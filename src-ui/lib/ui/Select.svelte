@@ -3,8 +3,11 @@
 </script>
 
 <script lang="ts" generics="T extends string">
-  // A single-choice dropdown (bits-ui Select) in the app's look (ui.css):
-  // each item a label, an optional hint, and optionally disabled.
+  // The app's one single-choice dropdown (bits-ui Select, ui.css): each item
+  // a label, an optional hint, and optionally disabled. `variant` "field" is
+  // a filled field the width of its container (the inspector, forms);
+  // "quiet" a label and chevron with no box (headers, toolbars). Never use a
+  // native <select>.
   import { Select } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
@@ -15,15 +18,18 @@
     onChange,
     disabled = false,
     label,
-  }: { value: T; items: SelectItem<T>[]; onChange: (value: T) => void; disabled?: boolean; label?: string } = $props();
+    variant = "field",
+    class: extra = "",
+    placeholder = "",
+  }: { value: T; items: SelectItem<T>[]; onChange: (value: T) => void; disabled?: boolean; label?: string; variant?: "field" | "quiet"; class?: string; placeholder?: string } = $props();
 
   const selected = $derived(items.find((i) => i.value === value));
 </script>
 
 <Select.Root type="single" {value} {disabled} items={items.map((i) => ({ value: i.value, label: i.label, disabled: i.disabled }))} onValueChange={(v) => onChange(v as T)}>
-  <Select.Trigger class="ui-select-trigger" aria-label={label}>
-    <span>{selected?.label ?? ""}</span>
-    <ChevronDown size={14} strokeWidth={1.75} />
+  <Select.Trigger class="ui-select-trigger {variant === 'quiet' ? 'is-quiet' : ''} {extra}" aria-label={label} title={variant === "quiet" ? label : undefined}>
+    <span class="ui-select-label">{selected?.label ?? placeholder}</span>
+    <ChevronDown size={12} strokeWidth={1.75} />
   </Select.Trigger>
   <Select.Portal>
     <Select.Content class="ui-menu" sideOffset={4} align="start">
@@ -31,7 +37,7 @@
         {#each items as item (item.value)}
           <Select.Item class="ui-menu-item" value={item.value} label={item.label} disabled={item.disabled}>
             {#snippet children({ selected })}
-              <span style="width: 14px; display: flex">{#if selected}<Check size={14} strokeWidth={2} />{/if}</span>
+              <span class="ui-menu-check">{#if selected}<Check size={14} strokeWidth={1.75} />{/if}</span>
               <span>{item.label}</span>
               {#if item.hint}<span class="ui-hint">{item.hint}</span>{/if}
             {/snippet}

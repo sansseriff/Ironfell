@@ -77,10 +77,10 @@
 </script>
 
 <Popover.Root bind:open>
-  <Popover.Trigger class="easing-trigger" aria-label="{label}: {title}" title="{label}: {title}" {disabled}>
+  <Popover.Trigger class="ui-select-trigger easing-trigger" aria-label="{label}: {title}" title="{label}: {title}" {disabled}>
     <svg width="28" height="18" viewBox="0 0 28 18" aria-hidden="true"><path d={curvePath(shown, 28, 18)} /></svg>
     <span class="easing-name">{title}</span>
-    <ChevronDown size={13} strokeWidth={1.5} />
+    <ChevronDown size={12} strokeWidth={1.75} />
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content class="property-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
@@ -105,7 +105,7 @@
               <circle class="handle" role="slider" tabindex="0" aria-label="Handle {i + 1}" aria-valuenow={draft[i * 2 + 1]} cx={px(draft[i * 2])} cy={py(draft[i * 2 + 1])} r="6" onpointerdown={(e) => drag(i, e)} />
             {/each}
           </svg>
-          <input class="bezier-text" aria-label="cubic-bezier values" value={draft.join(", ")} spellcheck="false"
+          <input class="ui-input bezier-text" aria-label="cubic-bezier values" value={draft.join(", ")} spellcheck="false"
             onchange={(e) => { const v = e.currentTarget.value.split(",").map(Number); if (v.length === 4 && v.every(Number.isFinite)) { draft = [Math.max(0, Math.min(1, v[0])), v[1], Math.max(0, Math.min(1, v[2])), v[3]]; onChange(`cubic-bezier(${draft.join(", ")})`); } }} />
         </div>
       {/if}
@@ -114,25 +114,21 @@
 </Popover.Root>
 
 <style>
-  :global(.easing-trigger) { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 5px; background: var(--bg-sunken); color: var(--fg); font-size: 12px; cursor: pointer; }
-  :global(.easing-trigger:hover) { border-color: var(--border-strong); }
-  :global(.easing-trigger:focus-visible) { outline: none; border-color: var(--accent); }
+  /* The trigger is a select's field (`.ui-select-trigger`, ui.css). */
   :global(.easing-trigger svg path), .easing-list svg path { fill: none; stroke: var(--accent); stroke-width: 1.5; }
   .easing-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :global(.easing-popover) { width: 216px; padding: 8px; }
   .easing-list { display: flex; flex-direction: column; gap: 2px; }
-  .easing-list button { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font-size: 12px; cursor: pointer; text-align: left; }
+  .easing-list button { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); font-size: var(--text-md); cursor: pointer; text-align: left; }
   .easing-list button:hover { background: var(--hover); }
-  .easing-list button.current { background: var(--bg-sunken); box-shadow: inset 0 0 0 1px var(--accent); }
-  .easing-list button:focus-visible { outline: 1px solid var(--accent); }
-  .easing-list svg { flex: 0 0 36px; background: var(--bg-sunken); border-radius: 3px; }
+  .easing-list button.current { background: var(--accent-soft); }
+  .easing-list svg { flex: 0 0 36px; background: var(--bg-sunken); border-radius: var(--radius-sm); }
   .bezier { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: center; }
-  .bezier-title { align-self: flex-start; color: var(--fg-muted); font-size: 11px; }
+  .bezier-title { align-self: flex-start; color: var(--fg-muted); font-size: var(--text-sm); }
   .bezier-box { touch-action: none; }
   .bezier-box .unit { fill: var(--bg-sunken); stroke: var(--border); }
   .bezier-box .arm { stroke: var(--fg-muted); stroke-width: 1; }
   .bezier-box .curve { fill: none; stroke: var(--accent); stroke-width: 2; }
   .bezier-box .handle { fill: var(--bg); stroke: var(--accent); stroke-width: 2; cursor: grab; }
-  .bezier-text { width: 100%; height: 26px; border: 1px solid transparent; border-radius: 5px; background: var(--bg-sunken); color: var(--fg); font-size: 12px; font-family: var(--font-mono, ui-monospace, monospace); padding: 0 8px; outline: none; }
-  .bezier-text:focus { border-color: var(--accent); }
+  .bezier-text { width: 100%; font-family: var(--font-mono); }
 </style>

@@ -611,7 +611,7 @@ pmove components 320 604
 pmove components 380 624
 up
 sleep 600
-pmove library 100 244
+pmove library 80 184
 down
 pmove components 20 464
 pmove components 620 604

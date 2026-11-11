@@ -4,7 +4,7 @@
   // and vertical alignment, with resizing and figures in the settings. And
   // Iron's own: the content, typed or bound to an expression, so a label
   // can be a live readout.
-  import { Popover, DropdownMenu } from "bits-ui";
+  import { Popover, DropdownMenu, Toggle } from "bits-ui";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Baseline from "@lucide/svelte/icons/baseline";
   import MoveHorizontal from "@lucide/svelte/icons/move-horizontal";
@@ -23,6 +23,10 @@
   import Underline from "@lucide/svelte/icons/underline";
   import Strikethrough from "@lucide/svelte/icons/strikethrough";
   import Select from "./Select.svelte";
+  import Segmented from "./Segmented.svelte";
+  import Checkbox from "./Checkbox.svelte";
+  import IconButton from "./IconButton.svelte";
+  import TextInput from "./TextInput.svelte";
   import FontPicker, { type FontCatalog } from "./FontPicker.svelte";
   import PropertyField, { type Property } from "./PropertyField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -124,17 +128,17 @@
   }
 </script>
 
-<div class="property-section text-section" data-section="text">
-  <div class="component"><span>Text</span></div>
+<section class="ui-section property-section" aria-label="Text" data-section="text">
+  <header class="ui-section-header component"><span>Text</span></header>
 
   <div class="family" bind:this={anchor}>
     <Popover.Root bind:open={pickerOpen}>
-      <Popover.Trigger class="ui-select-trigger family-trigger" aria-label="Font family">
-        <span class:missing>{family}</span>
-        <ChevronDown size={14} strokeWidth={1.75} />
+      <Popover.Trigger class="ui-select-trigger" aria-label="Font family">
+        <span class="ui-select-label" class:missing>{family}</span>
+        <ChevronDown size={12} strokeWidth={1.75} />
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content class="property-popover font-popover" side="left" align="start" sideOffset={12} customAnchor={anchor}>
+        <Popover.Content class="property-popover" side="left" align="start" sideOffset={12} customAnchor={anchor}>
           {#if catalog}
             <FontPicker value={family} {catalog} onClose={() => (pickerOpen = false)} onPick={(name) => { pickerOpen = false; void style({ family: name }); }} />
           {/if}
@@ -149,7 +153,7 @@
     <div class="size">
       <PropertyField field={field("font", "size", "24")} {node} compact label="Font size" onSet={setField} onRefresh={refresh} {onError} />
       <DropdownMenu.Root>
-        <DropdownMenu.Trigger class="size-more" aria-label="Font sizes"><ChevronDown size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+        <DropdownMenu.Trigger class="property-icon" aria-label="Font sizes" title="Font sizes"><ChevronDown size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content class="ui-menu" side="bottom" align="end" sideOffset={4}>
             {#each SIZES as s}<DropdownMenu.Item class="ui-menu-item" onSelect={() => style({ size: s })}>{s}</DropdownMenu.Item>{/each}
@@ -160,103 +164,87 @@
   </div>
 
   <div class="styles">
-    <div class="segmented toggles" role="group" aria-label="Text style">
-      <button aria-label="Bold" title="Bold (⌘B)" aria-pressed={!rangeSelected && weight >= 600} class:on={!rangeSelected && weight >= 600} onclick={() => toggle("bold")}><Bold size={15} strokeWidth={2} /></button>
-      <button aria-label="Italic" title="Italic (⌘I)" aria-pressed={!rangeSelected && italic} class:on={!rangeSelected && italic} onclick={() => toggle("italic")}><Italic size={15} strokeWidth={1.75} /></button>
-      <button aria-label="Underline" title="Underline (⌘U)" aria-pressed={!rangeSelected && underline} class:on={!rangeSelected && underline} onclick={() => toggle("underline")}><Underline size={15} strokeWidth={1.75} /></button>
-      <button aria-label="Strikethrough" title="Strikethrough (⌘⇧X)" aria-pressed={!rangeSelected && strike} class:on={!rangeSelected && strike} onclick={() => toggle("strike")}><Strikethrough size={15} strokeWidth={1.75} /></button>
+    <!-- Four independent toggles in the segmented control's track. -->
+    <div class="ui-segmented" role="group" aria-label="Text style">
+      {#each [{ what: "bold", icon: Bold, label: "Bold", title: "Bold (⌘B)", on: weight >= 600 }, { what: "italic", icon: Italic, label: "Italic", title: "Italic (⌘I)", on: italic }, { what: "underline", icon: Underline, label: "Underline", title: "Underline (⌘U)", on: underline }, { what: "strike", icon: Strikethrough, label: "Strikethrough", title: "Strikethrough (⌘⇧X)", on: strike }] as const as t (t.what)}
+        <Toggle.Root class="ui-segment" aria-label={t.label} title={t.title} pressed={!rangeSelected && t.on} onPressedChange={() => toggle(t.what)}><t.icon size={14} strokeWidth={1.75} /></Toggle.Root>
+      {/each}
     </div>
-    <label class="swatch" title={rangeSelected ? "Colour of the selected characters" : "Text colour"}>
+    <label class="ui-field swatch" title={rangeSelected ? "Colour of the selected characters" : "Text colour"}>
       <input type="color" aria-label={rangeSelected ? "Selection colour" : "Text colour"} value={fillColor.slice(0, 7)} onchange={(e) => style({ color: hexToRgba(e.currentTarget.value) })} />
     </label>
   </div>
   {#if rangeSelected}<p class="note">Styling the selected characters</p>{/if}
 
   <div class="pair">
-    <PropertyField field={field("font", "line_height", "0")} {node} label="Line height" zeroLabel="Auto" onSet={setField} onRefresh={refresh} {onError}>
-      {#snippet icon()}<Baseline size={14} strokeWidth={1.5} />{/snippet}
+    <PropertyField field={field("font", "line_height", "0")} {node} compact label="Line height" zeroLabel="Auto" onSet={setField} onRefresh={refresh} {onError}>
+      {#snippet icon()}<Baseline size={14} strokeWidth={1.75} />{/snippet}
     </PropertyField>
-    <PropertyField field={field("font", "letter_spacing", "0")} {node} label="Letter spacing" onSet={setField} onRefresh={refresh} {onError}>
-      {#snippet icon()}<MoveHorizontal size={14} strokeWidth={1.5} />{/snippet}
+    <PropertyField field={field("font", "letter_spacing", "0")} {node} compact label="Letter spacing" onSet={setField} onRefresh={refresh} {onError}>
+      {#snippet icon()}<MoveHorizontal size={14} strokeWidth={1.75} />{/snippet}
     </PropertyField>
   </div>
 
-  <div class="subheading">Alignment</div>
+  <div class="ui-subheading">Alignment</div>
   <div class="aligns">
-    <div class="segmented" role="radiogroup" aria-label="Horizontal alignment">
-      {#each [{ v: "left", icon: AlignStart, label: "Align left" }, { v: "center", icon: AlignCenter, label: "Align centre" }, { v: "right", icon: AlignEnd, label: "Align right" }] as a (a.v)}
-        <button role="radio" aria-checked={align === a.v} aria-label={a.label} title={a.label} class:on={align === a.v} onclick={() => set("font.align", a.v, "align text")}><a.icon size={16} strokeWidth={1.5} /></button>
-      {/each}
-    </div>
-    <div class="segmented" role="radiogroup" aria-label="Vertical alignment">
-      {#each [{ v: "top", icon: ArrowUpToLine, label: "Align top" }, { v: "middle", icon: AlignVerticalCenter, label: "Align middle" }, { v: "bottom", icon: ArrowDownToLine, label: "Align bottom" }] as a (a.v)}
-        <button role="radio" aria-checked={valign === a.v} aria-label={a.label} title={sizing === "fixed" ? a.label : `${a.label} (fixed size boxes)`} class:on={valign === a.v} onclick={() => set("font.valign", a.v, "align text")}><a.icon size={16} strokeWidth={1.5} /></button>
-      {/each}
-    </div>
+    <Segmented label="Horizontal alignment" iconOnly value={align} onChange={(v) => set("font.align", v, "align text")}
+      items={[{ value: "left", icon: AlignStart, label: "Align left" }, { value: "center", icon: AlignCenter, label: "Align centre" }, { value: "right", icon: AlignEnd, label: "Align right" }]} />
+    <Segmented label="Vertical alignment" iconOnly value={valign} onChange={(v) => set("font.valign", v, "align text")}
+      items={[{ value: "top", icon: ArrowUpToLine, label: "Align top" }, { value: "middle", icon: AlignVerticalCenter, label: "Align middle" }, { value: "bottom", icon: ArrowDownToLine, label: "Align bottom" }].map((a) => ({ ...a, title: sizing === "fixed" ? a.label : `${a.label} (fixed size boxes)` }))} />
     <Popover.Root>
-      <Popover.Trigger class="property-icon" aria-label="Type settings" title="Type settings"><SlidersHorizontal size={16} strokeWidth={1.5} /></Popover.Trigger>
+      <Popover.Trigger class="property-icon" aria-label="Type settings" title="Type settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
       <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} aria-label="Type settings">
-        <header><strong>Type settings</strong><Popover.Close class="property-icon" aria-label="Close type settings"><X size={15} /></Popover.Close></header>
+        <header><strong>Type settings</strong><Popover.Close class="property-icon" aria-label="Close type settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
         <div class="property-popover-body">
-          <div><div class="subheading">Resizing</div>
+          <div class="group"><div class="ui-subheading">Resizing</div>
             <Select value={sizing} items={[{ value: "auto_width", label: "Auto width" }, { value: "auto_height", label: "Auto height" }, { value: "fixed", label: "Fixed size" }]} onChange={(v) => set("text.sizing", v, "resize text")} label="Resizing" />
           </div>
-          <label class="check"><input type="checkbox" checked={italic} onchange={(e) => style({ italic: e.currentTarget.checked })} /> Italic</label>
-          <label class="check"><input type="checkbox" checked={tabular} onchange={(e) => set("font.tabular", String(e.currentTarget.checked), "set figures")} /> Tabular figures <span class="hint">steady digits for readouts</span></label>
+          <Checkbox label="Italic" checked={italic} onChange={(on) => style({ italic: on })} />
+          <div class="check"><Checkbox label="Tabular figures" checked={tabular} onChange={(on) => set("font.tabular", String(on), "set figures")} /><span class="hint">steady digits for readouts</span></div>
         </div>
       </Popover.Content></Popover.Portal>
     </Popover.Root>
   </div>
 
-  <div class="subheading content-heading">
+  <div class="ui-subheading content-heading">
     <span>Content</span>
     {#if content.bind}
-      <button class="property-icon" aria-label="Unbind content" title="Unbind: keep the current words" onclick={() => bind("")}><Unlink size={14} strokeWidth={1.5} /></button>
+      <IconButton icon={Unlink} label="Unbind content" title="Unbind: keep the current words" onclick={() => bind("")} />
     {:else}
-      <button class="property-icon" class:on={binding} aria-label="Bind content" title="Bind to an expression" onclick={() => { binding = !binding; expr = ""; }}><Link size={14} strokeWidth={1.5} /></button>
+      <IconButton icon={Link} label="Bind content" title="Bind to an expression" pressed={binding} onPressedChange={(on) => { binding = on; expr = ""; }} />
     {/if}
   </div>
   {#if content.bind}
     <div class="bound" title="Edit the binding to change it">
-      <input class="mono" aria-label="Content binding" value={content.bind} onkeydown={onEnter} onchange={(e) => bind(e.currentTarget.value)} />
+      <input class="ui-input mono" aria-label="Content binding" value={content.bind} onkeydown={onEnter} onchange={(e) => bind(e.currentTarget.value)} />
       <div class="reads">{content.text}</div>
     </div>
   {:else if binding}
-    <input class="mono expr" aria-label="Content expression" placeholder={'"P = " + fmt(n12.slider.value, 2)'} bind:value={expr} onkeydown={(e) => { if (e.key === "Enter") bind(expr); if (e.key === "Escape") binding = false; }} />
+    <TextInput class="mono" aria-label="Content expression" placeholder={'"P = " + fmt(n12.slider.value, 2)'} bind:value={expr} onkeydown={(e: KeyboardEvent) => { if (e.key === "Enter") bind(expr); if (e.key === "Escape") binding = false; }} />
     <p class="hint">An expression: <code>fmt(x, 2)</code>, <code>fmt(q, "kPa", 1)</code>, <code>sci(x, 3)</code>, joined with <code>+</code>.</p>
   {:else}
-    <textarea aria-label="Text content" rows="2" value={content.text ?? ""} disabled={content.edit === "locked"} title={content.why ?? ""} onchange={(e) => set("text.content", e.currentTarget.value, "edit text")}></textarea>
+    <textarea class="ui-input" aria-label="Text content" rows="2" value={content.text ?? ""} disabled={content.edit === "locked"} title={content.why ?? ""} onchange={(e) => set("text.content", e.currentTarget.value, "edit text")}></textarea>
   {/if}
-</div>
+</section>
 
 <style>
-  /* The inspector's section frame; SelectionView's own rules are scoped to it. */
-  .text-section { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-bottom: 1px solid var(--border); }
-  .text-section .component { display: flex; justify-content: space-between; align-items: center; min-height: 22px; margin-bottom: 4px; font-size: 12px; font-weight: 600; }
-  .family :global(.family-trigger) { width: 100%; }
-  .missing { color: var(--danger, #c33); }
-  .note { margin: 4px 0 0; font-size: 11px; color: var(--fg-muted); }
-  .styles { display: grid; grid-template-columns: minmax(0, 1fr) 32px; gap: 8px; align-items: center; }
-  .toggles button { color: var(--fg-muted); }
-  .swatch { display: flex; height: 32px; border-radius: 6px; overflow: hidden; background: var(--bg-sunken); }
-  .swatch input { width: 100%; height: 100%; border: none; padding: 4px; background: transparent; cursor: pointer; }
+  .missing { color: var(--danger); }
+  .note { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); }
+  .family { display: flex; flex-direction: column; gap: 4px; }
+  .styles { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 8px; align-items: center; }
+  .swatch { overflow: hidden; cursor: pointer; }
+  .swatch input { width: 100%; height: calc(var(--control-h) - 2px); padding: 4px; border: none; background: transparent; cursor: pointer; }
   .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-  .pair :global(.ui-select-trigger) { width: 100%; }
-  .size { display: flex; align-items: center; height: 32px; background: var(--bg-sunken); border-radius: 5px; }
+  .size { display: flex; align-items: center; gap: 2px; min-width: 0; }
   .size :global(.field) { flex: 1; }
-  .size :global(.size-more) { display: flex; align-items: center; justify-content: center; width: 28px; height: 100%; border: none; border-left: 1px solid var(--bg); background: transparent; color: var(--fg-muted); cursor: pointer; border-radius: 0 5px 5px 0; }
-  .subheading { font-size: 11px; color: var(--fg-muted); margin-bottom: 6px; }
-  .aligns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 28px; gap: 8px; align-items: center; margin-top: -4px; }
-  .segmented { display: flex; height: 32px; padding: 2px; background: var(--bg-sunken); border-radius: 6px; }
-  .segmented button { flex: 1; display: flex; align-items: center; justify-content: center; border: none; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; }
-  .segmented button.on { background: var(--bg); color: var(--fg); box-shadow: 0 0 0 1px var(--border-strong); }
-  .content-heading { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 -4px; }
-  .content-heading :global(.on) { color: var(--accent); }
-  textarea, .expr, .bound input { width: 100%; box-sizing: border-box; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg); color: var(--fg); padding: 6px 8px; font: inherit; font-size: 12px; resize: vertical; }
-  .mono { font-family: ui-monospace, monospace; font-size: 11px; }
-  .bound input { color: var(--accent); }
-  .reads { margin-top: 4px; font-size: 11px; color: var(--fg-muted); overflow-wrap: anywhere; }
-  .hint { font-size: 10px; color: var(--fg-faint); margin: 0; }
-  .check { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  :global(.font-popover) { padding: 0 !important; }
+  .aligns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: center; }
+  .group { display: flex; flex-direction: column; gap: 4px; }
+  .check { display: flex; align-items: center; gap: 8px; }
+  .check > :global(.ui-check-row) { flex: none; }
+  .content-heading { display: flex; align-items: center; justify-content: space-between; margin-right: -6px; }
+  .mono, section :global(.ui-input.mono) { font-family: var(--font-mono); font-size: var(--text-sm); }
+  .bound input { width: 100%; color: var(--accent); }
+  .reads { margin-top: 4px; font-size: var(--text-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
+  .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-faint); }
+  textarea { width: 100%; }
 </style>

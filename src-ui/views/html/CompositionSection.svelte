@@ -50,33 +50,40 @@
   function choose(name: string, value: string) { const f = field(name); if (f) void set(f, value); }
 </script>
 
+{#snippet runSetting()}
+  <div class="setting"><span class="ui-subheading">Run</span><Select label="Composition run mode" value={text("run")} items={[{value: "auto", label: "Auto"}, {value: "always", label: "Always"}, {value: "on_demand", label: "On demand"}]} onChange={v => choose("run", v)} /></div>
+{/snippet}
+
 {#if current && fields.length}
-  <section class="composition-section" aria-label="Composition settings" data-section="composition">
-    <header><strong>Composition</strong><span title={current.name ?? current.id}>{current.name ?? current.id}</span></header>
+  <section class="ui-section" aria-label="Composition settings" data-section="composition">
+    <header class="ui-section-header"><strong>Composition</strong><span class="ui-section-meta" title={current.name ?? current.id}>{current.name ?? current.id}</span></header>
     <p class="notation">{current.dims.toUpperCase()} · {text("notation")}</p>
+    <!-- Labels over fields, as in every inspector section. -->
+    <div class="property-grid">
+      {#if current.dims === "2d"}
+        <div class="setting"><span class="ui-subheading">Background</span><Select label="Composition background" value={text("background")} items={[{value: "theme", label: "Match app"}, {value: "custom", label: "Custom color"}]} onChange={v => choose("background", v)} /></div>
+      {/if}
+      {@render runSetting()}
+    </div>
     {#if current.dims === "2d"}
-      <div class="setting"><span>Background</span><Select label="Composition background" value={text("background")} items={[{value: "theme", label: "Match app"}, {value: "custom", label: "Custom color"}]} onChange={v => choose("background", v)} /></div>
       {#if text("background") === "custom" && field("background_color")}
         <PaintRow node={current.id} label="Background" color={field("background_color")!} onSet={set} onRefresh={refresh} onError={e => error = e} />
       {/if}
-      <div class="setting"><span>Grid</span><Select label="Composition grid" value={text("grid")} items={[{value: "off", label: "Off"}, {value: "lines", label: "Lines"}, {value: "dots", label: "Dots"}]} onChange={v => choose("grid", v)} /></div>
-      {#if text("grid") !== "off" && field("grid_spacing")}
-        <PropertyField field={field("grid_spacing")!} node={current.id} label="Grid spacing (px)" onSet={set} onRefresh={refresh} onError={e => error = e} />
-        <p class="hint">Visual guide only. Spacing thins out as you zoom out.</p>
-      {/if}
+      <div class="property-grid">
+        <div class="setting"><span class="ui-subheading">Grid</span><Select label="Composition grid" value={text("grid")} items={[{value: "off", label: "Off"}, {value: "lines", label: "Lines"}, {value: "dots", label: "Dots"}]} onChange={v => choose("grid", v)} /></div>
+        {#if text("grid") !== "off" && field("grid_spacing")}
+          <PropertyField field={field("grid_spacing")!} node={current.id} label="Grid spacing (px)" onSet={set} onRefresh={refresh} onError={e => error = e} />
+        {/if}
+      </div>
+      {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Visual guide only. Spacing thins out as you zoom out.</p>{/if}
     {/if}
-    <div class="setting"><span>Run</span><Select label="Composition run mode" value={text("run")} items={[{value: "auto", label: "Auto"}, {value: "always", label: "Always"}, {value: "on_demand", label: "On demand"}]} onChange={v => choose("run", v)} /></div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </section>
 {/if}
 
 <style>
-  .composition-section { padding: 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
-  header { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-  header span { margin-left: auto; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  strong { font-weight: 600; }
-  .notation, .hint { margin: 0; font-size: 11px; color: var(--fg-muted); line-height: 1.5; }
-  .setting { display: grid; grid-template-columns: 85px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; }
-  .setting :global(.ui-select-trigger) { width: 100%; }
-  .error { margin: 0; color: var(--danger); font-size: 12px; }
+  .notation, .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); line-height: 1.5; }
+  .hint { color: var(--fg-faint); }
+  .setting { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .error { margin: 0; color: var(--danger); font-size: var(--text-md); }
 </style>

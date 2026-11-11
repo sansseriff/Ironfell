@@ -29,6 +29,7 @@
   // animation frame, and an SVG ring moved in the event. Grab the square at
   // its centre and every shape shares one centre while the pointer is
   // still; while it moves, each lags by its own latency.
+  import Button from "../../lib/ui/Button.svelte";
   import { getContext, onMount } from "svelte";
   import { Switch } from "bits-ui";
   import Crosshair from "@lucide/svelte/icons/crosshair";
@@ -233,9 +234,9 @@
   <div class="card canvas-ui">
     <div class="head">
       <strong>Latency</strong>
-      <button class="ui-button is-small is-outline" disabled={!controllerManager.isInitialized} onclick={recentre} title="Put the square back in the middle">
-        <Crosshair size={13} strokeWidth={1.75} /> Recentre
-      </button>
+      <Button variant="outline" small disabled={!controllerManager.isInitialized} onclick={recentre} title="Put the square back in the middle">
+        <Crosshair size={14} strokeWidth={1.75} /> Recentre
+      </Button>
     </div>
     <ul class="legend">
       {#each TRACKERS as t (t.key)}
@@ -284,11 +285,11 @@
     flex-direction: column;
     gap: 6px;
     padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--raised);
     color: var(--fg);
-    font-size: 12px;
+    font-size: var(--text-md);
     box-shadow: var(--menu-shadow);
     pointer-events: auto;
   }
@@ -296,11 +297,6 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-  }
-  .head .ui-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
   }
   .legend {
     margin: 0;
@@ -324,8 +320,8 @@
     border-radius: 50%;
   }
   .swatch.square {
-    border-radius: 2px;
-    background: #ffd600;
+    border-radius: var(--radius-sm);
+    background: #ffd600; /* the square tracker's colour (TRACKERS) */
   }
   .setting {
     display: flex;
@@ -339,7 +335,7 @@
   }
   .note {
     margin: 0;
-    font-size: 11px;
+    font-size: var(--text-sm);
     color: var(--fg-faint);
   }
   .note.error {

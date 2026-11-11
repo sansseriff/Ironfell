@@ -70,24 +70,26 @@
 
 <Dialog.Root bind:open>
   <Dialog.Portal>
-    <Dialog.Overlay class="new-comp-overlay" />
-    <Dialog.Content class="new-comp-dialog">
-      <Dialog.Title class="new-comp-title">New composition</Dialog.Title>
+    <Dialog.Overlay class="ui-dialog-overlay" />
+    <Dialog.Content class="ui-dialog">
+      <Dialog.Title class="ui-dialog-title">New composition</Dialog.Title>
       <form onsubmit={create}>
-        <label class="field">
-          <span>Name</span>
-          <TextInput bind:value={name} bind:element={input} aria-label="Composition name" spellcheck="false" autocomplete="off" />
-        </label>
-        <div class="field">
-          <span>Kind</span>
-          <Select value={kind} items={KINDS} label="Kind" onChange={(v) => (kind = v)} />
+        <div class="ui-dialog-body">
+          <label class="field">
+            <span>Name</span>
+            <TextInput bind:value={name} bind:element={input} aria-label="Composition name" spellcheck="false" autocomplete="off" />
+          </label>
+          <div class="field">
+            <span>Kind</span>
+            <Select value={kind} items={KINDS} label="Kind" onChange={(v) => (kind = v)} />
+          </div>
+          {#if taken}
+            <p class="message">A composition named “{trimmed}” already exists.</p>
+          {:else if error}
+            <p class="message">{error}</p>
+          {/if}
         </div>
-        {#if taken}
-          <p class="message">A composition named “{trimmed}” already exists.</p>
-        {:else if error}
-          <p class="message">{error}</p>
-        {/if}
-        <div class="actions">
+        <div class="ui-dialog-actions">
           <Dialog.Close>
             {#snippet child({ props })}
               <Button variant="outline" {...props}>Cancel</Button>
@@ -101,52 +103,15 @@
 </Dialog.Root>
 
 <style>
-  :global(.new-comp-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    background: var(--overlay);
-  }
-  :global(.new-comp-dialog) {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 1001;
-    width: min(360px, calc(100vw - 32px));
-    padding: 18px 20px 16px;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: var(--menu-shadow);
-    font-size: 13px;
-  }
-  :global(.new-comp-title) {
-    margin: 0 0 12px;
-    font-size: 14px;
-    font-weight: 600;
-  }
   .field {
     display: grid;
     grid-template-columns: 56px 1fr;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
     color: var(--fg-muted);
   }
-  .field :global(.ui-input),
-  .field :global(.ui-select-trigger) {
-    width: 100%;
-  }
   .message {
-    margin: 2px 0 0 64px;
+    margin: 0 0 0 64px;
     color: var(--danger);
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 14px;
   }
 </style>

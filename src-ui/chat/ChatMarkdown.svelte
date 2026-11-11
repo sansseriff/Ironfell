@@ -47,20 +47,20 @@
 <div class="chat-markdown">{@render blocks(tokens)}</div>
 
 <style>
-  .chat-markdown { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
+  .chat-markdown { font-size: var(--text-lg); line-height: 1.6; overflow-wrap: anywhere; min-width: 0; }
   .chat-markdown :global(p) { margin: 0 0 10px; }
   .chat-markdown :global(p:last-child) { margin-bottom: 0; }
   .chat-markdown :global(h1), .chat-markdown :global(h2), .chat-markdown :global(h3), .chat-markdown :global(h4), .chat-markdown :global(h5), .chat-markdown :global(h6) { font-size: 1.1em; line-height: 1.4; margin: 16px 0 8px; }
   .chat-markdown :global(a) { color: var(--accent); text-underline-offset: 3px; }
-  .chat-markdown :global(code) { font-size: .9em; background: var(--bg-sunken); padding: 1px 4px; border-radius: 3px; }
+  .chat-markdown :global(code) { font-size: .9em; background: var(--bg-sunken); padding: 1px 4px; border-radius: var(--radius-sm); }
   .chat-markdown :global(pre) { margin: 0; padding: 10px 12px; overflow-x: auto; white-space: pre; }
   .chat-markdown :global(pre code) { padding: 0; background: none; }
-  .chat-markdown :global(figure.code) { margin: 10px 0; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--bg-sunken); }
-  .chat-markdown :global(figcaption) { padding: 4px 12px; border-bottom: 1px solid var(--border); color: var(--fg-muted); font-size: 10px; }
+  .chat-markdown :global(figure.code) { margin: 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-sunken); }
+  .chat-markdown :global(figcaption) { padding: 4px 12px; border-bottom: 1px solid var(--border); color: var(--fg-muted); font-size: var(--text-xs); }
   .chat-markdown :global(blockquote) { border-left: 3px solid var(--border-strong); margin: 10px 0; padding-left: 12px; color: var(--fg-muted); }
   .chat-markdown :global(ul), .chat-markdown :global(ol) { padding-left: 22px; margin: 8px 0; }
   .table { overflow-x: auto; margin: 10px 0; }
-  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: var(--text-md); }
   th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
   th { background: var(--bg-sunken); font-weight: 600; }
   .literal { white-space: pre-wrap; color: var(--fg-muted); }

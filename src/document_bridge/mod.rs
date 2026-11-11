@@ -387,7 +387,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline, clear, latency): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>),
+    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>),
 ) {
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
@@ -401,6 +401,7 @@ pub(crate) fn sync_document(
     let build_latency = latency.0 && !session_named(store.0.document(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && timeline.as_ref().is_none_or(|(_, p)| p.light == light)
+        && *library_light == Some(light)
         && history.0.is_empty()
         && load.0.is_none()
         && gestures.0.is_empty()
@@ -541,10 +542,27 @@ pub(crate) fn sync_document(
                 Ok(()) => {
                     affected.extend(ids);
                     structure = true;
+                    if name == iron_document::standard::LIBRARY {
+                        *library_light = None;
+                    }
                 }
                 Err(e) => warn!("{name} composition: {e}"),
             }
         }
+    }
+    // The Library is built in the light theme's colours; its cards and
+    // labels follow the shell's theme as the timeline does.
+    if *library_light != Some(light) {
+        let ops = iron_document::standard::library_theme_ops(store.0.document(), light);
+        let mut ids = BTreeSet::new();
+        for op in &ops {
+            collect_ids(op, &mut ids);
+        }
+        match store.0.apply_session(ops) {
+            Ok(()) => affected.extend(ids),
+            Err(e) => warn!("library theme: {e}"),
+        }
+        *library_light = Some(light);
     }
     // The timeline (timeline.md §4.3): a session composition generated from
     // the clips, regenerated when what it shows changes.

@@ -124,7 +124,7 @@
             onpointerenter={() => probe(row.target, "hover")}
             onpointerleave={() => probe("", "unhover")}
           >
-            {#if row.error}<TriangleAlert size={12} strokeWidth={2} />{/if}
+            {#if row.error}<TriangleAlert size={12} strokeWidth={1.75} />{/if}
             <span>{row.label}</span>
           </BitsButton.Root>
         {:else}
@@ -133,9 +133,9 @@
             <button class="now" title={row.state.running ? `At the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : "At the playhead. Click to edit this component's states"} onclick={() => openLane(row.target)}>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</button>
           {/if}
           <span class="keys">
-            <IconButton icon={ChevronLeft} label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
-            <IconButton icon={Diamond} label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => keyRow(row)} data-key="toggle" />
-            <IconButton icon={ChevronRight} label="Next key of {row.label}" title="Next key" onclick={() => key("next", row.clip)} data-key="next" />
+            <IconButton icon={ChevronLeft} size={12} label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
+            <IconButton icon={Diamond} size={12} label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => keyRow(row)} data-key="toggle" />
+            <IconButton icon={ChevronRight} size={12} label="Next key of {row.label}" title="Next key" onclick={() => key("next", row.clip)} data-key="next" />
           </span>
         {/if}
       </div>
@@ -150,62 +150,27 @@
 {/if}
 
 <style>
-  /* The column matches the canvas half's surface (timeline_view.rs's
-     LIGHT and DARK palettes' header and ruler), in the app's theme. */
+  /* One surface with the app: the column and the ruler's corner on
+     `--bg-sunken`, as the canvas half's header and ruler are
+     (timeline_view.rs's palettes hold the same tokens' values). */
   .timeline-column {
-    --tl-header: #f3f3f3;
-    --tl-ruler: #f3f3f3;
-    --tl-line: var(--border);
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
     overflow: hidden;
-    background: var(--tl-header);
-    border-right: 1px solid var(--tl-line);
+    background: var(--bg-sunken);
+    border-right: 1px solid var(--border);
     color: var(--fg);
     pointer-events: auto;
     user-select: none;
-  }
-  :global(:root[data-theme="dark"]) .timeline-column {
-    --fg: #d9d9e0;
-    --fg-muted: #9d9da6;
-    --fg-faint: #6e6e78;
-    --hover: rgba(255, 255, 255, 0.08);
-    --border-strong: #45454c;
-    --bg: #2b2b2e;
-    --bg-sunken: #222226;
-    --bg-input: #222226;
-    --accent-soft: rgba(0, 120, 212, 0.3);
-    --accent: #4aa3ff;
-    --tl-header: #2b2b2e;
-    --tl-ruler: #333337;
-    --tl-line: #3a3a40;
-  }
-  @media (prefers-color-scheme: dark) {
-    :global(:root:not([data-theme="light"])) .timeline-column {
-    --fg: #d9d9e0;
-    --fg-muted: #9d9da6;
-    --fg-faint: #6e6e78;
-    --hover: rgba(255, 255, 255, 0.08);
-    --border-strong: #45454c;
-    --bg: #2b2b2e;
-    --bg-sunken: #222226;
-    --bg-input: #222226;
-    --accent-soft: rgba(0, 120, 212, 0.3);
-    --accent: #4aa3ff;
-    --tl-header: #2b2b2e;
-    --tl-ruler: #333337;
-    --tl-line: #3a3a40;
-    }
   }
   .corner {
     position: absolute;
     left: 0;
     right: 0;
     top: 0;
-    background: var(--tl-ruler);
-    border-bottom: 1px solid var(--tl-line);
+    border-bottom: 1px solid var(--border);
   }
   .rows {
     position: absolute;
@@ -222,15 +187,14 @@
     align-items: center;
     gap: 4px;
     padding: 0 6px 0 8px;
-    box-sizing: border-box;
-    font-size: 12px;
+    font-size: var(--text-md);
   }
   .row.property {
     padding-left: 22px;
     color: var(--fg-muted);
   }
   .row.error {
-    color: #f07a74;
+    color: var(--danger);
   }
   .row :global(.name) {
     display: flex;
@@ -240,7 +204,7 @@
     padding: 1px 4px;
     margin-left: -4px;
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: inherit;
     font: inherit;
@@ -249,10 +213,6 @@
   }
   .row :global(.name:hover) {
     background: var(--hover);
-  }
-  .row :global(.name:focus-visible) {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
   }
   .row :global(.name span),
   .prop {
@@ -268,24 +228,28 @@
     flex: none;
     border: 0;
     font: inherit;
+    font-size: var(--text-sm);
     cursor: pointer;
     max-width: 76px;
     padding: 1px 6px;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: var(--hover);
     color: var(--fg);
-    font-size: 11px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .now:hover {
+    background: var(--active);
   }
   .keys {
     display: flex;
     margin-left: auto;
   }
+  /* A row is 22 px: its key buttons are the compact icon button, 2 px
+     smaller so they fit it. */
   .keys :global(.property-icon) {
-    width: 20px;
-    height: 20px;
-    padding: 3px;
+    width: calc(var(--control-h-sm) - 4px);
+    height: calc(var(--control-h-sm) - 4px);
   }
 </style>

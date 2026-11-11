@@ -9,6 +9,8 @@
   import { getContext, tick, type Component } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
+  import EmptyState from "../../lib/ui/EmptyState.svelte";
+  import Layers from "@lucide/svelte/icons/layers";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Pin from "@lucide/svelte/icons/pin";
@@ -385,36 +387,36 @@
 
 <div class="html-view layers">
   <section class="tree-section">
-    <header>
+    <header class="ui-panel-header">
       <DropdownMenu.Root bind:open={picking}>
-        <DropdownMenu.Trigger class="comp-pick" aria-label="Composition: {current?.name ?? 'none'}" title={pinned ? "Pinned to this composition. Choose another to show its layers here" : "Following the composition in view. Choose one to go to it"} data-comp-pick>
-          {#if current?.dims === "3d"}<Box size={14} strokeWidth={1.5} />{:else}<Shapes size={14} strokeWidth={1.5} />{/if}
-          <span class="comp-name">{current?.name ?? current?.id ?? "No composition"}</span>
+        <DropdownMenu.Trigger class="ui-quiet-trigger comp-pick" aria-label="Composition: {current?.name ?? 'none'}" title={pinned ? "Pinned to this composition. Choose another to show its layers here" : "Following the composition in view. Choose one to go to it"} data-comp-pick>
+          {#if current?.dims === "3d"}<Box size={14} strokeWidth={1.75} />{:else}<Shapes size={14} strokeWidth={1.75} />{/if}
+          <span>{current?.name ?? current?.id ?? "No composition"}</span>
           <ChevronDown size={12} strokeWidth={1.75} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
-          <DropdownMenu.Content class="ui-menu comp-menu" align="start" sideOffset={4}>
+          <DropdownMenu.Content class="ui-menu" align="start" sideOffset={4}>
             <DropdownMenu.Group>
             <DropdownMenu.GroupHeading class="ui-menu-heading">{pinned ? "Show here" : "Go to"}</DropdownMenu.GroupHeading>
             {#each entries as c (c.id)}
               <DropdownMenu.Item class="ui-menu-item" onSelect={() => choose(c.id)}>
-                <span class="check">{#if c.id === current?.id}<Check size={14} strokeWidth={2} />{/if}</span>
-                {c.name ?? c.id}
+                <span class="ui-menu-check">{#if c.id === current?.id}<Check size={14} strokeWidth={1.75} />{/if}</span>
+                <span>{c.name ?? c.id}</span>
                 <span class="ui-hint">{c.dims.toUpperCase()}</span>
               </DropdownMenu.Item>
             {/each}
             </DropdownMenu.Group>
             <DropdownMenu.Separator class="ui-menu-separator" />
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => { picking = false; naming = true; }}><span class="check"><Plus size={14} strokeWidth={2} /></span>New composition…</DropdownMenu.Item>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => { picking = false; naming = true; }}><span class="ui-menu-check"><Plus size={14} strokeWidth={1.75} /></span><span>New composition…</span></DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      <span class="grow"></span>
+      <span class="ui-spacer"></span>
       <IconButton icon={Pin} label={pinned ? "Unpin: follow the view in use" : "Pin to this composition"} pressed={pinned !== null} onPressedChange={setPinned} />
       <IconButton icon={ListCollapse} label="Collapse all" onclick={collapseAll} />
     </header>
     {#if !current}
-      <p class="empty">No composition to show.</p>
+      <EmptyState icon={Layers} title="No composition to show">Open a composition to see its layers.</EmptyState>
     {:else}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div class="tree" role="tree" aria-label="Layers of {current.name ?? current.id}" aria-multiselectable="true" tabindex="0"
@@ -465,28 +467,21 @@
 
 <style>
   /* An HTML view (Workspace.svelte's `.html-view` takes the pointer), without its page padding. */
-  .layers { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0 !important; gap: 0 !important; overflow: hidden !important; font-size: 12px; color: var(--fg); background: var(--bg); }
+  .layers { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0 !important; gap: 0 !important; overflow: hidden !important; font-size: var(--text-md); color: var(--fg); background: var(--bg); }
   section { display: flex; flex-direction: column; min-height: 0; }
-  header { display: flex; align-items: center; gap: 2px; height: 40px; padding: 0 8px 0 16px; flex: none; }
-  .grow { flex: 1; }
-  :global(.comp-pick) { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 26px; margin-left: -6px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
-  :global(.comp-pick svg) { flex: none; color: var(--fg-muted); }
-  :global(.comp-pick:hover), :global(.comp-pick[data-state="open"]) { background: var(--hover); }
-  :global(.comp-pick:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .comp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  :global(.comp-menu) { min-width: 220px; max-height: 60vh; overflow: auto; }
-  :global(.comp-menu .check) { display: inline-grid; place-items: center; width: 16px; margin-right: 6px; }
+  .layers :global(.comp-pick) { font-weight: 600; }
+  .layers :global(.comp-pick > svg:first-child) { flex: none; color: var(--fg-muted); }
   .tree-section { flex: 1; }
   .tree { position: relative; flex: 1; min-height: 0; overflow: auto; outline: none; }
   .spacer { position: relative; }
-  .layer { position: absolute; left: 8px; right: 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding-right: 6px; border-radius: 5px; white-space: nowrap; cursor: default; }
+  .layer { position: absolute; left: 8px; right: 8px; height: 32px; display: flex; align-items: center; gap: 6px; padding-right: 6px; border-radius: var(--radius); white-space: nowrap; cursor: default; }
   .layer:hover, .layer.probe { background: var(--hover); }
   .layer.selected { background: var(--accent-soft); }
   .layer.holding { box-shadow: inset 0 0 0 1px var(--accent-soft); }
   .tree:focus-visible .layer.cursor { box-shadow: inset 0 0 0 1px var(--accent); }
   .layer.flash { animation: flash 1.1s ease-out; }
   @keyframes flash { from { box-shadow: inset 0 0 0 2px var(--accent); } to { box-shadow: inset 0 0 0 2px transparent; } }
-  .twisty { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-right: -2px; color: var(--fg-faint); border-radius: 3px; }
+  .twisty { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; margin-right: -2px; color: var(--fg-faint); border-radius: var(--radius-sm); }
   .twisty :global(svg) { transition: transform .12s; }
   .twisty.open :global(svg) { transform: rotate(90deg); }
   .twisty:hover { color: var(--fg); }
@@ -494,13 +489,12 @@
   .icon.figure { color: var(--accent); }
   .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .grow { flex: 1; }
-  .tag { flex: none; font-size: 11px; color: var(--fg-faint); }
-  .chip { display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 96px; height: 20px; padding: 0 6px 0 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; }
+  .tag { flex: none; font-size: var(--text-sm); color: var(--fg-faint); }
+  .chip { display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 96px; height: 20px; padding: 0 6px 0 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--fg-muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
   .chip span { overflow: hidden; text-overflow: ellipsis; }
   .chip:hover { border-color: var(--accent); color: var(--fg); }
   .chip.more { cursor: default; }
   .problem { display: inline-flex; flex: none; color: var(--danger); }
-  footer { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: 10px; color: var(--fg-faint); }
-  .empty, .error { padding: 12px 16px; color: var(--fg-faint); }
-  .error { color: var(--danger); overflow-wrap: anywhere; }
+  footer { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: var(--text-xs); color: var(--fg-faint); }
+  .error { padding: 12px var(--panel-pad); color: var(--danger); overflow-wrap: anywhere; }
 </style>

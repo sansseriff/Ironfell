@@ -99,9 +99,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    font-family: Arial, sans-serif;
-    font-size: 2em;
-    color: var(--fg-faint);
+    font-size: var(--text-lg);
+    color: var(--fg-muted);
     pointer-events: none;
   }
 </style>

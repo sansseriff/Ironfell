@@ -67,7 +67,7 @@
 {#if info}
   <div class="settings canvas-ui" class:below-ruler={spec.source === "timeline"}>
     <DropdownMenu.Root bind:open onOpenChange={(o) => o && refresh()}>
-      <DropdownMenu.Trigger class="trigger" title="Composition settings" aria-label="Composition settings">
+      <DropdownMenu.Trigger class="property-icon large trigger" title="Composition settings" aria-label="Composition settings">
         <Settings2 size={16} strokeWidth={1.75} />
         {#if info.live}<span class="live" aria-hidden="true"></span>{/if}
       </DropdownMenu.Trigger>
@@ -76,7 +76,7 @@
           <div class="ui-menu-heading">Run</div>
           {#each MODES as m (m.id)}
             <DropdownMenu.Item class="ui-menu-item" onSelect={() => set(m.id)} data-run={m.id}>
-              <span class="check">{#if info.run === m.id}<Check size={14} strokeWidth={2} />{/if}</span>
+              <span class="ui-menu-check">{#if info.run === m.id}<Check size={14} strokeWidth={1.75} />{/if}</span>
               <span>{m.label}</span>
               <span class="ui-hint">{m.hint}</span>
             </DropdownMenu.Item>
@@ -85,7 +85,7 @@
           <div class="ui-menu-heading status" data-status>{status}</div>
           <div class="ui-menu-separator"></div>
           <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps>
-            <span class="check">{#if showFps}<Check size={14} strokeWidth={2} />{/if}</span>
+            <span class="ui-menu-check">{#if showFps}<Check size={14} strokeWidth={1.75} />{/if}</span>
             <span>Show FPS</span>
             <span class="ui-hint">Frames this view renders per second</span>
           </DropdownMenu.Item>
@@ -93,7 +93,7 @@
             <div class="ui-menu-separator"></div>
             <div class="ui-menu-heading">Developer</div>
             <DropdownMenu.Item class="ui-menu-item" onSelect={onInspect} data-inspector>
-              <span class="check">{#if inspecting}<Check size={14} strokeWidth={2} />{/if}</span>
+              <span class="ui-menu-check">{#if inspecting}<Check size={14} strokeWidth={1.75} />{/if}</span>
               <span>Render inspector</span>
               <span class="ui-hint">Chunks, culling and tiles beside the view</span>
             </DropdownMenu.Item>
@@ -115,23 +115,16 @@
   .settings.below-ruler {
     top: 64px;
   }
+  /* A 28 px icon button (`.property-icon.large`) floating over the canvas:
+     raised, with the menus' border and shadow so it reads on any picture. */
   .settings :global(.trigger) {
     position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--bg);
-    color: var(--fg-muted);
+    background: var(--raised);
     box-shadow: var(--menu-shadow);
-    cursor: pointer;
   }
-  .settings :global(.trigger:hover) {
-    color: var(--fg);
-    background: var(--hover);
+  .settings :global(.trigger:hover:not(:disabled)) {
+    background: var(--raised);
   }
   .live {
     position: absolute;
@@ -142,12 +135,7 @@
     border-radius: 50%;
     background: var(--accent);
   }
-  .check {
-    display: flex;
-    width: 14px;
-  }
   .status {
-    text-transform: none;
-    letter-spacing: 0;
+    font-weight: 400;
   }
 </style>

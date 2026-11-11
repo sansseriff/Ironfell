@@ -67,8 +67,8 @@
     <p>{controllerManager.loadingInProgress ? "Loading..." : "Starting up..."}</p>
   {:else}
     <div class="row">
-      <Button variant="outline" onclick={() => doc.download()} title="Save the document as a file"><Download size={13} strokeWidth={1.75} />Save</Button>
-      <Button variant="outline" onclick={() => fileInput?.click()} title="Open a saved document or an .svg"><FolderOpen size={13} strokeWidth={1.75} />Load</Button>
+      <Button variant="outline" onclick={() => doc.download()} title="Save the document as a file"><Download size={14} strokeWidth={1.75} />Save</Button>
+      <Button variant="outline" onclick={() => fileInput?.click()} title="Open a saved document or an .svg"><FolderOpen size={14} strokeWidth={1.75} />Load</Button>
       <IconButton icon={Undo2} label="Undo" title="Undo (⌘Z)" onclick={() => doc.undo()} disabled={!doc.canUndo} />
       <IconButton icon={Redo2} label="Redo" title="Redo (⇧⌘Z)" onclick={() => doc.redo()} disabled={!doc.canRedo} />
       <input type="file" accept=".json,application/json,.svg,image/svg+xml" bind:this={fileInput} hidden onchange={onFile} />
@@ -91,8 +91,8 @@
         SVG of
         <Select label="What to export as SVG" value={svgScope} items={scopeItems} onChange={(v) => (svgScope = v)} />
       </label>
-      <Button variant="outline" onclick={() => doc.downloadSvg(svgScope, scopeName())} title="Download as SVG"><Download size={13} strokeWidth={1.75} />Export SVG</Button>
-      <Button variant="outline" title="Copy as SVG (Alt+Shift+C copies the selection)" onclick={copySvg}><Copy size={13} strokeWidth={1.75} />Copy SVG</Button>
+      <Button variant="outline" onclick={() => doc.downloadSvg(svgScope, scopeName())} title="Download as SVG"><Download size={14} strokeWidth={1.75} />Export SVG</Button>
+      <Button variant="outline" title="Copy as SVG (Alt+Shift+C copies the selection)" onclick={copySvg}><Copy size={14} strokeWidth={1.75} />Copy SVG</Button>
     </div>
     {#if doc.error}<p class="error">{doc.error}</p>{/if}
     <pre class="view">{doc.view}</pre>
@@ -107,19 +107,20 @@
     margin: 0;
     padding: 8px;
     overflow: auto;
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
     line-height: 1.35;
     background: var(--bg-sunken);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     white-space: pre;
   }
   .doc-footer {
-    font-size: 11px;
+    font-size: var(--text-sm);
     color: var(--fg-faint);
   }
   .version {
-    font-size: 11px;
+    font-size: var(--text-sm);
     color: var(--fg-faint);
     margin-left: auto;
   }

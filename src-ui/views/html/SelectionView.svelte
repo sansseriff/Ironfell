@@ -15,6 +15,10 @@
   import { columnEdits, parseColumns } from "../../model/columns";
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
+  import Link from "@lucide/svelte/icons/link";
+  import ComponentIcon from "@lucide/svelte/icons/component";
+  import SquareDashed from "@lucide/svelte/icons/square-dashed";
+  import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import { Popover, DropdownMenu } from "bits-ui";
   import PaintRow from "../../lib/ui/PaintRow.svelte";
   import TextSection from "../../lib/ui/TextSection.svelte";
@@ -25,8 +29,12 @@
   import X from "@lucide/svelte/icons/x";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Button from "../../lib/ui/Button.svelte";
+  import IconButton from "../../lib/ui/IconButton.svelte";
   import Select from "../../lib/ui/Select.svelte";
-  import EasingField from "../../lib/ui/EasingField.svelte";
+  import TextInput from "../../lib/ui/TextInput.svelte";
+  import Checkbox from "../../lib/ui/Checkbox.svelte";
+  import Disclosure from "../../lib/ui/Disclosure.svelte";
+  import EmptyState from "../../lib/ui/EmptyState.svelte";
   import Unlink from "@lucide/svelte/icons/unlink";
   import type { ViewSpec } from "../views";
 
@@ -237,22 +245,21 @@
 </script>
 
 <section class="html-view properties">
-  <header class="panel-heading"><span>Design</span><SlidersHorizontal size={15} strokeWidth={1.5} /></header>
-
   <CompositionSection />
 
-  {#if doc.selection.length || showIn.length}
-    <div class="row actions">
-      {#if doc.selection.length}
-        <Button small variant="outline" onclick={() => link()} disabled={doc.selection.length !== 2} title="Link two pictures (Shift-click a second picture)">Link</Button>
-        <Button small variant="outline" onclick={makeComponent} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them">Make component</Button>
-        <Button small variant="outline" onclick={() => author("wrap", { ids: doc.selection })} title="Wrap the selection in an empty at its centre (⌘⌥G)">Wrap in empty</Button>
-      {/if}
-      {#each showIn as f (f.node)}
-        <Button small onclick={() => void showPicture({ node: f.node, composition: f.composition })}>Show in {f.name ?? f.composition}<ChevronRight size={12} strokeWidth={1.75} /></Button>
-      {/each}
-    </div>
-  {/if}
+  <!-- The selection's actions, and the attachment task's (which stays
+       mounted, so a task survives the selection emptying). -->
+  <div class="actions">
+    {#if doc.selection.length}
+      <Button small variant="outline" onclick={() => link()} disabled={doc.selection.length !== 2} title="Link two pictures (Shift-click a second picture)"><Link size={14} strokeWidth={1.75} />Link</Button>
+      <Button small variant="outline" onclick={makeComponent} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>
+      <Button small variant="outline" onclick={() => author("wrap", { ids: doc.selection })} title="Wrap the selection in an empty at its centre (⌘⌥G)"><SquareDashed size={14} strokeWidth={1.75} />Wrap in empty</Button>
+    {/if}
+    <AttachmentTask />
+    {#each showIn as f (f.node)}
+      <Button small variant="outline" onclick={() => void showPicture({ node: f.node, composition: f.composition })}>Show in {f.name ?? f.composition}<ChevronRight size={14} strokeWidth={1.75} /></Button>
+    {/each}
+  </div>
   {#if linkError}<p class="error">{linkError}</p>{/if}
   {#if makeError}<p class="error">{makeError}</p>{/if}
   {#if doc.question}
@@ -271,13 +278,12 @@
     </div>
   {/if}
 
-  <AttachmentTask />
-
   {#if inspected}
     <div class="inspector">
-      <div class="title"><strong>{inspected.name ?? inspected.type}</strong> <span class="mono">{inspected.type} {inspected.node}</span></div>
+      <!-- The object: its name, and its type and id as a badge. -->
+      <div class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span> <span class="ui-badge">{inspected.type} {inspected.node}</span></div>
       {#if machines.pinned && !machines.pinned.scrub && machines.view?.main_of && rootOf(inspected.node) === machines.view.main_of}
-        <p class="recording" role="status"><span class="dot"></span><span>Number edits go into <strong>{machines.pinned.state}</strong>; other edits (colour, text) change every state.</span></p>
+        <div class="recording" role="status"><span class="dot"></span><span>Number edits go into <strong>{machines.pinned.state}</strong>; other edits (colour, text) change every state.</span></div>
       {/if}
       {#if stateKey}
         <div class="state-key">
@@ -288,34 +294,34 @@
       {#if setError}<p class="error">{setError}</p>{/if}
       {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
       {#snippet portEditor(p: PortInfo, editable: boolean)}
-        <div class="port-grid" data-section="port-editor">
-          <label>Name<input value={p.name ?? ""} disabled={!editable} onchange={(e) => editPort(p.spec, { name: e.currentTarget.value })} /></label>
-          <label>Kind<select value={p.kind ?? "value"} disabled={!editable} onchange={(e) => editPort(p.spec, { kind: e.currentTarget.value })}>{#each p.kinds as k (k)}<option value={k}>{k}</option>{/each}</select></label>
-          <label>Direction<select value={p.dir ?? "in"} disabled={!editable} onchange={(e) => editPort(p.spec, { dir: e.currentTarget.value })}>{#each ["in", "out", "pair"] as d (d)}<option value={d}>{d}</option>{/each}</select></label>
-          {#if p.follow !== null}<label class="check">Loose end<input type="checkbox" checked={!!p.follow} disabled={!editable} onchange={(e) => editPort(p.spec, { follow: e.currentTarget.checked })} /></label>{/if}
-          <label>Connector<input value={p.connector ?? ""} placeholder="any" disabled={!editable} onchange={(e) => editPort(p.spec, { connector: e.currentTarget.value })} /></label>
-          <label>Gender<select value={p.gender ?? "any"} disabled={!editable} onchange={(e) => editPort(p.spec, { gender: e.currentTarget.value })}>{#each GENDERS as g (g)}<option value={g}>{g}</option>{/each}</select></label>
+        <div class="property-grid port-grid" data-section="port-editor">
+          <label class="port-field">Name<TextInput value={p.name ?? ""} disabled={!editable} onchange={(e: Event) => editPort(p.spec, { name: (e.currentTarget as HTMLInputElement).value })} /></label>
+          <div class="port-field"><span>Kind</span><Select label="Kind" value={p.kind ?? "value"} disabled={!editable} items={p.kinds.map((k) => ({ value: k, label: k }))} onChange={(v) => editPort(p.spec, { kind: v })} /></div>
+          <div class="port-field"><span>Direction</span><Select label="Direction" value={p.dir ?? "in"} disabled={!editable} items={["in", "out", "pair"].map((d) => ({ value: d, label: d }))} onChange={(v) => editPort(p.spec, { dir: v })} /></div>
+          <label class="port-field">Connector<TextInput value={p.connector ?? ""} placeholder="any" disabled={!editable} onchange={(e: Event) => editPort(p.spec, { connector: (e.currentTarget as HTMLInputElement).value })} /></label>
+          <div class="port-field"><span>Gender</span><Select label="Gender" value={p.gender ?? "any"} disabled={!editable} items={GENDERS.map((g) => ({ value: g, label: g }))} onChange={(v) => editPort(p.spec, { gender: v })} /></div>
+          {#if p.follow !== null}<div class="port-field check"><Checkbox label="Loose end" checked={!!p.follow} disabled={!editable} onChange={(on) => editPort(p.spec, { follow: on })} /></div>{/if}
           <!-- Its type (types-and-units.md): empty is loose, connecting to
                anything; the suggestions come from its value and from typed
                ports its instances are connected to (§3.5). -->
-          <label class="wide">Data type<input class="mono" value={p.datatype ?? ""} placeholder="any (loose)" disabled={!editable} title="nm, length, choice(a|b), bool, color, text, series, fn(1), like(input); add | auto. Empty: loose, it connects to anything." onchange={(e) => editPort(p.spec, { datatype: e.currentTarget.value })} /></label>
+          <label class="port-field wide">Data type<TextInput class="mono" value={p.datatype ?? ""} placeholder="any (loose)" disabled={!editable} title="nm, length, choice(a|b), bool, color, text, series, fn(1), like(input); add | auto. Empty: loose, it connects to anything." onchange={(e: Event) => editPort(p.spec, { datatype: (e.currentTarget as HTMLInputElement).value })} /></label>
           {#if editable && !p.datatype && p.suggest?.length}
             <div class="wide type-suggest"><span class="hint">Use</span>{#each p.suggest as t (t)}<Button small variant="outline" onclick={() => editPort(p.spec, { datatype: t })} title="Declare this type">{t}</Button>{/each}</div>
           {/if}
           {#if p.dir !== "out"}
-            <label>Show as pin<select value={p.show ?? "auto"} disabled={!editable} onchange={(e) => editPort(p.spec, { show: e.currentTarget.value })}><option value="auto">Auto</option><option value="pin">Always</option><option value="settings">In settings only</option></select></label>
-            <label>Group<input value={p.group ?? ""} placeholder="none" disabled={!editable} onchange={(e) => editPort(p.spec, { group: e.currentTarget.value })} /></label>
+            <div class="port-field"><span>Show as pin</span><Select label="Show as pin" value={p.show ?? "auto"} disabled={!editable} items={[{ value: "auto", label: "Auto" }, { value: "pin", label: "Always" }, { value: "settings", label: "In settings only" }]} onChange={(v) => editPort(p.spec, { show: v })} /></div>
+            <label class="port-field">Group<TextInput value={p.group ?? ""} placeholder="none" disabled={!editable} onchange={(e: Event) => editPort(p.spec, { group: (e.currentTarget as HTMLInputElement).value })} /></label>
           {/if}
-          <label class="wide">{p.dir === "out" ? "Value" : "Default"}<input class="mono" value={p.bind ? `{= ${p.bind}}` : (p.signal ?? "")} disabled={!editable} title="A number or quantity (10 mW), or an expression in braces: {'{'}= #power.port.signal{'}'}" onchange={(e) => editPort(p.spec, { signal: e.currentTarget.value })} /></label>
+          <label class="port-field wide">{p.dir === "out" ? "Value" : "Default"}<TextInput class="mono" value={p.bind ? `{= ${p.bind}}` : (p.signal ?? "")} disabled={!editable} title="A number or quantity (10 mW), or an expression in braces: {'{'}= #power.port.signal{'}'}" onchange={(e: Event) => editPort(p.spec, { signal: (e.currentTarget as HTMLInputElement).value })} /></label>
         </div>
       {/snippet}
       <!-- Sections in the order the selection's view resolves (`inspector.sections`,
            contexts.md §2.7); each shows only where its node has what it edits. -->
       {#each inspected.sections ?? SECTIONS as section (section)}
         {#if section === "main" && (inspected.main)}
-          <div class="property-section" data-section="main">
-            <div class="component main-head"><span class="main-chip">◆◆ Main component</span><span class="mono">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></div>
-            <label class="name-row">Name<input value={inspected.main.name ?? ""} onchange={(e) => author("rename", { node: inspected!.main!.def, name: e.currentTarget.value })} /></label>
+          <section class="ui-section property-section" aria-label="Main component" data-section="main">
+            <header class="ui-section-header component main-head"><span class="main-chip"><ComponentIcon size={14} strokeWidth={1.75} />Main component</span><span class="ui-section-meta">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></header>
+            <label class="port-field">Name<TextInput value={inspected.main.name ?? ""} onchange={(e: Event) => author("rename", { node: inspected!.main!.def, name: (e.currentTarget as HTMLInputElement).value })} /></label>
             <div class="ports" data-section="ports">
               {#each inspected.main.ports as p (p.spec)}
                 <button class="port-row" class:open={openSpec === p.spec} onclick={() => (openSpec = openSpec === p.spec ? null : p.spec)} title={p.placed ? "A port placed on the picture" : "A setting: no place on the picture"}>
@@ -324,7 +330,7 @@
                 {#if openSpec === p.spec && p.port}{@render portEditor(p.port, true)}{/if}
               {/each}
             </div>
-            <div class="row"><button onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture">+ input</button><span class="hint">Ports: the port tool, on the main</span></div>
+            <div class="inline-row"><Button small variant="outline" onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture"><Plus size={14} strokeWidth={1.75} />Input</Button><span class="hint">Ports: the port tool, on the main</span></div>
             <!-- States (machines.md §6): a doorway into the state editor, which
                  opens in the timeline panel; the inspector stays for values. -->
             <div class="states-door" data-section="states">
@@ -334,38 +340,38 @@
                 <Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)} title="Edit this component's states and their timing (opens in the timeline panel)">Edit states…</Button>
               {:else}
                 <span class="door-label">States</span><span class="door-names hint">none</span>
-                <Button small variant="outline" onclick={addFirstState} title="A state is a look the component can be in; instances move between them">+ Add state</Button>
+                <Button small variant="outline" onclick={addFirstState} title="A state is a look the component can be in; instances move between them"><Plus size={14} strokeWidth={1.75} />Add state</Button>
               {/if}
             </div>
             <!-- Figma's "Resizing" (frame-constraints.md §4): the picture gets a box
                  of its parts' bounds; each part says how it follows the box. -->
-            <label class="row resizable" title="Each picture of this component gets its own size; drag a corner to resize it. Set how each part follows in its Constraints.">
-              <input type="checkbox" checked={!!inspected.main.resizable} onchange={(e) => author("resizable", { def: inspected!.main!.def, on: e.currentTarget.checked })} />
-              Resizable<span class="hint">{inspected.main.resizable ? "parts follow their constraints" : "pictures keep the main's size"}</span>
-            </label>
-          </div>
+            <div class="inline-row resizable" title="Each picture of this component gets its own size; drag a corner to resize it. Set how each part follows in its Constraints.">
+              <Checkbox label="Resizable" checked={!!inspected.main.resizable} onChange={(on) => author("resizable", { def: inspected!.main!.def, on })} />
+              <span class="hint">{inspected.main.resizable ? "parts follow their constraints" : "pictures keep the main's size"}</span>
+            </div>
+          </section>
         {:else if section === "port" && (inspected.port)}
-          <div class="property-section" data-section="port">
-            <div class="component"><span>Port</span><span class="mono">{inspected.port.editable ? "" : "edit on the main"}</span></div>
+          <section class="ui-section property-section" aria-label="Port" data-section="port">
+            <header class="ui-section-header component"><span>Port</span>{#if !inspected.port.editable}<span class="ui-section-meta">edit on the main</span>{/if}</header>
             {@render portEditor(inspected.port, !!inspected.port.editable)}
-          </div>
+          </section>
         {:else if section === "component" && (inspected.component)}
-          <div class="property-section" data-section="component">
-            <div class="component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="mono">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<button class="property-icon" aria-label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach}><Unlink size={14} strokeWidth={1.5} /></button>{/if}</div>
+          <section class="ui-section property-section" aria-label="Component" data-section="component">
+            <header class="ui-section-header component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="ui-section-meta">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<span class="ui-section-actions"><IconButton icon={Unlink} label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach} /></span>{/if}</header>
             {#if machines.view?.entity === inspected.component.entity && machines.view.machines.length}
               <div class="states-door"><span class="door-label">States</span><span class="door-names">{machines.view.machines[0].states.map((s) => s.name).join(" · ")}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
             {/if}
             {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
-              <div class="row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={13} strokeWidth={1.5} /> Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
+              <div class="inline-row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={14} strokeWidth={1.75} />Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
             {/if}
             <!-- Inputs by their author's groups (types-and-units.md §6), in order. -->
             {#each inputGroups(inspected.component.inputs) as g (g.name)}
-              {#if g.name}<div class="subheading input-group">{g.name}</div>{/if}
-              <div class="field-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+              {#if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
+              <div class="property-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
             {/each}
             <!-- What this picture reads from where it is placed (reactivity.md §6). -->
             {#if inspected.component.context.length}
-              <div class="subheading input-group" title="Values this picture takes from the group it is placed in, not from its inputs">From context</div>
+              <div class="ui-subheading input-group" title="Values this picture takes from the group it is placed in, not from its inputs">From context</div>
               <div class="context-reads" data-section="context">
                 {#each inspected.component.context as c (c.name)}
                   <div class="context-read" title={c.from ? `@${c.name} is provided by ${c.from}` : `Nothing above provides @${c.name}: the component's own default`}>
@@ -374,35 +380,37 @@
                 {/each}
               </div>
             {/if}
-          </div>
+          </section>
         {:else if section === "table" && inspected.table && fields("transform2d").length}
-            <div class="property-section" data-section="table">
-              <div class="component"><span>Table</span></div>
-              <div class="add table-edits">
-                <button onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={13} />Row</button>
-                <button onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={13} />Row</button>
-                <button onclick={() => tableEdit("add_column")} title="Add a column at the right"><Plus size={13} />Column</button>
-                <button onclick={() => tableEdit("remove_column")} title="Remove the right column"><Minus size={13} />Column</button>
-                <button onclick={() => tableEdit("preset:light")} title="Hairlines between rows, a muted label column">Light</button>
-                <button onclick={() => tableEdit("preset:boxed")} title="Every cell boxed, a filled header">Boxed</button>
+            <section class="ui-section property-section" aria-label="Table" data-section="table">
+              <header class="ui-section-header component"><span>Table</span></header>
+              <div class="button-row">
+                <Button small variant="outline" onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={14} strokeWidth={1.75} />Row</Button>
+                <Button small variant="outline" onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={14} strokeWidth={1.75} />Row</Button>
+                <Button small variant="outline" onclick={() => tableEdit("add_column")} title="Add a column at the right"><Plus size={14} strokeWidth={1.75} />Column</Button>
+                <Button small variant="outline" onclick={() => tableEdit("remove_column")} title="Remove the right column"><Minus size={14} strokeWidth={1.75} />Column</Button>
+                <Button small variant="outline" onclick={() => tableEdit("preset:light")} title="Hairlines between rows, a muted label column">Light</Button>
+                <Button small variant="outline" onclick={() => tableEdit("preset:boxed")} title="Every cell boxed, a filled header">Boxed</Button>
                 {#if inspected.table !== inspected.node}
-                  <button onclick={() => tableEdit("merge")} disabled={doc.selection.length < 2} title="Merge the selected cells into one">Merge</button>
-                  <button onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</button>
+                  <Button small variant="outline" onclick={() => tableEdit("merge")} disabled={doc.selection.length < 2} title="Merge the selected cells into one">Merge</Button>
+                  <Button small variant="outline" onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</Button>
                 {/if}
               </div>
-            </div>
+            </section>
         {:else if section === "position" && fields("transform2d").length}
-          <div class="property-section" data-section="position">
-            <div class="component"><span>Position</span></div>
-            <div class="field-grid">
+          <section class="ui-section property-section" aria-label="Position" data-section="position">
+            <header class="ui-section-header component"><span>Position</span></header>
+            <div class="property-grid">
               {#each ["x", "y"] as axis}<PropertyField field={field("transform2d", axis)} node={inspected.node} compact prefix={axis.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
-              <PropertyField field={field("transform2d", "rot")} node={inspected.node} label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+              <PropertyField field={field("transform2d", "rot")} node={inspected.node} compact label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
+                {#snippet icon()}<RotateCw size={14} strokeWidth={1.75} />{/snippet}
+              </PropertyField>
             </div>
             {#if inspected.constraints}
               {@const c = inspected.constraints}
               <!-- Constraints (frame-constraints.md §3): how this part follows a
                    resized picture of its component. -->
-              <div class="subheading constraints-head">Constraints</div>
+              <div class="ui-subheading constraints-head">Constraints</div>
               <div class="constraints">
                 <div class="constraints-box" aria-hidden="true">
                   <span class="bar left" class:on={c.horizontal === "left" || c.horizontal === "left_right"}></span>
@@ -419,38 +427,40 @@
                 </div>
               </div>
             {/if}
-            <details class="advanced"><summary>Scale</summary><div class="field-grid">
-              {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
-            </div></details>
-          </div>
+            <Disclosure label="Scale">
+              <div class="property-grid disclosed">
+                {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} compact label={axis === "sx" ? "Scale X" : "Scale Y"} prefix={axis === "sx" ? "X" : "Y"} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
+              </div>
+            </Disclosure>
+          </section>
         {:else if section === "text" && (fields("text").length)}
           <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
         {:else if section === "layout" && ((fields("size").length && textSizing !== "auto_width") || fields("radius").length)}
-          <div class="property-section" data-section="layout">
-            <div class="component"><span>Layout</span></div>
-            <div class="subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
-            <div class="field-grid">
+          <section class="ui-section property-section" aria-label="Layout" data-section="layout">
+            <header class="ui-section-header component"><span>Layout</span></header>
+            <div class="ui-subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
+            <div class="property-grid">
               {#each (fields("size").length ? fields("size").filter(f => textSizing !== "auto_height" || f.field === "w") : fields("radius")) as f (f.leaf)}
                 <PropertyField field={f} node={inspected.node} compact prefix={f.field.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
               {/each}
             </div>
-          </div>
+          </section>
         {:else if section === "appearance" && (supports("appearance") || supports("corners"))}
-          <div class="property-section" data-section="appearance">
-            <div class="component"><span>Appearance</span></div>
-            <div class="field-grid appearance-grid" class:has-corners={supports("corners")}>
-              {#if supports("appearance")}<PropertyField field={field("appearance", "opacity", "1")} node={inspected.node} inlineUnit onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
+          <section class="ui-section property-section" aria-label="Appearance" data-section="appearance">
+            <header class="ui-section-header component"><span>Appearance</span></header>
+            <div class="property-grid appearance-grid" class:has-corners={supports("corners")}>
+              {#if supports("appearance")}<PropertyField field={field("appearance", "opacity", "1")} node={inspected.node} compact label="Opacity" onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
                 {#snippet icon()}<AppearanceIcon kind="opacity" />{/snippet}
               </PropertyField>{/if}
               {#if supports("corners")}
-                <PropertyField field={cornerField} node={inspected.node} label="Corner radius" mixed={mixedCorners} scrubLeaves={cornerLeaves} onSet={setCorners} onRefresh={refresh} onError={(e) => setError = e}>
+                <PropertyField field={cornerField} node={inspected.node} compact label="Corner radius" mixed={mixedCorners} scrubLeaves={cornerLeaves} onSet={setCorners} onRefresh={refresh} onError={(e) => setError = e}>
                   {#snippet icon()}<AppearanceIcon kind="radius" />{/snippet}
                 </PropertyField>
-                <button class="property-icon corner-toggle" class:active={separateCorners} aria-label="Individual corners" aria-pressed={separateCorners} title="Individual corners" onclick={() => separateCorners = !separateCorners}><Scan size={16} strokeWidth={1.5} /></button>
+                <IconButton icon={Scan} label="Individual corners" pressed={separateCorners} onPressedChange={(on) => separateCorners = on} />
               {/if}
             </div>
             {#if separateCorners}
-              <div class="field-grid individual-corners">
+              <div class="property-grid individual-corners">
                 {#each [{ key: "tl", label: "Top left" }, { key: "tr", label: "Top right" }, { key: "bl", label: "Bottom left" }, { key: "br", label: "Bottom right" }] as const as corner}
                   <PropertyField field={field("corners", corner.key)} node={inspected.node} compact label={corner.label} onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
                     {#snippet icon()}<AppearanceIcon kind={corner.key} />{/snippet}
@@ -458,28 +468,28 @@
                 {/each}
               </div>
             {/if}
-          </div>
+          </section>
         {:else if section === "fill" && (supports("fill") || fields("gradient").length)}
-          <div class="property-section" data-section="fill">
-            <div class="component"><span>Fill</span>{#if !fields("fill").length && !fields("gradient").length}<button class="property-icon" aria-label="Add fill" title="Add fill" onclick={() => component("fill", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
+          <section class="ui-section property-section" aria-label="Fill" data-section="fill">
+            <header class="ui-section-header component"><span>Fill</span>{#if !fields("fill").length && !fields("gradient").length}<span class="ui-section-actions"><IconButton icon={Plus} label="Add fill" onclick={() => component("fill", true)} /></span>{/if}</header>
             {#if fields("fill").length || fields("gradient").length}
               <PaintRow node={inspected.node} label="Fill" color={field("fill", "color", "#808080ff", "color")} opacity={field("fill", "opacity", "1")} gradient={fields("gradient")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onMode={paintMode} onRemove={() => patch({}, ["fill", "gradient"], "remove fill")} />
-            {:else}<p class="section-empty">No fill</p>{/if}
-          </div>
+            {:else}<EmptyState inline>No fill</EmptyState>{/if}
+          </section>
         {:else if section === "stroke" && (supports("stroke"))}
-          <div class="property-section" data-section="stroke">
-            <div class="component"><span>Stroke</span>{#if !fields("stroke").length}<button class="property-icon" aria-label="Add stroke" title="Add stroke" onclick={() => component("stroke", true)}><Plus size={17} strokeWidth={1.5} /></button>{/if}</div>
+          <section class="ui-section property-section" aria-label="Stroke" data-section="stroke">
+            <header class="ui-section-header component"><span>Stroke</span>{#if !fields("stroke").length}<span class="ui-section-actions"><IconButton icon={Plus} label="Add stroke" onclick={() => component("stroke", true)} /></span>{/if}</header>
             {#if fields("stroke").length}
               <PaintRow node={inspected.node} label="Stroke" color={field("stroke", "color", "#000000ff", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onRemove={() => component("stroke", false)} />
               <div class="stroke-options" bind:this={strokeAnchor}>
-                <div><div class="subheading">Position</div><div class="readout" title="Strokes currently render centred on the outline">Centre</div></div>
+                <div class="readout-field"><span class="ui-subheading">Position</span><div class="ui-field readout" title="Strokes currently render centred on the outline">Centre</div></div>
                 <PropertyField field={field("stroke", "width", "1")} node={inspected.node} label="Weight" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                 <Popover.Root>
-                  <Popover.Trigger class="property-icon stroke-settings" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={16} strokeWidth={1.5} /></Popover.Trigger>
+                  <Popover.Trigger class="property-icon" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
                   <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} customAnchor={strokeAnchor} aria-label="Stroke settings">
-                    <header><strong>Stroke settings</strong><Popover.Close class="property-icon" aria-label="Close stroke settings"><X size={15} /></Popover.Close></header>
+                    <header><strong>Stroke settings</strong><Popover.Close class="property-icon" aria-label="Close stroke settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
                     <div class="property-popover-body">
-                      <div class="subheading">Basic</div>
+                      <div class="ui-subheading">Basic</div>
                       <div class="property-grid">
                         {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset", "path_length"].includes(f.field)) as f (f.leaf)}
                           <PropertyField field={f} node={inspected.node} label={{ join: "Join", cap: "Cap", miter: "Miter limit", dash: "Dash pattern", dash_offset: "Dash offset", path_length: "Path length" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
@@ -488,14 +498,14 @@
                       <!-- Trim Paths (plans/specs/wires-and-formulas.md §5): the part of the
                            outline that is stroked; "draw on" animates End from 0 to 1. -->
                       {#if supports("trim")}
-                        <div class="subheading trim-heading"><span>Trim</span>
+                        <div class="ui-subheading trim-heading"><span>Trim</span>
                           {#if fields("trim").length}
-                            <button class="property-icon" aria-label="Remove trim" title="Remove trim" onclick={() => component("trim", false)}><Minus size={15} /></button>
+                            <IconButton icon={Minus} label="Remove trim" onclick={() => component("trim", false)} />
                           {:else}
-                            <button class="property-icon" aria-label="Add trim" title="Add trim" onclick={() => component("trim", true)}><Plus size={15} strokeWidth={1.5} /></button>
+                            <IconButton icon={Plus} label="Add trim" onclick={() => component("trim", true)} />
                           {/if}
                         </div>
-                        <div class="trim-actions"><Button small variant="outline" onclick={drawOn} title="Key Trim End from 0 at the playhead to 100% a second later, with Easy Ease (adds Trim if needed)"><PenLine size={13} strokeWidth={1.5} /> Draw on</Button></div>
+                        <div><Button small variant="outline" onclick={drawOn} title="Key Trim End from 0 at the playhead to 100% a second later, with Easy Ease (adds Trim if needed)"><PenLine size={14} strokeWidth={1.75} />Draw on</Button></div>
                         {#if fields("trim").length}
                           <div class="property-grid">
                             {#each fields("trim") as f (f.leaf)}
@@ -508,24 +518,26 @@
                   </Popover.Content></Popover.Portal>
                 </Popover.Root>
               </div>
-            {:else}<p class="section-empty">No stroke</p>{/if}
-          </div>
+            {:else}<EmptyState inline>No stroke</EmptyState>{/if}
+          </section>
         {:else if section === "effects" && (supports("shadow"))}
-          <div class="property-section" data-section="effects">
-            <div class="component"><span>Effects</span>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={17} strokeWidth={1.5} /></DropdownMenu.Trigger>
-                <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
-                  {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
-                </DropdownMenu.Content></DropdownMenu.Portal>
-              </DropdownMenu.Root>
-            </div>
+          <section class="ui-section property-section" aria-label="Effects" data-section="effects">
+            <header class="ui-section-header component"><span>Effects</span>
+              <span class="ui-section-actions">
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+                  <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
+                    {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
+                  </DropdownMenu.Content></DropdownMenu.Portal>
+                </DropdownMenu.Root>
+              </span>
+            </header>
             {#each effects as effect (effect.kind)}
               <div class="effect-row">
                 <Popover.Root>
-                  <Popover.Trigger class="effect-trigger" aria-label="{effect.label} settings"><Square size={16} strokeWidth={1.5} /><span>{effect.label}</span><SlidersHorizontal size={14} strokeWidth={1.5} /></Popover.Trigger>
+                  <Popover.Trigger class="ui-field effect-trigger" aria-label="{effect.label} settings"><Square size={14} strokeWidth={1.75} /><span>{effect.label}</span><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
                   <Popover.Portal><Popover.Content class="property-popover" side="left" align="start" sideOffset={12} aria-label="{effect.label} settings">
-                    <header><strong>{effect.label}</strong><Popover.Close class="property-icon" aria-label="Close effect settings"><X size={15} /></Popover.Close></header>
+                    <header><strong>{effect.label}</strong><Popover.Close class="property-icon" aria-label="Close effect settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
                     <div class="property-popover-body">
                       <PaintRow node={inspected.node} label="Shadow" color={field(effect.kind, "color", "#00000040", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                       <div class="property-grid">
@@ -534,44 +546,60 @@
                     </div>
                   </Popover.Content></Popover.Portal>
                 </Popover.Root>
-                <button class="property-icon" aria-label="Remove {effect.kind}" title="Remove {effect.label.toLowerCase()}" onclick={() => component(effect.kind, false)}><Minus size={16} strokeWidth={1.5} /></button>
+                <IconButton icon={Minus} label="Remove {effect.kind}" title="Remove {effect.label.toLowerCase()}" onclick={() => component(effect.kind, false)} />
               </div>
-            {:else}<p class="section-empty">No effects</p>{/each}
-          </div>
+            {:else}<EmptyState inline>No effects</EmptyState>{/each}
+          </section>
         {:else if section === "other"}
         {#each otherComponents as c (c.kind)}
-          <div class="property-section">
-            <div class="component" data-kind={c.kind}><span>{titles[c.kind] ?? c.kind}</span>{#if inspected.removable.includes(c.kind)}<button class="property-icon" aria-label="Remove {c.kind}" onclick={() => component(c.kind, false)}><Minus size={16} /></button>{/if}</div>
-            <div class="field-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
-          </div>
+          <section class="ui-section property-section" aria-label={titles[c.kind] ?? c.kind}>
+            <header class="ui-section-header component" data-kind={c.kind}><span>{titles[c.kind] ?? c.kind}</span>{#if inspected.removable.includes(c.kind)}<span class="ui-section-actions"><IconButton icon={Minus} label="Remove {c.kind}" onclick={() => component(c.kind, false)} /></span>{/if}</header>
+            <div class="property-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+          </section>
         {/each}
         {:else if section === "add" && (inspected.addable.some(k => addKinds.includes(k)))}
-          <div class="add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<button aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={13} />{titles[kind] ?? kind}</button>{/each}</div>
+          <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? kind}</Button>{/each}</div>
         {/if}
       {/each}
     </div>
   {:else}
-    <div class="empty"><MousePointer2 size={28} strokeWidth={1.25} /><strong>Make a selection</strong><span>Select an object to see its properties.</span></div>
+    <EmptyState icon={MousePointer2} title="Make a selection">Select an object to see its properties.</EmptyState>
   {/if}
   {#if inspected}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
 </section>
 
 <style>
-  .properties { padding: 0 !important; font-size: 12px; }
+  .properties { padding: 0 !important; gap: 0 !important; font-size: var(--text-md); }
+  /* The selection's actions: one row of small outline buttons. */
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); }
+  .actions:not(:has(> :global(.ui-button), > :global(.authoring:not(.idle)))) { display: none; }
+  .button-row, .inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  .button-row { gap: 4px; }
+  .add { padding: 12px var(--panel-pad); }
+  .inspector { display: flex; flex-direction: column; }
+  /* A header with both meta and actions: the meta takes the space. */
+  .ui-section-meta + .ui-section-actions { margin-left: 4px; }
+  .title { padding: 0 var(--panel-pad); min-height: var(--panel-header-h); border-bottom: 1px solid var(--border); }
+  .title-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mono { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-faint); }
+  .hint { font-size: var(--text-sm) !important; color: var(--fg-faint); }
+  .error { padding: 8px var(--panel-pad) 0; overflow-wrap: anywhere; }
+  .selection-note { padding: 8px var(--panel-pad) 0; color: var(--fg-muted); font-size: var(--text-sm); }
+  footer { display: flex; justify-content: space-between; padding: 12px var(--panel-pad); font-size: var(--text-sm); color: var(--fg-muted); }
+  .recording { display: flex; align-items: flex-start; gap: 6px; margin: 8px var(--panel-pad) 0; padding: 6px 8px; border-radius: var(--radius); background: color-mix(in srgb, var(--record) 16%, transparent); font-size: var(--text-sm); line-height: 1.35; }
+  .recording .dot { flex: none; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--record); }
+  .state-key { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px var(--panel-pad) 0; }
+  .question { display: flex; flex-direction: column; gap: 8px; margin: 8px var(--panel-pad); padding: 12px; border: 1px solid var(--danger); border-radius: var(--radius-lg); }
   .context-reads { display: flex; flex-direction: column; gap: 4px; }
-  .context-read { display: flex; align-items: baseline; gap: 8px; min-height: 22px; font-size: 12px; }
+  .context-read { display: flex; align-items: baseline; gap: 8px; min-height: 22px; }
   .context-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .states-door { display: flex; align-items: center; gap: 8px; min-height: 30px; font-size: 12px; }
-  .door-label { color: var(--fg-muted); font-size: 11px; }
+  .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
+  .door-label { color: var(--fg-muted); font-size: var(--text-sm); }
   .door-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .recording { display: flex; align-items: flex-start; gap: 6px; margin: 0 12px 8px; padding: 6px 8px; border-radius: 5px; background: rgba(255, 153, 51, 0.16); font-size: 11px; line-height: 1.35; }
-  .recording .dot { flex: none; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: #ff9933; }
-  .state-key { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
-  .resizable { align-items: center; gap: 8px; font-size: 12px; }
-  .resizable input { accent-color: var(--accent); margin: 0; }
-  .constraints-head { margin-top: 12px; }
+  .input-group { margin-top: 4px; }
+  .constraints-head { margin-top: 4px; }
   .constraints { display: flex; gap: 10px; align-items: center; }
-  .constraints-box { position: relative; flex: 0 0 64px; height: 64px; border-radius: 4px; background: var(--bg-sunken); }
+  .constraints-box { position: relative; flex: 0 0 64px; height: 64px; border-radius: var(--radius); background: var(--bg-sunken); }
   .constraints-box .core { position: absolute; inset: 22px; border: 1px solid var(--border-strong); border-radius: 2px; }
   .constraints-box .bar { position: absolute; background: var(--border-strong); border-radius: 1px; }
   .constraints-box .bar.on { background: var(--accent); }
@@ -582,62 +610,31 @@
   .constraints-box .midh { left: 26px; top: 31px; width: 12px; height: 2px; opacity: 0; }
   .constraints-box .midv { top: 26px; left: 31px; width: 2px; height: 12px; opacity: 0; }
   .constraints-box .midh.on, .constraints-box .midv.on { opacity: 1; }
-  .constraints-selects { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
-  .type-suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-  .input-group { margin: 12px 0 6px; font-weight: 600; color: var(--fg); }
-  .trim-actions { display: flex; margin: 6px 0 2px; }
-  .trim-actions :global(.ui-button), .row :global(.ui-button) { display: inline-flex; align-items: center; gap: 5px; }
-  .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
-  .panel-heading { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
-  .panel-heading span { border-bottom: 2px solid var(--accent); padding-bottom: 4px; }
-  .row { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 4px; }
-  .actions { padding-top: 10px; padding-bottom: 2px; }
-  .inspector { display: flex; flex-direction: column; }
-  .title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-  .title strong { font-size: 13px; flex: 1; }
-  .mono { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; color: var(--fg-faint); }
-  .property-section { padding: 16px; border-bottom: 1px solid var(--border); }
-  .component { display: flex; justify-content: space-between; align-items: center; min-height: 22px; margin-bottom: 14px; font-size: 12px; font-weight: 600; }
-  .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; }
-  .subheading { font-size: 11px; color: var(--fg-muted); margin-bottom: 6px; }
-  .section-empty { font-size: 11px; color: var(--fg-faint); margin: 0; }
-  .appearance-grid { gap: 12px 10px; }
-  .appearance-grid.has-corners { grid-template-columns: repeat(2, minmax(0, 1fr)) 28px; }
-  .corner-toggle { align-self: end; width: 28px; height: 32px; background: var(--bg-sunken); border-radius: 5px; }
-  .corner-toggle.active { background: var(--accent-soft); color: var(--accent); }
-  .individual-corners { margin-top: 10px; padding-right: 38px; gap: 10px; }
-  .advanced { margin-top: 10px; }
-  .advanced summary { color: var(--fg-muted); font-size: 11px; cursor: pointer; }
-  .advanced[open] summary { margin-bottom: 8px; }
-  .stroke-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: end; margin-top: 12px; }
-  .stroke-options :global(.stroke-settings) { margin-bottom: 4px; }
-  .readout { min-height: 32px; display: flex; align-items: center; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; font-size: 12px; box-sizing: border-box; }
-  .effect-row { display: flex; align-items: center; gap: 6px; }
-  .effect-row :global(.effect-trigger) { display: flex; align-items: center; gap: 8px; min-height: 33px; flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg); color: var(--fg); font-size: 12px; cursor: pointer; }
+  .constraints-selects { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+  .disclosed { margin-top: 8px; }
+  .appearance-grid.has-corners { grid-template-columns: repeat(2, minmax(0, 1fr)) 24px; align-items: center; }
+  .individual-corners { padding-right: 32px; }
+  .stroke-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: end; }
+  .stroke-options > :global(.property-icon) { margin-bottom: 2px; }
+  .readout-field { display: flex; flex-direction: column; gap: 4px; }
+  .readout { padding: 0 8px; color: var(--fg-muted); }
+  .effect-row { display: flex; align-items: center; gap: 4px; }
+  .effect-row :global(.effect-trigger) { flex: 1; gap: 8px; padding: 0 8px; color: var(--fg); cursor: pointer; }
   .effect-row :global(.effect-trigger span) { flex: 1; text-align: left; }
-  .effect-row :global(.effect-trigger:hover) { border-color: var(--fg-faint); }
-  .add { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px; }
-  .table-edits { padding: 8px 0 0; }
-  .add button { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; padding: 5px 7px; background: transparent; }
-  .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 20px; color: var(--fg-faint); }
-  .empty strong { font-size: 13px; color: var(--fg-muted); }
-  .selection-note { padding: 0 16px; color: var(--fg-muted); font-size: 11px; }
-  footer { display: flex; justify-content: space-between; padding: 12px 16px; font-size: 10px; color: var(--fg-faint); }
-  .question { border: 1px solid var(--danger); padding: 10px; margin: 8px; border-radius: 6px; }
-  .candidate { margin: 8px 0; }
-  .error { padding: 0 16px; overflow-wrap: anywhere; }
+  .effect-row :global(.effect-trigger svg) { flex: none; color: var(--fg-muted); }
+  .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+  .type-suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   /* Component authoring: a main's violet, ports' teal (component-authoring.md §0). */
-  .main-chip { color: #7d4dff; }
-  .name-row, .port-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--fg-muted); }
-  .name-row { margin-bottom: 12px; }
-  .name-row input, .port-grid input, .port-grid select { min-height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg); color: var(--fg); font-size: 12px; box-sizing: border-box; }
-  .port-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 8px; margin: 8px 0 12px; }
-  .port-grid .wide { grid-column: 1 / -1; }
-  .port-grid label.check { flex-direction: row; align-items: center; justify-content: space-between; }
-  .ports { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .port-row { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border-radius: 4px; background: transparent; text-align: left; font-size: 12px; }
-  .port-row:hover, .port-row.open { background: var(--bg-sunken); }
-  .port-row .dir { width: 28px; font-size: 10px; color: #0ab894; font-weight: 600; text-transform: uppercase; }
-  .port-row .setting { margin-left: auto; font-size: 10px; color: var(--fg-faint); }
-  .hint { font-size: 10px; color: var(--fg-faint); align-self: center; }
+  .main-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--component); }
+  .port-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: var(--text-sm); color: var(--fg-muted); }
+  .port-field.wide, .port-grid .wide { grid-column: 1 / -1; }
+  .port-field.check { justify-content: flex-end; min-height: var(--control-h); }
+  .port-field :global(.ui-input) { width: 100%; }
+  .port-field :global(.ui-input.mono) { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg); }
+  .port-grid { margin: 4px 0 8px; }
+  .ports { display: flex; flex-direction: column; gap: 2px; }
+  .port-row { display: flex; gap: 8px; align-items: center; min-height: var(--control-h-sm); padding: 0 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); text-align: left; font-size: var(--text-md); cursor: pointer; }
+  .port-row:hover, .port-row.open { background: var(--hover); }
+  .port-row .dir { width: 28px; font-size: var(--text-xs); color: var(--port); font-weight: 600; text-transform: uppercase; }
+  .port-row .setting { margin-left: auto; font-size: var(--text-xs); color: var(--fg-faint); }
 </style>

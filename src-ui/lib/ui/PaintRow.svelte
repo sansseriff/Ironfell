@@ -2,6 +2,7 @@
   import { Popover, ToggleGroup } from "bits-ui";
   import X from "@lucide/svelte/icons/x";
   import Minus from "@lucide/svelte/icons/minus";
+  import IconButton from "./IconButton.svelte";
   import PropertyField, { type Property } from "./PropertyField.svelte";
   import ColorPicker from "./ColorPicker.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -36,7 +37,7 @@
 
 <div class="paint-row" data-paint={label.toLowerCase()}>
   <Popover.Root bind:open>
-    <div class="paint-value">
+    <div class="ui-field paint-value">
       <Popover.Trigger class="paint-swatch" aria-label="{label} paint settings" title="Edit {label.toLowerCase()}">
         <span class="paint-chip" style:background={paint}></span>
       </Popover.Trigger>
@@ -51,18 +52,20 @@
     </div>
     <Popover.Portal>
       <Popover.Content class="property-popover color-popover" side="left" align="start" sideOffset={12} aria-label="{label} paint settings">
-        <header class="color-header">
-          <span class="color-tab">{label}</span>
-          <Popover.Close class="property-icon" aria-label="Close {label.toLowerCase()} settings"><X size={16} strokeWidth={1.5} /></Popover.Close>
+        <header>
+          <strong>{label}</strong>
+          <Popover.Close class="property-icon" aria-label="Close {label.toLowerCase()} settings"><X size={14} strokeWidth={1.75} /></Popover.Close>
         </header>
         {#if onMode}
-          <ToggleGroup.Root type="single" class="paint-types" value={mode} onValueChange={(v) => { if (v && v !== mode) onMode(v); }} aria-label="Paint type">
-            {#each types as t (t.value)}
-              <ToggleGroup.Item class="property-icon large paint-type" value={t.value} aria-label={t.label} title={t.label}>
-                <span class="paint-type-chip" style:background={t.chip}></span>
-              </ToggleGroup.Item>
-            {/each}
-          </ToggleGroup.Root>
+          <div class="paint-types-row">
+            <ToggleGroup.Root type="single" class="ui-segmented is-inline paint-types" value={mode} onValueChange={(v) => { if (v && v !== mode) onMode(v); }} aria-label="Paint type">
+              {#each types as t (t.value)}
+                <ToggleGroup.Item class="ui-segment" value={t.value} aria-label={t.label} title={t.label}>
+                  <span class="paint-type-chip" style:background={t.chip}></span>
+                </ToggleGroup.Item>
+              {/each}
+            </ToggleGroup.Root>
+          </div>
         {/if}
         {#if gradient.length}
           <div class="stops" style:--stops="linear-gradient(to right, {stop('start')?.text}, {stop('end')?.text})">
@@ -87,29 +90,27 @@
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
-  {#if onRemove}<button class="remove property-icon" aria-label="Remove {label.toLowerCase()}" title="Remove {label.toLowerCase()}" onclick={onRemove}><Minus size={16} strokeWidth={1.5} /></button>{/if}
+  {#if onRemove}<IconButton icon={Minus} label="Remove {label.toLowerCase()}" onclick={onRemove} />{/if}
 </div>
 
 <style>
-  .paint-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-  .paint-value { display: grid; grid-template-columns: 30px minmax(0, 1fr) 64px; flex: 1; min-width: 0; align-items: center; background: var(--bg-sunken); border-radius: 6px; }
-  .paint-value :global(.field .control) { background: transparent; }
-  .paint-opacity { border-left: 1px solid var(--bg); min-width: 0; }
-  .paint-name { text-align: left; border: 0; background: transparent; padding: 7px 3px; font-size: 12px; color: var(--fg); cursor: pointer; }
-  .paint-value :global(.paint-swatch) { display: grid; place-items: center; width: 30px; height: 32px; padding: 0; border: 0; background: transparent; cursor: pointer; }
-  .paint-chip { display: block; width: 19px; height: 19px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.05); }
+  .paint-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  /* One field (`.ui-field`): the swatch, the colour and the opacity. The
+     fields inside lose their own shells. */
+  .paint-value { display: grid; grid-template-columns: 28px minmax(0, 1fr) 64px; flex: 1; align-items: center; overflow: hidden; }
+  .paint-value :global(.control.ui-field), .paint-value :global(.control.ui-field:hover) { min-height: calc(var(--control-h) - 2px); border-color: transparent; background: transparent; }
+  .paint-opacity { min-width: 0; border-left: 1px solid var(--bg); }
+  .paint-name { padding: 0 2px; border: 0; background: transparent; color: var(--fg); font-size: var(--text-md); text-align: left; cursor: pointer; }
+  .paint-value :global(.paint-swatch) { display: grid; place-items: center; width: 28px; height: calc(var(--control-h) - 2px); padding: 0; border: 0; background: transparent; cursor: pointer; }
+  .paint-chip { display: block; width: 16px; height: 16px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border); }
   :global(.property-popover.color-popover) { width: 240px; }
-  .color-header { padding: 8px 8px 8px 8px; }
-  .color-tab { padding: 5px 8px; border-radius: 5px; background: var(--hover); font-weight: 600; }
-  :global(.paint-types) { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--border); }
-  :global(.paint-type[data-state="on"]) { background: var(--hover); }
-  .paint-type-chip { display: block; width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px var(--fg-muted); }
+  .paint-types-row { padding: 8px var(--panel-pad); border-bottom: 1px solid var(--border); }
+  :global(.paint-types .ui-segment) { width: 32px; }
+  .paint-type-chip { display: block; width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px currentColor; }
   .stops { position: relative; margin: 16px 23px 0; height: 24px; }
-  .stop-bar { position: absolute; inset: 6px 0; border-radius: 3px; background: var(--stops); box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
-  .stop { position: absolute; top: 0; width: 20px; height: 24px; padding: 3px; border: 0; border-radius: 4px; background: var(--bg); transform: translateX(-50%); cursor: pointer; box-shadow: 0 0 0 1px var(--border-strong), 0 1px 3px rgba(0,0,0,.2); }
+  .stop-bar { position: absolute; inset: 6px 0; border-radius: var(--radius-sm); background: var(--stops); box-shadow: inset 0 0 0 1px var(--border); }
+  .stop { position: absolute; top: 0; width: 20px; height: 24px; padding: 3px; border: 0; border-radius: var(--radius); background: var(--raised); transform: translateX(-50%); cursor: pointer; box-shadow: 0 0 0 1px var(--border-strong); }
   .stop span { display: block; width: 100%; height: 100%; border-radius: 2px; }
-  .stop.active { box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0,0,0,.2); }
-  .stop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .gradient-points { padding: 0 16px 16px; }
-  .remove { flex: 0 0 24px; }
+  .stop.active { box-shadow: 0 0 0 2px var(--accent); }
+  .gradient-points { padding: 0 var(--panel-pad) var(--panel-pad); }
 </style>

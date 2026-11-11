@@ -7,6 +7,7 @@
   import type { DockviewPanelApi } from "dockview-core";
   import SquareDashed from "@lucide/svelte/icons/square-dashed";
   import Button from "../../lib/ui/Button.svelte";
+  import EmptyState from "../../lib/ui/EmptyState.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
 
@@ -33,17 +34,15 @@
 </script>
 
 <div class="missing canvas-ui">
-  <SquareDashed size={28} strokeWidth={1.5} class="icon" />
-  <p class="title">{named ? `No composition “${spec.source}” in this scope` : "This composition is gone"}</p>
-  <p class="hint">
+  <EmptyState icon={SquareDashed} title={named ? `No composition “${spec.source}” in this scope` : "This composition is gone"}>
     {named ? "This tab is from another layout. Make the composition here, or close the tab." : "It was deleted. Undo brings it back; or close the tab."}
-  </p>
-  <div class="actions">
-    {#if named}
-      <Button variant="primary" disabled={busy} onclick={create}>Create “{spec.source}”</Button>
-    {/if}
-    <Button variant="outline" onclick={() => api.close()}>Close tab</Button>
-  </div>
+    {#snippet actions()}
+      {#if named}
+        <Button variant="primary" disabled={busy} onclick={create}>Create “{spec.source}”</Button>
+      {/if}
+      <Button variant="outline" onclick={() => api.close()}>Close tab</Button>
+    {/snippet}
+  </EmptyState>
   {#if error}<p class="error">{error}</p>{/if}
 </div>
 
@@ -55,35 +54,15 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 24px;
     background: var(--bg);
-    color: var(--fg);
-    text-align: center;
-    font-size: 13px;
     pointer-events: auto;
   }
-  .missing :global(.icon) {
-    color: var(--fg-muted);
-    margin-bottom: 4px;
-  }
-  .title {
-    margin: 0;
-    font-weight: 600;
-  }
-  .hint {
-    margin: 0;
-    max-width: 360px;
-    color: var(--fg-muted);
-    line-height: 1.45;
-  }
-  .actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
+  .missing :global(.ui-empty) {
+    max-width: 400px;
   }
   .error {
-    margin: 4px 0 0;
+    margin: 0;
     color: var(--danger);
+    font-size: var(--text-md);
   }
 </style>

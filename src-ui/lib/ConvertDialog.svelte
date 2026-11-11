@@ -5,6 +5,7 @@
   // engine converts without asking.
   import { AlertDialog } from "bits-ui";
   import { controllerManager } from "../controller-manager.svelte";
+  import Button from "./ui/Button.svelte";
 
   const doc = controllerManager.docClient;
   const q = $derived(doc.convertQuestion);
@@ -19,86 +20,29 @@
 
 <AlertDialog.Root open={!!q} onOpenChange={(open) => { if (!open) doc.convertQuestion = null; }}>
   <AlertDialog.Portal>
-    <AlertDialog.Overlay class="convert-overlay" />
-    <AlertDialog.Content class="convert-dialog">
-      <AlertDialog.Title class="convert-title">Edit this {noun} as a path?</AlertDialog.Title>
-      <AlertDialog.Description class="convert-body">
-        Editing its points turns it into a path, which has no {q?.type === "rect" ? "width or height" : "radii"} to bind. This cuts:
-      </AlertDialog.Description>
-      <ul class="convert-cuts">
-        {#each q?.cuts ?? [] as cut}
-          <li>{cut}</li>
-        {/each}
-      </ul>
-      <p class="convert-body">Undo turns it back into the {noun}, with everything restored.</p>
-      <div class="convert-actions">
-        <AlertDialog.Cancel class="convert-button">Cancel</AlertDialog.Cancel>
-        <AlertDialog.Action class="convert-button primary" onclick={convert}>Convert to path</AlertDialog.Action>
+    <AlertDialog.Overlay class="ui-dialog-overlay" />
+    <AlertDialog.Content class="ui-dialog">
+      <AlertDialog.Title class="ui-dialog-title">Edit this {noun} as a path?</AlertDialog.Title>
+      <div class="ui-dialog-body">
+        <AlertDialog.Description class="ui-dialog-description">
+          Editing its points turns it into a path, which has no {q?.type === "rect" ? "width or height" : "radii"} to bind. This cuts:
+        </AlertDialog.Description>
+        <ul class="cuts">
+          {#each q?.cuts ?? [] as cut}
+            <li>{cut}</li>
+          {/each}
+        </ul>
+        <p class="ui-dialog-description">Undo turns it back into the {noun}, with everything restored.</p>
+      </div>
+      <div class="ui-dialog-actions">
+        <AlertDialog.Cancel>{#snippet child({ props })}<Button variant="outline" {...props}>Cancel</Button>{/snippet}</AlertDialog.Cancel>
+        <AlertDialog.Action onclick={convert}>{#snippet child({ props })}<Button variant="primary" {...props}>Convert to path</Button>{/snippet}</AlertDialog.Action>
       </div>
     </AlertDialog.Content>
   </AlertDialog.Portal>
 </AlertDialog.Root>
 
 <style>
-  :global(.convert-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    background: var(--overlay);
-  }
-  :global(.convert-dialog) {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 1001;
-    width: min(440px, calc(100vw - 32px));
-    padding: 18px 20px 16px;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: var(--menu-shadow);
-    font-size: 13px;
-  }
-  :global(.convert-title) {
-    margin: 0 0 8px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  :global(.convert-body) {
-    margin: 0 0 8px;
-    color: var(--fg-muted);
-    line-height: 1.45;
-  }
-  .convert-cuts {
-    margin: 0 0 10px;
-    padding-left: 18px;
-    line-height: 1.45;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-  }
-  .convert-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 14px;
-  }
-  :global(.convert-button) {
-    padding: 5px 12px;
-    border: 1px solid var(--border-strong);
-    border-radius: 6px;
-    background: var(--bg-input);
-    color: var(--fg);
-    font: inherit;
-    cursor: pointer;
-  }
-  :global(.convert-button:hover) {
-    background: var(--hover);
-  }
-  :global(.convert-button.primary) {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
+  .cuts { margin: 0; padding-left: 18px; list-style: disc; line-height: 1.45; font-family: var(--font-mono); font-size: var(--text-md); }
+  p { margin: 0; }
 </style>

@@ -71,3 +71,16 @@ fn the_library_composition_bakes_every_preview() {
     assert_eq!(doc.children(lib).len(), standard::ENTRIES.len());
     assert!(!store.save().contains("Dial meter"), "never saved");
 }
+
+#[test]
+fn the_library_recolours_its_cards_for_the_theme() {
+    let mut store = Store::new();
+    let first = store.document().next_session_ids(1)[0];
+    store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
+    assert!(standard::library_theme_ops(store.document(), true).is_empty(), "built in the light theme's colours");
+    let dark = standard::library_theme_ops(store.document(), false);
+    // Each card's fill and edge, each label's ink.
+    assert_eq!(dark.len(), standard::ENTRIES.len() * 3);
+    store.apply_session(dark).unwrap();
+    assert!(standard::library_theme_ops(store.document(), false).is_empty());
+}

@@ -360,10 +360,12 @@ fn words(content: &str, size: f64, weight: f64) -> [Facet; 2] {
     [t.wrap(), f.wrap()]
 }
 
-const SEGMENT: [f32; 4] = [0.3, 0.55, 0.95, 1.0];
 const ERROR: [f32; 4] = [0.9, 0.3, 0.3, 1.0];
+/// The playhead's orange (#ff9933), its grip's and its transition bands':
+/// not the record colour (`--record`), which marks auto-keyframe.
 const PLAYHEAD: [f32; 4] = [1.0, 0.6, 0.2, 1.0];
-const LOOP: [f32; 4] = [1.0, 0.6, 0.2, 0.22];
+/// The loop's span on the ruler: the playhead's orange, faint.
+const LOOP: [f32; 4] = [PLAYHEAD[0], PLAYHEAD[1], PLAYHEAD[2], 0.22];
 /// A state lane's stretches, by the state's index: muted hues that read in
 /// both themes under light or dark labels.
 const LANE: [[f32; 4]; 6] = [
@@ -375,44 +377,57 @@ const LANE: [[f32; 4]; 6] = [
     [0.50, 0.58, 0.40, 0.75],
 ];
 
-/// The timeline's colours for one theme: the dark set matches the shell's
-/// dark tokens, the light set its light ones (src-ui/app.css), and the DOM
-/// column (TimelinePanel.svelte) uses the same values.
+/// The timeline's colours for one theme, in sRGB: each is a shell token
+/// (src-ui/app.css), so the canvas is one surface with the app and with
+/// the DOM column (TimelinePanel.svelte), which uses the tokens themselves.
+/// Change them together.
 struct Palette {
+    /// The rows: `--bg`.
     bg: [f32; 4],
+    /// Under the label column, and the ruler: `--bg-sunken`.
     header: [f32; 4],
     ruler: [f32; 4],
+    /// The grid's lines: `--border`.
     grid: [f32; 4],
+    /// Major ticks: `--fg-faint`; minor ones: `--border-strong`.
     tick: [f32; 4],
-    label: [f32; 4],
     dim: [f32; 4],
+    /// The ruler's labels: `--fg-muted`.
+    label: [f32; 4],
     summary: [f32; 4],
     key: [f32; 4],
     key_edge: [f32; 4],
+    /// A clip's bar: `--accent`.
+    segment: [f32; 4],
+}
+const fn hex(c: u32) -> [f32; 4] {
+    [((c >> 16) & 0xff) as f32 / 255.0, ((c >> 8) & 0xff) as f32 / 255.0, (c & 0xff) as f32 / 255.0, 1.0]
 }
 const DARK: Palette = Palette {
-    bg: [0.145, 0.145, 0.152, 1.0],
-    header: [0.17, 0.17, 0.18, 1.0],
-    ruler: [0.2, 0.2, 0.21, 1.0],
-    grid: [1.0, 1.0, 1.0, 0.06],
-    tick: [0.55, 0.55, 0.58, 1.0],
-    label: [0.85, 0.85, 0.88, 1.0],
-    dim: [0.6, 0.6, 0.64, 1.0],
+    bg: hex(0x121314),
+    header: hex(0x1c1d1f),
+    ruler: hex(0x1c1d1f),
+    grid: hex(0x2b2b2b),
+    tick: hex(0x6e7681),
+    dim: hex(0x3c3c3c),
+    label: hex(0x9d9d9d),
     summary: [0.45, 0.47, 0.52, 0.55],
-    key: [0.92, 0.93, 0.96, 1.0],
-    key_edge: [0.1, 0.12, 0.16, 1.0],
+    key: hex(0xcccccc),
+    key_edge: hex(0x121314),
+    segment: hex(0x0078d4),
 };
 const LIGHT: Palette = Palette {
-    bg: [1.0, 1.0, 1.0, 1.0],
-    header: [0.953, 0.953, 0.953, 1.0],
-    ruler: [0.953, 0.953, 0.953, 1.0],
-    grid: [0.0, 0.0, 0.0, 0.06],
-    tick: [0.55, 0.55, 0.55, 1.0],
-    label: [0.38, 0.38, 0.38, 1.0],
-    dim: [0.78, 0.78, 0.78, 1.0],
+    bg: hex(0xffffff),
+    header: hex(0xf3f3f3),
+    ruler: hex(0xf3f3f3),
+    grid: hex(0xe5e5e5),
+    tick: hex(0x8b8b8b),
+    dim: hex(0xcecece),
+    label: hex(0x616161),
     summary: [0.55, 0.57, 0.62, 0.35],
-    key: [1.0, 1.0, 1.0, 1.0],
-    key_edge: [0.23, 0.23, 0.23, 1.0],
+    key: hex(0xffffff),
+    key_edge: hex(0x3b3b3b),
+    segment: hex(0x005fb8),
 };
 /// A key's diamond: a square this wide, turned 45°.
 const KEY_PX: f64 = 10.0;
@@ -518,7 +533,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 }
             }
             for s in &p.segments {
-                let mut colour = if plan.errors.contains(&s.clip) { ERROR } else { SEGMENT };
+                let mut colour = if plan.errors.contains(&s.clip) { ERROR } else { pal.segment };
                 if !s.states.is_empty() && !plan.errors.contains(&s.clip) {
                     colour = [colour[0], colour[1], colour[2], 0.0];
                 }

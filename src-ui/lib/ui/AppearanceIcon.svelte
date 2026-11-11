@@ -5,9 +5,9 @@
 </script>
 
 {#if kind === "radius"}
-  <Scan size={16} strokeWidth={1.5} />
+  <Scan size={14} strokeWidth={1.75} />
 {:else}
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     {#if kind === "opacity"}
       <rect x="3" y="3" width="18" height="18" rx="3" />
       <g fill="currentColor" stroke="none">

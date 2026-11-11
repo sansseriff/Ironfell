@@ -178,22 +178,26 @@
     align-items: center;
     gap: 2px;
   }
+  /* The readout and the field it turns into are the same box: a compact
+     control, so typing a time does not move anything. */
   .transport :global(.time) {
-    width: 68px;
-    min-height: 24px;
+    width: 72px;
+    min-height: var(--control-h-sm);
+    height: var(--control-h-sm);
+    padding: 0 8px;
     justify-content: flex-start;
-    font-size: 13px;
+    font-size: var(--text-md);
   }
   .transport :global(button.time) {
     cursor: text;
   }
-  /* Auto-keyframe on: record red, as the canvas frame is. */
+  /* Auto-keyframe on: the record colour, as the canvas frame is. */
   .transport :global(.autokey[data-state="on"]) {
-    background: rgba(230, 61, 56, 0.2);
-    color: rgb(240, 90, 84);
+    background: color-mix(in srgb, var(--record) 20%, transparent);
+    color: var(--record);
   }
   .end {
-    font-size: 12px;
+    font-size: var(--text-sm);
     color: var(--fg-muted);
   }
 </style>

@@ -30,6 +30,12 @@
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TextInput from "../../lib/ui/TextInput.svelte";
+  import EmptyState from "../../lib/ui/EmptyState.svelte";
+  import BookOpen from "@lucide/svelte/icons/book-open";
+  import SquarePlay from "@lucide/svelte/icons/square-play";
+  import PenLine from "@lucide/svelte/icons/pen-line";
+  import Rows2 from "@lucide/svelte/icons/rows-2";
+  import MessagesSquare from "@lucide/svelte/icons/messages-square";
   import ChatPanel from '../../chat/ChatPanel.svelte';
   import { panelHistory } from '../../chat/sessions.svelte';
   import { narrativeMode, type ChatHandle, type ChatTurn, type NarrativeMode as Mode } from '../../chat/conversation';
@@ -44,6 +50,12 @@
   import { diff, sameContent, type StoredBlock } from "../../narrative/convert";
 
   let { spec, panel }: { spec: ViewSpec; panel?: string } = $props();
+
+  const MODES = [
+    { value: "authoring", label: "Authoring: the document, a small composer", icon: PenLine },
+    { value: "hybrid", label: "Hybrid: the document above, the conversation below", icon: Rows2 },
+    { value: "exploration", label: "Exploration: the conversation, the document an outline", icon: MessagesSquare },
+  ] as const;
 
   const doc = controllerManager.docClient;
   const active = getContext<() => boolean>("iron-view-active") ?? (() => true);
@@ -73,7 +85,7 @@
   let status = $state({ pending: false, error: "", version: 0, blocks: 0 });
   let cursor: CursorInfo = $state({ block: null, index: 0, heading: "", selection: "" });
   let narratives: { id: string; name: string; blocks: number }[] = $state([]);
-  let outline: { id: string; text: string; level: number }[] = $state([]);
+  let outline: { id: string; text: string; level: number; view: boolean }[] = $state([]);
   let follow = $state(true);
 
   // ---- the mention menu ----------------------------------------------
@@ -141,9 +153,9 @@
   }
 
   function readOutline(e: NarrativeEditor) {
-    const out: { id: string; text: string; level: number }[] = [];
+    const out: { id: string; text: string; level: number; view: boolean }[] = [];
     e.view.state.doc.forEach((n) => {
-      if (n.type.name === "heading" || n.type.name === "view") out.push({ id: n.attrs.id, text: n.type.name === "view" ? `▸ ${n.attrs.show}` : n.textContent, level: n.type.name === "heading" ? n.attrs.level : 3 });
+      if (n.type.name === "heading" || n.type.name === "view") out.push({ id: n.attrs.id, text: n.type.name === "view" ? n.attrs.show : n.textContent, level: n.type.name === "heading" ? n.attrs.level : 3, view: n.type.name === "view" });
     });
     return out;
   }
@@ -399,9 +411,10 @@
 </script>
 
 <section class="html-view narrative" data-mode={mode}>
-  <header class="bar">
-    <div class="pick">
-      <Select
+  <header class="ui-panel-header bar">
+    <Select
+        variant="quiet"
+        class="pick"
         label="Narrative"
         value={source}
         items={[
@@ -410,35 +423,36 @@
         ]}
         onChange={(v) => open(v)}
       />
-    </div>
-    <ToggleGroup.Root type="single" class="modes" aria-label="Layout" value={mode} onValueChange={(v) => v && (mode = v as Mode)}>
-      {#each [["authoring", "Authoring"], ["hybrid", "Hybrid"], ["exploration", "Exploration"]] as [m, label] (m)}
-        <ToggleGroup.Item value={m} class="ui-button is-small mode" data-mode-button={m}>{label}</ToggleGroup.Item>
-      {/each}
-    </ToggleGroup.Root>
     <span class="state" title={status.error || `v${status.version}`}>
       {#if status.error && !missing}<span class="err"><TriangleAlert size={12} strokeWidth={1.75} /> {status.error}</span>{:else if status.pending}saving…{:else}saved{/if}
     </span>
+    <span class="ui-spacer"></span>
+    <!-- The shared segmented look (Segmented.svelte) with each mode's
+         `data-mode-button`, which the driver's scripts click. -->
+    <ToggleGroup.Root type="single" class="ui-segmented is-inline modes" aria-label="Layout" value={mode} onValueChange={(v) => v && (mode = v as Mode)}>
+      {#each MODES as { value: m, label, icon: ModeIcon } (m)}
+        <ToggleGroup.Item value={m} class="ui-segment" data-mode-button={m} aria-label={label} title={label}><ModeIcon size={14} strokeWidth={1.75} /></ToggleGroup.Item>
+      {/each}
+    </ToggleGroup.Root>
   </header>
 
   {#if missing}
-    <div class="empty">
-      <p>No narrative named <strong>{source}</strong> in this scope.</p>
-      <div class="row">
+    <EmptyState icon={BookOpen} title="No narrative named “{source}”" class="missing-narrative">
+      Make one, import markdown{narratives.length ? ", or open another" : ""}.
+      {#snippet actions()}
         <TextInput placeholder="name" aria-label="New narrative's name" bind:value={newName} onkeydown={(e: KeyboardEvent) => e.key === "Enter" && createNarrative()} />
         <Button variant="primary" onclick={createNarrative}>New narrative</Button>
-        <Button variant="outline" onclick={() => mdInput?.click()}><Upload size={13} strokeWidth={1.75} />Import .md…</Button>
-      </div>
-      {#if narratives.length}
-        <div class="hint">Or open one: {#each narratives as n (n.id)}<Button small onclick={() => open(n.name || n.id)}>{n.name || n.id}</Button>{/each}</div>
-      {/if}
-    </div>
+        <Button variant="outline" onclick={() => mdInput?.click()}><Upload size={14} strokeWidth={1.75} />Import .md…</Button>
+        {#each narratives as n (n.id)}<Button small onclick={() => open(n.name || n.id)}>{n.name || n.id}</Button>{/each}
+      {/snippet}
+    </EmptyState>
   {/if}
 
   <div class="body" class:hidden={missing}>
     <div class="doc" class:collapsed={mode === "exploration"}>
       {#if mode !== "exploration"}
         <div class="tools" role="toolbar" aria-label="Formatting">
+          <span class="group">
           <IconButton icon={Pilcrow} label="Paragraph" onclick={() => editor?.setKind("paragraph")} />
           <IconButton icon={Heading1} label="Heading 1" onclick={() => editor?.setKind("heading", { level: 1 })} />
           <IconButton icon={Heading2} label="Heading 2" onclick={() => editor?.setKind("heading", { level: 2 })} />
@@ -446,7 +460,8 @@
           <IconButton icon={ListOrdered} label="Numbered item" onclick={() => editor?.setKind("ordered")} />
           <IconButton icon={TextQuote} label="Quote" onclick={() => editor?.setKind("quote")} />
           <IconButton icon={Code} label="Code" onclick={() => editor?.setKind("code")} />
-          <span class="sep"></span>
+          </span>
+          <span class="group">
           <IconButton icon={Bold} label="Bold" title="Bold (⌘B)" onclick={() => editor?.toggle("strong")} />
           <IconButton icon={Italic} label="Italic" title="Italic (⌘I)" onclick={() => editor?.toggle("em")} />
           <span class="sep"></span>
@@ -466,13 +481,15 @@
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
           <IconButton icon={Variable} label="Insert a live value" pressed={showValue} onPressedChange={(v: boolean) => (showValue = v)} />
+          </span>
           <label class="follow" title="Show each view block's composition as it scrolls to the top">
             <Switch.Root class="ui-switch" bind:checked={follow} aria-label="Follow views"><Switch.Thumb class="ui-switch-thumb" /></Switch.Root>
             Follow views
           </label>
-          <span class="spacer"></span>
+          <span class="group end">
           <IconButton icon={Download} label="Export as markdown" onclick={exportMarkdown} />
           <IconButton icon={Upload} label="Import markdown as a new narrative" onclick={() => mdInput?.click()} />
+          </span>
         </div>
         {#if showValue}
           <div class="value-form">
@@ -488,7 +505,7 @@
             <BitsButton.Root class="outline-item" style="padding-left: {(o.level - 1) * 10 + 6}px" onclick={() => {
               mode = "hybrid";
               setTimeout(() => editor?.reveal(o.id), 0);
-            }}>{o.text || "(untitled)"}</BitsButton.Root>
+            }}>{#if o.view}<SquarePlay size={14} strokeWidth={1.75} />{/if}<span>{o.text || "(untitled)"}</span></BitsButton.Root>
           {/each}
         </nav>
       {/if}
@@ -500,7 +517,7 @@
     <div class="conversation-host" class:compact={mode === 'authoring'}>
       <ChatPanel {session} {history} bind:this={chat} compact={mode === 'authoring'} target={targetLabel} send={performTurn}>
         {#snippet targetControl()}
-          <Button variant="outline" small title="Where the model writes: click to switch" onclick={() => writeAtCursor = !writeAtCursor}>{targetLabel}</Button>
+          <Button variant="outline" small class="target-button" title="Where the model writes: click to switch" onclick={() => writeAtCursor = !writeAtCursor}><span>{targetLabel}</span></Button>
         {/snippet}
         {#snippet review(turn: ChatTurn)}
           {@const change = reviews[turn.id]}
@@ -542,30 +559,22 @@
     padding: 0 !important;
     gap: 0 !important;
   }
-  .bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-bottom: 1px solid var(--border);
-    flex: none;
-  }
-  .pick {
-    width: 160px;
+  .bar :global(.pick) {
+    flex: 0 1 auto;
     min-width: 0;
-  }
-  .bar :global(.modes) {
-    display: flex;
-    gap: 2px;
-  }
-  .bar :global(.mode[data-state="on"]) {
-    background: var(--accent-soft);
-    color: var(--accent);
+    font-weight: 600;
   }
   .state {
-    margin-left: auto;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--fg-faint);
-    font-size: 11px;
+    font-size: var(--text-sm);
+  }
+  .bar :global(.modes) {
+    flex: none;
   }
   .err {
     display: inline-flex;
@@ -573,23 +582,9 @@
     gap: 4px;
     color: var(--danger);
   }
-  .empty {
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .empty .row {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .empty .hint {
-    display: flex;
+  .narrative :global(.missing-narrative .ui-empty-actions) {
     flex-wrap: wrap;
-    align-items: center;
-    gap: 2px;
-    color: var(--fg-muted);
+    justify-content: center;
   }
   .body {
     flex: 1;
@@ -615,12 +610,16 @@
     overflow: auto;
     border-bottom: 1px solid var(--border);
   }
+  /* The formatting toolbar: the panel header's 40 px rhythm, wrapping to
+     more rows in a narrow panel. */
   .tools {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
+    flex: none;
     gap: 2px;
-    padding: 4px 8px;
+    min-height: var(--panel-header-h);
+    padding: 8px;
     border-bottom: 1px solid var(--border);
   }
   .tools .sep {
@@ -629,16 +628,31 @@
     background: var(--border);
     margin: 0 4px;
   }
-  .tools .spacer {
-    flex: 1;
+  /* Groups wrap whole, so a narrow panel never strands one button. */
+  .tools .group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .tools .group.end {
+    margin-left: auto;
+  }
+  .narrative :global(.target-button) {
+    max-width: 100%;
+  }
+  .narrative :global(.target-button > span) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .follow {
-    font-size: 11px;
+    font-size: var(--text-sm);
     color: var(--fg-muted);
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-left: 6px;
+    margin: 0 4px;
+    white-space: nowrap;
   }
   .value-form {
     display: flex;
@@ -660,17 +674,23 @@
     padding: 6px;
   }
   .outline :global(.outline-item) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: var(--control-h-sm);
     text-align: left;
     border: none;
     background: none;
-    padding: 3px 6px;
+    padding: 0 6px;
     color: var(--fg);
+    font: inherit;
+    font-size: var(--text-md);
     cursor: pointer;
-    border-radius: 4px;
+    border-radius: var(--radius);
   }
-  .outline :global(.outline-item:focus-visible) {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
+  .outline :global(.outline-item > svg) {
+    flex: none;
+    color: var(--fg-faint);
   }
   .outline :global(.outline-item:hover) {
     background: var(--hover);
@@ -683,7 +703,7 @@
   .narrative .editor :global(.ProseMirror) {
     outline: none;
     padding: 12px 18px 40vh;
-    font-size: 14px;
+    font-size: var(--text-lg);
     line-height: 1.55;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -728,8 +748,8 @@
   .narrative .editor :global(pre) {
     background: var(--bg-sunken);
     padding: 8px;
-    border-radius: 6px;
-    font-size: 12px;
+    border-radius: var(--radius);
+    font-size: var(--text-md);
   }
   .narrative .editor :global(.nb-mention) {
     color: var(--accent);
@@ -739,7 +759,7 @@
   .narrative .editor :global(.nb-mention.nb-chip) {
     background: var(--accent-soft);
     border-bottom: none;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 0 3px;
   }
   .narrative .editor :global(.nb-mention:hover) {
@@ -753,32 +773,35 @@
   .narrative .editor :global(.nb-value) {
     font-variant-numeric: tabular-nums;
     background: var(--bg-sunken);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 0 4px;
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 0.92em;
   }
   .narrative .editor :global(.nb-view) {
     margin: 0.8em 0;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
   }
   .narrative .editor :global(.nb-view.nb-view-shown) {
     border-color: var(--accent);
     box-shadow: 0 0 0 1px var(--accent-soft);
   }
+  /* A view block's header: the disclosure look (`.ui-disclosure-trigger`,
+     its chevron from editor.ts) across the block's top. */
   .narrative .editor :global(.nb-view-header) {
-    display: block;
+    display: flex;
     width: 100%;
-    text-align: left;
-    border: none;
+    min-height: var(--control-h);
+    margin: 0;
+    padding: 0 10px 0 6px;
+    border-radius: 0;
     background: var(--bg-sunken);
-    padding: 5px 10px;
-    font: inherit;
-    font-size: 12px;
-    color: var(--fg-muted);
-    cursor: pointer;
+    text-align: left;
+  }
+  .narrative .editor :global(.nb-view-header:hover) {
+    background: var(--hover);
   }
   .narrative .editor :global(.nb-view-caption) {
     padding: 6px 10px;
@@ -809,27 +832,25 @@
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
-    font-size: 12px;
+    font-size: var(--text-md);
   }
   .review .done {
     color: var(--fg-faint);
   }
+  /* The # menu: the shared menu surface (`.ui-menu`), at the caret. */
   .mentions {
     position: fixed;
-    z-index: 1000;
     min-width: 220px;
     max-height: 240px;
-    overflow: auto;
     display: flex;
     flex-direction: column;
     pointer-events: auto;
   }
   .mentions :global(.mention) {
-    justify-content: space-between;
-    gap: 12px;
+    width: 100%;
     border: none;
     background: none;
-    width: 100%;
+    color: inherit;
     text-align: left;
     font: inherit;
   }

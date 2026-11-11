@@ -21,6 +21,7 @@
   import Trash from "@lucide/svelte/icons/trash-2";
   import type { Notation, ViewSpec } from "./views";
   import { controllerManager } from "../controller-manager.svelte";
+  import IconButton from "../lib/ui/IconButton.svelte";
 
   let { api, notation, spec }: { api: DockviewPanelApi; notation: Notation | undefined; spec?: ViewSpec } = $props();
 
@@ -113,18 +114,17 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <span class="title" ondblclick={() => void beginRename()} title={composition ? "Double-click to rename" : undefined}>{title}</span>
         {/if}
-        <button
+        <IconButton
+          icon={X}
           class="close"
+          label="Close {title}"
           title="Close"
-          aria-label="Close {title}"
-          onpointerdown={(e) => e.stopPropagation()}
-          onclick={(e) => {
+          onpointerdown={(e: PointerEvent) => e.stopPropagation()}
+          onclick={(e: MouseEvent) => {
             e.stopPropagation();
             api.close();
           }}
-        >
-          <X size={13} strokeWidth={1.75} />
-        </button>
+        />
       </div>
     {/snippet}
   </ContextMenu.Trigger>
@@ -152,7 +152,7 @@
     align-items: center;
     gap: 6px;
     height: 100%;
-    padding: 0 6px 0 12px;
+    padding: 0 4px 0 12px;
     white-space: nowrap;
   }
   .view-tab :global(.icon) {
@@ -165,32 +165,17 @@
   }
   .rename {
     width: 120px;
-    height: 22px;
-    padding: 0 6px;
+    min-height: var(--control-h-sm);
   }
   :global(.ui-menu-item.danger) {
     color: var(--danger);
   }
-  .close {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
+  .view-tab :global(.close) {
     margin-left: 2px;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--fg-muted);
-    cursor: pointer;
     visibility: hidden;
   }
-  .close:hover {
-    background: var(--hover);
-    color: var(--fg);
-  }
-  :global(.dv-tab.dv-active-tab) .close,
-  .view-tab:hover .close {
+  :global(.dv-tab.dv-active-tab) .view-tab :global(.close),
+  .view-tab:hover :global(.close) {
     visibility: visible;
   }
 </style>

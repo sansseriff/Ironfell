@@ -51,6 +51,7 @@
   import Pencil from "@lucide/svelte/icons/pencil";
   import Unlink from "@lucide/svelte/icons/unlink";
   import Button from "./Button.svelte";
+  import IconButton from "./IconButton.svelte";
   import Select from "./Select.svelte";
   import type { Property } from "./PropertyField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -271,7 +272,7 @@
 
   <div class="sliders">
     {#if EyeDropperCtor}
-      <button class="property-icon eyedropper" aria-label="Pick a colour from the screen" title="Pick colour" disabled={locked} onclick={sample}><Pipette size={16} strokeWidth={1.5} /></button>
+      <IconButton icon={Pipette} large label="Pick a colour from the screen" title="Pick colour" disabled={locked} onclick={sample} />
     {/if}
     <div class="tracks">
       <div class="track hue" role="slider" tabindex={locked ? -1 : 0} aria-label="Hue" aria-valuemin={0} aria-valuemax={360} aria-valuenow={Math.round(color.h)}
@@ -287,7 +288,7 @@
 
   <div class="values">
     <div class="format"><Select label="Colour format" value={format.value} items={formats} disabled={locked} onChange={(v) => format.value = v} /></div>
-    <div class="value-box">
+    <div class="ui-field value-box">
       {#if format.value === "hex"}
         <input class="hex" aria-label="Hex" value={hex.slice(1, 7).toUpperCase()} disabled={locked} spellcheck="false"
           onchange={(e) => setHex(e.currentTarget.value)} onkeydown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }} />
@@ -309,14 +310,14 @@
   <div class="swatches-title tokens-head">
     <span>Tokens</span>
     <span class="token-actions">
-      {#if current}<button class="property-icon small" aria-label="Detach from @{current}" title="Detach: keep this colour, stop following @{current}" disabled={locked} onclick={detach}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
-      {#if own.length}<button class="property-icon small" class:on={editing} aria-label="Edit tokens" aria-pressed={editing} title="Edit the document's tokens" onclick={() => editing = !editing}><Pencil size={13} strokeWidth={1.5} /></button>{/if}
-      <button class="property-icon small" aria-label="New token from this colour" title="New token from this colour" disabled={locked} onclick={() => naming = ""}><Plus size={14} strokeWidth={1.5} /></button>
+      {#if current}<IconButton icon={Unlink} label="Detach from @{current}" title="Detach: keep this colour, stop following @{current}" disabled={locked} onclick={detach} />{/if}
+      {#if own.length}<IconButton icon={Pencil} label="Edit tokens" title="Edit the document's tokens" pressed={editing} onPressedChange={(on) => editing = on} />{/if}
+      <IconButton icon={Plus} label="New token from this colour" title="New token from this colour" disabled={locked} onclick={() => naming = ""} />
     </span>
   </div>
   {#if naming !== null}
     <form class="token-new" onsubmit={(e) => { e.preventDefault(); if (naming) newToken(naming); }}>
-      <input aria-label="New token name" placeholder="brand-blue" bind:value={naming} spellcheck="false" />
+      <input class="ui-input" aria-label="New token name" placeholder="brand-blue" bind:value={naming} spellcheck="false" />
       <Button small variant="outline" type="submit" disabled={!naming}>Add</Button>
     </form>
   {/if}
@@ -324,7 +325,7 @@
     <div class="token-rows">
       {#each own as t (t.id)}
         <div class="token-row">
-          <input class="token-name" aria-label="Name of @{t.name}" value={t.name} spellcheck="false" onchange={(e) => editToken(t, "name.text", e.currentTarget.value)} />
+          <input class="ui-input token-name" aria-label="Name of @{t.name}" value={t.name} spellcheck="false" onchange={(e) => editToken(t, "name.text", e.currentTarget.value)} />
           <label title="Light theme"><span>Light</span><input type="color" value={t.light.slice(0, 7)} onchange={(e) => editToken(t, "token.light", e.currentTarget.value)} /></label>
           <label title="Dark theme"><span>Dark</span><input type="color" value={t.dark.slice(0, 7)} onchange={(e) => editToken(t, "token.dark", e.currentTarget.value)} /></label>
         </div>
@@ -355,18 +356,15 @@
 {/if}
 
 <style>
-  .color-picker { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
+  .color-picker { display: flex; flex-direction: column; gap: 14px; padding: var(--panel-pad); }
   .locked { opacity: .55; pointer-events: none; }
-  .sv { position: relative; height: 0; padding-bottom: 100%; border-radius: 4px; cursor: crosshair; touch-action: none; outline: none;
+  .sv { position: relative; height: 0; padding-bottom: 100%; border-radius: var(--radius); cursor: crosshair; touch-action: none;
     background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, var(--hue)); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
-  .sv:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
   .thumb { position: absolute; width: 14px; height: 14px; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
     box-shadow: 0 0 0 3px #fff, 0 0 0 4px rgba(0, 0, 0, .25), 0 1px 4px 3px rgba(0, 0, 0, .25); }
   .sliders { display: flex; align-items: center; gap: 8px; }
-  .eyedropper { flex: 0 0 28px; width: 28px; height: 28px; padding: 5px; }
   .tracks { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 0 7px; }
-  .track { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none; outline: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
-  .track:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .track { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
   .track .thumb { top: 50%; width: 12px; height: 12px; }
   .hue { background: linear-gradient(to right, #f00 0%, #ff0 16.67%, #0f0 33.33%, #0ff 50%, #00f 66.67%, #f0f 83.33%, #f00 100%); }
   .alpha, .swatch span { background-color: #fff; background-image: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%), linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%); background-size: 8px 8px; background-position: 0 0, 4px 4px; }
@@ -374,26 +372,22 @@
   .alpha .thumb { background: #fff; overflow: hidden; }
   .alpha .thumb span { position: absolute; inset: 0; }
   .values { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px; }
-  .format :global(.ui-select-trigger) { width: 100%; min-width: 0; height: 30px; background: transparent; }
-  .value-box { display: flex; min-width: 0; height: 30px; background: var(--bg-sunken); border: 1px solid transparent; border-radius: 5px; overflow: hidden; }
-  .value-box:hover { border-color: var(--border-strong); }
-  .value-box:focus-within { border-color: var(--accent); }
-  .value-box input { flex: 1 1 0; width: 0; min-width: 0; border: 0; background: transparent; color: var(--fg); font-size: 12px; padding: 0 6px; outline: none; font-variant-numeric: tabular-nums; }
+  .value-box { overflow: hidden; }
+  .value-box input { flex: 1 1 0; width: 0; min-width: 0; height: calc(var(--control-h) - 2px); border: 0; background: transparent; color: var(--fg); font-size: var(--text-md); padding: 0 6px; outline: none; font-variant-numeric: tabular-nums; }
   .value-box .hex { flex: 3 1 0; padding-left: 8px; text-transform: uppercase; }
   .value-box .channel + .channel { border-left: 1px solid var(--bg); }
   .alpha-input { display: flex; align-items: center; flex: 0 0 54px; border-left: 1px solid var(--bg); }
   .alpha-input input { padding-right: 0; }
-  .unit { color: var(--fg-faint); padding-right: 7px; font-size: 12px; }
-  .swatches-section { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; border-top: 1px solid var(--border); }
-  .swatches-title { color: var(--fg-muted); font-size: 11px; }
+  .unit { color: var(--fg-faint); padding-right: 8px; }
+  .swatches-section { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--panel-pad) var(--panel-pad); border-top: 1px solid var(--border); }
+  .swatches-title { color: var(--fg-muted); font-size: var(--text-sm); }
   .swatches { display: grid; grid-template-columns: repeat(auto-fill, 20px); gap: 8px; }
-  .swatch { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
-  .swatch span { position: relative; display: block; width: 100%; height: 100%; border-radius: 4px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
+  .swatch { width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+  .swatch span { position: relative; display: block; width: 100%; height: 100%; border-radius: var(--radius-sm); overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
   /* Opaque on the left half, as it is, over a checkerboard, on the right. */
   .swatch span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to right, var(--solid) 50%, var(--c) 50%); }
   .swatch:hover span, .swatch:focus-visible span { box-shadow: 0 0 0 2px var(--border-strong); }
   .swatch.current span { box-shadow: 0 0 0 2px var(--accent); }
-  .swatch:focus-visible { outline: none; }
   /* A token: its light value on the left, its dark on the right; the theme
      in use is the larger half. */
   .swatch.token span { background: linear-gradient(to right, var(--light) 60%, var(--dark) 60%); }
@@ -402,13 +396,10 @@
   .swatch.builtin { opacity: .8; }
   .tokens-head { display: flex; align-items: center; justify-content: space-between; }
   .token-actions { display: flex; gap: 2px; }
-  .token-actions .on { color: var(--accent); }
-  .property-icon.small { width: 22px; height: 22px; padding: 4px; }
   .token-new { display: flex; gap: 6px; }
-  .token-new input, .token-name { flex: 1; min-width: 0; height: 26px; border: 1px solid transparent; border-radius: 5px; background: var(--bg-sunken); color: var(--fg); font-size: 12px; padding: 0 8px; outline: none; }
-  .token-new input:focus, .token-name:focus { border-color: var(--accent); }
+  .token-new input, .token-name { flex: 1; }
   .token-rows { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
   .token-row { display: flex; gap: 6px; align-items: center; }
-  .token-row label { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 10px; }
-  .token-row input[type="color"] { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+  .token-row label { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: var(--text-xs); }
+  .token-row input[type="color"] { width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; cursor: pointer; }
 </style>

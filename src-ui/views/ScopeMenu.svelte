@@ -118,11 +118,11 @@
 <div class="scope" class:hidden={!shown}>
   {#if shown}
     <Popover.Root bind:open onOpenChange={opened}>
-      <Popover.Trigger class="scope-trigger" title="Scopes: open, new, import, export" data-scope-menu>
+      <Popover.Trigger class="ui-quiet-trigger scope-trigger" title="Scopes: open, new, import, export" data-scope-menu>
         <Database size={14} strokeWidth={1.75} />
         <span class="scope-name">{doc.scopes ? (current?.name ?? "…") : "Unsaved demo"}</span>
-        {#if doc.scope.readOnly}<span class="badge">read-only</span>{/if}
-        <ChevronDown size={13} strokeWidth={1.75} />
+        {#if doc.scope.readOnly}<span class="ui-badge">read-only</span>{/if}
+        <ChevronDown size={12} strokeWidth={1.75} />
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content class="property-popover scope-popover" side="bottom" align="start" sideOffset={4} aria-label="Scopes">
@@ -143,7 +143,7 @@
                 onclick={() => act(async () => {
                   await doc.scopes!.close();
                   location.href = scopesUrl();
-                })}><LayoutGrid size={13} strokeWidth={1.75} />All scopes</Button
+                })}><LayoutGrid size={14} strokeWidth={1.75} />All scopes</Button
               >
               <TextInput
                 class="name"
@@ -187,7 +187,7 @@
                     title={confirming === s.id ? "Click again to delete; this cannot be undone" : "Delete"}
                     onclick={() => remove(s.id)}
                   >
-                    {#if confirming === s.id}Delete?{:else}<Trash size={13} strokeWidth={1.75} />{/if}
+                    {#if confirming === s.id}Delete?{:else}<Trash size={14} strokeWidth={1.75} />{/if}
                   </BitsButton.Root>
                 </div>
               {/each}
@@ -215,24 +215,13 @@
     display: none;
   }
   .scope :global(.scope-trigger) {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    height: 24px;
     max-width: 200px;
     flex-shrink: 0;
-    padding: 0 6px;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--fg);
-    font-size: 12px;
     font-weight: 600;
-    cursor: pointer;
   }
-  .scope :global(.scope-trigger:hover),
-  .scope :global(.scope-trigger[data-state="open"]) {
-    background: var(--hover);
+  .scope :global(.scope-trigger > svg:first-child) {
+    flex: none;
+    color: var(--fg-muted);
   }
   .scope-name {
     max-width: 140px;
@@ -240,26 +229,18 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .badge {
-    padding: 0 5px;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--fg-muted);
-    font-size: 10px;
-    font-weight: 500;
-  }
   :global(.scope-popover) {
     width: 320px;
   }
   .body {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
+    gap: 12px;
+    padding: var(--panel-pad);
     border-bottom: 1px solid var(--border);
   }
   .body :global(.name) {
-    font-size: 14px;
+    font-size: var(--text-lg);
     font-weight: 600;
   }
   .actions {
@@ -278,9 +259,7 @@
     margin: 0;
     color: var(--danger);
   }
-  .body :global(.all-scopes) {
-    align-self: flex-start;
-  }
+  .body :global(.all-scopes),
   .body :global(.take-over) {
     align-self: flex-start;
   }
@@ -293,7 +272,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    border-radius: 6px;
+    border-radius: var(--radius);
   }
   .item:hover {
     background: var(--hover);
@@ -307,17 +286,14 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding: 5px 8px;
+    padding: 4px 8px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: transparent;
     color: var(--fg);
+    font: inherit;
     text-align: left;
     cursor: pointer;
-  }
-  .item :global(.open:focus-visible) {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
   }
   .item :global(.open:disabled) {
     cursor: default;
@@ -331,7 +307,7 @@
   }
   .meta {
     color: var(--fg-faint);
-    font-size: 11px;
+    font-size: var(--text-sm);
   }
   .item :global(.delete) {
     margin-right: 4px;
@@ -341,19 +317,20 @@
   }
   .item :global(.delete.confirming) {
     width: auto;
-    padding: 0 6px;
+    padding: 0 8px;
     background: var(--danger);
     color: var(--accent-fg);
-    font-size: 11px;
+    font-size: var(--text-sm);
   }
   .storage {
     margin: 0;
-    padding: 8px 12px 10px;
+    padding: 8px var(--panel-pad) 10px;
     border-top: 1px solid var(--border);
     color: var(--fg-faint);
-    font-size: 11px;
+    font-size: var(--text-sm);
   }
   code {
-    font-size: 11px;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
   }
 </style>

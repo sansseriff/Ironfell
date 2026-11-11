@@ -82,23 +82,22 @@
 <style>
   .work { margin: 0 0 10px; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; }
-  :global(.work-trigger) { display: flex; align-items: center; gap: 6px; min-width: 0; background: transparent; border: none; border-radius: 4px; padding: 3px 0; font: inherit; font-size: 13px; color: var(--fg-muted); cursor: pointer; }
+  :global(.work-trigger) { display: flex; align-items: center; gap: 6px; min-width: 0; background: transparent; border: none; border-radius: var(--radius); padding: 3px 0; font: inherit; font-size: var(--text-lg); color: var(--fg-muted); cursor: pointer; }
   :global(.work-trigger:hover) { color: var(--fg); }
-  :global(.work-trigger:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .chevron { display: inline-flex; transition: transform 120ms ease; }
   .chevron.open { transform: rotate(90deg); }
   .running .headline { color: var(--fg); }
   .headline { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .elapsed { color: var(--fg-faint); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .elapsed { color: var(--fg-faint); font-size: var(--text-sm); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .pulse { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.35; } }
   @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } .chevron { transition: none; } }
   .steps { list-style: none; margin: 4px 0 0 5px; padding: 0 0 0 12px; border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
-  .row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--fg-muted); }
+  .row { display: flex; align-items: center; gap: 7px; font-size: var(--text-md); color: var(--fg-muted); }
   .current .row { color: var(--fg); }
   .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .time { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
   /* Newest reasoning stays in view: the column runs bottom-up. */
   .reasoning { display: flex; flex-direction: column-reverse; max-height: 132px; overflow-y: auto; margin: 4px 0 0 19px; }
-  .reasoning p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .reasoning p { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

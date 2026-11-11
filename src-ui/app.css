@@ -40,6 +40,30 @@
   --ok: #1a7f37;
   --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
   --overlay: rgba(255, 255, 255, 0.6);
+  --scrollbar: rgba(0, 0, 0, 0.22);
+  --scrollbar-hover: rgba(0, 0, 0, 0.38);
+  --raised: #ffffff;
+
+  /* One scale for every control (ui.css, src-ui/lib/ui/), after Figma UI3:
+     text, radii, control heights and panel insets. Components use these,
+     never their own px values for the same things. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --text-xs: 10px;   /* badges, ids */
+  --text-sm: 11px;   /* labels, metadata, menus' hints */
+  --text-md: 12px;   /* controls, body */
+  --text-lg: 13px;   /* panel and section titles */
+  --radius-sm: 3px;  /* chips and swatches inside fields */
+  --radius: 5px;     /* fields, buttons, rows */
+  --radius-lg: 8px;  /* menus, popovers, dialogs */
+  --radius-xl: 12px; /* floating toolbars, the composer */
+  --control-h: 28px;    /* fields, selects, buttons */
+  --control-h-sm: 24px; /* compact buttons, icon buttons, quiet triggers */
+  --panel-pad: 16px;    /* a panel's and a section's side inset */
+  --panel-header-h: 40px;
+  /* Meaning, not theme: the same in light and dark. */
+  --record: #ff8a3d;    /* auto-keyframe, recording */
+  --component: #9747ff; /* components and their mains (Figma's violet) */
+  --port: #0ab894;      /* ports */
   color: var(--fg);
   background: var(--bg);
 }
@@ -71,6 +95,9 @@
     --ok: #4ec9b0;
     --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
     --overlay: rgba(0, 0, 0, 0.5);
+    --scrollbar: rgba(255, 255, 255, 0.2);
+    --scrollbar-hover: rgba(255, 255, 255, 0.34);
+    --raised: #2a2b2e;
   }
 }
 
@@ -98,6 +125,9 @@
   --ok: #4ec9b0;
   --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
   --overlay: rgba(0, 0, 0, 0.5);
+  --scrollbar: rgba(255, 255, 255, 0.2);
+  --scrollbar-hover: rgba(255, 255, 255, 0.34);
+  --raised: #2a2b2e;
 }
 
 *,

@@ -19,6 +19,7 @@
   import Database from "@lucide/svelte/icons/database";
   import Lock from "@lucide/svelte/icons/lock";
   import Button from "./lib/ui/Button.svelte";
+  import EmptyState from "./lib/ui/EmptyState.svelte";
   import TextInput from "./lib/ui/TextInput.svelte";
   import { OpfsScopeStorage, type ScopeMeta } from "./runtime/scope_storage";
   import { ScopeLibrary, webLocks } from "./runtime/scopes";
@@ -131,13 +132,13 @@
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 
   {#if loaded && !rows.length}
-    <div class="empty">
-      <p>No scopes yet.</p>
-      <div class="actions">
+    <EmptyState icon={Database} title="No scopes yet" class="empty">
+      A scope is a document kept in this browser.
+      {#snippet actions()}
         <Button variant="primary" onclick={() => create("empty")}><Plus size={14} strokeWidth={1.75} />New scope</Button>
         <Button variant="outline" onclick={() => create("demo")}><Sparkles size={14} strokeWidth={1.75} />Start from the demo</Button>
-      </div>
-    </div>
+      {/snippet}
+    </EmptyState>
   {:else}
     <ul class="list" aria-label="Stored scopes">
       {#each rows as r (r.id)}
@@ -161,14 +162,14 @@
             <BitsButton.Root class="main open" title="Open {r.name}" onclick={() => open(r.id)}>
               <span class="name">{r.name}</span>
               <span class="meta">
-                {#if r.busy}<span class="busy"><Lock size={11} strokeWidth={2} />open in another tab</span> ·{/if}
+                {#if r.busy}<span class="busy"><Lock size={12} strokeWidth={1.75} />open in another tab</span> ·{/if}
                 {bytes(r.bytes)} · {ago(r.modified)}
               </span>
             </BitsButton.Root>
           {/if}
           <DropdownMenu.Root>
             <DropdownMenu.Trigger class="property-icon large" aria-label="More for {r.name}" title="More">
-              <Ellipsis size={15} strokeWidth={1.75} />
+              <Ellipsis size={16} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content class="ui-menu" sideOffset={4} align="end">
@@ -194,14 +195,16 @@
 
 <AlertDialog.Root open={!!deleting} onOpenChange={(o) => { if (!o) deleting = null; }}>
   <AlertDialog.Portal>
-    <AlertDialog.Overlay class="scopes-overlay" />
-    <AlertDialog.Content class="scopes-dialog">
-      <AlertDialog.Title class="scopes-dialog-title">Delete “{deleting?.name}”?</AlertDialog.Title>
-      <AlertDialog.Description class="scopes-dialog-body">Its document and history are removed from this browser. This cannot be undone.</AlertDialog.Description>
-      <div class="scopes-dialog-actions">
+    <AlertDialog.Overlay class="ui-dialog-overlay" />
+    <AlertDialog.Content class="ui-dialog">
+      <AlertDialog.Title class="ui-dialog-title">Delete “{deleting?.name}”?</AlertDialog.Title>
+      <div class="ui-dialog-body">
+        <AlertDialog.Description class="ui-dialog-description">Its document and history are removed from this browser. This cannot be undone.</AlertDialog.Description>
+      </div>
+      <div class="ui-dialog-actions">
         <AlertDialog.Cancel class="ui-button is-outline">Cancel</AlertDialog.Cancel>
         <AlertDialog.Action
-          class="ui-button is-primary scopes-delete"
+          class="ui-button is-danger is-outline"
           data-action="confirm-delete"
           onclick={() => {
             const r = deleting;
@@ -223,7 +226,7 @@
     margin: 0 auto;
     padding: 48px 24px 32px;
     color: var(--fg);
-    font-size: 13px;
+    font-size: var(--text-lg);
   }
   :global(body:has(.scopes-page)) {
     background: var(--bg);
@@ -258,22 +261,15 @@
     margin: 0 0 12px;
     color: var(--danger);
   }
-  .empty {
-    padding: 40px 16px;
+  .scopes-page :global(.empty) {
     border: 1px dashed var(--border-strong);
-    border-radius: 10px;
-    text-align: center;
-    color: var(--fg-muted);
-  }
-  .empty .actions {
-    justify-content: center;
-    margin-top: 12px;
+    border-radius: var(--radius-lg);
   }
   .list {
     margin: 0;
     padding: 0;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
   }
   .row {
@@ -302,16 +298,13 @@
     border: none;
     background: transparent;
     color: var(--fg);
+    font: inherit;
     text-align: left;
     cursor: pointer;
   }
-  .row :global(.open:focus-visible) {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-  }
   .row :global(.rename) {
     width: 100%;
-    font-size: 14px;
+    font-size: var(--text-lg);
     font-weight: 600;
   }
   .name {
@@ -319,7 +312,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 14px;
+    font-size: var(--text-lg);
     font-weight: 600;
   }
   .meta {
@@ -327,7 +320,7 @@
     align-items: center;
     gap: 4px;
     color: var(--fg-faint);
-    font-size: 11px;
+    font-size: var(--text-sm);
   }
   .busy {
     display: inline-flex;
@@ -338,50 +331,9 @@
   .storage {
     margin: 14px 0 0;
     color: var(--fg-faint);
-    font-size: 11px;
+    font-size: var(--text-sm);
   }
   :global(.ui-menu-item.danger) {
     color: var(--danger);
-  }
-  :global(.scopes-overlay) {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    background: var(--overlay);
-  }
-  :global(.scopes-dialog) {
-    position: fixed;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 1001;
-    width: min(420px, calc(100vw - 32px));
-    padding: 18px 20px 16px;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: var(--menu-shadow);
-    font-size: 13px;
-  }
-  :global(.scopes-dialog-title) {
-    margin: 0 0 8px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  :global(.scopes-dialog-body) {
-    margin: 0;
-    color: var(--fg-muted);
-    line-height: 1.45;
-  }
-  .scopes-dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
-  }
-  :global(.ui-button.scopes-delete) {
-    border-color: var(--danger);
-    background: var(--danger);
   }
 </style>

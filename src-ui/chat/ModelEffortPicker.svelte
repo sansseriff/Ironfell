@@ -42,11 +42,11 @@
 </script>
 
 <DropdownMenu.Root>
-  <DropdownMenu.Trigger class="composer-control model-effort" {disabled} aria-label="Model and effort: {modelLabel}, {effort ? `${effort} effort` : 'default effort'}{fast ? ', fast' : ''}" title="Model, reasoning effort and speed">
+  <DropdownMenu.Trigger class="ui-quiet-trigger model-effort" {disabled} aria-label="Model and effort: {modelLabel}, {effort ? `${effort} effort` : 'default effort'}{fast ? ', fast' : ''}" title="Model, reasoning effort and speed">
     {#if fast}<Zap size={12} strokeWidth={0} fill="currentColor" class="fast-mark" />{/if}
     <span class="model-name">{modelLabel}</span>
     {#if effort}<span class="effort-name">{title(effort)}</span>{/if}
-    <ChevronDown size={14} strokeWidth={1.75} />
+    <ChevronDown size={12} strokeWidth={1.75} />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content class="ui-menu model-effort-menu" side="top" align="start" sideOffset={6}>
@@ -56,7 +56,7 @@
           {#each models as item (item.value)}
             <DropdownMenu.RadioItem class="ui-menu-item" value={item.value} closeOnSelect={false}>
               {#snippet children({ checked })}
-                <span class="check">{#if checked}<Check size={14} strokeWidth={2} />{/if}</span>
+                <span class="ui-menu-check">{#if checked}<Check size={14} strokeWidth={1.75} />{/if}</span>
                 <span class="label">{item.label}</span>
                 {#if item.hint}<span class="ui-hint">{item.hint}</span>{/if}
               {/snippet}
@@ -74,7 +74,7 @@
             {#each [DEFAULT, ...efforts] as level (level)}
               <DropdownMenu.RadioItem class="ui-menu-item" value={level}>
                 {#snippet children({ checked })}
-                  <span class="check">{#if checked}<Check size={14} strokeWidth={2} />{/if}</span>
+                  <span class="ui-menu-check">{#if checked}<Check size={14} strokeWidth={1.75} />{/if}</span>
                   <span class="label">{title(level === DEFAULT ? '' : level)}</span>
                 {/snippet}
               </DropdownMenu.RadioItem>
@@ -86,7 +86,7 @@
             <div class="ui-menu-heading speed">Speed</div>
             <DropdownMenu.CheckboxItem class="ui-menu-item" checked={fast} closeOnSelect={false} onCheckedChange={(on) => doc.setAgentTier(on ? fastTier.id : '')}>
               {#snippet children({ checked })}
-                <span class="check">{#if checked}<Check size={14} strokeWidth={2} />{/if}</span>
+                <span class="ui-menu-check">{#if checked}<Check size={14} strokeWidth={1.75} />{/if}</span>
                 <span class="label">Fast</span>
                 <Zap size={12} strokeWidth={0} fill="currentColor" />
               {/snippet}
@@ -100,9 +100,9 @@
 </DropdownMenu.Root>
 
 <style>
-  .model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  :global(.model-effort) { max-width: 240px; color: var(--fg-muted); }
   .effort-name { flex: none; color: var(--fg-faint); }
-  :global(.composer-control.model-effort svg.fast-mark) { color: var(--warning); }
+  :global(.model-effort svg.fast-mark) { flex: none; color: var(--warning); }
   .speed { margin-top: 4px; border-top: 1px solid var(--border); padding-top: 8px; }
   :global(.model-effort:hover) .effort-name, :global(.model-effort[data-state='open']) .effort-name { color: var(--fg-muted); }
   :global(.model-effort-menu) { display: flex; padding: 0; min-width: 0; max-width: calc(100vw - 32px); overflow: hidden; }
@@ -110,7 +110,6 @@
   .models { width: 220px; }
   .models.wide { width: 260px; }
   .efforts { width: 132px; border-left: 1px solid var(--border); background: var(--bg-sunken); }
-  .check { width: 14px; flex: none; display: flex; }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .note { margin: 4px 8px 4px; font-size: 10px; line-height: 1.4; color: var(--fg-faint); }
+  .note { margin: 4px 8px 4px; font-size: var(--text-xs); line-height: 1.4; color: var(--fg-faint); }
 </style>

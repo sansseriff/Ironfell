@@ -1,20 +1,43 @@
-/* Shared look for bits-ui parts (menus, selects, switches): they render in
-   portals outside any component, so their classes live here. Colours are the
-   theme tokens in app.css. */
+/* The app's one set of controls. Every view uses these classes, through the
+   wrappers in src-ui/lib/ui/ (Button, IconButton, Select, TextInput,
+   Segmented, Checkbox, Disclosure, EmptyState, Section), never its own copy
+   of a button, field, menu, scrollbar or section header. bits-ui parts
+   render in portals outside any component, so their classes live here.
+   Sizes and colours are the tokens in app.css; the look follows Figma UI3:
+   filled fields, quiet triggers, one accent, 24/28 px controls. */
+
+/* ---- Scrolling and focus, everywhere ---------------------------------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+*:hover { scrollbar-color: var(--scrollbar-hover) transparent; }
+
+/* One focus ring for every keyboard-focusable control. Fields show focus
+   with their border instead (`.ui-field`). */
+:where(button, a[href], summary, [role="button"], [role="tab"], [role="switch"], [role="checkbox"], [role="radio"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+:focus:not(:focus-visible) { outline: none; }
+
+/* ---- Menus, selects' lists and tooltips -------------------------------- */
 
 .ui-menu {
   /* Above dialogs (1000–1001), so a select opened inside one shows. */
   z-index: 1100;
   min-width: 180px;
-  max-height: var(--bits-dropdown-menu-content-available-height, 70vh);
+  max-height: min(70vh, calc(var(--bits-dropdown-menu-content-available-height, var(--bits-select-content-available-height, 100vh)) - 12px));
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
   color: var(--fg);
   box-shadow: var(--menu-shadow);
-  font-size: 13px;
+  font-size: var(--text-md);
   outline: none;
 }
 /* A hover tooltip with more than a word or two in it (the FPS readout's). */
@@ -23,11 +46,11 @@
   max-width: 380px;
   padding: 6px 9px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg);
+  border-radius: var(--radius);
+  background: var(--raised);
   color: var(--fg);
   box-shadow: var(--menu-shadow);
-  font-size: 11px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   white-space: pre-line;
   font-variant-numeric: tabular-nums;
@@ -35,65 +58,214 @@
 }
 .ui-menu-heading {
   padding: 6px 8px 2px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--fg-faint);
 }
 .ui-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border-radius: 5px;
+  min-height: var(--control-h-sm);
+  padding: 2px 8px;
+  border-radius: var(--radius);
   cursor: default;
   outline: none;
   user-select: none;
 }
+.ui-menu-item > span:not(.ui-hint) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-menu-item[data-highlighted] {
   background: var(--accent);
   color: var(--accent-fg);
 }
 .ui-menu-item[data-disabled] {
-  opacity: 0.45;
+  opacity: 0.4;
 }
 .ui-menu-item .ui-hint {
   margin-left: auto;
+  padding-left: 12px;
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .ui-menu-item[data-highlighted] .ui-hint {
   color: inherit;
   opacity: 0.8;
 }
+.ui-menu-item .ui-menu-check { width: 14px; display: flex; flex: 0 0 14px; }
+.ui-menu-item .ui-submenu-chevron { margin-left: auto; color: var(--fg-faint); }
+.ui-menu-item[data-highlighted] .ui-submenu-chevron { color: inherit; }
 .ui-menu-separator {
   height: 1px;
   margin: 4px 2px;
   background: var(--border);
 }
 
+/* ---- Fields ------------------------------------------------------------ */
+
+/* A field's shell: filled, a border on hover, the accent on focus. Text
+   fields, selects' triggers and composite fields (PropertyField's
+   `.control`, the colour and easing fields) all wear it. */
+.ui-field,
+.ui-input,
 .ui-select-trigger {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 120px;
-  padding: 3px 6px 3px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: var(--bg-input);
+  min-width: 0;
+  min-height: var(--control-h);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-md);
+  box-sizing: border-box;
+}
+.ui-field:hover:not(:focus-within):not([data-disabled]),
+.ui-input:hover:not(:focus):not(:disabled),
+.ui-select-trigger:hover:not([data-disabled]):not([data-state="open"]) { border-color: var(--border-strong); }
+.ui-field:focus-within,
+.ui-field.is-active,
+.ui-input:focus,
+.ui-select-trigger[data-state="open"],
+.ui-select-trigger:focus-visible { outline: none; border-color: var(--accent); }
+.ui-field[data-disabled], .ui-input:disabled, .ui-select-trigger[data-disabled] { opacity: 0.4; cursor: default; }
+
+.ui-input { padding: 0 8px; }
+.ui-input::placeholder { color: var(--fg-faint); }
+textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: vertical; }
+
+.ui-select-trigger {
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 0 6px 0 8px;
+  text-align: left;
   cursor: pointer;
 }
-.ui-select-trigger:hover {
-  border-color: var(--fg-faint);
+.ui-select-trigger > .ui-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-select-trigger > svg { flex: 0 0 auto; color: var(--fg-faint); }
+
+/* The quiet trigger: a label and a chevron with no box, for a menu in a
+   header or a toolbar (the scope, the chat, the layers' composition, the
+   composer's runtime and model). */
+.ui-select-trigger.is-quiet,
+.ui-quiet-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  min-height: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-md);
+  white-space: nowrap;
+  cursor: pointer;
 }
-.ui-select-trigger[data-disabled] {
-  opacity: 0.5;
-  cursor: default;
+.ui-quiet-trigger > span, .ui-quiet-trigger > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ui-quiet-trigger > svg:last-child, .ui-select-trigger.is-quiet > svg { flex: 0 0 auto; color: var(--fg-faint); }
+.ui-select-trigger.is-quiet:hover:not([data-disabled]),
+.ui-quiet-trigger:hover:not(:disabled) { border-color: transparent; background: var(--hover); }
+.ui-select-trigger.is-quiet[data-state="open"],
+.ui-quiet-trigger[data-state="open"] { border-color: transparent; background: var(--active); }
+.ui-quiet-trigger:disabled { opacity: 0.4; cursor: default; }
+
+/* ---- Buttons ----------------------------------------------------------- */
+
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: var(--control-h);
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-md);
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
 }
+.ui-button > svg { flex: 0 0 auto; }
+.ui-button:hover:not(:disabled):not([data-disabled]) { background: var(--hover); }
+.ui-button:disabled, .ui-button[data-disabled] { opacity: 0.4; cursor: default; }
+.ui-button.is-outline { border-color: var(--border-strong); }
+.ui-button.is-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
+.ui-button.is-primary:hover:not(:disabled):not([data-disabled]) { background: var(--accent); filter: brightness(1.1); }
+.ui-button.is-danger { color: var(--danger); }
+.ui-button.is-danger.is-primary { border-color: var(--danger); background: var(--danger); color: #fff; }
+.ui-button.is-danger.is-outline { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.ui-button.is-small { min-height: var(--control-h-sm); padding: 0 8px; font-size: var(--text-sm); }
+.ui-button.is-block { width: 100%; }
+
+/* Icon-only buttons: 24 px in panels and fields' ends, 28 px (`large`) in
+   toolbars and headers. */
+.property-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.property-icon:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.property-icon:disabled, .property-icon[data-disabled] { opacity: 0.4; cursor: default; }
+.property-icon[data-state="on"], .property-icon[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.property-icon[data-state="open"] { background: var(--active); color: var(--fg); }
+.property-icon.large { width: var(--control-h); height: var(--control-h); }
+
+/* ---- Segmented control (bits-ui ToggleGroup) --------------------------- */
+
+.ui-segmented {
+  display: flex;
+  width: 100%;
+  min-height: var(--control-h);
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+.ui-segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: calc(var(--radius) - 1px);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.ui-segment:hover:not([data-disabled]) { color: var(--fg); }
+.ui-segment[data-state="on"] { background: var(--raised); color: var(--fg); box-shadow: 0 0 0 1px var(--border-strong); }
+.ui-segment[data-disabled] { opacity: 0.4; cursor: default; }
+.ui-segmented.is-inline { display: inline-flex; width: auto; }
+.ui-segmented.is-inline .ui-segment { flex: 0 0 auto; padding: 0 8px; }
+
+/* ---- Switch and checkbox ----------------------------------------------- */
 
 .ui-switch {
   position: relative;
@@ -111,7 +283,7 @@
   background: var(--accent);
 }
 .ui-switch[data-disabled] {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: default;
 }
 .ui-switch-thumb {
@@ -126,6 +298,27 @@
   transform: translateX(12px);
 }
 
+.ui-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--fg-faint);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+.ui-checkbox:hover:not([data-disabled]) { border-color: var(--fg-muted); }
+.ui-checkbox[data-state="checked"], .ui-checkbox[data-state="indeterminate"] { border-color: var(--accent); background: var(--accent); }
+.ui-checkbox[data-disabled] { opacity: 0.4; cursor: default; }
+.ui-check-row { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-md); color: var(--fg); cursor: pointer; }
+
+/* ---- Popovers and dialogs ---------------------------------------------- */
+
 /* Property popovers share the inspector's scale and theme, including portals. */
 .property-popover {
   z-index: 900;
@@ -133,85 +326,140 @@
   max-width: calc(100vw - 24px);
   max-height: min(650px, calc(100vh - 24px));
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
   color: var(--fg);
   box-shadow: var(--menu-shadow);
-  font-size: 12px;
+  font-size: var(--text-md);
   outline: none;
 }
 .property-popover header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px 16px;
+  gap: 8px;
+  min-height: var(--panel-header-h);
+  padding: 0 8px 0 var(--panel-pad);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.property-popover-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
+.property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+
+/* A modal dialog (bits-ui Dialog): the overlay, the box, its title, body
+   and the row of actions at its foot. */
+.ui-dialog-overlay { position: fixed; inset: 0; z-index: 1000; background: var(--overlay); }
+.ui-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 1001;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--fg);
+  box-shadow: var(--menu-shadow);
+  font-size: var(--text-md);
+  outline: none;
+}
+.ui-dialog-title { display: flex; align-items: center; min-height: var(--panel-header-h); padding: 0 var(--panel-pad); border-bottom: 1px solid var(--border); font-size: var(--text-lg); font-weight: 600; }
+.ui-dialog-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
+.ui-dialog-description { color: var(--fg-muted); line-height: 1.5; }
+.ui-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 var(--panel-pad) var(--panel-pad); }
+
+/* ---- Panels: headers, sections, disclosure, empty states --------------- */
+
+/* A panel's own header row, under the dock tab: a quiet trigger or title
+   at the left, icon buttons at the right. */
+.ui-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-height: var(--panel-header-h);
+  padding: 0 8px 0 calc(var(--panel-pad) - 6px);
   border-bottom: 1px solid var(--border);
 }
-.property-popover-body { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
-.property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
-.property-icon {
+.ui-panel-header .ui-spacer { flex: 1; }
+
+/* A section of a panel (the inspector's Position, Fill, …). */
+.ui-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px var(--panel-pad) var(--panel-pad);
+  border-bottom: 1px solid var(--border);
+}
+.ui-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: var(--control-h-sm);
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+.ui-section-header > .ui-section-meta { margin-left: auto; font-weight: 400; color: var(--fg-muted); font-size: var(--text-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-section-header .ui-section-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; margin-right: -6px; }
+.ui-section-header > .ui-section-meta + .ui-section-actions { margin-left: 0; }
+/* A label over a group of fields inside a section. */
+.ui-subheading { font-size: var(--text-sm); color: var(--fg-muted); }
+
+/* A disclosure (bits-ui Collapsible): a chevron that turns, then a label. */
+.ui-disclosure-trigger {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 3px;
+  gap: 4px;
+  min-height: var(--control-h-sm);
+  margin-left: -4px;
+  padding: 0 6px 0 2px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
-.property-icon:hover { background: var(--hover); color: var(--fg); }
-.property-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.property-icon:disabled { opacity: .35; cursor: default; }
+.ui-disclosure-trigger:hover { color: var(--fg); background: var(--hover); }
+.ui-disclosure-trigger > svg { flex: 0 0 auto; transition: transform 120ms ease; }
+.ui-disclosure-trigger[data-state="open"] > svg { transform: rotate(90deg); }
 
-/* Buttons and fields (AGENTS.md), in the Inspector's look: icon buttons are
-   `.property-icon` (above), a field is PropertyField's sunken `.control`, a
-   text button is the Inspector's `.add` button. `Button`, `IconButton` and
-   `TextInput` in src-ui/lib/ui/ put these on Bits UI's Button and Toggle. */
-.property-icon[data-state="on"] { background: var(--accent-soft); color: var(--accent); }
-.property-icon.large { width: 28px; height: 28px; padding: 6px; border-radius: 6px; color: var(--fg); }
-
-.ui-button {
-  display: inline-flex;
+/* Nothing to show: an icon, a title and a line of help, centred. */
+.ui-empty {
+  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  min-height: 24px;
-  padding: 4px 8px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--fg);
-  font-size: 12px;
-  line-height: 1.2;
-  white-space: nowrap;
-  cursor: pointer;
+  gap: 6px;
+  padding: 32px var(--panel-pad);
+  text-align: center;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+  line-height: 1.5;
 }
-.ui-button:hover { background: var(--hover); }
-.ui-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ui-button:disabled, .ui-button[data-disabled] { opacity: .35; cursor: default; background: transparent; }
-.ui-button.is-outline { border-color: var(--border-strong); background: var(--bg); }
-.ui-button.is-outline:hover { background: var(--hover); }
-.ui-button.is-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
-.ui-button.is-primary:hover { filter: brightness(1.08); background: var(--accent); }
-.ui-button.is-danger { color: var(--danger); }
-.ui-button.is-small { min-height: 20px; padding: 2px 6px; font-size: 11px; }
+.ui-empty > svg { margin-bottom: 4px; color: var(--fg-faint); }
+.ui-empty > strong { font-size: var(--text-md); font-weight: 600; color: var(--fg-muted); }
+.ui-empty.is-inline { align-items: flex-start; padding: 0; text-align: left; }
+.ui-empty .ui-empty-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-.ui-input {
-  min-height: 30px;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: 5px;
+/* A chip of metadata (an id, a type, a count). */
+.ui-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-sunken);
-  color: var(--fg);
-  font-size: 12px;
-  box-sizing: border-box;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
 }
-.ui-input:hover { border-color: var(--border-strong); }
-.ui-input:focus { outline: none; border-color: var(--accent); }
-.ui-input::placeholder { color: var(--fg-faint); }
-textarea.ui-input { line-height: 1.4; resize: vertical; }

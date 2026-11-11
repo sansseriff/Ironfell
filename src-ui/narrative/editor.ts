@@ -23,6 +23,8 @@ import { keymap } from 'prosemirror-keymap';
 import { baseKeymap, setBlockType, toggleMark } from 'prosemirror-commands';
 import { InputRule, inputRules, textblockTypeInputRule } from 'prosemirror-inputrules';
 import type { Node as PMNode, NodeType } from 'prosemirror-model';
+import { mount, unmount } from 'svelte';
+import ChevronRight from '@lucide/svelte/icons/chevron-right';
 import { schema, nodeName } from './schema';
 import { blockOf, diff, isTemp, nodeOf, sameContent, valueExpr, type Edit, type StoredBlock } from './convert';
 
@@ -443,20 +445,27 @@ class ValueView implements NodeView {
   }
 }
 
-/** A view block: a header that shows its composition, and an editable caption. */
+/** A view block: a header that shows its composition, and an editable caption.
+ *  The header wears the disclosure look (`.ui-disclosure-trigger`): a Lucide
+ *  chevron, then the label. */
 class ViewBlockView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
   private header: HTMLButtonElement;
+  private label: HTMLSpanElement;
+  private chevron: ReturnType<typeof mount>;
   constructor(private node: PMNode, _view: EditorView, _getPos: () => number, private editor: NarrativeEditor) {
     this.dom = document.createElement('div');
     this.dom.className = 'nb-view';
     this.header = document.createElement('button');
-    this.header.className = 'nb-view-header';
+    this.header.className = 'nb-view-header ui-disclosure-trigger';
     this.header.contentEditable = 'false';
     this.header.type = 'button';
     this.header.addEventListener('mousedown', (e) => e.preventDefault());
     this.header.addEventListener('click', () => this.editor.showView(this.node.attrs.show, this.node.attrs.focus));
+    this.chevron = mount(ChevronRight, { target: this.header, props: { size: 12, strokeWidth: 1.75 } });
+    this.label = document.createElement('span');
+    this.header.append(this.label);
     this.contentDOM = document.createElement('div');
     this.contentDOM.className = 'nb-view-caption';
     this.dom.append(this.header, this.contentDOM);
@@ -466,7 +475,10 @@ class ViewBlockView implements NodeView {
     const { show, focus } = this.node.attrs;
     this.dom.dataset.show = show;
     this.dom.dataset.focus = focus;
-    this.header.textContent = `▸ Show ${show || '(no composition)'}${focus ? ` at ${focus}` : ''}`;
+    this.label.textContent = `Show ${show || '(no composition)'}${focus ? ` at ${focus}` : ''}`;
+  }
+  destroy() {
+    void unmount(this.chevron);
   }
   update(node: PMNode) {
     if (node.type !== this.node.type) return false;

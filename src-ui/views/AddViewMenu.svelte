@@ -1,13 +1,16 @@
 <script lang="ts">
-  // "+" in a tab group's header: open a view here. Every composition in the
-  // document, or a new one (named in a dialog), then the views that are not
-  // compositions, then the render benchmark's stress scene at a few sizes
-  // (src/document_bridge/stress.rs).
+  // "+" in a tab group's header: open a view here. A composition (a
+  // submenu, so a long document keeps the menu short) or a new one (named in
+  // a dialog), then narratives and the views that are not compositions, then
+  // the developer's: Latency and the render benchmark's stress scene at a
+  // few sizes (a submenu; src/document_bridge/stress.rs).
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { DropdownMenu } from "bits-ui";
   import Plus from "@lucide/svelte/icons/plus";
   import Settings from "@lucide/svelte/icons/settings";
   import PanelTopClose from "@lucide/svelte/icons/panel-top-close";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import IconButton from "../lib/ui/IconButton.svelte";
   import NewCompositionDialog from "./NewCompositionDialog.svelte";
   import { addCompositionView, setTabBarHidden } from "./workspace";
   import type { CompositionEntry } from "../runtime/document_client.svelte";
@@ -78,27 +81,25 @@
 </script>
 
 <div class="add">
-  <button class="action" title="Hide the tab bar: the views keep a grab handle to switch, drag and show it again" aria-label="Hide tab bar" onclick={() => setTabBarHidden(group.id, true)}>
-    <PanelTopClose size={15} strokeWidth={1.75} />
-  </button>
-  <button class="action" title="Settings" aria-label="Settings" onclick={settings}>
-    <Settings size={15} strokeWidth={1.75} />
-  </button>
+  <IconButton icon={PanelTopClose} size={16} large label="Hide tab bar" title="Hide the tab bar: the views keep a grab handle to switch, drag and show it again" onclick={() => setTabBarHidden(group.id, true)} />
+  <IconButton icon={Settings} size={16} large label="Settings" onclick={settings} />
   <DropdownMenu.Root bind:open onOpenChange={opened}>
-    <DropdownMenu.Trigger class="action" title="Open a view" aria-label="Open a view">
+    <DropdownMenu.Trigger class="property-icon large" title="Open a view" aria-label="Open a view">
       <Plus size={16} strokeWidth={1.75} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content class="ui-menu" align="end" sideOffset={4}>
-        <DropdownMenu.Group>
-          <DropdownMenu.GroupHeading class="ui-menu-heading">Compositions</DropdownMenu.GroupHeading>
-          {#each compositions as c (c.id)}
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => show(c)}>
-              {titleOf(c.name ?? c.id)} <span class="ui-hint">{c.session ? "session" : c.dims}</span>
-            </DropdownMenu.Item>
-          {/each}
-          <DropdownMenu.Item class="ui-menu-item" onSelect={() => { open = false; naming = true; }}>New composition…</DropdownMenu.Item>
-        </DropdownMenu.Group>
+        <DropdownMenu.Sub>
+          <DropdownMenu.SubTrigger class="ui-menu-item"><span>Open composition</span><ChevronRight class="ui-submenu-chevron" size={14} strokeWidth={1.75} /></DropdownMenu.SubTrigger>
+          <DropdownMenu.SubContent class="ui-menu" sideOffset={4}>
+            {#each compositions as c (c.id)}
+              <DropdownMenu.Item class="ui-menu-item" onSelect={() => show(c)}>
+                <span>{titleOf(c.name ?? c.id)}</span><span class="ui-hint">{c.session ? "session" : c.dims}</span>
+              </DropdownMenu.Item>
+            {/each}
+          </DropdownMenu.SubContent>
+        </DropdownMenu.Sub>
+        <DropdownMenu.Item class="ui-menu-item" onSelect={() => { open = false; naming = true; }}>New composition…</DropdownMenu.Item>
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
           <DropdownMenu.GroupHeading class="ui-menu-heading">Narratives</DropdownMenu.GroupHeading>
@@ -114,19 +115,20 @@
             <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(v.title, v.spec)}>{v.title}</DropdownMenu.Item>
           {/each}
         </DropdownMenu.Group>
-        {#if appSettings.developer}
-          <DropdownMenu.Separator class="ui-menu-separator" />
-          <DropdownMenu.Group>
-            <DropdownMenu.GroupHeading class="ui-menu-heading">Developer</DropdownMenu.GroupHeading>
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Latency", LATENCY_VIEW)}>Latency <span class="ui-hint">input to screen</span></DropdownMenu.Item>
-          </DropdownMenu.Group>
-        {/if}
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
-          <DropdownMenu.GroupHeading class="ui-menu-heading">Stress test</DropdownMenu.GroupHeading>
-          {#each STRESS_SIZES as n (n)}
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => stress(n)}>{n.toLocaleString()} shapes</DropdownMenu.Item>
-          {/each}
+          <DropdownMenu.GroupHeading class="ui-menu-heading">Developer</DropdownMenu.GroupHeading>
+          {#if appSettings.developer}
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Latency", LATENCY_VIEW)}>Latency <span class="ui-hint">input to screen</span></DropdownMenu.Item>
+          {/if}
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger class="ui-menu-item"><span>Stress test</span><ChevronRight class="ui-submenu-chevron" size={14} strokeWidth={1.75} /></DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent class="ui-menu" sideOffset={4}>
+              {#each STRESS_SIZES as n (n)}
+                <DropdownMenu.Item class="ui-menu-item" onSelect={() => stress(n)}>{n.toLocaleString()} shapes</DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
         </DropdownMenu.Group>
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
@@ -140,24 +142,7 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    padding-right: 6px;
+    padding-right: 4px;
     pointer-events: auto;
-  }
-  .add :global(.action) {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border: none;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--fg-muted);
-    cursor: pointer;
-  }
-  .add :global(.action:hover),
-  .add :global(.action[data-state="open"]) {
-    background: var(--hover);
-    color: var(--fg);
   }
 </style>

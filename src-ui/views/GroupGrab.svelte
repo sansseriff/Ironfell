@@ -54,18 +54,22 @@
 </div>
 
 <style>
-  .grab { position: absolute; top: 0; left: 50%; width: 40px; height: 22px; transform: translateX(-50%); z-index: 5; pointer-events: auto; }
+  /* Collapsed, the hit area is a 10 px strip at the view's top edge, clear
+     of a panel header's controls (centred in its 40 px row); hovered, open
+     or focused it grows down to the full pill. Growing never moves the
+     target away from the pointer, so it cannot flicker. */
+  .grab { position: absolute; top: 0; left: 50%; width: 40px; height: 10px; transform: translateX(-50%); z-index: 5; pointer-events: auto; }
+  .grab:hover, .grab:has(.grab-pill.open), .grab:has(.grab-pill:focus-visible) { height: 22px; }
   /* Workspace's canvas-ui pointer rule otherwise re-enables this invisible
      trigger over the pill, alternately taking hover and changing the cursor. */
   :global(.grab-anchor) { position: absolute; inset: 0; opacity: 0; pointer-events: none !important; border: 0; padding: 0; background: none; }
   /* The full-size button remains the hit area. Only its painted pill grows,
      so hovering near the collapsed edge cannot move the pointer target. */
-  .grab-pill { position: relative; display: grid; place-items: center; width: 40px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--fg-muted); cursor: grab; }
-  .grab-pill::before { content: ''; position: absolute; inset: 0 0 4px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 7px 7px; background: var(--bg-chrome); transform: scaleY(0.45); transform-origin: top; opacity: 0.75; pointer-events: none; transition: transform 150ms ease, opacity 150ms ease; }
+  .grab-pill { position: relative; display: grid; place-items: center; width: 40px; height: 100%; padding: 0; border: 0; background: transparent; color: var(--fg-muted); cursor: grab; }
+  .grab-pill::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 18px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--bg-chrome); transform: scaleY(0.45); transform-origin: top; opacity: 0.75; pointer-events: none; transition: transform 150ms ease, opacity 150ms ease; }
   .grab-pill :global(svg) { position: relative; opacity: 0; transition: opacity 150ms ease; }
   .grab:hover .grab-pill::before, .grab-pill.open::before, .grab-pill:focus-visible::before { transform: scaleY(1); opacity: 1; }
   .grab:hover .grab-pill :global(svg), .grab-pill.open :global(svg), .grab-pill:focus-visible :global(svg) { opacity: 1; }
   .grab:hover .grab-pill, .grab-pill.open { color: var(--fg); }
-  .grab-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) { .grab-pill::before, .grab-pill :global(svg) { transition: none; } }
 </style>

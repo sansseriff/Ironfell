@@ -15,6 +15,6 @@
 {:else}<span class="unavailable">{alt || 'Image'} ({failed ? 'image unavailable' : 'unsupported image address'})</span>{/if}
 
 <style>
-  img { display: block; max-width: 100%; max-height: 360px; object-fit: contain; border-radius: 6px; margin: 8px 0; }
+  img { display: block; max-width: 100%; max-height: 360px; object-fit: contain; border-radius: var(--radius); margin: 8px 0; }
   .unavailable { color: var(--fg-muted); }
 </style>

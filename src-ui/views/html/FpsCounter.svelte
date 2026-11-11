@@ -80,11 +80,11 @@
     gap: 3px;
     padding: 3px 7px;
     border: 1px solid var(--border-strong);
-    border-radius: 6px;
-    background: var(--bg);
+    border-radius: var(--radius);
+    background: var(--raised);
     color: var(--fg);
     box-shadow: var(--menu-shadow);
-    font-size: 11px;
+    font-size: var(--text-sm);
     line-height: 1.3;
     font-variant-numeric: tabular-nums;
     user-select: none;

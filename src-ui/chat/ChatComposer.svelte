@@ -101,86 +101,67 @@
     {#if images.length}<div class="attachments">{#each images as image, index}<div class="attachment"><img src={imageUrl(image)} alt={image.name} /><IconButton icon={X} label={`Remove ${image.name}`} size={12} class="attachment-remove" onclick={() => { images = images.filter((_, i) => i !== index); }} /></div>{/each}</div>{/if}
     {#if imageError}<p class="image-error" role="alert">{imageError}</p>{/if}
     {#if reading}<p class="hint" role="status">Reading images…</p>{/if}
+    {#if !doc.canAsk}<p class="notice">Open Agent settings to connect your runtime.</p>{/if}
     <TextInput multiline class={overflowing ? 'overflowing' : ''} bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } } }} />
     <input hidden type="file" bind:this={picker} accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif,image/svg+xml,.heic,.heif,.svg" multiple onchange={() => { void attach(Array.from(picker.files ?? [])); picker.value = ''; }} />
     <div class="footer">
       <IconButton icon={ImagePlus} label="Attach images" disabled={busy || reading} onclick={() => picker.click()} />
-      <Select value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
+      <Select variant="quiet" value={doc.agentProvider} items={providers} label="Agent runtime" disabled={busy || doc.asking} onChange={(provider) => doc.configureAgent({ provider })} />
       <ModelEffortPicker disabled={busy || doc.asking} />
       <AgentSettings />
       <span class="spacer"></span>
       {#if busy && stop}
-        <button type="button" class="round stop" onclick={stop} aria-label="Stop the agent" title="Stop the agent"><Square size={11} strokeWidth={0} fill="currentColor" /></button>
+        <IconButton icon={Square} large class="round stop" type="button" onclick={stop} label="Stop the agent" />
       {:else}
-        <button type="submit" class="round send" disabled={blocked} aria-label="Send message" title="Send · Enter (Shift+Enter for a new line)"><ArrowUp size={16} strokeWidth={2.25} /></button>
+        <IconButton icon={ArrowUp} size={16} large class="round send" type="submit" disabled={blocked} label="Send message" title="Send · Enter (Shift+Enter for a new line)" />
       {/if}
     </div>
   </div>
-  {#if !doc.canAsk}<p class="hint">Open Agent settings to connect your runtime.</p>{/if}
 </form>
 
 <style>
   .attachments { display: flex; gap: 10px; padding: 10px 16px 4px; flex-wrap: wrap; }
   .attachment { position: relative; width: 72px; height: 72px; flex: none; }
-  .attachment img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: 10px; }
+  .attachment img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius-lg); }
   .attachment :global(.attachment-remove) {
     position: absolute; top: -6px; right: -6px; width: 22px; height: 22px;
     border: 2px solid var(--bg-input); border-radius: 50%;
-    background: var(--fg); color: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+    background: var(--fg); color: var(--bg); box-shadow: var(--menu-shadow);
   }
-  .attachment :global(.attachment-remove:hover) { background: var(--danger); color: white; }
-  .attachment :global(.attachment-remove:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .image-error { color: var(--danger); margin: 8px 16px; font-size: 12px; }
+  .attachment :global(.attachment-remove:hover) { background: var(--danger); color: var(--accent-fg); }
+  .image-error { color: var(--danger); margin: 8px 16px; font-size: var(--text-md); }
   .composer { flex: none; padding: 6px 16px 14px; background: var(--bg); }
   .surface {
-    max-width: 736px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: 16px;
-    background: var(--bg-input); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); overflow: hidden;
-    transition: border-color 150ms ease, box-shadow 150ms ease;
+    max-width: 736px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-xl);
+    background: var(--bg-input); overflow: hidden;
+    transition: border-color 150ms ease;
   }
-  .surface:focus-within { border-color: var(--fg-faint); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
-  .target { padding: 9px 16px 0; font-size: 11px; color: var(--fg-faint); }
+  .surface:focus-within { border-color: var(--fg-faint); }
+  .target { padding: 9px 16px 0; font-size: var(--text-sm); color: var(--fg-faint); }
   .target:empty { display: none; }
+  /* Why Send is off, inside the card and on the text's left edge. */
+  .notice { margin: 0; padding: 9px 16px 0; font-size: var(--text-sm); color: var(--fg-muted); }
   .surface :global(textarea.ui-input) {
     display: block; width: 100%; box-sizing: border-box; border: 0; border-radius: 0; box-shadow: none; outline: none;
     background: transparent; resize: none; overflow-y: hidden;
     /* One full line plus the padding, so the caret is never clipped. */
-    min-height: calc(14px * 1.6 + 14px); max-height: 208px; padding: 8px 16px 6px;
-    font-size: 14px; line-height: 1.6; color: var(--fg);
-    scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+    min-height: calc(var(--text-lg) * 1.6 + 14px); max-height: 208px; padding: 8px 16px 6px;
+    font-size: var(--text-lg); line-height: 1.6; color: var(--fg);
   }
   .surface :global(textarea.ui-input.overflowing) { overflow-y: auto; }
-  .surface :global(textarea.ui-input::-webkit-scrollbar) { width: 8px; }
-  .surface :global(textarea.ui-input::-webkit-scrollbar-track) { background: transparent; }
-  .surface :global(textarea.ui-input::-webkit-scrollbar-thumb) { background: var(--border-strong); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
-  .surface :global(textarea.ui-input::placeholder) { color: var(--fg-faint); }
   .footer { display: flex; gap: 2px; align-items: center; padding: 2px 8px 8px; min-width: 0; }
+  .footer :global(.ui-select-trigger.is-quiet) { flex: none; color: var(--fg-muted); }
   .spacer { flex: 1; }
-  /* Quiet "ghost" controls, as T3 Code's composer row. */
-  .footer :global(.ui-select-trigger), .footer :global(.composer-control), .footer :global(.property-icon) {
-    display: inline-flex; align-items: center; gap: 6px; height: 28px; min-width: 0; padding: 0 8px; box-sizing: border-box;
-    border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--fg-muted);
-    font: inherit; font-size: 12px; cursor: pointer; transition: background 150ms ease, color 150ms ease;
-  }
-  .footer :global(.composer-control) { max-width: 240px; }
-  .footer :global(.property-icon) { width: 28px; padding: 0; justify-content: center; }
-  .footer :global(.ui-select-trigger:hover), .footer :global(.composer-control:hover), .footer :global(.property-icon:hover),
-  .footer :global([data-state='open']) { background: var(--hover); color: var(--fg); border-color: transparent; }
-  .footer :global(.ui-select-trigger[data-disabled]), .footer :global(.composer-control:disabled) { opacity: 0.55; cursor: default; background: transparent; }
-  .footer :global(.ui-select-trigger svg), .footer :global(.composer-control svg) { flex: none; color: var(--fg-faint); }
-  .footer :global(.ui-select-trigger:focus-visible), .footer :global(.composer-control:focus-visible), .footer :global(.property-icon:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .round {
-    flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0;
-    border: 0; border-radius: 50%; cursor: pointer; transition: background 150ms ease, transform 150ms ease, opacity 150ms ease;
-  }
-  .round:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .round:active:not(:disabled) { transform: scale(0.95); }
-  .send { background: var(--accent); color: var(--accent-fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
-  .send:hover:not(:disabled) { filter: brightness(1.08); }
-  .send:disabled { background: var(--active); color: var(--fg-faint); box-shadow: none; cursor: default; }
-  .stop { background: var(--fg); color: var(--bg); }
-  .stop:hover { opacity: 0.85; }
-  .hint { text-align: center; margin: 6px 0 0; color: var(--fg-faint); font-size: 11px; }
+  /* The primary action: a filled round Send (Stop while a turn runs). */
+  .footer :global(.round) { border-radius: 50%; }
+  .footer :global(.round.send) { background: var(--accent); color: var(--accent-fg); }
+  .footer :global(.round.send:hover:not(:disabled)) { background: var(--accent); color: var(--accent-fg); filter: brightness(1.1); }
+  .footer :global(.round.send:disabled) { background: var(--active); color: var(--fg-faint); opacity: 1; }
+  .footer :global(.round.stop) { background: var(--fg); color: var(--bg); }
+  .footer :global(.round.stop svg) { fill: currentColor; }
+  .footer :global(.round.stop:hover) { background: var(--fg); color: var(--bg); opacity: 0.85; }
+  .hint { margin: 6px 16px 0; color: var(--fg-faint); font-size: var(--text-sm); }
   .compact { padding: 4px 10px 8px; }
-  .compact .surface :global(textarea.ui-input) { max-height: 120px; min-height: calc(13px * 1.6 + 14px); font-size: 13px; }
-  @media (prefers-reduced-motion: reduce) { .surface, .round, .footer :global(*) { transition: none; } }
+  .compact .surface :global(textarea.ui-input) { max-height: 120px; }
+  @media (prefers-reduced-motion: reduce) { .surface { transition: none; } }
 </style>

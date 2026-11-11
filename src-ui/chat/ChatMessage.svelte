@@ -92,31 +92,30 @@
 </article>
 
 <style>
-  .attached-image { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 6px; margin-top: 8px; }
+  .attached-image { max-width: 100%; max-height: 240px; object-fit: contain; border-radius: var(--radius); margin-top: 8px; }
   .attached-image.preview { max-height: 96px; }
   .chat-turn { width: min(100%, 736px); margin: 0 auto; min-width: 0; }
   /* The user's turn: a bubble on the right, as T3 Code's; the reply below it
      is plain text across the column. */
   .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 0 0 16px; }
-  .user-message { max-width: min(80%, 560px); padding: 9px 14px; background: var(--bg-sunken); border-radius: 16px; }
-  .user-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; margin: 0; }
-  .target { padding: 0 6px; color: var(--fg-faint); font-size: 11px; }
+  .user-message { max-width: min(80%, 560px); padding: 9px 14px; background: var(--bg-sunken); border-radius: var(--radius-xl); }
+  .user-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-lg); line-height: 1.55; margin: 0; }
+  .target { padding: 0 6px; color: var(--fg-faint); font-size: var(--text-sm); }
   .assistant-message { min-width: 0; padding: 0 4px; }
-  .working, .summary { font-size: 13px; margin: 4px 0 10px; color: var(--fg-muted); }
+  .working, .summary { font-size: var(--text-lg); margin: 4px 0 10px; color: var(--fg-muted); }
   .working { display: flex; align-items: center; gap: 8px; }
   .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-  .error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
-  :global(.edit-trigger) { display: flex; align-items: center; gap: 5px; background: transparent; border: none; border-radius: 4px; font: inherit; font-size: 10px; color: var(--fg-muted); cursor: pointer; padding: 5px 0; margin-top: 8px; }
+  .error { color: var(--danger); font-size: var(--text-md); overflow-wrap: anywhere; white-space: pre-wrap; }
+  :global(.edit-trigger) { display: flex; align-items: center; gap: 5px; background: transparent; border: none; border-radius: var(--radius); font: inherit; font-size: var(--text-xs); color: var(--fg-muted); cursor: pointer; padding: 5px 0; margin-top: 8px; }
   :global(.edit-trigger:hover) { color: var(--fg); }
-  :global(.edit-trigger:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .forming { margin: 6px 0 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-sunken); }
-  .forming-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg); }
-  .verbs { list-style: none; margin: 6px 0 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--fg-muted); }
+  .forming { margin: 6px 0 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-sunken); }
+  .forming-head { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--fg); }
+  .verbs { list-style: none; margin: 6px 0 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); color: var(--fg-muted); }
   .verbs li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .verbs .earlier { color: var(--fg-faint); }
-  .edit { font-size: 10px; background: var(--bg-sunken); padding: 10px; border-radius: 6px; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .edit { font-size: var(--text-xs); background: var(--bg-sunken); padding: 10px; border-radius: var(--radius); max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
   .actions { display: flex; align-items: center; gap: 2px; }
-  .meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; color: var(--fg-faint); font-size: 11px; }
+  .meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 6px; color: var(--fg-faint); font-size: var(--text-sm); }
   /* Actions show on hover or focus where there is a pointer to hover with. */
   @media (hover: hover) {
     .meta { opacity: 0.55; transition: opacity 150ms ease; }

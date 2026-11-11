@@ -4,7 +4,11 @@
   // the port's range maps onto it. One binding in the definition:
   // `scale(#port.port.signal, a, b, c, d)`, written through the inspector's
   // bind, which the store sends into the definition.
+  import { Popover } from "bits-ui";
   import { controllerManager } from "../controller-manager.svelte";
+  import Button from "./ui/Button.svelte";
+  import Select from "./ui/Select.svelte";
+  import TextInput from "./ui/TextInput.svelte";
 
   const doc = controllerManager.docClient;
   const drop = $derived(doc.linkDrop);
@@ -60,6 +64,9 @@
     d = g.d;
   }
 
+  // The popover sits at the drop point: a zero-size anchor there.
+  const anchor = $derived(drop ? { getBoundingClientRect: () => new DOMRect(drop.x, drop.y, 0, 0) } : null);
+
   async function link() {
     if (!drop || !leaf) return;
     const expr = `scale(${drop.spec}.port.signal, ${a}, ${b}, ${c}, ${d})`;
@@ -72,47 +79,34 @@
   }
 </script>
 
-{#if drop}
-  <div class="link-popover" role="dialog" aria-label="Link a port" style="left: {Math.min(drop.x + 14, innerWidth - 300)}px; top: {Math.min(drop.y + 14, innerHeight - 260)}px">
-    <div class="head">Link <strong>{portName}</strong></div>
-    <label>Drives<select value={leaf} onchange={(e) => pick(e.currentTarget.value)}>{#each props as f (f.leaf)}<option value={f.leaf}>{labels[f.leaf] ?? f.leaf}</option>{/each}</select></label>
-    <div class="map">
-      <span>When {portName} goes from</span>
-      <input aria-label="from" bind:value={a} /><span>to</span><input aria-label="to" bind:value={b} />
-      <span>{labels[leaf] ?? leaf} goes from</span>
-      <input aria-label="drives from" bind:value={c} /><span>to</span><input aria-label="drives to" bind:value={d} />
-    </div>
-    {#if error}<p class="error">{error}</p>{/if}
-    <div class="actions">
-      <button onclick={() => (doc.linkDrop = null)}>Cancel</button>
-      <button class="primary" onclick={link} disabled={!leaf}>Link</button>
-    </div>
-  </div>
-{/if}
+<Popover.Root open={!!drop} onOpenChange={(open) => { if (!open) doc.linkDrop = null; }}>
+  <Popover.Portal>
+    <Popover.Content class="property-popover link-popover" customAnchor={anchor} side="bottom" align="start" sideOffset={14} alignOffset={14} aria-label="Link a port">
+      <header class="head"><span>Link <strong>{portName}</strong></span></header>
+      <div class="property-popover-body">
+        <div class="group"><span class="ui-subheading">Drives</span><Select label="Drives" value={leaf} items={props.map((f) => ({ value: f.leaf, label: labels[f.leaf] ?? f.leaf }))} onChange={pick} /></div>
+        <div class="map">
+          <span>When {portName} goes from</span>
+          <TextInput aria-label="from" bind:value={a} /><span>to</span><TextInput aria-label="to" bind:value={b} />
+          <span>{labels[leaf] ?? leaf} goes from</span>
+          <TextInput aria-label="drives from" bind:value={c} /><span>to</span><TextInput aria-label="drives to" bind:value={d} />
+        </div>
+        {#if error}<p class="error">{error}</p>{/if}
+      </div>
+      <div class="ui-dialog-actions">
+        <Button variant="outline" onclick={() => (doc.linkDrop = null)}>Cancel</Button>
+        <Button variant="primary" class="primary" onclick={link} disabled={!leaf}>Link</Button>
+      </div>
+    </Popover.Content>
+  </Popover.Portal>
+</Popover.Root>
 
 <style>
-  .link-popover {
-    position: fixed;
-    z-index: 1001;
-    width: 280px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-strong);
-    border-radius: 9px;
-    background: var(--bg);
-    color: var(--fg);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-    font-size: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .head strong { color: #7d4dff; }
-  label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-muted); font-size: 11px; }
-  select, input { min-height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg); color: var(--fg); font-size: 12px; box-sizing: border-box; }
-  .map { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; }
-  .map span:nth-of-type(odd) { grid-column: 1 / -1; color: var(--fg-muted); font-size: 11px; }
-  .map input { width: 100%; }
-  .actions { display: flex; justify-content: flex-end; gap: 6px; }
-  .primary { background: #7d4dff; color: white; border-color: #7d4dff; }
-  .error { color: var(--danger); margin: 0; overflow-wrap: anywhere; }
+  .head strong { color: var(--component); }
+  .group { display: flex; flex-direction: column; gap: 4px; }
+  .map { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: center; }
+  .map > span { color: var(--fg-muted); font-size: var(--text-sm); }
+  .map > span:nth-of-type(odd) { grid-column: 1 / -1; }
+  .map :global(.ui-input) { width: 100%; }
+  .error { margin: 0; color: var(--danger); overflow-wrap: anywhere; }
 </style>

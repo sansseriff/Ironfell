@@ -34,6 +34,7 @@
   import type { ViewSpec } from "../views";
   import TimelinePanel from "./TimelinePanel.svelte";
   import X from "@lucide/svelte/icons/x";
+  import IconButton from "../../lib/ui/IconButton.svelte";
   import { onDestroy } from "svelte";
   import { machines } from "../../lib/machines.svelte";
 
@@ -107,7 +108,7 @@
     {:else}
       <span>Editing <strong>{pin.state}</strong>{#if pin.name}<span class="of"> · {pin.name}</span>{/if}<span class="of"> · edits go into this state</span></span>
     {/if}
-    <button class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title={pin.scrub ? "Stop previewing" : "Stop editing this state: the component shows at rest"} aria-label={pin.scrub ? "Stop previewing" : "Stop editing this state"}><X size={13} strokeWidth={2} /></button>
+    <IconButton icon={X} class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title={pin.scrub ? "Stop previewing" : "Stop editing this state: the component shows at rest"} label={pin.scrub ? "Stop previewing" : "Stop editing this state"} />
   </div>
 {/if}
 
@@ -117,26 +118,26 @@
       {#if slot.length === 1}
         {@const t = TOOLS[slot[0]]}
         <button class="tool" class:active={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
-          <t.icon size={18} strokeWidth={1.6} />
+          <t.icon size={18} strokeWidth={1.75} />
         </button>
       {:else}
         {@const id = current(slot)}
         {@const t = TOOLS[id]}
         <div class="group">
           <button class="tool" class:active={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
-            <t.icon size={18} strokeWidth={1.6} />
+            <t.icon size={18} strokeWidth={1.75} />
           </button>
           <DropdownMenu.Root bind:open={() => menu[slot.join("|")] ?? false, (v) => (menu[slot.join("|")] = v)}>
             <DropdownMenu.Trigger class="more" title="Shape tools" aria-label="Shape tools">
-              <ChevronDown size={12} strokeWidth={2} />
+              <ChevronDown size={12} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content class="ui-menu" side="top" sideOffset={8} align="start">
                 {#each slot as s (s)}
                   {@const m = TOOLS[s]}
                   <DropdownMenu.Item class="ui-menu-item" onSelect={() => pick(s, slot)}>
-                    <span class="check">{#if doc.tool === s}<Check size={14} strokeWidth={2} />{/if}</span>
-                    <m.icon size={15} strokeWidth={1.75} />
+                    <span class="ui-menu-check">{#if doc.tool === s}<Check size={14} strokeWidth={1.75} />{/if}</span>
+                    <m.icon size={14} strokeWidth={1.75} />
                     <span>{m.label}</span>
                     <span class="ui-hint">{keyOf[s] ?? ""}</span>
                   </DropdownMenu.Item>
@@ -151,14 +152,17 @@
 {/if}
 
 <style>
-  .previewing { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px 0 12px; border-radius: 14px; background: #ff9933; color: #1d1203; font-size: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); pointer-events: auto; z-index: 4; white-space: nowrap; }
-  .previewing .dot { width: 7px; height: 7px; border-radius: 50%; background: #1d1203; }
+  /* Recording into a state is the record colour; previewing a transition,
+     which records nothing, the accent. Text and the dot are a dark shade of
+     the pill's own colour. */
+  .previewing { --pill: var(--record); --pill-fg: color-mix(in srgb, var(--pill) 18%, black); position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; height: var(--control-h); padding: 0 2px 0 12px; border-radius: calc(var(--control-h) / 2); background: var(--pill); color: var(--pill-fg); font-size: var(--text-md); box-shadow: var(--menu-shadow); pointer-events: auto; z-index: 4; white-space: nowrap; }
+  .previewing.scrub { --pill: var(--accent); --pill-fg: var(--accent-fg); }
+  .previewing .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .previewing .of { opacity: 0.75; }
-  .previewing .stop { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: 11px; background: rgba(0, 0, 0, 0.12); color: inherit; cursor: pointer; }
-  .previewing .stop:hover { background: rgba(0, 0, 0, 0.22); }
-  .previewing .stop:focus-visible { outline: 2px solid #1d1203; }
-  .previewing.scrub { background: #4aa3ff; color: #04182c; }
-  .previewing.scrub .dot { background: #04182c; }
+  .previewing :global(.stop) { border-radius: 50%; color: inherit; background: color-mix(in srgb, currentColor 12%, transparent); }
+  .previewing :global(.stop:hover:not(:disabled)) { color: inherit; background: color-mix(in srgb, currentColor 22%, transparent); }
+  /* The floating tool palette: larger targets than a panel's (36 px), on a
+     raised bar with the composer's radius. */
   .toolbar {
     position: absolute;
     left: 50%;
@@ -169,8 +173,8 @@
     gap: 4px;
     padding: 6px;
     border: 1px solid var(--border-strong);
-    border-radius: 12px;
-    background: var(--bg);
+    border-radius: var(--radius-xl);
+    background: var(--raised);
     box-shadow: var(--menu-shadow);
     user-select: none;
   }
@@ -185,7 +189,7 @@
     width: 36px;
     height: 36px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--radius-lg);
     background: transparent;
     color: var(--fg);
     cursor: pointer;
@@ -204,17 +208,14 @@
     width: 16px;
     height: 36px;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius);
     background: transparent;
     color: var(--fg-muted);
     cursor: pointer;
   }
-  .group :global(.more:hover) {
+  .group :global(.more:hover),
+  .group :global(.more[data-state="open"]) {
     background: var(--hover);
     color: var(--fg);
-  }
-  .check {
-    display: flex;
-    width: 14px;
   }
 </style>

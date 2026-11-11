@@ -1378,7 +1378,7 @@ PROFILE=wasm-bench .claude/skills/run-iron/build.sh   # ~2.5 min cold
 .claude/skills/run-iron/build.sh                      # back to dev-opt for the smoke
 ```
 
-The **+** menu in any tab bar has a *Stress test* section (1k–20k shapes; another
+The **+** menu in any tab bar has a *Stress test* submenu under Developer (1k–20k shapes; another
 size replaces the scene). `?stress=N` (with `layout=default` if a saved layout lacks the tab) adds a
 `stress` composition of N shapes in cells of 100 and shows it in a Stress
 tab (`src/document_bridge/stress.rs`); `await __iron.stress(N)` does the same

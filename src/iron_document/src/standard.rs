@@ -8,7 +8,7 @@
 
 use crate::definition::{self, Placement};
 use crate::document::Document;
-use crate::facet::{Composition, Facet, Fill, Font, Import, LeafStruct, Name, Port, Size, Text, Transform2d};
+use crate::facet::{Composition, Facet, FacetKind, Fill, Font, Import, LeafPath, LeafStruct, Name, Port, Size, Stroke, Text, Transform2d};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -267,22 +267,45 @@ pub fn latency_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
     ]
 }
 
+/// The Library's grid, in document px (CSS px at 100%): two columns of
+/// cards that fit a 300 px panel whole (16 + 128 + 12 + 128 + 16).
+const LIB_MARGIN: f64 = 16.0;
+const LIB_CARD: (f64, f64) = (128.0, 86.0);
+const LIB_GAP: f64 = 12.0;
+/// A cell's card, then its label under it, then the gap to the next row.
+const LIB_ROW: f64 = 124.0;
+/// The card's inset around its preview.
+const LIB_INSET: f64 = 5.0;
+
+/// The Library's card and label colours for a theme, in sRGB: the shell's
+/// tokens (src-ui/app.css). Card fill `--bg-sunken` (light) or `--raised`
+/// (dark), its edge `--border` or `--border-strong`, the label `--fg-muted`.
+/// (fill, edge, label).
+pub fn library_colours(light: bool) -> ([f32; 4], [f32; 4], [f32; 4]) {
+    let hex = |c: u32| [((c >> 16) & 0xff) as f32 / 255.0, ((c >> 8) & 0xff) as f32 / 255.0, (c & 0xff) as f32 / 255.0, 1.0];
+    if light { (hex(0xf3f3f3), hex(0xe5e5e5), hex(0x616161)) } else { (hex(0x2a2b2e), hex(0x3c3c3c), hex(0x9d9d9d)) }
+}
+
 /// The ops building the Library tab's session composition: a grid of
-/// cells, each an `empty` named for its entry's key holding a baked preview
-/// (scaled to fit) and a label. Ids from `first`, a session id. Previews are
-/// each standard picture's resolved shapes, with no bindings and no ports.
+/// cells, each an `empty` named for its entry's key holding a card, a baked
+/// preview (scaled to fit) and a label, in the light theme's colours
+/// ([`library_theme_ops`] recolours them). Ids from `first`, a session id.
+/// Previews are each standard picture's resolved shapes, with no bindings
+/// and no ports.
 pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
     let mut ids = Ids(first.raw());
     let comp = ids.id();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut ops = vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order, facets: vec![named(LIBRARY), c.wrap()] }];
-    let (cell_w, cell_h, preview_w, preview_h) = (175.0, 150.0, 150.0, 96.0);
+    let (card_w, card_h) = LIB_CARD;
+    let (preview_w, preview_h) = (card_w - 2.0 * LIB_INSET, card_h - 2.0 * LIB_INSET);
+    let (fill, edge, ink) = library_colours(true);
     let mut key = OrderKey::first();
     for (i, entry) in ENTRIES.iter().enumerate() {
         let (col, row) = ((i % 2) as f64, (i / 2) as f64);
         let cell = ids.id();
-        ops.push(Op::Create { id: cell, ty: ty("empty"), parent: Some(comp), order: key.clone(), facets: vec![at(20.0 + col * cell_w, 20.0 + row * cell_h).wrap(), named(entry.key)] });
+        ops.push(Op::Create { id: cell, ty: ty("empty"), parent: Some(comp), order: key.clone(), facets: vec![at(LIB_MARGIN + col * (card_w + LIB_GAP), LIB_MARGIN + row * LIB_ROW).wrap(), named(entry.key)] });
         key = OrderKey::after(&key);
         // A card behind the preview, the preview fitted into it, a label.
         let card = ids.id();
@@ -291,12 +314,15 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
         corners.tr = n(8.0);
         corners.br = n(8.0);
         corners.bl = n(8.0);
-        ops.push(Op::Create { id: card, ty: ty("rect"), parent: Some(cell), order: OrderKey::first(), facets: vec![at(0.0, 0.0).wrap(), size(preview_w + 10.0, preview_h + 10.0), paint([0.965, 0.965, 0.975, 1.0]), corners.wrap(), named("card")] });
+        let mut stroke = Stroke::default();
+        stroke.color = Slot::Const(Value::Color(edge));
+        stroke.width = n(1.0);
+        ops.push(Op::Create { id: card, ty: ty("rect"), parent: Some(cell), order: OrderKey::first(), facets: vec![at(0.0, 0.0).wrap(), size(card_w, card_h), paint(fill), stroke.wrap(), corners.wrap(), named("card")] });
         let baked = bake(entry.key);
         if let Some(b) = baked.bounds {
             let s = (preview_w / b.width().max(1.0)).min(preview_h / b.height().max(1.0)).min(1.0);
             let holder = ids.id();
-            let mut t = at(5.0 + (preview_w - b.width() * s) / 2.0 - b.x0 * s, 5.0 + (preview_h - b.height() * s) / 2.0 - b.y0 * s);
+            let mut t = at(LIB_INSET + (preview_w - b.width() * s) / 2.0 - b.x0 * s, LIB_INSET + (preview_h - b.height() * s) / 2.0 - b.y0 * s);
             t.sx = n(s);
             t.sy = n(s);
             ops.push(Op::Create { id: holder, ty: ty("empty"), parent: Some(cell), order: OrderKey::after(&OrderKey::first()), facets: vec![t.wrap(), named("preview")] });
@@ -314,8 +340,41 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
         let mut words = Text::default();
         words.content = Slot::Const(Value::Str(entry.name.into()));
         let mut font = Font::default();
-        font.size = n(13.0);
-        ops.push(Op::Create { id: label, ty: ty("text"), parent: Some(cell), order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![at(4.0, preview_h + 18.0).wrap(), words.wrap(), font.wrap(), paint([0.25, 0.25, 0.3, 1.0]), named("label")] });
+        font.size = n(12.0);
+        ops.push(Op::Create { id: label, ty: ty("text"), parent: Some(cell), order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![at(2.0, card_h + 6.0).wrap(), words.wrap(), font.wrap(), paint(ink), named("label")] });
+    }
+    ops
+}
+
+/// The session ops recolouring the Library's cards and labels for the
+/// theme (`light`), or none when they already wear it. The Library's
+/// colours are constants (its previews are baked), so a theme switch sets
+/// them, as the timeline regenerates in its palette (timeline_view.rs).
+pub fn library_theme_ops(doc: &Document, light: bool) -> Vec<Op> {
+    let (fill, edge, ink) = library_colours(light);
+    let Some(&lib) = doc.roots().iter().find(|&&r| r.is_session() && doc.get::<Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(LIBRARY)) else {
+        return Vec::new();
+    };
+    let mut ops = Vec::new();
+    let mut set = |id: NodeId, kind: FacetKind, field: &'static str, want: [f32; 4], have: Option<&Value>| {
+        if have != Some(&Value::Color(want)) {
+            ops.push(Op::Set { id, path: LeafPath::new(kind, field).expect("declared"), slot: Slot::Const(Value::Color(want)) });
+        }
+    };
+    for &cell in doc.children(lib) {
+        for &c in doc.children(cell) {
+            let name = doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+            let have_fill = doc.get::<Fill>(c).and_then(|f| f.color.constant().cloned());
+            match name.as_deref() {
+                Some("card") => {
+                    set(c, FacetKind::Fill, "color", fill, have_fill.as_ref());
+                    let have_edge = doc.get::<Stroke>(c).and_then(|s| s.color.constant().cloned());
+                    set(c, FacetKind::Stroke, "color", edge, have_edge.as_ref());
+                }
+                Some("label") => set(c, FacetKind::Fill, "color", ink, have_fill.as_ref()),
+                _ => {}
+            }
+        }
     }
     ops
 }

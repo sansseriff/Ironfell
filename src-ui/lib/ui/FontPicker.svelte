@@ -26,6 +26,7 @@
   import CircleX from "@lucide/svelte/icons/circle-x";
   import X from "@lucide/svelte/icons/x";
   import Select from "./Select.svelte";
+  import IconButton from "./IconButton.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
 
   let { value, catalog, onPick, onClose }: { value: string; catalog: FontCatalog; onPick: (family: string) => void; onClose: () => void } = $props();
@@ -93,18 +94,20 @@
 </script>
 
 <div class="fonts" role="dialog" aria-label="Fonts">
-  <header><strong>Fonts</strong><button class="property-icon" aria-label="Close fonts" onclick={onClose}><X size={16} strokeWidth={1.5} /></button></header>
-  <div class="search">
-    <Search size={15} strokeWidth={1.75} />
-    <input bind:this={search} bind:value={query} placeholder="Search fonts" aria-label="Search fonts" onkeydown={onKey} />
-    {#if query}<button class="clear" aria-label="Clear search" onclick={() => { query = ""; search?.focus(); }}><CircleX size={15} strokeWidth={1.5} /></button>{/if}
+  <header><strong>Fonts</strong><IconButton icon={X} label="Close fonts" onclick={onClose} /></header>
+  <div class="tools">
+    <div class="ui-field search">
+      <Search size={14} strokeWidth={1.75} />
+      <input bind:this={search} bind:value={query} placeholder="Search fonts" aria-label="Search fonts" onkeydown={onKey} />
+      {#if query}<IconButton icon={CircleX} label="Clear search" onclick={() => { query = ""; search?.focus(); }} />{/if}
+    </div>
+    <Select value={filter} items={filters} onChange={(v) => (filter = v)} label="Font filter" />
   </div>
-  <div class="filter"><Select value={filter} items={filters} onChange={(v) => (filter = v)} label="Font filter" /></div>
   <div class="list" bind:this={list} onscroll={previewVisible} role="listbox" aria-label="Font families">
     {#each shown as row (row.name)}
       {@const p = previews[row.name]}
       <button class="row" class:current={row.name === value} role="option" aria-selected={row.name === value} title={row.name} onclick={() => onPick(row.name)}>
-        <span class="check">{#if row.name === value}<Check size={15} strokeWidth={2} />{/if}</span>
+        <span class="check">{#if row.name === value}<Check size={14} strokeWidth={1.75} />{/if}</span>
         {#if p}
           <svg class="preview" viewBox="0 0 {p.w} {p.h}" width={(p.w * 20) / p.h} height="20" aria-hidden="true"><path d={p.d} /></svg>
         {:else}
@@ -118,19 +121,16 @@
 </div>
 
 <style>
-  .fonts { width: 260px; display: flex; flex-direction: column; max-height: min(560px, 80vh); }
-  header { display: flex; justify-content: space-between; align-items: center; padding: 14px 12px 10px 16px; font-size: 13px; }
-  .search { display: flex; align-items: center; gap: 6px; margin: 0 10px; padding: 0 8px; height: 32px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg-sunken); color: var(--fg-muted); }
-  .search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; padding: 0; }
-  .clear { display: flex; border: none; background: transparent; color: var(--fg-muted); padding: 0; cursor: pointer; }
-  .filter { padding: 10px; border-bottom: 1px solid var(--border); }
-  .filter :global(.ui-select-trigger) { width: 100%; }
+  /* Inside a `.property-popover`: its header is the shared one. */
+  .fonts { display: flex; flex-direction: column; max-height: min(560px, 80vh); }
+  .tools { display: flex; flex-direction: column; gap: 8px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); }
+  .search { gap: 6px; padding: 0 2px 0 8px; color: var(--fg-muted); }
+  .search input { flex: 1; min-width: 0; height: calc(var(--control-h) - 2px); padding: 0; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); }
   .list { overflow-y: auto; padding: 4px 0 8px; flex: 1; min-height: 120px; }
   .row { display: flex; align-items: center; gap: 6px; width: 100%; height: 36px; padding: 0 12px 0 8px; border: none; background: transparent; color: var(--fg); cursor: pointer; text-align: left; }
-  .row:hover { background: var(--hover); }
-  .row.current { background: var(--hover); }
+  .row:hover, .row.current { background: var(--hover); }
   .check { width: 18px; display: flex; justify-content: center; flex: none; }
   .preview { fill: currentColor; flex: none; max-width: 210px; }
-  .plain { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .none { padding: 12px 16px; color: var(--fg-faint); font-size: 12px; }
+  .plain { font-size: var(--text-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .none { padding: 12px var(--panel-pad); color: var(--fg-faint); font-size: var(--text-md); }
 </style>

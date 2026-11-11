@@ -7,6 +7,7 @@
   // (src/document_bridge/inspector.rs).
   import { onDestroy } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
+  import Checkbox from "../../lib/ui/Checkbox.svelte";
   import type { ViewSpec } from "../views";
 
   let { spec, panel }: { spec: ViewSpec; panel?: string } = $props();
@@ -132,10 +133,10 @@
     {/if}
   {/if}
   <div class="toggles">
-    <label><input type="checkbox" checked={options.tint} onchange={() => toggle("tint")} /> Chunk colours</label>
-    <label><input type="checkbox" checked={options.outlines} onchange={() => toggle("outlines")} /> Chunk bounds</label>
-    <label><input type="checkbox" checked={options.dim} onchange={() => toggle("dim")} /> Dim culled</label>
-    <label><input type="checkbox" checked={options.tiles} onchange={() => toggle("tiles")} /> Raster squares</label>
+    <Checkbox label="Chunk colours" checked={options.tint} onChange={() => toggle("tint")} />
+    <Checkbox label="Chunk bounds" checked={options.outlines} onChange={() => toggle("outlines")} />
+    <Checkbox label="Dim culled" checked={options.dim} onChange={() => toggle("dim")} />
+    <Checkbox label="Raster squares" checked={options.tiles} onChange={() => toggle("tiles")} />
   </div>
 </div>
 
@@ -146,11 +147,13 @@
     left: 8px;
     min-width: 200px;
     padding: 8px 10px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.94);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-    font: 11px/1.4 var(--ui-font, system-ui, sans-serif);
-    color: #222;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--raised);
+    box-shadow: var(--menu-shadow);
+    font-size: var(--text-sm);
+    line-height: 1.4;
+    color: var(--fg);
     pointer-events: auto;
   }
   .title {
@@ -158,7 +161,7 @@
     margin-bottom: 4px;
   }
   .hint {
-    color: #888;
+    color: var(--fg-faint);
     font-weight: normal;
   }
   dl {
@@ -168,7 +171,7 @@
     margin: 0 0 6px;
   }
   dt {
-    color: #666;
+    color: var(--fg-muted);
   }
   dd {
     margin: 0;
@@ -202,12 +205,11 @@
   .toggles {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 6px;
+    margin-top: 4px;
   }
-  label {
-    display: flex;
-    align-items: center;
-    gap: 5px;
+  .toggles :global(.ui-check-row) {
+    font-size: var(--text-sm);
   }
   /* The raster squares' outline colours (inspector.rs). */
   .key {

@@ -10,14 +10,17 @@
   import Unlink from "@lucide/svelte/icons/unlink";
   import Diamond from "@lucide/svelte/icons/diamond";
   import Select from "./Select.svelte";
+  import Segmented from "./Segmented.svelte";
+  import Checkbox from "./Checkbox.svelte";
+  import Button from "./Button.svelte";
+  import IconButton from "./IconButton.svelte";
   import EasingField from "./EasingField.svelte";
-  import { ToggleGroup } from "bits-ui";
   import { controllerManager } from "../../controller-manager.svelte";
-  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, inlineUnit = false, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
+  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
     field: Property; node: string;
     onSet: (field: Property, text: string) => void | Promise<void>;
     onRefresh: () => void; onError: (error: string) => void;
-    compact?: boolean; label?: string; prefix?: string; icon?: Snippet; inlineUnit?: boolean; channel?: "alpha";
+    compact?: boolean; label?: string; prefix?: string; icon?: Snippet; channel?: "alpha";
     scrubLeaves?: string[]; mixed?: boolean; hideSwatch?: boolean; colorDigits?: 6 | 8;
     /** Shown instead of a zero value (a text's line height 0 is "Auto"). */
     zeroLabel?: string;
@@ -105,6 +108,15 @@
   let draft = $state(0);
   let session: { node: string; leaf: string; origin: number; x: number; token: number; options: string; failed: boolean; queue: Promise<void> } | null = null;
   const shown = $derived(dragging ? draft : numeric ? Math.round(numberValue * factor * 1000) / 1000 : f.text ?? "");
+  // A zero shown as its label ("Auto"), the field empty with it as placeholder.
+  const zero = $derived(!!zeroLabel && !dragging && numeric && Number(shown) === 0);
+  const placeholder = $derived(mixed ? "Mixed" : zero ? zeroLabel : isAuto ? "Auto" : undefined);
+  // A % or ° sits right after the value ("45°"), so the input is as wide as
+  // what it shows.
+  const valueLength = $derived(Math.max(placeholder?.length ?? 0, mixed && !dragging ? 0 : zero ? 0 : String(shown).length, 1));
+  // A segmented choice or a checkbox is its own control, not in a field.
+  const segmented = $derived(!!options && options.length <= 4 && !token && !editingFormula && f.kind !== "bool");
+  const bare = $derived(segmented || (f.kind === "bool" && !token && !editingFormula));
 
   function start(e: PointerEvent) {
     if (!e.altKey || locked || !numeric || e.button !== 0) return;
@@ -162,7 +174,7 @@
 </script>
 
 {#snippet keyButton()}
-  {#if animatable && !compact}<button type="button" class="field-action key" class:reveal={f.key === "none"} class:animated={f.key !== "none"} aria-label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere}><Diamond size={11} strokeWidth={1.75} fill={f.key === "on" ? "currentColor" : "none"} /></button>{/if}
+  {#if animatable && !compact}<IconButton icon={Diamond} size={12} class="key {f.key === 'none' ? 'reveal' : 'animated'}" data-key={f.key} label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere} />{/if}
 {/snippet}
 
 <svelte:window onkeydown={(e: KeyboardEvent) => { alt = e.altKey; }} onkeyup={(e: KeyboardEvent) => alt = e.altKey} onblur={() => { alt = false; finish(true); }} />
@@ -172,30 +184,28 @@
   <!-- Keyboard editing belongs to the input. This wrapper only extends the
        Alt-drag hit area and cancels the label's synthetic click after a scrub. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-  <span class="control" role="group" aria-label={displayLabel} class:scrub={alt && numeric && !locked} class:dragging class:inline-unit={inlineUnit && !!unit} style:--value-length={mixed && !dragging ? 5 : String(shown).length}
+  <span class="control" class:ui-field={!bare} class:bare role="group" aria-label={displayLabel} data-disabled={locked && !bare ? "" : undefined} class:scrub={alt && numeric && !locked} class:dragging class:inline-unit={!!unit} style:--value-length={valueLength}
     onclick={(e) => { if (e.altKey && numeric) e.preventDefault(); }}
     onpointerdown={start} onpointermove={move} onpointerup={() => finish()} onpointercancel={() => finish(true)} onlostpointercapture={() => { if (session) finish(true); }}>
     {#if icon}<span class="field-icon" aria-hidden="true">{@render icon()}</span>{/if}
     {#if prefix}<span class="prefix">{prefix}</span>{/if}
     {#if token && !formula}
       <span class="token-chip" title="Follows the colour token @{token} (light and dark theme). Detach to keep this colour."><span class="dot" style:background={f.text ?? "transparent"}></span>@{token}</span>
-      {#if !locked}<button type="button" class="field-action" aria-label={`Detach ${displayLabel} from @${token}`} title="Detach: keep this colour" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
+      {#if !locked}<IconButton icon={Unlink} label={`Detach ${displayLabel} from @${token}`} title="Detach: keep this colour" onclick={unbind} />{/if}
     {:else if editingFormula}
       <span class="fx" aria-hidden="true">ƒx</span>
       <input aria-label={`${displayLabel} formula`} class="formula" type="text" spellcheck="false" value={fieldText()} disabled={locked}
         placeholder="= #id.facet.field * 2"
         onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); formula = false; e.currentTarget.value = fieldText(); e.currentTarget.blur(); } }}
         onchange={(e) => change(e.currentTarget)} />
-      {#if f.bind && !locked}<button type="button" class="field-action" aria-label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind}><Unlink size={13} strokeWidth={1.5} /></button>{/if}
+      {#if f.bind && !locked}<IconButton icon={Unlink} label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind} />{/if}
     {:else if f.kind === "bool"}
-      <input aria-label={displayLabel} type="checkbox" checked={f.text === "true"} disabled={locked} onchange={(e) => onSet(f, String(e.currentTarget.checked))} />
+      <Checkbox label={displayLabel} showLabel={false} checked={f.text === "true"} disabled={locked} onChange={(on) => onSet(f, String(on))} />
     {:else if f.field === "easing" || (f.field === "ease" && f.kind === "str")}
       <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
       <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
-    {:else if options && options.length <= 4}
-      <ToggleGroup.Root type="single" class="segmented" value={f.text ?? options[0]} disabled={locked} aria-label={displayLabel} onValueChange={(v) => { if (v && v !== f.text) onSet(f, v); }}>
-        {#each options as o (o)}<ToggleGroup.Item class="segment" value={o}>{o[0].toUpperCase() + o.slice(1)}</ToggleGroup.Item>{/each}
-      </ToggleGroup.Root>
+    {:else if options && segmented}
+      <Segmented label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if options}
       <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
@@ -204,15 +214,14 @@
       {#if !hideSwatch}<input aria-label={displayLabel} class="swatch" type="color" value={(f.text ?? "#000000").slice(0, 7)} disabled={locked} onchange={(e) => onSet(f, e.currentTarget.value + (f.text ?? "").slice(7, 9))} />{/if}
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
-      {@const zero = !!zeroLabel && !dragging && numeric && Number(shown) === 0}
-      <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} placeholder={mixed ? "Mixed" : zero ? zeroLabel : isAuto ? "Auto" : undefined} disabled={locked}
+      <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} {placeholder} disabled={locked}
         oninput={(e) => { if (isFormula(e.currentTarget.value)) formula = true; }}
         onchange={(e) => { if (!dragging) change(e.currentTarget); }} />
-      {#if unit && !(zeroLabel && !dragging && numeric && Number(shown) === 0)}<span class="unit">{unit}</span>{/if}
+      {#if unit && !zero}<span class="unit">{unit}</span>{/if}
       {#if f.unit && !isAuto}<span class="unit">{f.unit}</span>{/if}
-      {#if f.auto && !locked && !isAuto && !editingFormula}<button type="button" class="auto-toggle" title="Back to automatic" onclick={() => onSet(f, "auto")}>Auto</button>{/if}
+      {#if f.auto && !locked && !isAuto && !editingFormula}<Button small variant="outline" class="auto-toggle" title="Back to automatic" onclick={() => onSet(f, "auto")}>Auto</Button>{/if}
       {@render keyButton()}
-      {#if !locked && !compact}<button type="button" class="field-action reveal" aria-label={`Write a formula for ${displayLabel}`} title="Formula (or type =)" onclick={openFormula}><SquareFunction size={13} strokeWidth={1.5} /></button>{/if}
+      {#if !locked && !compact}<IconButton icon={SquareFunction} class="reveal" label={`Write a formula for ${displayLabel}`} title="Formula (or type =)" onclick={openFormula} />{/if}
     {/if}
   </span>
   {#if f.bind && !editingFormula}<span class="binding">↳ {f.via ?? f.bind}</span>{/if}
@@ -220,47 +229,40 @@
 </label>
 
 <style>
-  .field { display: flex; flex-direction: column; min-width: 0; gap: 5px; font-size: 11px; }
+  .field { display: flex; flex-direction: column; min-width: 0; gap: 4px; font-size: var(--text-sm); }
   .compact { gap: 0; }
-  .compact .control { min-height: 32px; }
   .compact .binding { display: none; }
-  .prefix { color: var(--fg-faint); padding-left: 10px; font-size: 11px; }
-  .field-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 16px; margin-left: 8px; color: var(--fg-muted); }
   .label { color: var(--fg-muted); }
   .bound, .binding { color: var(--accent); }
-  .binding { font-size: 10px; overflow-wrap: anywhere; }
+  .binding, .field-error { font-size: var(--text-xs); overflow-wrap: anywhere; }
+  .field-error { color: var(--danger); }
   .wide { grid-column: 1 / -1; }
-  .control { display: flex; align-items: center; min-height: 30px; background: var(--bg-sunken); border: 1px solid transparent; border-radius: 5px; overflow: hidden; }
-  .control:focus-within { border-color: var(--accent); }
-  .control:hover { border-color: var(--border-strong); }
-  input:not([type="checkbox"]) { width: 100%; min-width: 0; border: none; background: transparent; box-shadow: none; font-size: 12px; padding: 6px 8px; outline: none; color: var(--fg); }
+  .locked .label { opacity: 0.4; }
+  /* The field's shell is `.ui-field` (ui.css); its parts sit in a row. */
+  .control { overflow: hidden; }
+  .control > :global(.property-icon) { margin-right: 1px; }
+  .control.bare { display: flex; align-items: center; gap: 4px; min-height: var(--control-h); overflow: visible; }
+  .control.bare > :global(.ui-segmented) { flex: 1; min-width: 0; }
+  .prefix { flex: none; padding-left: 8px; color: var(--fg-faint); }
+  .field-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 14px; margin-left: 8px; color: var(--fg-muted); }
+  input { width: 100%; min-width: 0; height: calc(var(--control-h) - 2px); padding: 0 8px; border: none; background: transparent; box-shadow: none; color: var(--fg); font-size: var(--text-md); outline: none; }
   .scrub, .scrub input, .dragging, .dragging input { cursor: ew-resize; user-select: none; }
-  .dragging { border-color: var(--accent); }
-  .compact .unit { padding-right: 8px; }
-  .unit { color: var(--fg-faint); padding-right: 9px; }
-  .inline-unit input { width: calc(var(--value-length) * 1ch + 1px); flex: 0 1 auto; box-sizing: content-box; padding-right: 0; font-variant-numeric: tabular-nums; }
-  .inline-unit .unit { color: var(--fg); padding: 0 8px 0 0; font-size: 12px; }
-  .control .swatch { width: 26px; height: 26px; padding: 3px; margin-left: 3px; flex: 0 0 26px; cursor: pointer; }
+  .control.dragging, .control.dragging.dragging:hover { border-color: var(--accent); }
+  .unit { flex: none; padding-right: 8px; color: var(--fg-faint); }
+  /* A % or ° reads with its value: the input is the value's width. */
+  .inline-unit input { flex: 0 1 auto; width: calc(var(--value-length) * 1ch + 1px); box-sizing: content-box; padding-right: 0; font-variant-numeric: tabular-nums; }
+  .inline-unit .unit { flex: 1; padding-left: 1px; color: var(--fg); }
+  .control .swatch { flex: 0 0 22px; width: 22px; height: 22px; padding: 2px; margin-left: 3px; cursor: pointer; }
   .hex { font-variant-numeric: tabular-nums; }
-  input[type="checkbox"] { margin: 8px; accent-color: var(--accent); }
-  .locked { opacity: 0.55; }
-  .fx { color: var(--accent); font-size: 11px; font-style: italic; padding-left: 8px; }
-  input.formula { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--accent); }
-  .field-action { display: flex; align-items: center; justify-content: center; flex: 0 0 22px; height: 22px; margin-right: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--fg-muted); cursor: pointer; padding: 0; }
-  .field-action:hover { background: var(--bg-hover, var(--bg)); color: var(--fg); }
-  .field-action:focus-visible { outline: 1px solid var(--accent); }
-  .reveal { opacity: 0; }
-  .key.animated { color: var(--accent); }
-  .control :global(.segmented) { display: flex; width: 100%; padding: 2px; gap: 2px; }
-  .control :global(.segment) { flex: 1 1 0; min-width: 0; border: 0; border-radius: 4px; background: transparent; color: var(--fg-muted); font-size: 11px; padding: 4px 6px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .control :global(.segment:hover) { color: var(--fg); }
-  .control :global(.segment[data-state="on"]) { background: var(--bg); color: var(--fg); box-shadow: 0 0 0 1px var(--border); }
-  .control :global(.segment:focus-visible) { outline: 1px solid var(--accent); }
-  .auto-toggle { flex: 0 0 auto; margin-right: 4px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg-muted); font-size: 10px; padding: 2px 6px; cursor: pointer; }
-  .auto-toggle:focus-visible { outline: 1px solid var(--accent); }
-  .token-chip { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 0 8px; font-size: 12px; color: var(--fg); overflow: hidden; white-space: nowrap; }
-  .token-chip .dot { flex: 0 0 12px; width: 12px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15); }
-  .field-error { color: var(--danger); font-size: 10px; overflow-wrap: anywhere; }
-  .control:hover .reveal, .control:focus-within .reveal, .reveal:focus-visible { opacity: 1; }
-  .control :global(.ui-select-trigger) { width: 100%; min-width: 0; border: 0; background: transparent; }
+  .fx { padding-left: 8px; color: var(--accent); font-size: var(--text-sm); font-style: italic; }
+  input.formula { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); }
+  .control :global(.reveal) { opacity: 0; }
+  .control:hover :global(.reveal), .control:focus-within :global(.reveal), .control :global(.reveal:focus-visible) { opacity: 1; }
+  .control :global(.key.animated) { color: var(--accent); }
+  .control :global(.key[data-key="on"] svg) { fill: currentColor; }
+  .control :global(.auto-toggle) { flex: none; margin-right: 2px; }
+  .token-chip { display: inline-flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 0 8px; font-size: var(--text-md); color: var(--fg); overflow: hidden; white-space: nowrap; }
+  .token-chip .dot { flex: 0 0 12px; width: 12px; height: 12px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  /* A select or easing inside the field wears the field's shell, not its own. */
+  .control :global(.ui-select-trigger) { width: 100%; min-width: 0; min-height: calc(var(--control-h) - 2px); border: 0; background: transparent; }
 </style>

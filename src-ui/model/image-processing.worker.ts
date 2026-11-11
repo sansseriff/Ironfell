@@ -2,7 +2,6 @@
 import type { ModelImage } from './images';
 import { MAX_IMAGE_BASE64 } from './images';
 import resvgWasmUrl from '@resvg/resvg-wasm/index_bg.wasm?url';
-import svgFontUrl from '../assets/fonts/Roboto.ttf?url';
 
 const EDGE = 1568;
 const THUMB_EDGE = 192;
@@ -26,12 +25,23 @@ function canvasFor(width: number, height: number): OffscreenCanvas {
 
 async function svgBitmap(file: File): Promise<ImageBitmap> {
   const { Resvg, initWasm } = await import('@resvg/resvg-wasm');
-  resvgReady ??= initWasm(resvgWasmUrl);
-  await resvgReady;
-  svgFont ??= fetch(svgFontUrl).then(async response => {
-    if (!response.ok) throw new Error('Could not load the SVG font.');
-    return new Uint8Array(await response.arrayBuffer());
+  // A failed load clears its promise, so the next SVG retries instead of
+  // failing for the rest of the session.
+  resvgReady ??= initWasm(resvgWasmUrl).catch(error => {
+    resvgReady = undefined;
+    throw error;
   });
+  await resvgReady;
+  // The same Roboto the font catalog serves from public/fonts (OFL.txt there).
+  svgFont ??= fetch(new URL(`${import.meta.env.BASE_URL}fonts/Roboto.ttf`, self.location.origin).href)
+    .then(async response => {
+      if (!response.ok) throw new Error('Could not load the SVG font.');
+      return new Uint8Array(await response.arrayBuffer());
+    })
+    .catch(error => {
+      svgFont = undefined;
+      throw error;
+    });
   const svg = new Uint8Array(await file.arrayBuffer());
   const options = { font: { fontBuffers: [await svgFont], defaultFontFamily: 'Roboto' } };
   let renderer = new Resvg(svg, options);

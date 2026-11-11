@@ -12,8 +12,9 @@ The composer also accepts HEIC/HEIF and SVG. `heic-to/next` decodes HEIC in a
 worker; `@resvg/resvg-wasm` rasterizes SVG in an image-processing worker. All
 attachments are resized off the UI thread to at most 1568 px on the long edge
 and encoded as PNG or JPEG before model transport. SVG source is capped at 2 MB
-and image processing at 30 seconds. SVG text uses bundled Roboto (OFL) as the
-fallback font. The composer preview has no outer box; its
+and image processing at 30 seconds. SVG text uses the catalog's Roboto (`public/fonts`, OFL) as the
+fallback font. Licence notices for `heic-to` (LGPL-3.0) and
+`@resvg/resvg-wasm` (MPL-2.0) ship as `public/THIRD_PARTY_NOTICES.txt`. The composer preview has no outer box; its
 remove button sits over the image's corner.
 Recent model history has a separate 4-million-character image budget, applied per
 image, newest first; a message whose images were left out says so to the model.

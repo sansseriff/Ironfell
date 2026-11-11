@@ -170,7 +170,7 @@ test('Codex app-server handshake, final items, failures, approvals, exit and can
     const result = await runtime(payload, AbortSignal.timeout(3000));
     assert.match(result.text, /<create/);
     await assert.rejects(() => codexRuntime('/missing-iron-codex')(payload, AbortSignal.timeout(3000)), /ENOENT/);
-    for (const [mode, expected] of [['failed', /fixture turn failed/], ['approval', /Unexpected runtime request/], ['exit', /Runtime exited/], ['malformed', /JSON|Unexpected/], ['timeout', /abort/i]] as const) {
+    for (const [mode, expected] of [['failed', /fixture turn failed/], ['approval', /Unexpected runtime request/], ['exit', /Runtime exited/], ['malformed', /JSON|Unexpected/], ['timeout', /abort|timed out/i]] as const) {
       process.env.IRON_TEST_RUNTIME_MODE = mode;
       await assert.rejects(() => runtime(payload, AbortSignal.timeout(mode === 'timeout' ? 100 : 3000)), expected);
     }
@@ -344,7 +344,7 @@ test('Codex and Claude adapters stream reply and reasoning deltas that add up to
     assert.deepEqual(claudeEvents.filter(e => e.type === 'reasoning').map(e => e.delta), ['Nothing to change.']);
     // Claude Code's running estimate of hidden thinking, then the exact count.
     assert.deepEqual(claudeEvents.filter(e => e.type === 'thinking-tokens' || e.type === 'usage'), [
-      { type: 'thinking-tokens', estimated: 50 }, { type: 'thinking-tokens', estimated: 120 }, { type: 'usage', output: 130, thinking: 125 },
+      { type: 'thinking-tokens', estimated: 50 }, { type: 'thinking-tokens', estimated: 120 }, { type: 'usage', output: 130, thinking: 125, input: 16 },
     ]);
   } finally { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; }
 });
@@ -515,7 +515,7 @@ test('capture failures are reported to the model and repeated pictures are bound
     if (captures) assert.match(messages.at(-1)!.content, /Picture failed/);
     return { text: '<look picture="test"/>' };
   } }, 'Inspect this', { allowTextReply: false });
-  assert.equal(captures, 3);
+  assert.equal(captures, 6);
   assert.equal(result.ok, false);
 });
 
@@ -602,11 +602,55 @@ test('once its pictures are spent, the agent is told so rather than the turn fai
   fixtureDoc.api.picture = async () => { captures++; return testImage; };
   let told = false;
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
-    if (/No more pictures this request \(at most 3\)/.test(messages.at(-1)!.content)) { told = true; return { text: 'It looks right.' }; }
+    if (/No more pictures this request \(at most 6\)/.test(messages.at(-1)!.content)) { told = true; return { text: 'It looks right.' }; }
     return { text: '<look picture="test"/>' };
   } }, 'Inspect this', { allowTextReply: true });
-  assert.equal(captures, 3);
+  assert.equal(captures, 6);
   assert.ok(told);
   assert.equal(result.ok, true);
   assert.equal(result.note, 'It looks right.');
+});
+
+test('a turn\'s calls share one runtime session: only new messages are sent, and the process remembers', async () => {
+  const saved = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    await bridgeTest(claudeRuntime(fixture), async endpoint => {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const call = async (messages: CompletionRequest['messages'], turn = 'turn-a') => {
+        const response = await fetch(`${endpoint}/complete`, { method: 'POST', headers, body: JSON.stringify({ provider: 'claude', system: 'Iron manifest', messages, turn }) });
+        assert.equal(response.status, 200);
+        return (await response.json()).text as string;
+      };
+      const first = [{ role: 'user' as const, content: 'session-test-first' }];
+      const one = await call(first);
+      assert.equal(one, 'turn 1 remembers true');
+      // The page re-sends the conversation; the bridge sends only the new message.
+      const two = await call([...first, { role: 'assistant', content: one }, { role: 'user', content: 'session-test-second' }]);
+      assert.equal(two, 'turn 2 remembers true');
+      // A history that does not continue it, or another turn, starts afresh.
+      assert.equal(await call([{ role: 'user', content: 'session-test-other' }]), 'turn 1 remembers false');
+      assert.equal(await call([{ role: 'user', content: 'session-test-first' }], 'turn-b'), 'turn 1 remembers true');
+      const end = await fetch(`${endpoint}/end`, { method: 'POST', headers, body: JSON.stringify({ turn: 'turn-b' }) });
+      assert.deepEqual(await end.json(), { ended: true });
+      // Without a turn, a call runs alone.
+      const alone = await fetch(`${endpoint}/complete`, { method: 'POST', headers, body: JSON.stringify({ provider: 'claude', system: 'Iron manifest', messages: first }) });
+      assert.equal((await alone.json()).text, 'turn 1 remembers true');
+    }, 3000);
+  } finally { if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved; }
+});
+
+test('a Codex turn keeps one thread: later calls are turns on it with only the new message', async () => {
+  await bridgeTest(codexRuntime(fixture), async endpoint => {
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    const call = async (messages: CompletionRequest['messages']) => {
+      const response = await fetch(`${endpoint}/complete`, { method: 'POST', headers, body: JSON.stringify({ provider: 'codex', system: 'Iron manifest', messages, turn: 'turn-c' }) });
+      return (await response.json()).text as string;
+    };
+    const first = [{ role: 'user' as const, content: 'session-test-first' }];
+    const one = await call(first);
+    assert.equal(one, 'thread 1 turn 1 input "USER\\nsession-test-first"');
+    const two = await call([...first, { role: 'assistant', content: one }, { role: 'user', content: 'session-test-second' }]);
+    assert.equal(two, 'thread 1 turn 2 input "session-test-second"');
+  }, 3000);
 });

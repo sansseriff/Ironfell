@@ -52,12 +52,39 @@ const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation
 /// The ops for a model's component verbs (see the module doc), and a
 /// summary of what each made, one line per verb.
 pub fn compose_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, String), String> {
-    let els = elements(markup)?;
+    compose_after(store, Vec::new(), markup).map_err(|e| match e {
+        ComposeError::Ops(errors) => errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
+        ComposeError::Verb(message) => message,
+    })
+}
+
+/// Why [`compose_after`] failed: one of the ops before the verbs (each
+/// error indexes `before`), or a verb.
+#[derive(Debug)]
+pub enum ComposeError {
+    Ops(Vec<crate::ApplyError>),
+    Verb(String),
+}
+
+/// One edit that both writes ops and places components: `before` applied
+/// first, then the verbs, each seeing what came before it, so a `<place>`
+/// can name a definition `before` creates. The ops returned start with
+/// `before` and make one transaction.
+pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Result<(Vec<Op>, String), ComposeError> {
+    let els = elements(markup).map_err(ComposeError::Verb)?;
     if els.is_empty() {
-        return Err("no <place> or <make-component>".into());
+        return Err(ComposeError::Verb("no <place> or <make-component>".into()));
     }
     let mut scratch = crate::Store::with_document(store.document().clone());
-    let mut ops: Vec<Op> = Vec::new();
+    if !before.is_empty() {
+        scratch
+            .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: before.clone(), exact: false })
+            .map_err(ComposeError::Ops)?;
+    }
+    compose_verbs(scratch, before, els).map_err(ComposeError::Verb)
+}
+
+fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String), String> {
     let mut aliases: BTreeMap<String, Named> = BTreeMap::new();
     let mut lines = Vec::new();
     for (i, el) in els.iter().enumerate() {

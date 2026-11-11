@@ -13,7 +13,7 @@ try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: scale, colorScheme: scheme });
     page.on('pageerror', e => console.error('pageerror', String(e)));
     await page.goto(url);
-    await page.getByRole('tab', { name: 'Model', exact: true }).click({ timeout: 20000 });
+    await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click({ timeout: 20000 });
     const field = page.getByRole('textbox', { name: 'Agent instruction' }).first();
     await field.waitFor({ state: 'visible', timeout: 15000 });
     const surface = page.locator('.composer .surface').first();

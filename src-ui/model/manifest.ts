@@ -85,13 +85,17 @@ export const TOPICS: Record<TopicName, Topic> = {
   a definition's bindings read only its own nodes. Setting an unknown or wrongly
   typed argument is rejected.
 
-COMPONENT VERBS  (place instances and pictures; in an <edit> of their own, any number)
+COMPONENT VERBS  (place instances and pictures; any number, alone or after plain verbs)
     <edit>
       <make-component of="#rect #dot" name="pump" as="$pump"/>
       <place def="$pump" in="#bench" x="300" y="80" name="P1" as="$p1"/>
       <place entity="$p1" in="#overview" x="40" y="40"/>
       <place def="std:laser" in="#bench" x="40" y="200" power="5 mW"/>
     </edit>
+  In an edit with plain verbs (create, set, …) those apply first, then the component
+  verbs in order, as one change: create a definition with id="$d" and its template,
+  then <place def="$d" …/> in the same edit. A component verb's as= alias is for the
+  component verbs after it, not for plain verbs.
   place def= puts a new linked instance of a definition (an id, std:<key>, or an
   earlier verb's $alias) under the model root, named name=, and its picture (a use)
   in= a 2D composition (id or name) or a group in one, at x, y (rot in degrees).
@@ -555,6 +559,14 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
       SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
       (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
       gradients beyond their first colour, filters) is listed as <cut> lines.
+
+STEPS
+  Build in one <edit> when you can; never split one only to learn ids (use $aliases).
+  Split where seeing the result changes what you build next: a new component you will
+  repeat many times, or a layout you are unsure of. Then end the edit with a look at
+  it (VISION, if offered) and build the rest after you see it. To send another edit
+  without a picture, put <continue/> after the edit: the answer names what it made
+  (each alias's id) and you send the next. An edit with neither ends the request.
 
 VALUES
   numbers 12 or 1.5; bool true/false; colours #rrggbb or #rrggbbaa; vectors 1,2 or

@@ -1,16 +1,16 @@
 import { validImages } from '../../src-ui/model/images';
 import { createServer, type IncomingMessage } from 'node:http';
 import { timingSafeEqual, randomBytes } from 'node:crypto';
-import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type ModelEntry, type ModelLister, type Runtime } from './runtimes';
+import { codexRuntime, claudeRuntime, codexModels, claudeModels, claudeAuth, type ModelEntry, type ModelLister, type Runtime, type RuntimeSession } from './runtimes';
 import { resolveClaude, resolveCodex } from './resolve';
 import { agentLog, agentLogDir, type AgentLog } from './log';
 import { fileURLToPath } from 'node:url';
 import type { CompletionRequest } from '../../src-ui/model/runtime-options';
 import { isEffort, isLoopbackOrigin, isServiceTier } from '../../src-ui/model/runtime-options';
 
-/** History (12) + request + a turn's pictures, looks, topics and repairs (each a
- *  reply and an answer), with room to spare. */
-const MAX_MESSAGES = 48;
+/** History (12) + request + a turn's 20 model calls after the first (each a
+ *  reply and an answer: steps, pictures, looks, topics, repairs), with room. */
+const MAX_MESSAGES = 64;
 
 export function validateRequest(value: unknown): CompletionRequest {
   const request = value as CompletionRequest;
@@ -29,6 +29,24 @@ export function validateRequest(value: unknown): CompletionRequest {
 /** A chat turn's id: a UUID, or any short word-like name. */
 function isTurnId(value: unknown): value is string {
   return typeof value === 'string' && /^[\w-]{1,100}$/.test(value);
+}
+
+/** How long a turn's runtime session waits for its next call before it is
+ *  closed: about the provider's prompt-cache lifetime, after which reusing it
+ *  saves little. The page ends it sooner with `POST /end`. */
+const SESSION_IDLE_MS = 300_000;
+
+type Message = CompletionRequest['messages'][number];
+const sameMessage = (a: Message, b: Message) => a.role === b.role && a.content === b.content &&
+  (a.images ?? []).length === (b.images ?? []).length && (a.images ?? []).every((image, i) => image.data === b.images![i].data);
+
+/** The messages a request adds to a session that has seen `history`, or
+ *  null when it does not continue it: the same conversation so far, then
+ *  only user messages (the page's answers to the last reply). */
+export function continuation(history: Message[], messages: Message[]): Message[] | null {
+  if (!history.length || messages.length <= history.length || !history.every((m, i) => sameMessage(m, messages[i]))) return null;
+  const added = messages.slice(history.length);
+  return added.every(m => m.role === 'user') ? added : null;
 }
 
 /** Image-bearing completions may be large; every other route stays small. */
@@ -70,6 +88,16 @@ export function createAgentBridge(options: {
   const listed = new Map<string, { at: number; models: ModelEntry[] }>();
   let busy = false;
   const active = new Set<AbortController>();
+  // The turn's runtime session (runtimes.ts), one at a time: a call that
+  // continues its conversation sends only what is new to the same process.
+  let live: { turn: string; key: string; history: Message[]; session: RuntimeSession; idle?: ReturnType<typeof setTimeout> } | null = null;
+  const endSession = async () => {
+    const ending = live;
+    live = null;
+    if (!ending) return;
+    clearTimeout(ending.idle);
+    await ending.session.close().catch(() => {});
+  };
   const server = createServer(async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     const send = (status: number, value: object) => {
@@ -126,6 +154,19 @@ export function createAgentBridge(options: {
         return send(400, { error: String(error) });
       }
     }
+    // The page's turn ended (agent.ts): its session is not needed again.
+    if (request.url === '/end' && request.method === 'POST') {
+      if (request.headers['content-type'] !== 'application/json') return send(415, { error: 'Expected application/json' });
+      try {
+        const { turn } = await readBody(request);
+        if (!isTurnId(turn)) throw new Error('Invalid turn');
+        const ended = live?.turn === turn && !busy;
+        if (ended) await endSession();
+        return send(200, { ended });
+      } catch (error) {
+        return send(400, { error: String(error) });
+      }
+    }
     if (request.url !== '/complete' || request.method !== 'POST') return send(404, { error: 'Not found' });
     if (request.headers['content-type'] !== 'application/json') return send(415, { error: 'Expected application/json' });
     if (busy) return send(429, { error: 'Agent bridge is busy' });
@@ -153,20 +194,45 @@ export function createAgentBridge(options: {
     let usage: unknown;
     let reply: string | undefined;
     let failure: string | undefined;
+    /** Whether this call opened a session, continued one, or ran alone. */
+    let session: 'new' | 'continued' | null = null;
     try {
       payload = validateRequest(await readBody(request, COMPLETION_BODY));
       if (streaming) {
         response.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
         ping = setInterval(() => line({ type: 'ping' }), options.pingMs ?? 10000);
       }
-      const result = await runtimes[payload.provider](payload, controller.signal, event => {
+      const onEvent = (event: Parameters<NonNullable<Parameters<Runtime>[2]>>[0]) => {
         firstTokenMs ??= Date.now() - started;
         if (event.type === 'reasoning') reasoning += event.delta;
-        if (event.type === 'usage') usage = { output: event.output, thinking: event.thinking };
+        if (event.type === 'usage') { const { type: _, ...counts } = event; usage = counts; }
         clearTimeout(idle);
         idle = setTimeout(expire, options.timeoutMs ?? 90000);
         if (streaming) line(event);
-      });
+      };
+      const runtime = runtimes[payload.provider];
+      let result: Awaited<ReturnType<Runtime>>;
+      if (runtime.open && payload.turn) {
+        const key = JSON.stringify([payload.provider, payload.model ?? null, payload.effort ?? null, payload.serviceTier ?? null, payload.system]);
+        let added = live && live.turn === payload.turn && live.key === key ? continuation(live.history, payload.messages) : null;
+        if (!live || !added) {
+          await endSession();
+          live = { turn: payload.turn, key, history: [], session: await runtime.open(payload) };
+          added = payload.messages;
+          session = 'new';
+        } else session = 'continued';
+        clearTimeout(live.idle);
+        const current = live;
+        try {
+          result = await current.session.send(added, controller.signal, onEvent);
+        } catch (error) {
+          if (live === current) await endSession();
+          throw error;
+        }
+        current.history = [...payload.messages, { role: 'assistant', content: result.text }];
+        current.idle = setTimeout(() => { if (live === current) void endSession(); }, SESSION_IDLE_MS);
+        current.idle.unref?.();
+      } else result = await runtime(payload, controller.signal, onEvent);
       reply = result.text;
       usage ??= result.usage;
       if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('Runtime returned no text');
@@ -181,7 +247,7 @@ export function createAgentBridge(options: {
       if (log && payload) {
         log.write({
           kind: 'call', turn: payload.turn ?? null, provider: payload.provider, model: payload.model ?? null, effort: payload.effort ?? null, serviceTier: payload.serviceTier ?? null,
-          ms: Date.now() - started, firstTokenMs: firstTokenMs ?? null, usage: usage ?? null,
+          ms: Date.now() - started, firstTokenMs: firstTokenMs ?? null, usage: usage ?? null, session,
           ...(failure ? { error: failure } : {}),
           system: log.system(payload.system), messages: log.messages(payload.messages),
           reply: reply ?? null, ...(reasoning ? { reasoning } : {}),
@@ -197,7 +263,7 @@ export function createAgentBridge(options: {
   });
   server.requestTimeout = 10000;
   server.headersTimeout = 10000;
-  return { server, stop: () => { for (const controller of active) controller.abort(); server.close(); server.closeAllConnections(); } };
+  return { server, stop: () => { for (const controller of active) controller.abort(); void endSession(); server.close(); server.closeAllConnections(); } };
 }
 
 if (import.meta.main) {

@@ -5,9 +5,11 @@ assert.equal(process.env.CLAUDE_CONFIG_DIR, process.env.IRON_TEST_PROFILE);
 if (process.argv.includes('--safe-mode')) {
   assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, undefined);
-  for await (const chunk of process.stdin) { void chunk; }
-  // Claude Code's stream-json: the last line is the result.
-  process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'alternate-profile-confirmed', is_error: false })}\n`);
+  // Claude Code's stream-json: a result line for each user message line.
+  const { createInterface } = await import('node:readline');
+  for await (const line of createInterface({ input: process.stdin })) {
+    if (line.trim()) process.stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success', result: 'alternate-profile-confirmed', is_error: false })}\n`);
+  }
 } else {
   assert.equal(process.env.IRON_NATIVE_AGENT_PROVIDER, 'claude');
   if (process.env.IRON_TEST_ADAPTIVE === '1') {

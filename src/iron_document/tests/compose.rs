@@ -136,3 +136,35 @@ fn the_schema_lists_each_standard_component_s_ports() {
     let ports: Vec<String> = laser["ports"].as_array().unwrap().iter().map(|p| format!("{} {} {} {}", p["name"].as_str().unwrap(), p["dir"].as_str().unwrap(), p["kind"].as_str().unwrap(), p["default"])).collect();
     assert_eq!(ports, ["power in value \"10 mW\"", "pulse_hz in value \"0\"", "duty in value \"0.5\"", "out out optical_power null"]);
 }
+
+/// One edit that writes ops and places components (`compose_after`): the
+/// verbs see what the ops made, everything is one history entry, and a
+/// failing op is reported by its index among the ops.
+#[test]
+fn ops_before_the_verbs_are_one_transaction_with_them() {
+    let (mut store, [bench, _, _, _, _, _]) = desk();
+    let before = store.history().past().len();
+    let rect = store.document().next_id();
+    let mut size = Size::default();
+    size.w = Slot::Const(Value::Number(20.0));
+    size.h = Slot::Const(Value::Number(20.0));
+    let create = Op::Create { id: rect, ty: ty("rect"), parent: Some(bench), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), size.wrap(), named("cell")] };
+    let (ops, summary) = compose::compose_after(
+        &store,
+        vec![create],
+        &format!(r#"<make-component of="{rect}" name="cell" as="$cell"/><place def="$cell" in="bench" x="200" y="0"/>"#),
+    )
+    .unwrap();
+    assert!(matches!(ops.first(), Some(Op::Create { id, .. }) if *id == rect), "the ops come first");
+    store.apply(TransactionInput { label: "mixed".into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
+    assert_eq!(store.history().past().len(), before + 1, "one history entry");
+    let def = field(&summary, "made", 0, "definition");
+    assert!(store.document().is_live(def));
+
+    // An op that fails names its index in `before`; nothing is built.
+    let bad = Op::Create { id: store.document().next_id(), ty: ty("rect"), parent: Some("#ZZZZ".parse().unwrap()), order: OrderKey::first(), facets: vec![] };
+    match compose::compose_after(&store, vec![bad], r#"<place def="std:laser" in="bench" x="0" y="0"/>"#) {
+        Err(compose::ComposeError::Ops(errors)) => assert!(!errors.is_empty() && errors.iter().all(|e| e.op == 0), "{errors:?}"),
+        other => panic!("expected an op error, got {other:?}"),
+    }
+}

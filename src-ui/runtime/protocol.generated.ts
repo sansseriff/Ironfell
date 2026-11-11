@@ -48,7 +48,7 @@ export type DocumentCommand =
   | { op: 'showcase' }
   | { op: 'contexts' }
   | { op: 'circuit'; markup: string }
-  | { op: 'compose'; markup: string }
+  | { op: 'compose'; markup: string; ops_json: string }
   | { op: 'picture'; source: string }
   | { op: 'picture_poll'; ticket: number; cancel: boolean }
   | { op: 'netlist'; sheet: string }
@@ -138,7 +138,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'showcase': return { fn: command.op, args: [] };
     case 'contexts': return { fn: command.op, args: [] };
     case 'circuit': return { fn: command.op, args: [command.markup] };
-    case 'compose': return { fn: command.op, args: [command.markup] };
+    case 'compose': return { fn: command.op, args: [command.markup, command.ops_json] };
     case 'picture': return { fn: command.op, args: [command.source] };
     case 'picture_poll': return { fn: command.op, args: [command.ticket, command.cancel] };
     case 'netlist': return { fn: command.op, args: [command.sheet] };

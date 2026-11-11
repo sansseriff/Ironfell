@@ -55,12 +55,12 @@ try {
   await page.waitForFunction(async () => {
     try { return /name="main"/.test(await (window as any).__iron.view({ fidelity: 'skeleton' })); } catch { return false; }
   }, undefined, { timeout: 15000 });
-  await page.getByRole('tab', { name: 'Model', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().waitFor();
   await page.waitForSelector('.loading', { state: 'detached', timeout: 15000 });
   await page.waitForFunction(async () => {
     try { return !!(await (window as any).__iron.call('schema')).types; } catch { return false; }
   }, undefined, { timeout: 15000 });
-  await page.getByRole('tab', { name: 'Model', exact: true }).click();
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
   await page.evaluate(({ endpoint, token }) => (window as any).__iron.configureAgent({ provider: 'codex', endpoint, token }), { endpoint, token });
   const prompt = page.getByRole('textbox', { name: 'Agent instruction' });
   if (live) {
@@ -120,7 +120,7 @@ try {
   await page.getByRole('button', { name: 'Latest', exact: true }).click();
   await page.waitForFunction(() => { const element = document.querySelector('.transcript')!; return element.scrollHeight - element.scrollTop - element.clientHeight < 64; });
   await prompt.fill('Model draft stays here');
-  await page.getByRole('tab', { name: 'Lesson', exact: true }).click();
+  await page.getByRole('button', { name: 'lesson', exact: true }).first().click();
   await page.waitForFunction(() => ((window as any).__narrative?.get('lesson')?.status().blocks ?? 0) > 2);
   const lessonPrompt = page.getByRole('textbox', { name: 'Agent instruction' });
   await lessonPrompt.fill('Lesson draft survives modes');
@@ -157,7 +157,7 @@ try {
   await page.screenshot({ path: `.agents/chat/authoring-${runtimeMode}.png` });
   await page.locator('[data-mode-button="exploration"]').click();
   await page.screenshot({ path: `.agents/chat/exploration-${runtimeMode}.png` });
-  await page.getByRole('tab', { name: 'Model', exact: true }).click();
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
   assert.equal(await prompt.inputValue(), 'Model draft stays here');
   assert.equal(await page.locator('.chat-turn').count(), 3);
   const beforeFailure = await page.evaluate(() => (window as any).__iron.save());

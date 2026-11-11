@@ -64,9 +64,10 @@ export interface DocumentApi {
   /** Place and wire parts from a `<circuit>` (plans/specs/schematic.md §5),
    *  as one history entry. */
   circuit(markup: string): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string }>;
-  /** The model's component verbs, `<place>` and `<make-component>`
-   *  (`compose::compose_ops`), as one history entry. */
-  compose(markup: string): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string }>;
+  /** The model's component verbs, `<place>` and `<make-component>`, after
+   *  the edit's other ops (`compose::compose_after`), as one history entry.
+   *  A failing op answers `errors` indexed into `ops`; a failing verb, `error`. */
+  compose(markup: string, ops?: object[]): MaybePromise<{ ok: boolean; version?: number; summary?: string; error?: string; errors?: { op: number | null; kind: string; message: string }[] }>;
   /** A schematic sheet's netlist, SPICE-like, with each net's solved
    *  voltage; `sheet` is a composition's id or name. */
   netlist(sheet: string): MaybePromise<{ ok: boolean; netlist?: string; error?: string }>;
@@ -151,7 +152,7 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     table: spec => json({ op: 'table', spec }),
     context: markup => json({ op: 'context', markup }),
     circuit: markup => json({ op: 'circuit', markup }),
-    compose: markup => json({ op: 'compose', markup }),
+    compose: (markup, ops = []) => json({ op: 'compose', markup, ops_json: JSON.stringify(ops) }),
     netlist: sheet => json({ op: 'netlist', sheet }),
     narrativeWrite: (source, after, markdown) => json({ op: 'narrative_write', source, after, markdown, actor: 'model' }),
     narrativeRewrite: (block, markdown) => json({ op: 'narrative_rewrite', block, markdown, actor: 'model' }),

@@ -57,6 +57,17 @@ export class LocalRuntimeTransport implements ModelTransport {
     } catch { /* logging never fails a turn */ }
   }
 
+  /** The turn is over: the bridge may close its runtime session now rather
+   *  than when it goes idle. Best effort. */
+  async end(turn: string) {
+    try {
+      await fetch(new URL('/end', this.endpoint), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.options.token}` },
+        body: JSON.stringify({ turn }), signal: AbortSignal.timeout(5000),
+      });
+    } catch { /* the session closes itself when idle */ }
+  }
+
   constructor(private options: LocalRuntimeOptions) {
     this.endpoint = localEndpoint(options.endpoint);
     this.name = `${options.provider}:local${options.model ? `:${options.model}` : ''}${options.effort ? `:${options.effort}` : ''}${options.serviceTier ? `:${options.serviceTier}` : ''}`;
@@ -134,6 +145,8 @@ export interface ModelTransport {
   complete(system: string, messages: Message[], live?: CompleteLive): Promise<{ text: string; usage?: unknown }>;
   /** Record a turn's outcome where this transport keeps logs, if it does. */
   log?(record: TurnRecord): Promise<void>;
+  /** The turn's calls are done, so a session kept for them may close. */
+  end?(turn: string): Promise<void>;
 }
 
 /** Messages as the Messages API takes them: text, then each image as a base64 block. */

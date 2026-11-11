@@ -1,7 +1,9 @@
 /**
- * One request, one edit: read a view, ask the model, apply what it wrote,
- * and give it two chances to fix a rejected edit (doc 04 §9.5), each a
- * <revise> of the rejected edit or a new one.
+ * One request: read a view, ask the model, apply what it wrote. A rejected
+ * edit gets up to MAX_REPAIRS repairs in a row (doc 04 §9.5), each a
+ * <revise> of it or a new edit; an applied edit ends the turn unless the
+ * reply asks for a picture or says <continue/>. Every model call counts
+ * against MAX_CALLS.
  */
 import type { DocumentApi } from './api';
 import { applyEdit, extractEdit, type EditOutcome } from './edit';
@@ -46,14 +48,17 @@ export async function ask(api: DocumentApi, transport: ModelTransport, instructi
   const trace: AskStep[] = [];
   let result: AskResult | undefined;
   let thrown: unknown;
+  // Every ask is a turn to the bridge, so its calls share one runtime session.
+  const turn = options.turnId ?? `ask-${started.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   try {
-    result = await runAsk(api, transport, instruction, options, live, trace);
+    result = await runAsk(api, transport, instruction, { ...options, turnId: turn }, live, trace);
     result.trace = trace;
     return result;
   } catch (error) {
     thrown = error;
     throw error;
   } finally {
+    void transport.end?.(turn);
     if (options.turnId && transport.log) {
       void transport.log({
         turn: options.turnId, instruction, transport: transport.name, ms: Date.now() - started,
@@ -89,7 +94,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   // and an index of the rest, which the model may ask for with <topic>.
   const asked = [instruction, ...(options.history ?? []).slice(-4).map((m) => m.content)].join('\n');
   const topics = topicsFor(view, asked);
-  const system = manifest(schema, options.allowTextReply, topics) + (api.picture ? `\nVISION\nYou can inspect actual 2D composition pixels with <look picture="composition name or #id"/>. It captures the whole content on white, without editor overlays, at up to 1568 pixels. 3D capture is unavailable. To check a visual edit, append a look request after </edit>; the edit is applied before capture, and you may then refine it or finish with prose. At most ${MAX_PICTURES} pictures and ${MAX_ATTEMPTS} edits/repair attempts per request. Attached user images are visual references.\n` : '') + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
+  const system = manifest(schema, options.allowTextReply, topics) + (api.picture ? `\nVISION\nYou can inspect actual 2D composition pixels with <look picture="composition name or #id"/>. It captures the whole content on white, without editor overlays, at up to 1568 pixels. 3D capture is unavailable. To check a visual edit, append a look request after </edit>; the edit is applied before capture, and you may then refine it or finish with prose. At most ${MAX_PICTURES} pictures per request. Attached user images are visual references.\n` : '') + (options.allowTextReply ? '\n\nCONVERSATION\nTo show an existing Iron composition, put ::view{show="composition name" focus=#node} on its own paragraph (focus optional). Never invent visual references or embed raw HTML. Recent conversation is context only; the final document view is current.\n' : '');
   // What the person has selected, so "this" and "the selected one" resolve.
   const picked = await api.selection();
   const selection = picked.length
@@ -100,6 +105,10 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     { role: 'user', content: `${view}\n\n${selection}REQUEST\n${instruction}`, ...(attached.length ? { images: attached } : {}) },
   ];
   let attempts = 0;
+  /** Model calls this turn, of any kind. */
+  let calls = 0;
+  /** Edits rejected since the last one applied. */
+  let rejections = 0;
   let lastEdit: string | null = null;
   /** The edit the store last rejected, as written: what a <revise> patches. */
   let rejected: string | null = null;
@@ -136,7 +145,8 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     trace.push({ attempt: attempts, kind: 'stopped' });
     return { ok: false, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, error: STOPPED, ...(applied ? { note: 'Stopped after applying changes. ' + note } : {}) };
   };
-  while (attempts < MAX_ATTEMPTS) {
+  while (calls < MAX_CALLS) {
+    calls += 1;
     attempts += 1;
     if (live.signal?.aborted) return stopped();
     emit({ kind: 'phase', phase: 'thinking', attempt: attempts });
@@ -216,6 +226,11 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       edit = revised.edit;
     }
     if (!edit) {
+      // After an applied step, a reply with no edit finishes the turn.
+      if (applied && lastOutcome?.ok) {
+        trace.push({ attempt: attempts, kind: 'prose' });
+        return { ok: true, note, edit: lastApplied?.edit ?? null, outcome: lastApplied?.outcome ?? null, attempts, transport: transport.name, ...(mergedWith ? { merged: mergedWith } : {}) };
+      }
       const prose = !!((options.allowTextReply || applied) && note && (attempts === 1 || (applied && lastOutcome?.ok)));
       trace.push(prose ? { attempt: attempts, kind: 'prose' } : { attempt: attempts, kind: 'no-edit' });
       if (prose) return { ok: true, note, edit: lastApplied?.edit ?? null, outcome: lastApplied?.outcome ?? null, attempts, transport: transport.name, ...(mergedWith ? { merged: mergedWith } : {}) };
@@ -265,7 +280,8 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       since = lastOutcome.version ?? await api.version();
       cycleVersion = since;
       rejected = null;
-      if (picture && pictures < MAX_PICTURES && attempts < MAX_ATTEMPTS) {
+      rejections = 0;
+      if (picture && pictures < MAX_PICTURES && calls < MAX_CALLS) {
         messages.push({ role: 'assistant', content: text });
         // The captured composition as it now is, not the whole document again:
         // each refinement would otherwise add another copy of the full tree.
@@ -276,17 +292,44 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
         messages.push({ ...shot.message, content: `Edit applied successfully. ${shot.node ? `Current ${shot.node}` : 'Current document'}:\n${current}\n\n${shot.message.content}` });
         continue;
       }
+      // <continue/>: the reply is one step of several. Say what it made (the
+      // ids its aliases became) and ask for the next.
+      if (CONTINUE.test(executableReply(text)) && calls < MAX_CALLS) {
+        messages.push({ role: 'assistant', content: text });
+        messages.push({ role: 'user', content: `${appliedMarkup(lastOutcome)}\n\nContinue: the next <edit> (with <continue/> after it if more follows), or finish with prose.` });
+        continue;
+      }
       break;
     }
     rejected = edit;
+    rejections += 1;
+    if (rejections > MAX_REPAIRS) break;
     messages.push({ role: 'assistant', content: text });
     // A revised edit is shown whole, so a second revise's op numbers and the
     // errors' match what the model sees.
     const shown = patch ? `Your revise made this edit, which was rejected:\n${edit}\n\n` : '';
     messages.push({ role: 'user', content: `${shown}${lastOutcome.failure}\n\n${REPAIR}` });
   }
-  return { ok: !!lastOutcome?.ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, ...(mergedWith ? { merged: mergedWith } : {}) };
+  const ok = !!lastOutcome?.ok;
+  // Out of calls, or stuck on one step: the steps before it stay applied.
+  const error = ok ? undefined : rejections > MAX_REPAIRS
+    ? `the store rejected ${rejections} edits in a row${applied ? '; the steps before them are applied' : ''}`
+    : calls >= MAX_CALLS ? `used all ${MAX_CALLS} model calls${applied ? '; the steps so far are applied' : ''}` : undefined;
+  // Applied, but the reply asked to continue: it did not finish.
+  if (ok && calls >= MAX_CALLS) note = `Stopped at the limit of ${MAX_CALLS} model calls; more steps were planned. ${note}`.trim();
+  return { ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, ...(error ? { error } : {}), ...(mergedWith ? { merged: mergedWith } : {}) };
 }
+
+/** An applied edit for the model: its summary, and the ids its aliases became. */
+function appliedMarkup(outcome: EditOutcome): string {
+  const created = Object.entries(outcome.aliases ?? {}).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`);
+  const summary = outcome.summary ?? `<applied version="${outcome.version}">\n</applied>`;
+  const missing = created.filter((line) => !summary.includes(line));
+  return missing.length ? summary.replace(/<\/applied>/, `${missing.join('\n')}\n</applied>`) : summary;
+}
+
+/** A reply's `<continue/>`: more steps follow its edit. */
+const CONTINUE = /<continue\s*\/>/;
 
 const UNMERGEABLE = 'the document changed while the agent worked, and too much of that is gone from history to merge its edit; ask again with the current document';
 
@@ -294,17 +337,21 @@ const UNMERGEABLE = 'the document changed while the agent worked, and too much o
  *  checking only that the nodes they name still exist. */
 const STORE_BUILT = /<(?:place|make-component|link-figures|import-svg|table|circuit|context|write|rewrite)[\s/>]/;
 
-/** Model replies one request may take: the edit and two repairs. A repair
- *  is usually a short <revise>, so a second costs little. */
-const MAX_ATTEMPTS = 3;
+/** Model calls one request may make, of every kind: steps, repairs, looks,
+ *  topics and refinements after a picture. Each re-sends the conversation. */
+const MAX_CALLS = 20;
+/** Rejected edits in a row before the turn ends: an edit and its repairs
+ *  that keep failing are stuck, and more tries only spend calls. */
+const MAX_REPAIRS = 3;
 
 /** What a rejected edit's reply asks for. */
 const REPAIR = 'Fix what it names with a <revise> of that edit (only the ops that change), or send one new <edit> if most of it must change.';
 
-/** Looks one request may take before it must answer. */
-const MAX_LOOKS = 2;
-/** `<look picture>` captures a turn may take, refining an edit or not. */
-const MAX_PICTURES = 3;
+/** Looks one request may take. */
+const MAX_LOOKS = 4;
+/** `<look picture>` captures a turn may take, refining an edit or not. Each
+ *  is an image every later call in the turn carries. */
+const MAX_PICTURES = 6;
 
 /** Topic requests one request may make before it must answer. */
 const MAX_TOPIC_ASKS = 2;

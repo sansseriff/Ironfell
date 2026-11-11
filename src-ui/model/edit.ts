@@ -20,7 +20,7 @@
  *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
  *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
  *   <edit><circuit sheet="circuit"><place part="resistor" x="200" y="100"/>…</circuit></edit>   (alone too)
- *   <edit><make-component of="#a #b" name="pump" as="$p"/><place def="$p" in="#C" x="10" y="20"/></edit>   (component verbs, only with each other)
+ *   <edit><create id="$d" type="definition" …/>…<place def="$d" in="#C" x="10" y="20"/></edit>   (component verbs: after the other verbs' ops, one transaction)
  *   <edit><write narrative="#N" after="#B">markdown</write>…</edit>   (narrative verbs, only with each other)
  *   <edit><rewrite block="#B">markdown</rewrite></edit>
  */
@@ -199,7 +199,9 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
       case 'set':
       case 'add': {
         const id = resolveId(a.id, 'id', v.index);
-        const type = a.type; // optional hint for bare attribute names
+        // A bare field is read against the node's type: written as a hint, made
+        // by this edit, or (only when the name is ambiguous across facets) read.
+        let type: string | undefined = a.type ?? verbs.find((c) => c.verb === 'create' && c.attrs.id && mintedFor.get(c.index) === id)?.attrs.type;
         const pairs: [string, string][] = [];
         if (a.path) pairs.push([a.path, a.bind !== undefined ? `{= ${a.bind}}` : (a.value ?? '')]);
         pairs.push(...leafPairs(a, a.path ? new Set([...placement, 'path', 'value', 'bind']) : placement));
@@ -208,6 +210,7 @@ export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEd
         for (const [k, raw] of pairs) {
           let leaf;
           try {
+            if (!k.includes('.') && !type && ambiguous(schema, k)) type = await nodeType(api, id);
             leaf = k.includes('.') || !type ? resolveLeafAnyType(schema, k) : resolveLeaf(schema, type, k);
             const slot = leafValue(leaf.kind, raw, v.index);
             if (v.verb === 'set') ops.push({ t: 'set', id, path: `${leaf.facet}.${leaf.field}`, slot });
@@ -261,6 +264,21 @@ function describe(v: { verb: string; attrs: Record<string, string> }): string {
   if (v.verb === 'create') return a.id ? `create ${a.id}` : `create ${a.type ?? 'node'}${a.parent ? ` in ${a.parent}` : ''}`;
   if (v.verb === 'link') return `link ${a.from ?? ''} ${a.rel ?? 'references'} ${a.to ?? ''}`;
   return `${v.verb} ${a.id ?? ''}`.trim();
+}
+
+/** Whether a bare field names a field of more than one facet. */
+function ambiguous(schema: Awaited<ReturnType<DocumentApi['schema']>>, attr: string): boolean {
+  return attr !== 'name' && Object.values(schema.facets).filter((fields) => fields[attr] !== undefined).length > 1;
+}
+
+/** An existing node's type, from a skeleton view of it alone. */
+async function nodeType(api: DocumentApi, id: string): Promise<string | undefined> {
+  try {
+    const text = await api.view({ fidelity: 'skeleton', scope: id, depth: 0 });
+    return text.match(new RegExp(`<([\\w-]+)\\s[^>]*id="${id.replace(/[^\w#/]/g, '')}"`))?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 /** A leaf written as `facet.field`, or a bare field unique across all facets. */
@@ -420,16 +438,63 @@ async function circuit(api: DocumentApi, markup: string): Promise<EditOutcome> {
 
 /** `<place>` and `<make-component>` (src/iron_document/src/compose.rs):
  *  instances of definitions pictured in any 2D composition, another picture
- *  of an entity, a component made of a selection. Several in one edit, only
- *  with each other; `as="$x"` names what one made for the verbs after it.
- *  The store computes the ops, as one transaction, and answers with what
- *  each verb made. */
-const ONLY_COMPOSE = /^\s*<edit(?:\s[^>]*)?>((?:\s*<(?:place|make-component)\s[^>]*?\/>)+)\s*<\/edit>\s*$/;
+ *  of an entity, a component made of a selection. They may share an edit
+ *  with the plain verbs: the store applies those verbs' ops first, then the
+ *  component verbs in order, each seeing what came before it, as one
+ *  transaction. So `<place def="$d">` may name a definition this edit
+ *  creates, and `as="$x"` names what a component verb made for the
+ *  component verbs after it (not for plain verbs). The store answers with
+ *  what each component verb made. */
+const COMPOSE_VERB = /<(?:place|make-component)(?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*\/>/g;
 
-async function compose(api: DocumentApi, markup: string): Promise<EditOutcome> {
-  const r = await api.compose(markup);
-  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'compose', message: r.error ?? 'compose failed' }]) };
-  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n${r.summary ?? ''}\n</applied>` };
+async function compose(api: DocumentApi, xml: string, label: string): Promise<EditOutcome> {
+  const verbs = xml.match(COMPOSE_VERB) ?? [];
+  const rest = xml.replace(COMPOSE_VERB, '');
+  // Each verb's place among all the edit's verbs, so errors count as the model wrote them.
+  const order = topLevelVerbs(xml);
+  const restIndex = order.map((v, i) => ({ v, i })).filter(({ v }) => v !== 'place' && v !== 'make-component').map(({ i }) => i);
+  const composeIndex = order.map((v, i) => ({ v, i })).filter(({ v }) => v === 'place' || v === 'make-component').map(({ i }) => i);
+  const hasOps = restIndex.length > 0;
+  let parsed: ParsedEdit | null = null;
+  if (hasOps) {
+    try {
+      parsed = await parseEdit(api, rest);
+    } catch (e) {
+      const err = e instanceof EditError ? e : new EditError(String(e));
+      return { ok: false, failure: failed(await api.version(), [{ op: err.line === undefined ? null : restIndex[err.line] ?? null, kind: 'parse', message: err.message }]) };
+    }
+  }
+  const aliases = parsed?.aliases ?? {};
+  for (const v of verbs) {
+    const as = v.match(/\sas=["'](\$[A-Za-z_]\w*)["']/)?.[1];
+    if (as && aliases[as]) return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: `${as} is created by a <create> and named again by as=; use another alias` }]) };
+  }
+  const markup = verbs.map((v) => v.replace(ALIAS_IN_EXPR, (a) => aliases[a] ?? a)).join('\n');
+  const r = await api.compose(markup, parsed?.ops ?? []);
+  if (!r.ok) {
+    if (r.errors && parsed) {
+      const tx = { label, ops: parsed.ops };
+      const lines = inModelTerms(tx, parsed, r.errors).map((e) => ({ ...e, op: e.op === null ? null : restIndex[e.op] ?? null }));
+      return { ok: false, version: r.version, failure: failed(r.version ?? await api.version(), lines) };
+    }
+    // "<place> 2: …" counts the component verbs; say which verb of the edit it is.
+    const message = (r.error ?? r.errors?.map((e) => e.message).join('; ') ?? 'compose failed');
+    const n = Number(message.match(/^<(?:place|make-component)> (\d+):/)?.[1]);
+    return { ok: false, failure: failed(await api.version(), [{ op: n ? composeIndex[n - 1] ?? 0 : 0, kind: 'compose', message }]) };
+  }
+  const created = Object.entries(aliases).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`);
+  return { ok: true, version: r.version, aliases, summary: `<applied version="${r.version}">\n${[...created, r.summary ?? ''].filter(Boolean).join('\n')}\n</applied>` };
+}
+
+/** The names of an edit's top-level verbs, in order. */
+function topLevelVerbs(xml: string): string[] {
+  try {
+    const tree = new XMLParser({ ignoreAttributes: true, preserveOrder: true }).parse(xml) as any[];
+    const root = tree.find((n) => n.edit !== undefined);
+    return ((root?.edit ?? []) as any[]).map((c) => Object.keys(c).find((k) => k !== ':@' && k !== '#text')).filter((k): k is string => !!k);
+  } catch {
+    return [];
+  }
 }
 
 /** `<write narrative after>` and `<rewrite block>` (plans/specs/narrative-
@@ -486,10 +551,15 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   if (/<circuit[\s/>]/.test(xml)) {
     return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<circuit> must be the only verb in its <edit>' }]) };
   }
-  const comp = xml.match(ONLY_COMPOSE);
-  if (comp) return compose(api, comp[1]);
   if (/<(?:place|make-component)[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<place> and <make-component> go in an <edit> of their own (only with each other, each a self-closing tag); outside a <circuit>, <place> takes def= or entity=, not part=' }]) };
+    const stray = xml.replace(COMPOSE_VERB, '');
+    if (/<(?:place|make-component)[\s/>]/.test(stray)) {
+      return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<place> and <make-component> are self-closing tags; outside a <circuit>, <place> takes def= or entity=, not part=' }]) };
+    }
+    if (/<(?:table|import-svg)[\s/>]/.test(stray)) {
+      return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<table> and <import-svg> must be the only verb in their <edit>' }]) };
+    }
+    return compose(api, xml, label);
   }
   const tbl = xml.match(TABLE);
   if (tbl) return table(api, tbl[1] ?? '', tbl[2]);

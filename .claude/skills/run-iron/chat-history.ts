@@ -43,7 +43,7 @@ async function ready() {
   }
   await page.waitForSelector('.loading', { state: 'detached', timeout: 15000 });
   await page.waitForFunction(async () => { try { return !!(await (window as any).__iron.call('schema')).types; } catch { return false; } }, undefined, { timeout: 15000 });
-  await page.getByRole('tab', { name: 'Model', exact: true }).click();
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
   await page.evaluate(({ endpoint, token }) => (window as any).__iron.configureAgent({ provider: 'codex', endpoint, token }), { endpoint, token });
 }
 const model = () => page.locator('.model-view');

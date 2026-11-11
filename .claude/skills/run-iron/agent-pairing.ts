@@ -24,12 +24,12 @@ page.setDefaultTimeout(8000);
 const errors: string[] = [];
 page.on('pageerror', error => errors.push(String(error)));
 async function ready() {
-  await page.getByRole('tab', { name: 'Model', exact: true }).waitFor({ timeout: 15000 });
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().waitFor({ timeout: 15000 });
   await page.waitForSelector('.loading', { state: 'detached', timeout: 15000 });
   await page.waitForFunction(async () => {
     try { return !!(await (window as any).__iron.call('schema')).types; } catch { return false; }
   });
-  await page.getByRole('tab', { name: 'Model', exact: true }).click();
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
 }
 async function checkToken(expected: string) {
   await page.getByRole('button', { name: 'Agent settings', exact: true }).click();

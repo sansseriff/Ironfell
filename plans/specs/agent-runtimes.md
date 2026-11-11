@@ -87,7 +87,22 @@ neither owns nor mutates the document.
 - `__iron.configureAgent({provider, endpoint?, token?, model?})` exposes the same
   configuration to the existing driver; it does not return secrets.
 
-Provider processes are stateless between asks. The shared conversation UI now
+**A turn's calls share one runtime session (2026-11-10).** The page still sends
+the whole conversation on each `/complete`; when a call carries the same turn id,
+settings and system prompt, and its messages are the session's history plus new
+user messages, the bridge sends only those to the process it kept: one `claude -p
+--input-format stream-json` taking a user message a line, or another `turn/start`
+on the same ephemeral Codex thread. Anything else (another turn, an edited
+history) closes the session and opens a new one. A session ends on `POST /end`
+(the page, when its turn ends), after 5 minutes idle, on Stop or an error, and when
+the bridge stops. Before, each call was a new process given the conversation
+flattened into one prompt, so nothing past the system prompt was cached and the
+model saw its earlier replies only as quoted text; measured with two short calls,
+the flattened second call read 0 tokens from the cache, the session's read 2,032
+of ~2,400. The call log records `session` (`new`, `continued`, or null for a call
+without a turn) and `usage.input` / `usage.cached`.
+
+Provider processes are stateless between asks (turns). The shared conversation UI now
 passes bounded recent history; repair receives the original context and failed
 exchange. See [`narrative-panel.md` §9](narrative-panel.md#9-shared-conversation-ui-t3-investigation-2026-11-03)
 for the T3-inspired Model/Lesson UI and its current validation. It is not yet
@@ -332,7 +347,8 @@ usage in the run-iron skill, "Agent probe".
 1. ~~Explicit Stop and cancellation through all adapter lifetimes; panel progress
    and usage events; clear queued/running states.~~ Stop, progress and streaming
    done 2026-11-06 ([`agent-streaming.md`](agent-streaming.md)); usage events open.
-2. Persistent provider sessions, per-scope identity/revisions, bounded history,
+2. ~~Persistent provider sessions~~ within a turn done 2026-11-10 (§5); across
+   turns, per-scope identity/revisions, bounded history,
    resume/reconnect semantics and normalized provider errors.
 3. Shared Iron tools (schema, scoped reads, validated edits) over provider-native
    MCP/dynamic tools, with explicit user approval policy. Preserve the same

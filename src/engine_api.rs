@@ -991,21 +991,31 @@ pub fn document_circuit(app: &mut WorkerApp, markup: String) -> String {
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
-/// The model's component verbs (`compose::compose_ops`): `<place>` and
-/// `<make-component>`, as one history entry. The summary names what each
-/// verb made.
-pub fn document_compose(app: &mut WorkerApp, markup: String) -> String {
-    let mut run = || -> Result<serde_json::Value, String> {
-        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let (ops, summary) = iron_document::compose::compose_ops(&store.0, &markup)?;
+/// The model's component verbs (`compose::compose_after`): `<place>` and
+/// `<make-component>`, after the edit's other ops (`ops_json`, a JSON array,
+/// often empty), as one history entry. The summary names what each verb
+/// made. A failing op answers `errors` indexed into `ops_json`, as `apply`
+/// does; a failing verb answers `error`.
+pub fn document_compose(app: &mut WorkerApp, markup: String, ops_json: String) -> String {
+    use iron_document::compose::ComposeError;
+    let mut run = || -> Result<serde_json::Value, serde_json::Value> {
+        let verb = |error: String| serde_json::json!({"ok": false, "error": error});
+        let before: Vec<iron_document::Op> = serde_json::from_str(&ops_json)
+            .map_err(|e| serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "parse", "message": e.to_string()}]}))?;
+        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or_else(|| verb("document bridge not installed".into()))?;
+        let current = store.0.document().version().0;
+        let (ops, summary) = iron_document::compose::compose_after(&store.0, before, &markup).map_err(|e| match e {
+            ComposeError::Ops(errors) => serde_json::json!({"ok": false, "version": current, "errors": errors}),
+            ComposeError::Verb(message) => verb(message),
+        })?;
         let applied = store.0
             .apply(iron_document::TransactionInput { label: "model: components".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
-            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+            .map_err(|es| verb(es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")))?;
         Ok(serde_json::json!({"ok": true, "version": applied.version.0, "summary": summary}))
     };
     let result = run();
     if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
-    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
+    result.unwrap_or_else(|error| error).to_string()
 }
 
 /// A sheet's netlist, SPICE-like, with each net's solved voltage

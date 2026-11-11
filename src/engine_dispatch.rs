@@ -59,7 +59,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "showcase" => { arity(args,0)?; crate::engine_api::document_showcase(app) },
         "contexts" => { arity(args,0)?; crate::engine_api::document_contexts(app) },
         "circuit" => { arity(args,1)?; crate::engine_api::document_circuit(app,argument::<String>(args,0)?) },
-        "compose" => { arity(args,1)?; crate::engine_api::document_compose(app,argument::<String>(args,0)?) },
+        "compose" => { arity(args,2)?; crate::engine_api::document_compose(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "picture" => { arity(args,1)?; crate::engine_api::document_picture(app,argument::<String>(args,0)?) },
         "picture_poll" => { arity(args,2)?; crate::engine_api::document_picture_poll(app,argument::<u64>(args,0)?,argument::<bool>(args,1)?) },
         "netlist" => { arity(args,1)?; crate::engine_api::document_netlist(app,argument::<String>(args,0)?) },

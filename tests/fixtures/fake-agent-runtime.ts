@@ -5,6 +5,9 @@ import { createInterface } from 'node:readline';
 const mode = process.env.IRON_TEST_RUNTIME_MODE;
 const reply = (message: object) => process.stdout.write(`${JSON.stringify(message)}\n`);
 if (process.argv.includes('app-server')) {
+  let turns = 0;
+  let threads = 0;
+  let conversation = '';
   createInterface({ input: process.stdin }).on('line', async line => {
     const message = JSON.parse(line);
     if (!message.id) return;
@@ -18,12 +21,17 @@ if (process.argv.includes('app-server')) {
     ] } });
     else if (message.method === 'thread/start') {
       if (message.params.sandbox !== 'read-only' || message.params.approvalPolicy !== 'never' || !message.params.ephemeral) process.exit(3);
+      threads++;
       reply({ id: message.id, result: { thread: { id: 'fixture-thread' } } });
     } else if (message.method === 'turn/start') {
       reply({ id: message.id, result: { turn: { id: 'fixture-turn' } } });
       if (mode === 'approval') { reply({ id: 99, method: 'item/commandExecution/requestApproval', params: {} }); return; }
       if (mode === 'timeout') return;
-      const input = message.params.input.filter((i: any) => i.type === 'text').map((i: any) => i.text).join('\n\n');
+      // What this turn sent, and the thread's whole conversation, which a
+      // real model remembers: the replies below read the conversation.
+      const sent = message.params.input.filter((i: any) => i.type === 'text').map((i: any) => i.text).join('\n\n');
+      conversation += `${conversation ? '\n\n' : ''}${sent}`;
+      const input = conversation;
       const target = input.match(/TARGET (#\w+)/)?.[1] ?? '#1';
       const shape = input.match(/SHAPE (#\w+)/)?.[1] ?? '#fixture';
       let text = input.includes('edit-test-shape')
@@ -35,6 +43,8 @@ if (process.argv.includes('app-server')) {
         const bytes = image ? await readFile(image.path) : Buffer.alloc(0);
         text = bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image received' : 'missing image';
       }
+      turns++;
+      if (input.includes('session-test')) text = `thread ${threads} turn ${turns} input ${JSON.stringify(sent)}`;
       if (input.includes('effort-test')) text = `effort=${message.params.effort ?? 'none'} tier=${message.params.serviceTier ?? 'none'}`;
       if (input.includes('chat-test-follow-up')) text = input.includes('A **rectangle** is a 2D shape.') ? 'The previous reply described a rectangle.' : 'ERROR: missing history';
       if (input.includes('chat-test-lesson')) text = '### Lesson companion\n\nWe can discuss the lesson without editing it.\n\n::view{show=main}';
@@ -88,8 +98,6 @@ if (process.argv.includes('app-server')) {
     }
   });
 } else {
-  let input = '';
-  for await (const chunk of process.stdin) input += chunk;
   if (!process.argv.includes('--tools') || process.argv[process.argv.indexOf('--tools') + 1] !== '') process.exit(3);
   if (!process.argv.includes('--strict-mcp-config')) process.exit(3);
   // A subscription runs in safe mode with no API key and nothing from a
@@ -99,24 +107,41 @@ if (process.argv.includes('app-server')) {
   if (bare && !process.env.ANTHROPIC_API_KEY) process.exit(3);
   if (safe && (process.env.ANTHROPIC_API_KEY || process.env.CLAUDECODE || Object.keys(process.env).some(k => k.startsWith('CLAUDE_CODE_')))) process.exit(4);
   if (process.argv[process.argv.indexOf('--output-format') + 1] !== 'stream-json' || !process.argv.includes('--verbose')) process.exit(5);
-  if (input.includes('image-wire-test')) {
-    if (!process.argv.includes('--input-format')) process.exit(6);
-    const envelope = JSON.parse(input);
-    const image = envelope.message.content.find((i: any) => i.type === 'image');
-    const bytes = Buffer.from(image?.source?.data ?? '', 'base64');
-    reply({ type: 'result', result: bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image received' : 'missing image' });
-    process.exit(0);
+  if (process.argv[process.argv.indexOf('--input-format') + 1] !== 'stream-json') process.exit(6);
+  // One stream-json user message a line, each answered with a result, as
+  // Claude Code does; the conversation so far is what it has been sent.
+  let seen = '';
+  let turns = 0;
+  for await (const line of createInterface({ input: process.stdin })) {
+    if (!line.trim()) continue;
+    const envelope = JSON.parse(line);
+    const content: any[] = envelope.message.content;
+    const input = content.filter(i => i.type === 'text').map(i => i.text).join('\n\n');
+    seen += `\n\n${input}`;
+    turns++;
+    if (input.includes('image-wire-test')) {
+      const image = content.find(i => i.type === 'image');
+      const bytes = Buffer.from(image?.source?.data ?? '', 'base64');
+      reply({ type: 'result', result: bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' ? 'image received' : 'missing image' });
+      continue;
+    }
+    reply({ type: 'system', subtype: 'init' });
+    if (input.includes('effort-test')) {
+      const effort = process.argv.includes('--effort') ? process.argv[process.argv.indexOf('--effort') + 1] : 'none';
+      reply({ type: 'result', subtype: 'success', result: `effort=${effort}`, is_error: false, usage: { output_tokens: 1 } });
+      continue;
+    }
+    // A session test: which message of the session this is, and whether the
+    // first is still in its memory.
+    if (input.includes('session-test')) {
+      reply({ type: 'result', subtype: 'success', result: `turn ${turns} remembers ${seen.includes('session-test-first')}`, is_error: false, usage: { input_tokens: 2, cache_read_input_tokens: turns > 1 ? 1000 : 0, output_tokens: 3 } });
+      continue;
+    }
+    reply({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } });
+    reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Nothing to change.' } } });
+    reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 50, estimated_tokens_delta: 50 });
+    reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 120, estimated_tokens_delta: 70 });
+    for (const piece of ['<edit', '/>']) reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: piece } } });
+    reply({ type: 'result', subtype: 'success', result: '<edit/>', is_error: false, usage: { input_tokens: input.length, output_tokens: 130, output_tokens_details: { thinking_tokens: 125 } } });
   }
-  reply({ type: 'system', subtype: 'init' });
-  if (input.includes('effort-test')) {
-    const effort = process.argv.includes('--effort') ? process.argv[process.argv.indexOf('--effort') + 1] : 'none';
-    reply({ type: 'result', subtype: 'success', result: `effort=${effort}`, is_error: false, usage: { output_tokens: 1 } });
-    process.exit(0);
-  }
-  reply({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } });
-  reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Nothing to change.' } } });
-  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 50, estimated_tokens_delta: 50 });
-  reply({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 120, estimated_tokens_delta: 70 });
-  for (const piece of ['<edit', '/>']) reply({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: piece } } });
-  reply({ type: 'result', subtype: 'success', result: '<edit/>', is_error: false, usage: { input_tokens: input.length, output_tokens: 130, output_tokens_details: { thinking_tokens: 125 } } });
 }

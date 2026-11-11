@@ -17,8 +17,51 @@
   // pointer until it is released (after dockview handles the drop).
   const stop = () => setTimeout(() => (dragging = false), 0);
 
+  // A tab strip ends at its last whole tab: a tab the strip's edge would
+  // cut is hidden (dockview's overflow menu lists it), unless it is the
+  // active tab. Checked after anything that moves tabs: layout, activation,
+  // a scroll of the strip, a resize, tabs added or removed.
+  let clipFrame = 0;
+  function clipTabs() {
+    clipFrame = 0;
+    for (const strip of el.querySelectorAll<HTMLElement>(".dv-tabs-container")) {
+      const box = strip.getBoundingClientRect();
+      // The active tab whole, clear of the strip's 10 px inset: dockview
+      // scrolls to it only when it is wholly outside.
+      const active = strip.querySelector<HTMLElement>(":scope > .dv-tab.dv-active-tab")?.getBoundingClientRect();
+      if (active && active.width > 0 && active.width < box.width - 20) {
+        const by = active.right > box.right - 10 ? active.right - box.right + 10 : active.left < box.left + 10 ? active.left - box.left - 10 : 0;
+        if (Math.abs(by) >= 1) {
+          strip.scrollLeft += by;
+          // dockview keeps its own copy of the offset and restores it each
+          // frame; tell it now, before its next frame puts the old one back.
+          strip.dispatchEvent(new Event("scroll"));
+        }
+      }
+      for (const tab of strip.querySelectorAll<HTMLElement>(":scope > .dv-tab")) {
+        const r = tab.getBoundingClientRect();
+        const cut = r.width > 0 && !tab.classList.contains("dv-active-tab") && (r.left < box.left - 0.5 || r.right > box.right + 0.5);
+        if (cut !== tab.hasAttribute("data-iron-clipped")) tab.toggleAttribute("data-iron-clipped", cut);
+      }
+    }
+  }
+  const scheduleClip = () => { if (!clipFrame) clipFrame = requestAnimationFrame(clipTabs); };
+  let clipObservers: { disconnect(): void }[] = [];
+
   onMount(() => {
     api = createWorkspace(el);
+    api.onDidLayoutChange(scheduleClip);
+    api.onDidActivePanelChange(scheduleClip);
+    el.addEventListener("scroll", scheduleClip, true);
+    const resize = new ResizeObserver(scheduleClip);
+    resize.observe(el);
+    // Only tab strips' own changes: not every edit inside an HTML view.
+    const tabs = new MutationObserver((changes) => {
+      if (changes.some((c) => (c.target as Element).closest?.(".dv-tabs-and-actions-container"))) scheduleClip();
+    });
+    tabs.observe(el, { childList: true, subtree: true });
+    clipObservers = [resize, tabs];
+    scheduleClip();
     // For the driver (.claude/skills/run-iron): open views as the + menu would.
     (window as any).__dock = api;
     // Splits and tab moves change rectangles without resizing the window.
@@ -30,6 +73,8 @@
   });
 
   onDestroy(() => {
+    clipObservers.forEach((o) => o.disconnect());
+    cancelAnimationFrame(clipFrame);
     document.removeEventListener("pointerup", stop, true);
     document.removeEventListener("pointercancel", stop, true);
     destroyWorkspace();

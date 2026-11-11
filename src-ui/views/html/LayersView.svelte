@@ -444,14 +444,14 @@
               <span class="grow"></span>
               {#if r.problem}<span class="problem" role="img" title={r.problem} aria-label="Problem: {r.problem}"><TriangleAlert size={13} strokeWidth={1.75} /></span>{/if}
               {#each r.chips.slice(0, 2) as chip (chip.composition)}
-                <button class="chip" tabindex="-1" title="Show in {chip.name ?? chip.composition}" aria-label="Show in {chip.name ?? chip.composition}"
+                <button class="ui-badge is-pill chip" tabindex="-1" title="Show in {chip.name ?? chip.composition}" aria-label="Show in {chip.name ?? chip.composition}"
                   onclick={(e) => { e.stopPropagation(); void showIn({ node: chip.node, composition: chip.composition, chain: chip.chain }); }}>
                   {#if chip.dims === "3d"}<Box size={11} strokeWidth={1.75} />{:else}<Shapes size={11} strokeWidth={1.75} />{/if}
                   <span>{chip.name ?? chip.composition}</span>
                 </button>
               {/each}
               {#if r.chips.length > 2}
-                <span class="chip more" title={r.chips.slice(2).map((c) => c.name ?? c.composition).join(", ")}>+{r.chips.length - 2}</span>
+                <span class="ui-badge is-pill chip more" title={r.chips.slice(2).map((c) => c.name ?? c.composition).join(", ")}>+{r.chips.length - 2}</span>
               {/if}
             </div>
           {/each}
@@ -489,12 +489,9 @@
   .icon.figure { color: var(--accent); }
   .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .grow { flex: 1; }
-  .tag { flex: none; font-size: var(--text-sm); color: var(--fg-faint); }
-  .chip { display: inline-flex; align-items: center; gap: 3px; flex: none; max-width: 96px; height: 20px; padding: 0 6px 0 5px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg); color: var(--fg-muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
-  .chip span { overflow: hidden; text-overflow: ellipsis; }
-  .chip:hover { border-color: var(--accent); color: var(--fg); }
-  .chip.more { cursor: default; }
+  .tag { flex: none; font-size: var(--text-sm); color: var(--fg-muted); }
+  .chip { flex: none; max-width: 96px; }
   .problem { display: inline-flex; flex: none; color: var(--danger); }
-  footer { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: var(--text-xs); color: var(--fg-faint); }
+  footer { flex: none; padding: 6px 16px; border-top: 1px solid var(--border); font-size: var(--text-sm); color: var(--fg-muted); }
   .error { padding: 12px var(--panel-pad); color: var(--danger); overflow-wrap: anywhere; }
 </style>

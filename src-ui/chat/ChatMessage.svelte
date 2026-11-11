@@ -100,7 +100,7 @@
   .user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin: 0 0 16px; }
   .user-message { max-width: min(80%, 560px); padding: 9px 14px; background: var(--bg-sunken); border-radius: var(--radius-xl); }
   .user-message p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-lg); line-height: 1.55; margin: 0; }
-  .target { padding: 0 6px; color: var(--fg-faint); font-size: var(--text-sm); }
+  .target { padding: 0 6px; color: var(--fg-muted); font-size: var(--text-sm); }
   .assistant-message { min-width: 0; padding: 0 4px; }
   .working, .summary { font-size: var(--text-lg); margin: 4px 0 10px; color: var(--fg-muted); }
   .working { display: flex; align-items: center; gap: 8px; }

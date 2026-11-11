@@ -52,14 +52,16 @@
   --text-sm: 11px;   /* labels, metadata, menus' hints */
   --text-md: 12px;   /* controls, body */
   --text-lg: 13px;   /* panel and section titles */
+  --text-xl: 16px;   /* a page's title (the scopes page) */
   --radius-sm: 3px;  /* chips and swatches inside fields */
   --radius: 5px;     /* fields, buttons, rows */
   --radius-lg: 8px;  /* menus, popovers, dialogs */
   --radius-xl: 12px; /* floating toolbars, the composer */
+  --radius-full: 999px; /* pills and chips */
   --control-h: 28px;    /* fields, selects, buttons */
   --control-h-sm: 24px; /* compact buttons, icon buttons, quiet triggers */
   --panel-pad: 16px;    /* a panel's and a section's side inset */
-  --panel-header-h: 40px;
+  --panel-header-h: 36px; /* the dock's tab strip too: one top edge */
   /* Meaning, not theme: the same in light and dark. */
   --record: #ff8a3d;    /* auto-keyframe, recording */
   --component: #9747ff; /* components and their mains (Figma's violet) */

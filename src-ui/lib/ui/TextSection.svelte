@@ -28,6 +28,8 @@
   import IconButton from "./IconButton.svelte";
   import TextInput from "./TextInput.svelte";
   import FontPicker, { type FontCatalog } from "./FontPicker.svelte";
+  import ColorPicker, { parseHex } from "./ColorPicker.svelte";
+  import Section from "./Section.svelte";
   import PropertyField, { type Property } from "./PropertyField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
 
@@ -67,7 +69,7 @@
   const content = $derived(field("text", "content", "", "str"));
   const underline = $derived(field("font", "underline", "false", "bool").text === "true");
   const strike = $derived(field("font", "strike", "false", "bool").text === "true");
-  const fillColor = $derived(field("fill", "color", "#000000ff", "color").text ?? "#000000ff");
+  const fill = $derived(field("fill", "color", "#000000ff", "color"));
 
   // Characters selected in the canvas edit: styling goes to them alone
   // (plans/specs/text.md §2.1); otherwise to the whole node.
@@ -90,10 +92,13 @@
     const patch = { bold: { weight: weight >= 600 ? 400 : 700 }, italic: { italic: !italic }, underline: { underline: !underline }, strike: { strike: !strike } }[what];
     void style(patch);
   }
-  function hexToRgba(hex: string): number[] {
-    const h = hex.replace("#", "");
-    const ch = (i: number) => parseInt(h.slice(i, i + 2), 16) / 255;
-    return [ch(0), ch(2), ch(4), h.length >= 8 ? ch(6) : 1];
+  // The colour, of the selected characters or the whole text; a token
+  // (`=@name`) binds the node's fill.
+  function setColor(f: Property, text: string) {
+    if (text.startsWith("=")) return set(f.leaf, text, "text colour");
+    const rgba = parseHex(text);
+    if (rgba) void style({ color: rgba });
+    else onError(`"${text}" is not a hex colour`);
   }
 
   const known = $derived((catalog as FontCatalog | null)?.families.find((f) => f.name.toLowerCase() === family.toLowerCase()));
@@ -128,8 +133,7 @@
   }
 </script>
 
-<section class="ui-section property-section" aria-label="Text" data-section="text">
-  <header class="ui-section-header component"><span>Text</span></header>
+<Section title="Text" class="property-section" headerClass="component" data-section="text">
 
   <div class="family" bind:this={anchor}>
     <Popover.Root bind:open={pickerOpen}>
@@ -170,9 +174,10 @@
         <Toggle.Root class="ui-segment" aria-label={t.label} title={t.title} pressed={!rangeSelected && t.on} onPressedChange={() => toggle(t.what)}><t.icon size={14} strokeWidth={1.75} /></Toggle.Root>
       {/each}
     </div>
-    <label class="ui-field swatch" title={rangeSelected ? "Colour of the selected characters" : "Text colour"}>
-      <input type="color" aria-label={rangeSelected ? "Selection colour" : "Text colour"} value={fillColor.slice(0, 7)} onchange={(e) => style({ color: hexToRgba(e.currentTarget.value) })} />
-    </label>
+    <div class="ui-field color" title={rangeSelected ? "Colour of the selected characters" : "Text colour"}>
+      <ColorPicker swatch field={fill} {node} label={rangeSelected ? "Selection colour picker" : "Text colour picker"} heading={rangeSelected ? "Selection colour" : "Text colour"} scrub={!rangeSelected} tokens={!rangeSelected} onSet={setColor} onRefresh={refresh} {onError} />
+      <input aria-label={rangeSelected ? "Selection colour" : "Text colour"} value={(fill.text ?? "").slice(1, 7).toUpperCase()} spellcheck="false" onkeydown={onEnter} onchange={(e) => setColor(fill, e.currentTarget.value.startsWith("#") ? e.currentTarget.value : `#${e.currentTarget.value}`)} />
+    </div>
   </div>
   {#if rangeSelected}<p class="note">Styling the selected characters</p>{/if}
 
@@ -225,15 +230,16 @@
   {:else}
     <textarea class="ui-input" aria-label="Text content" rows="2" value={content.text ?? ""} disabled={content.edit === "locked"} title={content.why ?? ""} onchange={(e) => set("text.content", e.currentTarget.value, "edit text")}></textarea>
   {/if}
-</section>
+</Section>
 
 <style>
   .missing { color: var(--danger); }
   .note { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); }
   .family { display: flex; flex-direction: column; gap: 4px; }
-  .styles { display: grid; grid-template-columns: minmax(0, 1fr) 28px; gap: 8px; align-items: center; }
-  .swatch { overflow: hidden; cursor: pointer; }
-  .swatch input { width: 100%; height: calc(var(--control-h) - 2px); padding: 4px; border: none; background: transparent; cursor: pointer; }
+  .styles { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: center; }
+  .color { overflow: hidden; }
+  .color > :global(.color-swatch) { margin-left: 2px; }
+  .color input { flex: 1; width: 100%; min-width: 0; height: calc(var(--control-h) - 2px); padding: 0 8px; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); font-variant-numeric: tabular-nums; }
   .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
   .size { display: flex; align-items: center; gap: 2px; min-width: 0; }
   .size :global(.field) { flex: 1; }
@@ -245,6 +251,6 @@
   .mono, section :global(.ui-input.mono) { font-family: var(--font-mono); font-size: var(--text-sm); }
   .bound input { width: 100%; color: var(--accent); }
   .reads { margin-top: 4px; font-size: var(--text-sm); color: var(--fg-muted); overflow-wrap: anywhere; }
-  .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-faint); }
+  .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); }
   textarea { width: 100%; }
 </style>

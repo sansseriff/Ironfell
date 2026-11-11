@@ -8,8 +8,9 @@
   import { STOPPED, type AgentEvent } from '../model/progress';
   import { controllerManager } from '../controller-manager.svelte';
   import type { Snippet } from 'svelte';
+  import type { SelectItem } from '../lib/ui/Select.svelte';
 
-  let { session, history, send, target = 'Document', compact = false, review, targetControl }: { session: ChatSession; history?: ChatHistory; send: SendTurn; target?: string; compact?: boolean; review?: Snippet<[ChatTurn]>; targetControl?: Snippet } = $props();
+  let { session, history, send, target = 'Document', targets, targetValue, onTarget, compact = false, review }: { session: ChatSession; history?: ChatHistory; send: SendTurn; target?: string; targets?: SelectItem<string>[]; targetValue?: string; onTarget?: (value: string) => void; compact?: boolean; review?: Snippet<[ChatTurn]> } = $props();
   const doc = controllerManager.docClient;
   const busy = $derived(session.turns.some(turn => turn.status === 'running'));
   let scrollRequest = $state(0);
@@ -77,7 +78,7 @@
   {#if !compact || session.turns.length}<ChatTranscript turns={session.turns} {compact} {scrollRequest} {review} retry={(turn) => { if (!session.draft && !session.draftImages?.length) { session.draft = turn.instruction; session.draftImages = restorable(turn.images); } }} />{/if}
   <!-- The draft belongs to the conversation (chat/sessions.svelte.ts), not
        to this panel: bound through its getter and setter. -->
-  <ChatComposer bind:this={composer} bind:images={() => session.draftImages ?? [], (images) => { session.draftImages = images; }} bind:value={() => session.draft, (draft) => setDraft(session, draft)} {busy} {compact} {target} {targetControl} submit={() => { void submit(); }} {stop} />
+  <ChatComposer bind:this={composer} bind:images={() => session.draftImages ?? [], (images) => { session.draftImages = images; }} bind:value={() => session.draft, (draft) => setDraft(session, draft)} {busy} {compact} {target} {targets} {targetValue} {onTarget} submit={() => { void submit(); }} {stop} />
 </section>
 
 <style>

@@ -161,7 +161,7 @@
     margin-bottom: 4px;
   }
   .hint {
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-weight: normal;
   }
   dl {

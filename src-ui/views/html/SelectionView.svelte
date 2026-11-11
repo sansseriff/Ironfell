@@ -36,6 +36,8 @@
   import Disclosure from "../../lib/ui/Disclosure.svelte";
   import EmptyState from "../../lib/ui/EmptyState.svelte";
   import Unlink from "@lucide/svelte/icons/unlink";
+  import Waypoints from "@lucide/svelte/icons/waypoints";
+  import Section from "../../lib/ui/Section.svelte";
   import type { ViewSpec } from "../views";
 
   let { spec }: { spec: ViewSpec } = $props();
@@ -67,6 +69,9 @@
       if (!r.ok) makeError = r.error;
     } catch (e) { makeError = String(e); }
   }
+  // The attachment task: started from the title's Attach points, it stays
+  // mounted (and open) when the selection empties.
+  let attach: ReturnType<typeof AttachmentTask> | undefined = $state();
   const showIn = $derived(doc.counterparts.figures.filter((f) => f.node !== doc.selection[0] && f.composition !== null));
 
   // The inspector (a first, HTML version; plans/specs/panels-and-session.md):
@@ -103,7 +108,9 @@
     if (!node || !active()) return;
     return doc.subscribe<Inspected>({ op: 'inspect', node }, r => { inspected = r; }, e => { setError = String(e); });
   });
-  const titles: Record<string, string> = { transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content", layout: "Auto layout", layout_item: "In layout", table: "Table style", rules: "Lines" };
+  // Timing (a key, a clip) is not a picture: no picture actions in the title.
+  const TIMED = ["key", "clip"];
+  const titles: Record<string, string> = { key: "Key", clip: "Clip", transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content", layout: "Auto layout", layout_item: "In layout", table: "Table style", rules: "Lines" };
   const order = ["transform2d", "size", "radius", "layout", "layout_item", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
   const components = $derived.by(() => {
     const current = inspected as Inspected | null;
@@ -244,22 +251,23 @@
   }
 </script>
 
-<section class="html-view properties">
+<section class="html-view properties inspector">
   <CompositionSection />
 
-  <!-- The selection's actions, and the attachment task's (which stays
-       mounted, so a task survives the selection emptying). -->
-  <div class="actions">
-    {#if doc.selection.length}
-      <Button small variant="outline" onclick={() => link()} disabled={doc.selection.length !== 2} title="Link two pictures (Shift-click a second picture)"><Link size={14} strokeWidth={1.75} />Link</Button>
-      <Button small variant="outline" onclick={makeComponent} title="Make a component: shapes become a new definition shown by its main; instances become one component holding them"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>
-      <Button small variant="outline" onclick={() => author("wrap", { ids: doc.selection })} title="Wrap the selection in an empty at its centre (⌘⌥G)"><SquareDashed size={14} strokeWidth={1.75} />Wrap in empty</Button>
-    {/if}
-    <AttachmentTask />
-    {#each showIn as f (f.node)}
-      <Button small variant="outline" onclick={() => void showPicture({ node: f.node, composition: f.composition })}>Show in {f.name ?? f.composition}<ChevronRight size={14} strokeWidth={1.75} /></Button>
-    {/each}
-  </div>
+  <!-- The object: its name, its kind (the id in the tooltip), and what to
+       do with the selection, one row of icon buttons. -->
+  {#if inspected}
+    <!-- One line: scripts read the title's text ("name kind"). -->
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-badge" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={makeComponent} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => author("wrap", { ids: doc.selection })} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+  {/if}
+  <AttachmentTask bind:this={attach} />
+  {#if showIn.length}
+    <div class="show-in">
+      {#each showIn as f (f.node)}
+        <Button small onclick={() => void showPicture({ node: f.node, composition: f.composition })}>Show in {f.name ?? f.composition}<ChevronRight size={14} strokeWidth={1.75} /></Button>
+      {/each}
+    </div>
+  {/if}
   {#if linkError}<p class="error">{linkError}</p>{/if}
   {#if makeError}<p class="error">{makeError}</p>{/if}
   {#if doc.question}
@@ -279,9 +287,7 @@
   {/if}
 
   {#if inspected}
-    <div class="inspector">
-      <!-- The object: its name, and its type and id as a badge. -->
-      <div class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span> <span class="ui-badge">{inspected.type} {inspected.node}</span></div>
+    <div class="sections">
       {#if machines.pinned && !machines.pinned.scrub && machines.view?.main_of && rootOf(inspected.node) === machines.view.main_of}
         <div class="recording" role="status"><span class="dot"></span><span>Number edits go into <strong>{machines.pinned.state}</strong>; other edits (colour, text) change every state.</span></div>
       {/if}
@@ -319,8 +325,8 @@
            contexts.md §2.7); each shows only where its node has what it edits. -->
       {#each inspected.sections ?? SECTIONS as section (section)}
         {#if section === "main" && (inspected.main)}
-          <section class="ui-section property-section" aria-label="Main component" data-section="main">
-            <header class="ui-section-header component main-head"><span class="main-chip"><ComponentIcon size={14} strokeWidth={1.75} />Main component</span><span class="ui-section-meta">{inspected.main.instances} instance{inspected.main.instances === 1 ? "" : "s"}</span></header>
+          <Section title="Main component" class="property-section" headerClass="component" data-section="main" meta="{inspected.main.instances} instance{inspected.main.instances === 1 ? '' : 's'}">
+            {#snippet heading()}<h3 class="main-chip"><ComponentIcon size={14} strokeWidth={1.75} />Main component</h3>{/snippet}
             <label class="port-field">Name<TextInput value={inspected.main.name ?? ""} onchange={(e: Event) => author("rename", { node: inspected!.main!.def, name: (e.currentTarget as HTMLInputElement).value })} /></label>
             <div class="ports" data-section="ports">
               {#each inspected.main.ports as p (p.spec)}
@@ -349,15 +355,14 @@
               <Checkbox label="Resizable" checked={!!inspected.main.resizable} onChange={(on) => author("resizable", { def: inspected!.main!.def, on })} />
               <span class="hint">{inspected.main.resizable ? "parts follow their constraints" : "pictures keep the main's size"}</span>
             </div>
-          </section>
+          </Section>
         {:else if section === "port" && (inspected.port)}
-          <section class="ui-section property-section" aria-label="Port" data-section="port">
-            <header class="ui-section-header component"><span>Port</span>{#if !inspected.port.editable}<span class="ui-section-meta">edit on the main</span>{/if}</header>
+          <Section title="Port" class="property-section" headerClass="component" data-section="port" meta={inspected.port.editable ? undefined : "edit on the main"}>
             {@render portEditor(inspected.port, !!inspected.port.editable)}
-          </section>
+          </Section>
         {:else if section === "component" && (inspected.component)}
-          <section class="ui-section property-section" aria-label="Component" data-section="component">
-            <header class="ui-section-header component" data-kind="component"><span>{inspected.component.def ?? "Component"}</span><span class="ui-section-meta">{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? "" : " · detached"}</span>{#if inspected.component.linked}<span class="ui-section-actions"><IconButton icon={Unlink} label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach} /></span>{/if}</header>
+          <Section title={inspected.component.def ?? "Component"} aria-label="Component" class="property-section" headerClass="component" data-section="component" meta="{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? '' : ' · detached'}">
+            {#snippet actions()}{#if inspected?.component?.linked}<IconButton icon={Unlink} label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach} />{/if}{/snippet}
             {#if machines.view?.entity === inspected.component.entity && machines.view.machines.length}
               <div class="states-door"><span class="door-label">States</span><span class="door-names">{machines.view.machines[0].states.map((s) => s.name).join(" · ")}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
             {/if}
@@ -380,10 +385,9 @@
                 {/each}
               </div>
             {/if}
-          </section>
+          </Section>
         {:else if section === "table" && inspected.table && fields("transform2d").length}
-            <section class="ui-section property-section" aria-label="Table" data-section="table">
-              <header class="ui-section-header component"><span>Table</span></header>
+            <Section title="Table" class="property-section" headerClass="component" data-section="table">
               <div class="button-row">
                 <Button small variant="outline" onclick={() => tableEdit("add_row")} title="Add a row at the bottom"><Plus size={14} strokeWidth={1.75} />Row</Button>
                 <Button small variant="outline" onclick={() => tableEdit("remove_row")} title="Remove the bottom row"><Minus size={14} strokeWidth={1.75} />Row</Button>
@@ -396,10 +400,9 @@
                   <Button small variant="outline" onclick={() => tableEdit("split")} disabled={doc.selection.length !== 1} title="Split a merged cell into single cells">Split</Button>
                 {/if}
               </div>
-            </section>
+            </Section>
         {:else if section === "position" && fields("transform2d").length}
-          <section class="ui-section property-section" aria-label="Position" data-section="position">
-            <header class="ui-section-header component"><span>Position</span></header>
+          <Section title="Position" class="property-section" headerClass="component" data-section="position">
             <div class="property-grid">
               {#each ["x", "y"] as axis}<PropertyField field={field("transform2d", axis)} node={inspected.node} compact prefix={axis.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
               <PropertyField field={field("transform2d", "rot")} node={inspected.node} compact label="Rotation" onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
@@ -432,22 +435,20 @@
                 {#each ["sx", "sy"] as axis}<PropertyField field={field("transform2d", axis, "1")} node={inspected.node} compact label={axis === "sx" ? "Scale X" : "Scale Y"} prefix={axis === "sx" ? "X" : "Y"} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
               </div>
             </Disclosure>
-          </section>
+          </Section>
         {:else if section === "text" && (fields("text").length)}
           <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
         {:else if section === "layout" && ((fields("size").length && textSizing !== "auto_width") || fields("radius").length)}
-          <section class="ui-section property-section" aria-label="Layout" data-section="layout">
-            <header class="ui-section-header component"><span>Layout</span></header>
+          <Section title="Layout" class="property-section" headerClass="component" data-section="layout">
             <div class="ui-subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
             <div class="property-grid">
               {#each (fields("size").length ? fields("size").filter(f => textSizing !== "auto_height" || f.field === "w") : fields("radius")) as f (f.leaf)}
                 <PropertyField field={f} node={inspected.node} compact prefix={f.field.toUpperCase()} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
               {/each}
             </div>
-          </section>
+          </Section>
         {:else if section === "appearance" && (supports("appearance") || supports("corners"))}
-          <section class="ui-section property-section" aria-label="Appearance" data-section="appearance">
-            <header class="ui-section-header component"><span>Appearance</span></header>
+          <Section title="Appearance" class="property-section" headerClass="component" data-section="appearance">
             <div class="property-grid appearance-grid" class:has-corners={supports("corners")}>
               {#if supports("appearance")}<PropertyField field={field("appearance", "opacity", "1")} node={inspected.node} compact label="Opacity" onSet={set} onRefresh={refresh} onError={(e) => setError = e}>
                 {#snippet icon()}<AppearanceIcon kind="opacity" />{/snippet}
@@ -468,17 +469,17 @@
                 {/each}
               </div>
             {/if}
-          </section>
+          </Section>
         {:else if section === "fill" && (supports("fill") || fields("gradient").length)}
-          <section class="ui-section property-section" aria-label="Fill" data-section="fill">
-            <header class="ui-section-header component"><span>Fill</span>{#if !fields("fill").length && !fields("gradient").length}<span class="ui-section-actions"><IconButton icon={Plus} label="Add fill" onclick={() => component("fill", true)} /></span>{/if}</header>
+          <Section title="Fill" class="property-section" headerClass="component" data-section="fill">
+            {#snippet actions()}{#if !fields("fill").length && !fields("gradient").length}<IconButton icon={Plus} label="Add fill" onclick={() => component("fill", true)} />{/if}{/snippet}
             {#if fields("fill").length || fields("gradient").length}
               <PaintRow node={inspected.node} label="Fill" color={field("fill", "color", "#808080ff", "color")} opacity={field("fill", "opacity", "1")} gradient={fields("gradient")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onMode={paintMode} onRemove={() => patch({}, ["fill", "gradient"], "remove fill")} />
             {:else}<EmptyState inline>No fill</EmptyState>{/if}
-          </section>
+          </Section>
         {:else if section === "stroke" && (supports("stroke"))}
-          <section class="ui-section property-section" aria-label="Stroke" data-section="stroke">
-            <header class="ui-section-header component"><span>Stroke</span>{#if !fields("stroke").length}<span class="ui-section-actions"><IconButton icon={Plus} label="Add stroke" onclick={() => component("stroke", true)} /></span>{/if}</header>
+          <Section title="Stroke" class="property-section" headerClass="component" data-section="stroke">
+            {#snippet actions()}{#if !fields("stroke").length}<IconButton icon={Plus} label="Add stroke" onclick={() => component("stroke", true)} />{/if}{/snippet}
             {#if fields("stroke").length}
               <PaintRow node={inspected.node} label="Stroke" color={field("stroke", "color", "#000000ff", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onRemove={() => component("stroke", false)} />
               <div class="stroke-options" bind:this={strokeAnchor}>
@@ -519,19 +520,17 @@
                 </Popover.Root>
               </div>
             {:else}<EmptyState inline>No stroke</EmptyState>{/if}
-          </section>
+          </Section>
         {:else if section === "effects" && (supports("shadow"))}
-          <section class="ui-section property-section" aria-label="Effects" data-section="effects">
-            <header class="ui-section-header component"><span>Effects</span>
-              <span class="ui-section-actions">
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
-                  <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
-                    {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
-                  </DropdownMenu.Content></DropdownMenu.Portal>
-                </DropdownMenu.Root>
-              </span>
-            </header>
+          <Section title="Effects" class="property-section" headerClass="component" data-section="effects">
+            {#snippet actions()}
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+                <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
+                  {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
+                </DropdownMenu.Content></DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            {/snippet}
             {#each effects as effect (effect.kind)}
               <div class="effect-row">
                 <Popover.Root>
@@ -549,13 +548,13 @@
                 <IconButton icon={Minus} label="Remove {effect.kind}" title="Remove {effect.label.toLowerCase()}" onclick={() => component(effect.kind, false)} />
               </div>
             {:else}<EmptyState inline>No effects</EmptyState>{/each}
-          </section>
+          </Section>
         {:else if section === "other"}
         {#each otherComponents as c (c.kind)}
-          <section class="ui-section property-section" aria-label={titles[c.kind] ?? c.kind}>
-            <header class="ui-section-header component" data-kind={c.kind}><span>{titles[c.kind] ?? c.kind}</span>{#if inspected.removable.includes(c.kind)}<span class="ui-section-actions"><IconButton icon={Minus} label="Remove {c.kind}" onclick={() => component(c.kind, false)} /></span>{/if}</header>
+          <Section title={titles[c.kind] ?? c.kind} class="property-section" headerClass="component" data-kind={c.kind}>
+            {#snippet actions()}{#if inspected?.removable.includes(c.kind)}<IconButton icon={Minus} label="Remove {c.kind}" onclick={() => component(c.kind, false)} />{/if}{/snippet}
             <div class="property-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
-          </section>
+          </Section>
         {/each}
         {:else if section === "add" && (inspected.addable.some(k => addKinds.includes(k)))}
           <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? kind}</Button>{/each}</div>
@@ -570,19 +569,16 @@
 
 <style>
   .properties { padding: 0 !important; gap: 0 !important; font-size: var(--text-md); }
-  /* The selection's actions: one row of small outline buttons. */
-  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); }
-  .actions:not(:has(> :global(.ui-button), > :global(.authoring:not(.idle)))) { display: none; }
+  .show-in { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px calc(var(--panel-pad) - 8px); border-bottom: 1px solid var(--border); }
+  .attach { display: contents; }
   .button-row, .inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
   .button-row { gap: 4px; }
   .add { padding: 12px var(--panel-pad); }
-  .inspector { display: flex; flex-direction: column; }
-  /* A header with both meta and actions: the meta takes the space. */
-  .ui-section-meta + .ui-section-actions { margin-left: 4px; }
+  .sections { display: flex; flex-direction: column; }
   .title { padding: 0 var(--panel-pad); min-height: var(--panel-header-h); border-bottom: 1px solid var(--border); }
   .title-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mono { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-faint); }
-  .hint { font-size: var(--text-sm) !important; color: var(--fg-faint); }
+  .hint { font-size: var(--text-sm); color: var(--fg-muted); }
   .error { padding: 8px var(--panel-pad) 0; overflow-wrap: anywhere; }
   .selection-note { padding: 8px var(--panel-pad) 0; color: var(--fg-muted); font-size: var(--text-sm); }
   footer { display: flex; justify-content: space-between; padding: 12px var(--panel-pad); font-size: var(--text-sm); color: var(--fg-muted); }
@@ -625,7 +621,7 @@
   .trim-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
   .type-suggest { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   /* Component authoring: a main's violet, ports' teal (component-authoring.md §0). */
-  .main-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--component); }
+  .main-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0; font: inherit; color: var(--component); }
   .port-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: var(--text-sm); color: var(--fg-muted); }
   .port-field.wide, .port-grid .wide { grid-column: 1 / -1; }
   .port-field.check { justify-content: flex-end; min-height: var(--control-h); }

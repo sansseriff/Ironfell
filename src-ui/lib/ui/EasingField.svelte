@@ -40,6 +40,7 @@
   // two handles to drag, the four numbers to type) when `custom` allows it.
   import { Popover } from "bits-ui";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Check from "@lucide/svelte/icons/check";
   let { value, label, custom = true, disabled = false, onChange }: {
     value: string | null; label: string; custom?: boolean; disabled?: boolean; onChange: (v: string) => void;
   } = $props();
@@ -69,6 +70,23 @@
     next[dragging * 2 + 1] = Math.round(y * 100) / 100;
     draft = next;
   }
+  // A menu's keyboard (as every Select's): the list takes focus when it
+  // opens; arrows, Home and End move the highlight, a letter jumps to the
+  // next curve it starts, Enter or Space picks. The current curve has the check.
+  let highlighted = $state(0);
+  $effect(() => { if (open) highlighted = Math.max(0, CURVES.findIndex((c) => c.value === value)); });
+  function choose(v: string) { onChange(v); open = false; }
+  function onKey(e: KeyboardEvent) {
+    const n = CURVES.length;
+    const to = ({ ArrowDown: highlighted + 1, ArrowUp: highlighted - 1, Home: 0, End: n - 1 } as Record<string, number>)[e.key];
+    if (to !== undefined) { e.preventDefault(); highlighted = Math.max(0, Math.min(n - 1, to)); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(CURVES[highlighted].value); }
+    else if (e.key.length === 1 && /\S/.test(e.key)) {
+      const k = e.key.toLowerCase();
+      const next = [...CURVES.keys()].map((i) => (highlighted + 1 + i) % n).find((i) => CURVES[i].label.toLowerCase().startsWith(k));
+      if (next !== undefined) highlighted = next;
+    }
+  }
   function release() {
     if (dragging === null) return;
     dragging = null;
@@ -84,12 +102,15 @@
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content class="property-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
-      <div class="easing-list" role="listbox" aria-label={label}>
-        {#each CURVES as c (c.value)}
-          <button role="option" aria-selected={c.value === value} class:current={c.value === value} onclick={() => { onChange(c.value); open = false; }}>
+      <div class="easing-list" role="listbox" tabindex="0" aria-label={label} aria-activedescendant="easing-{highlighted}" onkeydown={onKey}>
+        {#each CURVES as c, i (c.value)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div class="ui-menu-item" id="easing-{i}" role="option" aria-selected={c.value === value} data-highlighted={i === highlighted ? "" : undefined} title={c.label}
+            onpointermove={() => (highlighted = i)} onclick={() => choose(c.value)}>
+            <span class="ui-menu-check">{#if c.value === value}<Check size={14} strokeWidth={1.75} />{/if}</span>
             <svg width="36" height="24" viewBox="0 0 36 24" aria-hidden="true"><path d={curvePath(c.f, 36, 24)} /></svg>
             <span>{c.label}</span>
-          </button>
+          </div>
         {/each}
       </div>
       {#if custom}
@@ -117,13 +138,14 @@
   /* The trigger is a select's field (`.ui-select-trigger`, ui.css). */
   :global(.easing-trigger svg path), .easing-list svg path { fill: none; stroke: var(--accent); stroke-width: 1.5; }
   .easing-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  :global(.easing-popover) { width: 216px; padding: 8px; }
-  .easing-list { display: flex; flex-direction: column; gap: 2px; }
-  .easing-list button { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border: 0; border-radius: var(--radius); background: transparent; color: var(--fg); font-size: var(--text-md); cursor: pointer; text-align: left; }
-  .easing-list button:hover { background: var(--hover); }
-  .easing-list button.current { background: var(--accent-soft); }
+  :global(.easing-popover) { width: 216px; padding: 4px; }
+  /* Menu items (ui.css), 32 px tall for the curve's preview. */
+  .easing-list { display: flex; flex-direction: column; outline: none; }
+  .easing-list .ui-menu-item { min-height: 32px; }
   .easing-list svg { flex: 0 0 36px; background: var(--bg-sunken); border-radius: var(--radius-sm); }
-  .bezier { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: center; }
+  .easing-list [data-highlighted] svg { background: transparent; }
+  .easing-list [data-highlighted] svg path { stroke: currentColor; }
+  .bezier { margin: 4px -4px 0; padding: 8px 12px 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; align-items: center; }
   .bezier-title { align-self: flex-start; color: var(--fg-muted); font-size: var(--text-sm); }
   .bezier-box { touch-action: none; }
   .bezier-box .unit { fill: var(--bg-sunken); stroke: var(--border); }

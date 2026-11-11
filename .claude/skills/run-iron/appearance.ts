@@ -1,4 +1,4 @@
-// Run after build.sh + serve.sh start: bun run appearance.ts (DPR=2 optional).
+// Run after build.sh + serve.sh start: bun run appearance.ts (DPR=2 and URL optional).
 import { chromium } from 'playwright-core';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -14,7 +14,7 @@ const doc=()=>page.evaluate(async()=>JSON.parse(await (window as any).__iron.sav
 const view=()=>page.evaluate(()=>(window as any).__iron.view({fidelity:'full'}));
 const edit=async(xml:string)=>{const r=await page.evaluate(x=>(window as any).__iron.edit(x),xml);assert(r.ok, JSON.stringify(r));await wait();};
 try{
-await page.goto('http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
+await page.goto(process.env.URL??'http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
 const v=await view(),parent=v.match(/<composition id="([^"]+)" name="controls"/)[1];
 await edit(`<edit>
 <create id="$g" type="group" parent="${parent}" name="opacity scope" x="400" y="60"/><add id="$g" appearance.opacity="0.5"/>
@@ -27,7 +27,8 @@ await edit(`<edit>
 <create id="$inside" type="rect" parent="$c" x="-40" y="-40" w="180" h="180" color="#00ff00"/>
 <create id="$s" type="rect" parent="${parent}" name="scrub sample" x="600" y="260" w="200" h="100" color="#8866dd"/><add id="$s" appearance.opacity="0.8"/>
 </edit>`);
-await page.locator('.dv-tab',{hasText:/^\s*Controls\s*$/}).click();await wait();
+// The tab may sit in the strip's overflow menu: activate the panel itself.
+await page.evaluate(()=>(window as any).__dock.getPanel('controls').api.setActive());await wait();
 const p=(await page.locator('[data-panel-id="controls"]').boundingBox())!;assert(p,'panel missing');
 const click=async(x:number,y:number)=>{await page.mouse.move(p.x+x/Number(process.env.DPR??1),p.y+y/Number(process.env.DPR??1));await page.waitForTimeout(150);await page.mouse.down();await page.waitForTimeout(200);await page.mouse.up();await wait();};
 await page.mouse.move(5,5);await wait();await page.screenshot({path:resolve(dir,'appearance.png')});writeFileSync(resolve(dir,'panel.json'),JSON.stringify({...p,dpr:Number(process.env.DPR??1)}));
@@ -45,7 +46,7 @@ const selected=(await page.evaluate(()=>(window as any).__iron.selection()))[0];
 await begin(50);await edit(`<edit><set id="${selected}" size.w="260"/></edit>`);await release();assert((await doc()).facets.size[key].w===260,'stale scrub overwrote model edit');
 console.log('inspector: preview, single undo, Escape and concurrent edit pass');
 // The appearance presenter groups corners and edits all four atomically.
-const cornerInput = page.getByRole('spinbutton',{name:'Corner radius',exact:true});
+const cornerInput = page.getByRole('textbox',{name:'Corner radius',exact:true});
 await cornerInput.fill('18');await cornerInput.press('Tab');await wait();
 let saved=await doc();assert(Object.values(saved.facets.corners[key]).every(x=>x===18),'uniform radius did not set all corners');
 await page.locator('[data-section="appearance"] .component').click();await page.keyboard.press('Meta+z');await wait();
@@ -58,7 +59,7 @@ await page.locator('[data-section="appearance"]').screenshot({path:resolve(dir,'
 const beforeToggle=JSON.stringify(await doc());
 await page.getByRole('button',{name:'Individual corners',exact:true}).click();
 assert(JSON.stringify(await doc())===beforeToggle,'corner disclosure authored a document change');
-const topLeft=page.getByRole('spinbutton',{name:'Top left',exact:true});
+const topLeft=page.getByRole('textbox',{name:'Top left',exact:true});
 await topLeft.fill('27');await topLeft.press('Tab');await wait();
 const separate=(await doc()).facets.corners[key];
 assert(separate.tl===27 && separate.tr===18 && separate.bl===18 && separate.br===18,'individual corner changed its neighbours');
@@ -79,11 +80,11 @@ await page.getByRole('button',{name:'Add stroke',exact:true}).click();await wait
 const strokeAlpha=page.locator('[data-paint="stroke"] .paint-opacity input');await scrubProperty(strokeAlpha,-30);
 assert(Math.abs((await doc()).facets.stroke[key].color.rgba[3]-.7)<.001,'stroke alpha scrub did not commit');
 await page.keyboard.press('Meta+z');await wait();assert((await doc()).facets.stroke[key].color.rgba[3]===1,'stroke alpha scrub was not one undo');
-await page.getByRole('button',{name:'Stroke settings',exact:true}).click();await page.getByRole('button',{name:'Join',exact:true}).waitFor();
+await page.getByRole('button',{name:'Stroke settings',exact:true}).click();await page.locator('[data-leaf="stroke.join"] .ui-segmented').waitFor();
 await page.keyboard.press('Escape');await wait();assert((await page.evaluate(()=>(window as any).__iron.selection()))[0]===selected,'closing stroke settings cleared selection');
 await page.getByRole('button',{name:'Add effect',exact:true}).click();await page.getByRole('menuitem',{name:'Drop shadow',exact:true}).click();await wait();
 assert(!!(await doc()).facets.shadow[key],'effect menu did not add shadow');
-await page.getByRole('button',{name:'Drop shadow settings',exact:true}).click();await page.getByRole('spinbutton',{name:'Blur',exact:true}).waitFor();
+await page.getByRole('button',{name:'Drop shadow settings',exact:true}).click();await page.getByRole('textbox',{name:'Blur',exact:true}).waitFor();
 await page.keyboard.press('Escape');await wait();
 // Switching fill type uses one transaction and keeps the solid fallback.
 await page.getByRole('button',{name:'Fill paint settings',exact:true}).click();

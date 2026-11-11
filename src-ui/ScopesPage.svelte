@@ -245,7 +245,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: var(--text-xl);
     font-weight: 600;
   }
   .actions {
@@ -319,7 +319,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-size: var(--text-sm);
   }
   .busy {
@@ -330,7 +330,7 @@
   }
   .storage {
     margin: 14px 0 0;
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-size: var(--text-sm);
   }
   :global(.ui-menu-item.danger) {

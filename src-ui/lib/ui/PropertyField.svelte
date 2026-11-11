@@ -15,6 +15,7 @@
   import Button from "./Button.svelte";
   import IconButton from "./IconButton.svelte";
   import EasingField from "./EasingField.svelte";
+  import ColorPicker from "./ColorPicker.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
     field: Property; node: string;
@@ -211,7 +212,7 @@
       <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if f.kind === "color" && channel !== "alpha"}
-      {#if !hideSwatch}<input aria-label={displayLabel} class="swatch" type="color" value={(f.text ?? "#000000").slice(0, 7)} disabled={locked} onchange={(e) => onSet(f, e.currentTarget.value + (f.text ?? "").slice(7, 9))} />{/if}
+      {#if !hideSwatch}<ColorPicker swatch field={f} {node} label={displayLabel} {onSet} {onRefresh} {onError} />{/if}
       <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
       <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} {placeholder} disabled={locked}
@@ -252,7 +253,7 @@
   /* A % or ° reads with its value: the input is the value's width. */
   .inline-unit input { flex: 0 1 auto; width: calc(var(--value-length) * 1ch + 1px); box-sizing: content-box; padding-right: 0; font-variant-numeric: tabular-nums; }
   .inline-unit .unit { flex: 1; padding-left: 1px; color: var(--fg); }
-  .control .swatch { flex: 0 0 22px; width: 22px; height: 22px; padding: 2px; margin-left: 3px; cursor: pointer; }
+  .control > :global(.color-swatch) { margin-left: 2px; }
   .hex { font-variant-numeric: tabular-nums; }
   .fx { padding-left: 8px; color: var(--accent); font-size: var(--text-sm); font-style: italic; }
   input.formula { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); }

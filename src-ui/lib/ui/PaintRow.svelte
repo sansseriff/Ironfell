@@ -38,8 +38,8 @@
 <div class="paint-row" data-paint={label.toLowerCase()}>
   <Popover.Root bind:open>
     <div class="ui-field paint-value">
-      <Popover.Trigger class="paint-swatch" aria-label="{label} paint settings" title="Edit {label.toLowerCase()}">
-        <span class="paint-chip" style:background={paint}></span>
+      <Popover.Trigger class="color-swatch" aria-label="{label} paint settings" title="Edit {label.toLowerCase()}">
+        <span class="color-chip" style:background={paint}></span>
       </Popover.Trigger>
       {#if gradient.length}
         <button class="paint-name" onclick={() => open = true}>{mode === "radial" ? "Radial" : "Linear"}</button>
@@ -97,20 +97,18 @@
   .paint-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
   /* One field (`.ui-field`): the swatch, the colour and the opacity. The
      fields inside lose their own shells. */
-  .paint-value { display: grid; grid-template-columns: 28px minmax(0, 1fr) 64px; flex: 1; align-items: center; overflow: hidden; }
+  .paint-value { display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px; flex: 1; align-items: center; overflow: hidden; }
   .paint-value :global(.control.ui-field), .paint-value :global(.control.ui-field:hover) { min-height: calc(var(--control-h) - 2px); border-color: transparent; background: transparent; }
   .paint-opacity { min-width: 0; border-left: 1px solid var(--bg); }
-  .paint-name { padding: 0 2px; border: 0; background: transparent; color: var(--fg); font-size: var(--text-md); text-align: left; cursor: pointer; }
-  .paint-value :global(.paint-swatch) { display: grid; place-items: center; width: 28px; height: calc(var(--control-h) - 2px); padding: 0; border: 0; background: transparent; cursor: pointer; }
-  .paint-chip { display: block; width: 16px; height: 16px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border); }
-  :global(.property-popover.color-popover) { width: 240px; }
+  .paint-name { padding: 0 8px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); text-align: left; cursor: pointer; }
+  .paint-value :global(.color-swatch) { margin-left: 2px; }
   .paint-types-row { padding: 8px var(--panel-pad); border-bottom: 1px solid var(--border); }
   :global(.paint-types .ui-segment) { width: 32px; }
-  .paint-type-chip { display: block; width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 1.5px currentColor; }
+  .paint-type-chip { display: block; width: 14px; height: 14px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1.5px currentColor; }
   .stops { position: relative; margin: 16px 23px 0; height: 24px; }
   .stop-bar { position: absolute; inset: 6px 0; border-radius: var(--radius-sm); background: var(--stops); box-shadow: inset 0 0 0 1px var(--border); }
   .stop { position: absolute; top: 0; width: 20px; height: 24px; padding: 3px; border: 0; border-radius: var(--radius); background: var(--raised); transform: translateX(-50%); cursor: pointer; box-shadow: 0 0 0 1px var(--border-strong); }
-  .stop span { display: block; width: 100%; height: 100%; border-radius: 2px; }
+  .stop span { display: block; width: 100%; height: 100%; border-radius: var(--radius-sm); }
   .stop.active { box-shadow: 0 0 0 2px var(--accent); }
   .gradient-points { padding: 0 var(--panel-pad) var(--panel-pad); }
 </style>

@@ -117,7 +117,7 @@
   }
   .doc-footer {
     font-size: var(--text-sm);
-    color: var(--fg-faint);
+    color: var(--fg-muted);
   }
   .version {
     font-size: var(--text-sm);

@@ -3,7 +3,7 @@
 //! laser by a line; the Library tab's session composition bakes every
 //! preview with no bindings left.
 
-use iron_document::facet::{Composition, Name};
+use iron_document::facet::{Composition, Fill, Name};
 use iron_document::*;
 
 fn ty(n: &str) -> TypeId {
@@ -83,4 +83,56 @@ fn the_library_recolours_its_cards_for_the_theme() {
     assert_eq!(dark.len(), standard::ENTRIES.len() * 3);
     store.apply_session(dark).unwrap();
     assert!(standard::library_theme_ops(store.document(), false).is_empty());
+}
+
+/// WCAG contrast between two sRGB colours.
+fn contrast(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let lum = |c: [f32; 4]| {
+        let ch = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+    };
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+#[test]
+fn the_library_previews_read_in_both_themes() {
+    let mut store = Store::new();
+    let first = store.document().next_session_ids(1)[0];
+    store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
+    for light in [false, true] {
+        store.apply_session(standard::library_theme_ops(store.document(), light)).unwrap();
+        let doc = store.document();
+        let lib = composition::compositions(doc).into_iter().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(standard::LIBRARY)).unwrap();
+        let named = |id: NodeId| doc.get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+        let colour = |id: NodeId| match doc.get::<Fill>(id).and_then(|f| f.color.constant().cloned()) {
+            Some(Value::Color(c)) => Some(c),
+            _ => None,
+        };
+        let mut texts = 0;
+        // The previews whose ink sits on the card itself (the Plot draws
+        // on its own surface); the Laser's body is a shape, held to 3:1.
+        for &cell in doc.children(lib).iter().filter(|&&c| matches!(named(c).as_deref(), Some("readout" | "meter" | "laser"))) {
+            let card = doc.children(cell).iter().copied().find(|&c| named(c).as_deref() == Some("card")).unwrap();
+            let paper = colour(card).unwrap();
+            let Some(preview) = doc.children(cell).iter().copied().find(|&c| named(c).as_deref() == Some("preview")) else { continue };
+            let mut stack = vec![preview];
+            while let Some(id) = stack.pop() {
+                stack.extend(doc.children(id).iter().copied());
+                if named(id).as_deref() == Some("body")
+                    && let Some(body) = colour(id)
+                {
+                    assert!(contrast(body, paper) >= 3.0, "the laser's body reads at {:.2}:1", contrast(body, paper));
+                }
+                if doc.live(id).is_some_and(|n| n.ty.name() == "text")
+                    && let Some(ink) = colour(id)
+                {
+                    texts += 1;
+                    // The Readout's figure and the Dial meter's reading among them.
+                    assert!(contrast(ink, paper) >= 4.5, "{:?} in {:?} reads at {:.2}:1 ({})", named(id), named(cell), contrast(ink, paper), if light { "light" } else { "dark" });
+                }
+            }
+        }
+        assert_eq!(texts, 2, "the Readout's figure and the Dial meter's reading");
+    }
 }

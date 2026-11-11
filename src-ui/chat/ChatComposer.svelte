@@ -10,15 +10,17 @@
   import ArrowUp from '@lucide/svelte/icons/arrow-up';
   import Square from '@lucide/svelte/icons/square';
   import TextInput from '../lib/ui/TextInput.svelte';
-  import Select from '../lib/ui/Select.svelte';
+  import Select, { type SelectItem } from '../lib/ui/Select.svelte';
   import AgentSettings from '../lib/AgentSettings.svelte';
   import ModelEffortPicker from './ModelEffortPicker.svelte';
   import { controllerManager } from '../controller-manager.svelte';
   import { shouldSubmit } from './conversation';
   import type { AgentProvider } from '../model/runtime-options';
-  import type { Snippet } from 'svelte';
 
-  let { value = $bindable(''), images = $bindable<ModelImage[]>([]), busy = false, compact = false, target, targetControl, submit, stop }: { value?: string; images?: ModelImage[]; busy?: boolean; compact?: boolean; target: string; targetControl?: Snippet; submit: () => void; stop?: () => void } = $props();
+  // `target` is where the model writes, as the composer's first line says
+  // it; `targets` the choices its menu offers (the narrative's: at the
+  // cursor, or the conversation only), or just `target` when there is one.
+  let { value = $bindable(''), images = $bindable<ModelImage[]>([]), busy = false, compact = false, target, targets, targetValue, onTarget, submit, stop }: { value?: string; images?: ModelImage[]; busy?: boolean; compact?: boolean; target: string; targets?: SelectItem<string>[]; targetValue?: string; onTarget?: (value: string) => void; submit: () => void; stop?: () => void } = $props();
   const doc = controllerManager.docClient;
   const providers: { value: AgentProvider; label: string; hint?: string }[] = [
     { value: 'codex', label: 'Codex', hint: 'ChatGPT login' },
@@ -97,12 +99,12 @@
   ondrop={(event) => { if (event.dataTransfer?.files.length) { event.preventDefault(); event.stopPropagation(); void attach(Array.from(event.dataTransfer.files)); } }}
   onsubmit={(event) => { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } }}>
   <div class="surface">
-    <div class="target">{#if targetControl}{@render targetControl()}{:else}<span>{target}</span>{/if}</div>
+    <div class="target"><Select variant="quiet" class="target-trigger" label="Where the model writes" value={targets ? (targetValue ?? '') : target} items={targets ?? [{ value: target, label: target }]} onChange={(choice) => onTarget?.(choice)} /></div>
     {#if images.length}<div class="attachments">{#each images as image, index}<div class="attachment"><img src={imageUrl(image)} alt={image.name} /><IconButton icon={X} label={`Remove ${image.name}`} size={12} class="attachment-remove" onclick={() => { images = images.filter((_, i) => i !== index); }} /></div>{/each}</div>{/if}
     {#if imageError}<p class="image-error" role="alert">{imageError}</p>{/if}
     {#if reading}<p class="hint" role="status">Reading images…</p>{/if}
     {#if !doc.canAsk}<p class="notice">Open Agent settings to connect your runtime.</p>{/if}
-    <TextInput multiline class={overflowing ? 'overflowing' : ''} bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask, explain, or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } } }} />
+    <TextInput multiline class={overflowing ? 'overflowing' : ''} bind:element={field} aria-label="Agent instruction" rows={compact ? 1 : 2} placeholder="Ask or change something…" bind:value onblur={sync} onkeydown={(event: KeyboardEvent) => { if (shouldSubmit(event)) { event.preventDefault(); sync(); if (!blocked) { imageError = ''; submit(); } } }} />
     <input hidden type="file" bind:this={picker} accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif,image/svg+xml,.heic,.heif,.svg" multiple onchange={() => { void attach(Array.from(picker.files ?? [])); picker.value = ''; }} />
     <div class="footer">
       <IconButton icon={ImagePlus} label="Attach images" disabled={busy || reading} onclick={() => picker.click()} />
@@ -130,15 +132,16 @@
   }
   .attachment :global(.attachment-remove:hover) { background: var(--danger); color: var(--accent-fg); }
   .image-error { color: var(--danger); margin: 8px 16px; font-size: var(--text-md); }
-  .composer { flex: none; padding: 6px 16px 14px; background: var(--bg); }
+  .composer { flex: none; padding: 6px 12px 12px; background: var(--bg); }
   .surface {
     max-width: 736px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-xl);
     background: var(--bg-input); overflow: hidden;
     transition: border-color 150ms ease;
   }
   .surface:focus-within { border-color: var(--fg-faint); }
-  .target { padding: 9px 16px 0; font-size: var(--text-sm); color: var(--fg-faint); }
-  .target:empty { display: none; }
+  /* Where the model writes: a quiet menu whose text lines up with the field's. */
+  .target { display: flex; padding: 6px 10px 0; }
+  .target :global(.target-trigger) { color: var(--fg-muted); }
   /* Why Send is off, inside the card and on the text's left edge. */
   .notice { margin: 0; padding: 9px 16px 0; font-size: var(--text-sm); color: var(--fg-muted); }
   .surface :global(textarea.ui-input) {
@@ -149,8 +152,11 @@
     font-size: var(--text-lg); line-height: 1.6; color: var(--fg);
   }
   .surface :global(textarea.ui-input.overflowing) { overflow-y: auto; }
-  .footer { display: flex; gap: 2px; align-items: center; padding: 2px 8px 8px; min-width: 0; }
-  .footer :global(.ui-select-trigger.is-quiet) { flex: none; color: var(--fg-muted); }
+  .footer { display: flex; gap: 2px; align-items: center; padding: 2px 6px 6px; min-width: 0; }
+  /* The runtime's trigger gives way first, the model's last: both ellipsize
+     only when the footer cannot hold their full names. */
+  .footer :global(.ui-select-trigger.is-quiet) { flex: 0 100 auto; min-width: 40px; color: var(--fg-muted); }
+  .footer :global(.model-effort) { flex: 0 1 auto; min-width: 48px; }
   .spacer { flex: 1; }
   /* The primary action: a filled round Send (Stop while a turn runs). */
   .footer :global(.round) { border-radius: 50%; }
@@ -160,7 +166,7 @@
   .footer :global(.round.stop) { background: var(--fg); color: var(--bg); }
   .footer :global(.round.stop svg) { fill: currentColor; }
   .footer :global(.round.stop:hover) { background: var(--fg); color: var(--bg); opacity: 0.85; }
-  .hint { margin: 6px 16px 0; color: var(--fg-faint); font-size: var(--text-sm); }
+  .hint { margin: 6px 16px 0; color: var(--fg-muted); font-size: var(--text-sm); }
   .compact { padding: 4px 10px 8px; }
   .compact .surface :global(textarea.ui-input) { max-height: 120px; }
   @media (prefers-reduced-motion: reduce) { .surface { transition: none; } }

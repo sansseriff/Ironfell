@@ -1026,7 +1026,7 @@ undefined
 [[240,475],["meter 15.8865646945 mW","short fiber 10 mW"]]
 ["meter 15.8865646945 mW","short fiber 0 W"]
 clicked button[title^="Make a component"]
-"component use #52"
+"component use"
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Port")
 "in"

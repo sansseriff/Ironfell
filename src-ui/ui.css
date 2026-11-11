@@ -24,7 +24,10 @@
 
 /* ---- Menus, selects' lists and tooltips -------------------------------- */
 
-.ui-menu {
+/* dockview's own context menu (a tab's right-click) is the same menu: its
+   vendor classes share these rules (dockview.css keeps only its layout). */
+.ui-menu,
+.dv-context-menu {
   /* Above dialogs (1000–1001), so a select opened inside one shows. */
   z-index: 1100;
   min-width: 180px;
@@ -60,9 +63,10 @@
   padding: 6px 8px 2px;
   font-size: var(--text-sm);
   font-weight: 500;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
-.ui-menu-item {
+.ui-menu-item,
+.dv-context-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -74,17 +78,21 @@
   user-select: none;
 }
 .ui-menu-item > span:not(.ui-hint) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ui-menu-item[data-highlighted] {
+.ui-menu-item[data-highlighted],
+.dv-context-menu-item:hover {
   background: var(--accent);
   color: var(--accent-fg);
 }
-.ui-menu-item[data-disabled] {
+.ui-menu-item[data-disabled],
+.dv-context-menu-item.dv-context-menu-item--disabled {
   opacity: 0.4;
 }
+.dv-context-menu-item { white-space: nowrap; }
+.dv-context-menu-item--disabled { pointer-events: none; }
 .ui-menu-item .ui-hint {
   margin-left: auto;
   padding-left: 12px;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-size: var(--text-sm);
 }
 .ui-menu-item[data-highlighted] .ui-hint {
@@ -94,7 +102,8 @@
 .ui-menu-item .ui-menu-check { width: 14px; display: flex; flex: 0 0 14px; }
 .ui-menu-item .ui-submenu-chevron { margin-left: auto; color: var(--fg-faint); }
 .ui-menu-item[data-highlighted] .ui-submenu-chevron { color: inherit; }
-.ui-menu-separator {
+.ui-menu-separator,
+.dv-context-menu-separator {
   height: 1px;
   margin: 4px 2px;
   background: var(--border);
@@ -107,6 +116,7 @@
    `.control`, the colour and easing fields) all wear it. */
 .ui-field,
 .ui-input,
+.dv-context-menu-rename-input,
 .ui-select-trigger {
   display: flex;
   align-items: center;
@@ -122,16 +132,19 @@
 }
 .ui-field:hover:not(:focus-within):not([data-disabled]),
 .ui-input:hover:not(:focus):not(:disabled),
+.dv-context-menu-rename-input:hover:not(:focus),
 .ui-select-trigger:hover:not([data-disabled]):not([data-state="open"]) { border-color: var(--border-strong); }
 .ui-field:focus-within,
 .ui-field.is-active,
 .ui-input:focus,
+.dv-context-menu-rename-input:focus,
 .ui-select-trigger[data-state="open"],
 .ui-select-trigger:focus-visible { outline: none; border-color: var(--accent); }
 .ui-field[data-disabled], .ui-input:disabled, .ui-select-trigger[data-disabled] { opacity: 0.4; cursor: default; }
 
-.ui-input { padding: 0 8px; }
-.ui-input::placeholder { color: var(--fg-faint); }
+.ui-input, .dv-context-menu-rename-input { padding: 0 8px; }
+.dv-context-menu-rename-input { width: 100%; }
+.ui-input::placeholder, .dv-context-menu-rename-input::placeholder { color: var(--fg-faint); }
 textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: vertical; }
 
 .ui-select-trigger {
@@ -175,6 +188,10 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 .ui-select-trigger.is-quiet[data-state="open"],
 .ui-quiet-trigger[data-state="open"] { border-color: transparent; background: var(--active); }
 .ui-quiet-trigger:disabled { opacity: 0.4; cursor: default; }
+/* Quiet triggers show keyboard focus with a 1 px ring, lighter than a
+   button's, so a ring left after a menu closes does not shout. */
+.ui-select-trigger.is-quiet:focus-visible,
+.ui-quiet-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 
 /* ---- Buttons ----------------------------------------------------------- */
 
@@ -226,8 +243,21 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 .property-icon:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
 .property-icon:disabled, .property-icon[data-disabled] { opacity: 0.4; cursor: default; }
 .property-icon[data-state="on"], .property-icon[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.property-icon[data-state="on"]:hover:not(:disabled), .property-icon[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .property-icon[data-state="open"] { background: var(--active); color: var(--fg); }
 .property-icon.large { width: var(--control-h); height: var(--control-h); }
+/* Variants, each one place: `is-nav` a 28 px rail button that switches
+   views (the view strip; its pressed state is the view shown); `is-tool` a
+   floating canvas tool, 36 px, filled with the accent when it is the tool
+   in use; `is-tool-menu` the narrow chevron beside a tool that opens its
+   group; `is-row` a 20 px button inside a 22 px list row (the timeline's
+   key buttons). */
+.property-icon.is-nav { width: var(--control-h); height: var(--control-h); }
+.property-icon.is-tool { width: 36px; height: 36px; border-radius: var(--radius-lg); color: var(--fg); }
+.property-icon.is-tool[aria-pressed="true"],
+.property-icon.is-tool[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
+.property-icon.is-tool-menu { width: 16px; height: 36px; }
+.property-icon.is-row { width: calc(var(--control-h-sm) - 4px); height: calc(var(--control-h-sm) - 4px); }
 
 /* ---- Segmented control (bits-ui ToggleGroup) --------------------------- */
 
@@ -441,16 +471,18 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   gap: 6px;
   padding: 32px var(--panel-pad);
   text-align: center;
-  color: var(--fg-faint);
+  color: var(--fg-muted);
   font-size: var(--text-sm);
   line-height: 1.5;
 }
 .ui-empty > svg { margin-bottom: 4px; color: var(--fg-faint); }
-.ui-empty > strong { font-size: var(--text-md); font-weight: 600; color: var(--fg-muted); }
+.ui-empty > strong { font-size: var(--text-md); font-weight: 600; color: var(--fg); }
 .ui-empty.is-inline { align-items: flex-start; padding: 0; text-align: left; }
 .ui-empty .ui-empty-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-/* A chip of metadata (an id, a type, a count). */
+/* A chip of metadata (an id, a type, a count). `is-pill` is a rounded
+   chip in the body font, with an icon, that may be a button (the layers'
+   "shown in" chips). */
 .ui-badge {
   display: inline-flex;
   align-items: center;
@@ -463,3 +495,19 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   font-size: var(--text-xs);
   white-space: nowrap;
 }
+.ui-badge.is-pill {
+  gap: 3px;
+  min-height: 20px;
+  padding: 0 6px 0 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-family: inherit;
+  font-size: var(--text-sm);
+}
+.ui-badge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+button.ui-badge { cursor: pointer; }
+button.ui-badge:hover { border-color: var(--accent); color: var(--fg); }
+/* A badge that carries a state: a build that is slow, or one fit for timing. */
+.ui-badge.is-warning { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.ui-badge.is-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }

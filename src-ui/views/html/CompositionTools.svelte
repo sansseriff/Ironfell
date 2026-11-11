@@ -117,18 +117,18 @@
     {#each slots as slot (slot.join("|"))}
       {#if slot.length === 1}
         {@const t = TOOLS[slot[0]]}
-        <button class="tool" class:active={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
+        <button class="property-icon is-tool tool" aria-pressed={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
           <t.icon size={18} strokeWidth={1.75} />
         </button>
       {:else}
         {@const id = current(slot)}
         {@const t = TOOLS[id]}
         <div class="group">
-          <button class="tool" class:active={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
+          <button class="property-icon is-tool tool" aria-pressed={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
             <t.icon size={18} strokeWidth={1.75} />
           </button>
           <DropdownMenu.Root bind:open={() => menu[slot.join("|")] ?? false, (v) => (menu[slot.join("|")] = v)}>
-            <DropdownMenu.Trigger class="more" title="Shape tools" aria-label="Shape tools">
+            <DropdownMenu.Trigger class="property-icon is-tool-menu" title="Shape tools" aria-label="Shape tools">
               <ChevronDown size={12} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
@@ -161,8 +161,8 @@
   .previewing .of { opacity: 0.75; }
   .previewing :global(.stop) { border-radius: 50%; color: inherit; background: color-mix(in srgb, currentColor 12%, transparent); }
   .previewing :global(.stop:hover:not(:disabled)) { color: inherit; background: color-mix(in srgb, currentColor 22%, transparent); }
-  /* The floating tool palette: larger targets than a panel's (36 px), on a
-     raised bar with the composer's radius. */
+  /* The floating tool palette: the tool buttons (`.property-icon.is-tool`,
+     36 px, larger than a panel's) on a raised bar with the composer's radius. */
   .toolbar {
     position: absolute;
     left: 50%;
@@ -181,41 +181,5 @@
   .group {
     display: flex;
     align-items: center;
-  }
-  .tool {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    border: none;
-    border-radius: var(--radius-lg);
-    background: transparent;
-    color: var(--fg);
-    cursor: pointer;
-  }
-  .tool:hover {
-    background: var(--hover);
-  }
-  .tool.active {
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
-  .group :global(.more) {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 36px;
-    border: none;
-    border-radius: var(--radius);
-    background: transparent;
-    color: var(--fg-muted);
-    cursor: pointer;
-  }
-  .group :global(.more:hover),
-  .group :global(.more[data-state="open"]) {
-    background: var(--hover);
-    color: var(--fg);
   }
 </style>

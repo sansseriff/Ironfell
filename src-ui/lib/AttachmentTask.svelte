@@ -1,10 +1,9 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { controllerManager } from "../controller-manager.svelte";
   import Button from "./ui/Button.svelte";
   import Select from "./ui/Select.svelte";
   import TextInput from "./ui/TextInput.svelte";
-  import Waypoints from "@lucide/svelte/icons/waypoints";
 
   const doc = controllerManager.docClient;
   type Point = { id: string; index: number; attachment: null | { control: string; dx: number; dy: number } };
@@ -40,6 +39,9 @@
       picked = picked.filter(id => r.paths.some(p => p.points.some(q => q.id === id && !q.attachment)));
     } catch (e) { if (request === serial) error = String(e); }
   }
+  // The inspector's Attach points button starts it (bind:this).
+  export function begin() { if (!busy) void start(); }
+  export function isOpen() { return !!owner; }
   async function start() {
     error = "";
     const target = doc.selection[0];
@@ -58,6 +60,8 @@
   }
   function close() { serial++; owner = ""; control = ""; info = null; picked = []; error = ""; editing = ""; }
   $effect(() => { if (owner && (doc.generation !== session || doc.documentEpoch !== epoch)) close(); });
+  // A refusal ("Select a main component") lasts until the selection changes.
+  $effect(() => { void doc.selection; untrack(() => { if (!owner) error = ""; }); });
   const timer = setInterval(refresh, 400);
   onDestroy(() => { serial++; clearInterval(timer); });
   function toggle(id: string) { picked = picked.includes(id) ? picked.filter(p => p !== id) : [...picked, id]; }
@@ -82,13 +86,12 @@
   }
 </script>
 
-<!-- Idle, its button joins the inspector's row of actions; working, the
-     task takes the row's full width. -->
-<div class="authoring" class:idle={!owner && !doc.selection.length} class:working={!!owner} data-attachment-task>
-  {#if !owner}
-    <Button small variant="outline" disabled={!doc.selection.length || busy} onclick={start} title="Select a main component or an empty in its main to begin"><Waypoints size={14} strokeWidth={1.75} />Attach points to control</Button>
-  {:else}
-    <div class="heading"><strong>Attach points</strong><Button small onclick={close} disabled={busy}>Done</Button></div>
+<!-- Working, the task sits under the inspector's title (its button is the
+     title's Attach points action); it outlives the selection. -->
+{#if owner || error}
+<div class="authoring" data-attachment-task>
+  {#if owner}
+    <header class="ui-section-header"><span>Attach points</span><Button small onclick={close} disabled={busy}>Done</Button></header>
     <p>Editing main {info?.name || owner}. This target stays pinned while you pick geometry.</p>
     <label>Endpoint control
       <Select value={control} items={(info?.controls ?? []).map(c => ({ value: c.id, label: c.name || c.id }))} onChange={v => { control = v; editing = ""; }} label="Endpoint control" disabled={busy} />
@@ -149,17 +152,15 @@
   {/if}
   {#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
+{/if}
 
 <style>
-  .authoring { display: contents; }
-  .authoring.idle { display: none; }
-  .authoring.working { flex: 1 0 100%; display: flex; flex-direction: column; gap: 8px; padding-top: 4px; font-size: var(--text-md); }
-  .heading, .actions, .point-list { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-  .heading { justify-content: space-between; }
+  .authoring { display: flex; flex-direction: column; gap: 8px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); font-size: var(--text-md); }
+  .actions, .point-list { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   p { margin: 0; color: var(--fg-muted); line-height: 1.5; }
   label { display: flex; flex-direction: column; gap: 4px; }
   .paths { max-height: 240px; overflow: auto; }
   .path, .attached { display: flex; flex-direction: column; gap: 6px; padding: 8px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: var(--radius); }
   .id { color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
-  .error { color: var(--danger); }
+  .error { color: var(--danger); overflow-wrap: anywhere; }
 </style>

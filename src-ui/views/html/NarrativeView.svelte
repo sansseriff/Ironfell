@@ -12,7 +12,7 @@
   // §…", or "conversation only"); a model turn's changes to the narrative are
   // marked for review, each kept or reverted (§7 item 6).
   import { getContext, onDestroy, onMount } from "svelte";
-  import { Button as BitsButton, DropdownMenu, Switch, ToggleGroup } from "bits-ui";
+  import { Button as BitsButton, DropdownMenu, ToggleGroup } from "bits-ui";
   import Pilcrow from "@lucide/svelte/icons/pilcrow";
   import Heading1 from "@lucide/svelte/icons/heading-1";
   import Heading2 from "@lucide/svelte/icons/heading-2";
@@ -27,6 +27,10 @@
   import Download from "@lucide/svelte/icons/download";
   import Upload from "@lucide/svelte/icons/upload";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import Ellipsis from "@lucide/svelte/icons/ellipsis";
+  import Check from "@lucide/svelte/icons/check";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import type { Component } from "svelte";
   import Button from "../../lib/ui/Button.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TextInput from "../../lib/ui/TextInput.svelte";
@@ -221,8 +225,15 @@
     observer?.disconnect();
     if (!scroller || !editor || !follow || mode === "exploration") return;
     // A view block entering the top quarter of the panel shows its composition.
+    // The observer's first report is where the blocks already are, not a
+    // scroll: opening the panel (or an edit) never switches the view.
+    let first = true;
     observer = new IntersectionObserver(
       (entries) => {
+        if (first) {
+          first = false;
+          return;
+        }
         for (const en of entries) {
           const el = en.target as HTMLElement;
           if (en.isIntersecting && el.dataset.show && editor && editor.shown !== el.dataset.show) editor.showView(el.dataset.show, el.dataset.focus ?? "");
@@ -248,18 +259,17 @@
   const reviews = $derived(session.annotations as Record<string, NarrativeReview>);
   let chat: ChatHandle | undefined = $state();
   let writeAtCursor = $state(true);
+  const cursorLabel = $derived(
+    cursor.selection
+      ? `Edits the selection${cursor.heading ? ` in “${cursor.heading}”` : ""}`
+      : `Writes at the cursor${cursor.heading ? `, in “${cursor.heading}”` : ""}`,
+  );
   $effect(() => {
     // Each mode's default target (§4.1): Authoring writes at the cursor,
     // Exploration talks only.
     writeAtCursor = mode !== "exploration";
   });
-  const targetLabel = $derived(
-    writeAtCursor
-      ? cursor.selection
-        ? `Edits the selection${cursor.heading ? ` in “${cursor.heading}”` : ""}`
-        : `Writes at the cursor${cursor.heading ? `, in “${cursor.heading}”` : ""}`
-      : "Conversation only",
-  );
+  const targetLabel = $derived(writeAtCursor ? cursorLabel : "Conversation only");
 
   /** The request with where the author is: a hint, not a rule (§4.2). */
   function contextFor(text: string): string {
@@ -330,6 +340,43 @@
   }
 
   // ---- toolbar ---------------------------------------------------------
+  // One row at any panel width: the block kinds, then bold and italic, then
+  // the inserts, and a More menu at the end. What does not fit moves into
+  // More, the least used first (`OVERFLOW`); More always holds Follow views
+  // and the markdown import and export.
+  type Kind = { id: string; label: string; icon: Component<any>; title?: string; run: () => void };
+  const KINDS: Kind[] = [
+    { id: "paragraph", label: "Paragraph", icon: Pilcrow, run: () => editor?.setKind("paragraph") },
+    { id: "h1", label: "Heading 1", icon: Heading1, run: () => editor?.setKind("heading", { level: 1 }) },
+    { id: "h2", label: "Heading 2", icon: Heading2, run: () => editor?.setKind("heading", { level: 2 }) },
+    { id: "bullet", label: "Bulleted item", icon: List, run: () => editor?.setKind("bullet") },
+    { id: "ordered", label: "Numbered item", icon: ListOrdered, run: () => editor?.setKind("ordered") },
+    { id: "quote", label: "Quote", icon: TextQuote, run: () => editor?.setKind("quote") },
+    { id: "code", label: "Code", icon: Code, run: () => editor?.setKind("code") },
+  ];
+  const MARKS: Kind[] = [
+    { id: "bold", label: "Bold", title: "Bold (⌘B)", icon: Bold, run: () => editor?.toggle("strong") },
+    { id: "italic", label: "Italic", title: "Italic (⌘I)", icon: Italic, run: () => editor?.toggle("em") },
+  ];
+  const OVERFLOW = ["code", "quote", "value", "view", "ordered", "bullet", "h2"];
+  const BUTTON = 26; // a 24 px icon button and the 2 px gap after it
+  const SEP = 9;
+  let toolsWidth = $state(0);
+  const overflow = $derived.by(() => {
+    const out = new Set<string>();
+    if (!toolsWidth) return out;
+    const room = toolsWidth - 12 - BUTTON; // the row's padding, and More
+    const width = () => {
+      const blocks = KINDS.filter((k) => !out.has(k.id)).length;
+      const inserts = ["view", "value"].filter((k) => !out.has(k)).length;
+      return (blocks + MARKS.length + inserts) * BUTTON + SEP * (inserts ? 2 : 1);
+    };
+    for (const id of OVERFLOW) {
+      if (width() <= room) break;
+      out.add(id);
+    }
+    return out;
+  });
   let compositions: { id: string; name: string | null; dims: string }[] = $state([]);
   async function loadCompositions() {
     compositions = await doc.command({ op: "compositions" });
@@ -404,6 +451,15 @@
   }
 </script>
 
+{#snippet viewChoices()}
+  <div class="ui-menu-heading">Show a composition</div>
+  {#each compositions as c (c.id)}
+    <DropdownMenu.Item class="ui-menu-item" onSelect={() => editor?.insertViewBlock(c.name ?? c.id, "")}>
+      <span>{c.name ?? c.id}</span><span class="ui-hint">{c.dims}</span>
+    </DropdownMenu.Item>
+  {/each}
+{/snippet}
+
 <script module lang="ts">
   /** Open narrative panels, by view id, for the driver (`__narrative`). */
   const registry = new Map<string, unknown>();
@@ -451,45 +507,59 @@
   <div class="body" class:hidden={missing}>
     <div class="doc" class:collapsed={mode === "exploration"}>
       {#if mode !== "exploration"}
-        <div class="tools" role="toolbar" aria-label="Formatting">
-          <span class="group">
-          <IconButton icon={Pilcrow} label="Paragraph" onclick={() => editor?.setKind("paragraph")} />
-          <IconButton icon={Heading1} label="Heading 1" onclick={() => editor?.setKind("heading", { level: 1 })} />
-          <IconButton icon={Heading2} label="Heading 2" onclick={() => editor?.setKind("heading", { level: 2 })} />
-          <IconButton icon={List} label="Bulleted item" onclick={() => editor?.setKind("bullet")} />
-          <IconButton icon={ListOrdered} label="Numbered item" onclick={() => editor?.setKind("ordered")} />
-          <IconButton icon={TextQuote} label="Quote" onclick={() => editor?.setKind("quote")} />
-          <IconButton icon={Code} label="Code" onclick={() => editor?.setKind("code")} />
-          </span>
-          <span class="group">
-          <IconButton icon={Bold} label="Bold" title="Bold (⌘B)" onclick={() => editor?.toggle("strong")} />
-          <IconButton icon={Italic} label="Italic" title="Italic (⌘I)" onclick={() => editor?.toggle("em")} />
+        <div class="tools" role="toolbar" aria-label="Formatting" bind:clientWidth={toolsWidth}>
+          {#each KINDS as k (k.id)}
+            {#if !overflow.has(k.id)}<IconButton icon={k.icon} label={k.label} onclick={k.run} />{/if}
+          {/each}
           <span class="sep"></span>
-          <DropdownMenu.Root onOpenChange={(o) => o && loadCompositions()}>
-            <DropdownMenu.Trigger class="property-icon" aria-label="Insert a view block" title="Insert a view block">
-              <SquareCode size={14} strokeWidth={1.75} />
+          {#each MARKS as k (k.id)}<IconButton icon={k.icon} label={k.label} title={k.title} onclick={k.run} />{/each}
+          {#if !overflow.has("view") || !overflow.has("value")}<span class="sep"></span>{/if}
+          {#if !overflow.has("view")}
+            <DropdownMenu.Root onOpenChange={(o) => o && loadCompositions()}>
+              <DropdownMenu.Trigger class="property-icon" aria-label="Insert a view block" title="Insert a view block">
+                <SquareCode size={14} strokeWidth={1.75} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content class="ui-menu" sideOffset={4} align="start">
+                  {@render viewChoices()}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {/if}
+          {#if !overflow.has("value")}
+            <IconButton icon={Variable} label="Insert a live value" pressed={showValue} onPressedChange={(v: boolean) => (showValue = v)} />
+          {/if}
+          <span class="ui-spacer"></span>
+          <DropdownMenu.Root onOpenChange={(o) => o && overflow.has("view") && loadCompositions()}>
+            <DropdownMenu.Trigger class="property-icon" aria-label="More" title="More">
+              <Ellipsis size={14} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.Content class="ui-menu" sideOffset={4} align="start">
-                <div class="ui-menu-heading">Show a composition</div>
-                {#each compositions as c (c.id)}
-                  <DropdownMenu.Item class="ui-menu-item" onSelect={() => editor?.insertViewBlock(c.name ?? c.id, "")}>
-                    <span>{c.name ?? c.id}</span><span class="ui-hint">{c.dims}</span>
-                  </DropdownMenu.Item>
+              <DropdownMenu.Content class="ui-menu" sideOffset={4} align="end">
+                {#each KINDS.filter((k) => overflow.has(k.id)) as k (k.id)}
+                  <DropdownMenu.Item class="ui-menu-item" onSelect={k.run}><k.icon size={14} strokeWidth={1.75} /><span>{k.label}</span></DropdownMenu.Item>
                 {/each}
+                {#if overflow.has("view")}
+                  <DropdownMenu.Sub>
+                    <DropdownMenu.SubTrigger class="ui-menu-item"><SquareCode size={14} strokeWidth={1.75} /><span>Insert a view block</span><ChevronRight class="ui-submenu-chevron" size={14} strokeWidth={1.75} /></DropdownMenu.SubTrigger>
+                    <DropdownMenu.SubContent class="ui-menu" sideOffset={4}>{@render viewChoices()}</DropdownMenu.SubContent>
+                  </DropdownMenu.Sub>
+                {/if}
+                {#if overflow.has("value")}
+                  <DropdownMenu.Item class="ui-menu-item" onSelect={() => (showValue = !showValue)}><Variable size={14} strokeWidth={1.75} /><span>Insert a live value</span></DropdownMenu.Item>
+                {/if}
+                {#if overflow.size}<DropdownMenu.Separator class="ui-menu-separator" />{/if}
+                <DropdownMenu.CheckboxItem class="ui-menu-item" bind:checked={follow} closeOnSelect={false} title="Show each view block's composition as it scrolls to the top">
+                  {#snippet children({ checked })}
+                    <span class="ui-menu-check">{#if checked}<Check size={14} strokeWidth={1.75} />{/if}</span><span>Follow views</span><span class="ui-hint">as you scroll</span>
+                  {/snippet}
+                </DropdownMenu.CheckboxItem>
+                <DropdownMenu.Separator class="ui-menu-separator" />
+                <DropdownMenu.Item class="ui-menu-item" onSelect={exportMarkdown}><Download size={14} strokeWidth={1.75} /><span>Export as markdown</span></DropdownMenu.Item>
+                <DropdownMenu.Item class="ui-menu-item" onSelect={() => mdInput?.click()}><Upload size={14} strokeWidth={1.75} /><span>Import markdown as a new narrative…</span></DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
-          <IconButton icon={Variable} label="Insert a live value" pressed={showValue} onPressedChange={(v: boolean) => (showValue = v)} />
-          </span>
-          <label class="follow" title="Show each view block's composition as it scrolls to the top">
-            <Switch.Root class="ui-switch" bind:checked={follow} aria-label="Follow views"><Switch.Thumb class="ui-switch-thumb" /></Switch.Root>
-            Follow views
-          </label>
-          <span class="group end">
-          <IconButton icon={Download} label="Export as markdown" onclick={exportMarkdown} />
-          <IconButton icon={Upload} label="Import markdown as a new narrative" onclick={() => mdInput?.click()} />
-          </span>
         </div>
         {#if showValue}
           <div class="value-form">
@@ -515,10 +585,9 @@
     </div>
 
     <div class="conversation-host" class:compact={mode === 'authoring'}>
-      <ChatPanel {session} {history} bind:this={chat} compact={mode === 'authoring'} target={targetLabel} send={performTurn}>
-        {#snippet targetControl()}
-          <Button variant="outline" small class="target-button" title="Where the model writes: click to switch" onclick={() => writeAtCursor = !writeAtCursor}><span>{targetLabel}</span></Button>
-        {/snippet}
+      <ChatPanel {session} {history} bind:this={chat} compact={mode === 'authoring'} target={targetLabel}
+        targets={[{ value: "cursor", label: cursorLabel }, { value: "conversation", label: "Conversation only" }]}
+        targetValue={writeAtCursor ? "cursor" : "conversation"} onTarget={(v) => (writeAtCursor = v === "cursor")} send={performTurn}>
         {#snippet review(turn: ChatTurn)}
           {@const change = reviews[turn.id]}
           {@const index = session.turns.findIndex(item => item.id === turn.id)}
@@ -564,8 +633,9 @@
     min-width: 0;
     font-weight: 600;
   }
+  /* In a narrow panel the save state gives way before the narrative's name. */
   .state {
-    flex: 0 1 auto;
+    flex: 0 100 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -610,49 +680,27 @@
     overflow: auto;
     border-bottom: 1px solid var(--border);
   }
-  /* The formatting toolbar: the panel header's 40 px rhythm, wrapping to
-     more rows in a narrow panel. */
+  /* The formatting toolbar: one row in the panel header's rhythm; what
+     does not fit is in its More menu. */
   .tools {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
     flex: none;
     gap: 2px;
-    min-height: var(--panel-header-h);
-    padding: 8px;
+    height: var(--panel-header-h);
+    padding: 0 6px;
     border-bottom: 1px solid var(--border);
+    overflow: hidden;
   }
   .tools .sep {
+    flex: none;
     width: 1px;
     height: 16px;
     background: var(--border);
-    margin: 0 4px;
+    margin: 0 3px;
   }
-  /* Groups wrap whole, so a narrow panel never strands one button. */
-  .tools .group {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  .tools .group.end {
-    margin-left: auto;
-  }
-  .narrative :global(.target-button) {
-    max-width: 100%;
-  }
-  .narrative :global(.target-button > span) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .follow {
-    font-size: var(--text-sm);
-    color: var(--fg-muted);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0 4px;
-    white-space: nowrap;
+  .tools .ui-spacer {
+    flex: 1;
   }
   .value-form {
     display: flex;

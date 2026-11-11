@@ -336,7 +336,7 @@
   .note {
     margin: 0;
     font-size: var(--text-sm);
-    color: var(--fg-faint);
+    color: var(--fg-muted);
   }
   .note.error {
     color: var(--danger);

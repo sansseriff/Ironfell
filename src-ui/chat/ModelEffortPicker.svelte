@@ -31,7 +31,7 @@
   const modelValue = $derived(current || DEFAULT);
   const modelLabel = $derived.by(() => {
     if (current) return listed.find((m) => m.id === current)?.label ?? current;
-    return listed.find((m) => m.default)?.label ?? 'Default model';
+    return listed.find((m) => m.default)?.label ?? 'Default';
   });
   const efforts = $derived(doc.agentEfforts);
   const effort = $derived(doc.effectiveEffort);
@@ -111,5 +111,5 @@
   .models.wide { width: 260px; }
   .efforts { width: 132px; border-left: 1px solid var(--border); background: var(--bg-sunken); }
   .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .note { margin: 4px 8px 4px; font-size: var(--text-xs); line-height: 1.4; color: var(--fg-faint); }
+  .note { margin: 4px 8px 4px; font-size: var(--text-sm); line-height: 1.4; color: var(--fg-muted); }
 </style>

@@ -51,7 +51,7 @@
 <style>
   .visual { margin: 10px 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-sunken); }
   figcaption { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: var(--text-md); font-weight: 500; border-bottom: 1px solid var(--border); }
-  .hint { margin-left: auto; color: var(--fg-faint); font-size: var(--text-xs); font-weight: 400; }
+  .hint { margin-left: auto; color: var(--fg-muted); font-size: var(--text-sm); font-weight: 400; }
   img { display: block; width: 100%; height: 190px; object-fit: contain; background: var(--bg); }
   p { font-size: var(--text-sm); color: var(--fg-muted); margin: 10px; overflow-wrap: anywhere; }
   .actions { padding: 8px 10px; }

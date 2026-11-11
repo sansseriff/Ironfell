@@ -117,7 +117,9 @@
       </div>
     </div>
   {/if}
-  {#if spec.notation === "composition"}
+  <!-- Composition settings belong to a canvas the user edits: not to the
+       session's Library, which lays out the library's definitions. -->
+  {#if spec.notation === "composition" && spec.source !== "library"}
     <CompositionSettings {spec} {inspecting} onInspect={() => setInspecting(id, inspecting ? undefined : 0.5)} {showFps} onShowFps={() => setShowFps(id, !showFps)} />
     {#if showFps && visible}<FpsCounter panel={id} />{/if}
   {/if}

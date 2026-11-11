@@ -17,6 +17,11 @@ try {
   await pill.waitFor();
   const idleScale = await pill.evaluate(element => getComputedStyle(element, '::before').transform);
   assert.match(idleScale, /0\.45/);
+  // At rest the pill is not painted; the pointer in the group's top strip shows it.
+  assert.equal(await pill.evaluate(element => getComputedStyle(element, '::before').opacity), '0');
+  // The collapsed hit area is the top 10 px: enter it, then move down the grown pill.
+  await page.mouse.move(170, 4);
+  await page.waitForTimeout(100);
   await page.mouse.move(170, 16);
   await page.waitForTimeout(100);
   const stable = await page.evaluate(async () => {

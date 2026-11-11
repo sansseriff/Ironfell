@@ -253,7 +253,7 @@
     color: var(--fg-muted);
   }
   .hint {
-    color: var(--fg-faint);
+    color: var(--fg-muted);
   }
   .error {
     margin: 0;
@@ -306,7 +306,7 @@
     font-weight: 500;
   }
   .meta {
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-size: var(--text-sm);
   }
   .item :global(.delete) {
@@ -326,7 +326,7 @@
     margin: 0;
     padding: 8px var(--panel-pad) 10px;
     border-top: 1px solid var(--border);
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-size: var(--text-sm);
   }
   code {

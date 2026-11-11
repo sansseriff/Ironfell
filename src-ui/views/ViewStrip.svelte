@@ -34,7 +34,7 @@
   {#each viewStrip.items as item (item.key)}
     {@const at = where(item)}
     {@const Icon = item.icon}
-    <button class="item" class:here={at === "here"} class:elsewhere={at === "elsewhere"} aria-pressed={at === "here"} aria-label={item.label}
+    <button class="property-icon is-nav item" class:here={at === "here"} class:elsewhere={at === "elsewhere"} aria-pressed={at === "here"} aria-label={item.label}
       title="{item.label}{at === 'elsewhere' ? ' (showing)' : ''} · Shift-click: open below"
       onclick={(e) => showStripView(api, item.spec, item.id, item.label, e.shiftKey)}>
       <Icon size={16} strokeWidth={1.75} />
@@ -43,12 +43,11 @@
 </nav>
 
 <style>
-  /* Navigation, not an action: a rail of 28 px icon buttons (`--control-h`)
-     with the shared hover and the accent for the view shown here. */
-  .view-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 40px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; background: var(--bg-chrome); border-right: 1px solid var(--border); pointer-events: auto; z-index: 2; box-sizing: border-box; }
-  .item { position: relative; display: grid; place-items: center; width: var(--control-h); height: var(--control-h); border: 0; border-radius: var(--radius); background: transparent; color: var(--fg-muted); cursor: pointer; }
-  .item:hover { background: var(--hover); color: var(--fg); }
-  .item.here { background: var(--accent-soft); color: var(--accent); }
+  /* Navigation, not an action: a rail of the shared nav icon buttons
+     (`.property-icon.is-nav`, pressed for the view shown here), with a bar
+     beside the shown one and a dot for one showing elsewhere. */
+  .view-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 40px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: calc((var(--panel-header-h) - var(--control-h)) / 2); background: var(--bg-chrome); border-right: 1px solid var(--border); pointer-events: auto; z-index: 2; box-sizing: border-box; }
+  .item { position: relative; }
   .item.here::before { content: ""; position: absolute; left: -6px; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
   .item.elsewhere::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
 </style>

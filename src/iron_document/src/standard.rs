@@ -268,22 +268,26 @@ pub fn latency_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
 }
 
 /// The Library's grid, in document px (CSS px at 100%): two columns of
-/// cards that fit a 300 px panel whole (16 + 128 + 12 + 128 + 16).
-const LIB_MARGIN: f64 = 16.0;
-const LIB_CARD: (f64, f64) = (128.0, 86.0);
-const LIB_GAP: f64 = 12.0;
+/// cards that fit a 272 px panel whole (12 + 120 + 8 + 120 + 12), the
+/// left side's width at a 1440 px window (src-ui/views/workspace.ts).
+const LIB_MARGIN: f64 = 12.0;
+const LIB_CARD: (f64, f64) = (120.0, 80.0);
+const LIB_GAP: f64 = 8.0;
 /// A cell's card, then its label under it, then the gap to the next row.
-const LIB_ROW: f64 = 124.0;
+const LIB_ROW: f64 = 116.0;
 /// The card's inset around its preview.
-const LIB_INSET: f64 = 5.0;
+const LIB_INSET: f64 = 6.0;
 
-/// The Library's card and label colours for a theme, in sRGB: the shell's
-/// tokens (src-ui/app.css). Card fill `--bg-sunken` (light) or `--raised`
-/// (dark), its edge `--border` or `--border-strong`, the label `--fg-muted`.
-/// (fill, edge, label).
+/// The Library's card and label colours for a theme, in sRGB.
+/// (fill, edge, label). The previews are baked in the light theme's
+/// colours (the components' own dark ink and bodies), so every card is
+/// paper they read on: `--bg-sunken` in the light theme, a dimmed paper
+/// in the dark one, as Figma's assets panel shows thumbnails on light
+/// tiles. The edge and the label follow the shell's tokens
+/// (src-ui/app.css): `--border` or `--border-strong`, `--fg-muted`.
 pub fn library_colours(light: bool) -> ([f32; 4], [f32; 4], [f32; 4]) {
     let hex = |c: u32| [((c >> 16) & 0xff) as f32 / 255.0, ((c >> 8) & 0xff) as f32 / 255.0, (c & 0xff) as f32 / 255.0, 1.0];
-    if light { (hex(0xf3f3f3), hex(0xe5e5e5), hex(0x616161)) } else { (hex(0x2a2b2e), hex(0x3c3c3c), hex(0x9d9d9d)) }
+    if light { (hex(0xf3f3f3), hex(0xe5e5e5), hex(0x616161)) } else { (hex(0xd6d6d6), hex(0x3c3c3c), hex(0x9d9d9d)) }
 }
 
 /// The ops building the Library tab's session composition: a grid of
@@ -341,7 +345,7 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
         words.content = Slot::Const(Value::Str(entry.name.into()));
         let mut font = Font::default();
         font.size = n(12.0);
-        ops.push(Op::Create { id: label, ty: ty("text"), parent: Some(cell), order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![at(2.0, card_h + 6.0).wrap(), words.wrap(), font.wrap(), paint(ink), named("label")] });
+        ops.push(Op::Create { id: label, ty: ty("text"), parent: Some(cell), order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![at(0.0, card_h + 6.0).wrap(), words.wrap(), font.wrap(), paint(ink), named("label")] });
     }
     ops
 }

@@ -133,9 +133,9 @@
             <button class="now" title={row.state.running ? `At the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : "At the playhead. Click to edit this component's states"} onclick={() => openLane(row.target)}>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</button>
           {/if}
           <span class="keys">
-            <IconButton icon={ChevronLeft} size={12} label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
-            <IconButton icon={Diamond} size={12} label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => keyRow(row)} data-key="toggle" />
-            <IconButton icon={ChevronRight} size={12} label="Next key of {row.label}" title="Next key" onclick={() => key("next", row.clip)} data-key="next" />
+            <IconButton icon={ChevronLeft} size={12} class="is-row" label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
+            <IconButton icon={Diamond} size={12} class="is-row" label={row.keyed ? `Remove the key of ${row.label} here` : `Add a key of ${row.label} here`} title={row.keyed ? "Remove the key at the playhead" : "Add a key at the playhead"} pressed={row.keyed} onPressedChange={() => keyRow(row)} data-key="toggle" />
+            <IconButton icon={ChevronRight} size={12} class="is-row" label="Next key of {row.label}" title="Next key" onclick={() => key("next", row.clip)} data-key="next" />
           </span>
         {/if}
       </div>
@@ -232,7 +232,7 @@
     cursor: pointer;
     max-width: 76px;
     padding: 1px 6px;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full);
     background: var(--hover);
     color: var(--fg);
     overflow: hidden;
@@ -245,11 +245,5 @@
   .keys {
     display: flex;
     margin-left: auto;
-  }
-  /* A row is 22 px: its key buttons are the compact icon button, 2 px
-     smaller so they fit it. */
-  .keys :global(.property-icon) {
-    width: calc(var(--control-h-sm) - 4px);
-    height: calc(var(--control-h-sm) - 4px);
   }
 </style>

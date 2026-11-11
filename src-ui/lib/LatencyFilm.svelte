@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import BevyPanel from './BevyPanel.svelte';
+  import Button from './ui/Button.svelte';
+  import Checkbox from './ui/Checkbox.svelte';
+  import TextInput from './ui/TextInput.svelte';
   import { controllerManager } from '../controller-manager.svelte';
   import { pixelRatio } from '../runtime/settings.svelte';
   import { isNativeHost } from '../runtime/native_host';
@@ -21,7 +24,8 @@
   let prepared = -1;
   let alive = true;
   let continuous = $state(false);
-  let cameraFps = $state(240);
+  let cameraText = $state('240');
+  const cameraFps = $derived(Number(cameraText));
 
   type Saved = {
     nodes: Record<string, { ty: string; parent?: string; tombstoned?: number }>;
@@ -75,8 +79,7 @@
       void prepare(generation);
     }
   });
-  async function setContinuous(event: Event) {
-    const next = (event.currentTarget as HTMLInputElement).checked;
+  async function setContinuous(next: boolean) {
     try {
       const result = await doc.command<{ok:boolean;error?:string}>({op:'set_run_mode',source:composition,mode:next?'always':'auto'});
       if (!result.ok) throw new Error(result.error ?? 'Could not change run mode');
@@ -124,10 +127,10 @@
 <section class="film" data-latency-film data-ready={ready && !busy} data-shape={shape}>
   <header>
     <div class="heading"><strong>Iron · latency filming</strong><span>{label}</span>
-      <button disabled={busy || !controllerManager.isInitialized} onclick={() => prepare(doc.generation,true)}>Reset target</button>
-      <label><input type="checkbox" checked={continuous} disabled={!ready || busy} onchange={setContinuous}/> Continuous rendering</label>
-      <label>Camera fps <input class="fps" type="number" min="30" max="10000" bind:value={cameraFps}/></label>
-      <button disabled={!ready || busy || !cameraFps || cameraFps < 30} onclick={exportSetup}>Export setup</button>
+      <Button variant="outline" small disabled={busy || !controllerManager.isInitialized} onclick={() => prepare(doc.generation,true)}>Reset target</Button>
+      <Checkbox label="Continuous rendering" checked={continuous} disabled={!ready || busy} onChange={setContinuous} />
+      <label class="fps-row">Camera fps <TextInput class="fps" type="number" min="30" max="10000" bind:value={cameraText} /></label>
+      <Button variant="outline" small disabled={!ready || busy || !cameraFps || cameraFps < 30} onclick={exportSetup}>Export setup</Button>
     </div>
     <div class="legend">{#if layerProbe}<span class="green">◆ Bevy sprite −192 px</span>{/if}<span class="cyan">○ DOM −96 px</span><span class="magenta">＋ Engine +96 px</span><span class="yellow">■ Normal document drag</span></div>
     <p>Grab the yellow square at its centre and drag horizontally along the guide. Keep the OS cursor visible. Film the screen at 240 fps or faster; use the same window size and monitor for each run.</p>
@@ -142,15 +145,17 @@
 </section>
 
 <style>
-  .film{height:100%;display:flex;flex-direction:column;color:#f4f4f4;font:14px/1.4 system-ui,sans-serif;pointer-events:none}
-  header{background:#17191d;padding:12px 20px;flex:none;border-bottom:1px solid #555;pointer-events:auto}
-  .heading,.legend{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-  .heading span{color:#bbb}.legend{margin-top:8px;font-weight:700}
-  p{margin:6px 0 0}.note{font-size:12px;color:#b9bec8}
-  button{background:#343943;border:1px solid #687080;border-radius:4px;padding:5px 9px;color:white;cursor:pointer}
-  button:disabled{opacity:.5;cursor:default}label{display:flex;align-items:center;gap:5px}.fps{width:66px;color:black;background:white}
-  .green{color:#00d232}.cyan{color:#00cce7}.magenta{color:#ff00aa}.yellow{color:#ffd600}.error{color:#ff8e8e}
+  /* The page's chrome in the app's tokens; the legend's colours are the
+     markers' own (check-latency-film.py finds them by colour). */
+  .film{height:100%;display:flex;flex-direction:column;color:var(--fg);font-size:var(--text-lg);line-height:1.4;pointer-events:none}
+  header{background:var(--bg-chrome);padding:12px var(--panel-pad);flex:none;border-bottom:1px solid var(--border);pointer-events:auto}
+  .heading,.legend{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .heading span{color:var(--fg-muted)}.legend{margin-top:8px;font-weight:600}
+  p{margin:6px 0 0}.note{font-size:var(--text-md);color:var(--fg-muted)}
+  .fps-row{display:flex;align-items:center;gap:6px;font-size:var(--text-md)}
+  .fps-row :global(.fps){width:72px}
+  .green{color:#00d232}.cyan{color:#00cce7}.magenta{color:#ff00aa}.yellow{color:#ffd600}.error{color:var(--danger)}
   .test-stage{position:relative;flex:1;min-height:120px;overflow:hidden}
-  .guide{position:absolute;top:50%;left:0;right:0;border-top:1px dashed #8888;pointer-events:none}
+  .guide{position:absolute;top:50%;left:0;right:0;border-top:1px dashed var(--border-strong);pointer-events:none}
   .dom-ring{position:fixed;left:0;top:0;width:24px;height:24px;box-sizing:border-box;border:4px solid #00cce7;border-radius:50%;outline:2px solid black;visibility:hidden;pointer-events:none;z-index:2;will-change:transform}
 </style>

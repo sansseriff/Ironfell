@@ -11,6 +11,21 @@
 
   let { api }: { api: DockviewPanelApi } = $props();
   let open = $state(false);
+  // The pill paints only while the pointer is in the group's top strip (a
+  // panel header's height), so a bare group shows no stray nub at rest.
+  let near = $state(false);
+  $effect(() => {
+    const el = (api.group as unknown as { element: HTMLElement }).element;
+    const strip = parseFloat(getComputedStyle(el).getPropertyValue("--panel-header-h")) || 36;
+    // On the window: over a canvas view the pointer's events go to the canvas.
+    const move = (e: PointerEvent) => {
+      const r = el.getBoundingClientRect();
+      const inside = e.clientX >= r.left && e.clientX < r.right && e.clientY >= r.top && e.clientY < r.top + strip;
+      if (inside !== near) near = inside;
+    };
+    window.addEventListener("pointermove", move, { passive: true });
+    return () => window.removeEventListener("pointermove", move);
+  });
   const views = () => api.group.panels.map((p) => ({ id: p.id, title: p.title ?? p.id, active: p.id === api.id }));
 
   // A press hands the drag to dockview: its own pointer drag starts from a
@@ -27,7 +42,7 @@
   }
 </script>
 
-<div class="grab canvas-ui">
+<div class="grab canvas-ui" class:near>
   <DropdownMenu.Root bind:open>
     <!-- The menu's anchor: Bits' trigger opens on pointerdown and cancels it,
          which would stop the browser's drag, so the pill is a plain button
@@ -55,7 +70,7 @@
 
 <style>
   /* Collapsed, the hit area is a 10 px strip at the view's top edge, clear
-     of a panel header's controls (centred in its 40 px row); hovered, open
+     of a panel header's controls (centred in its 36 px row); hovered, open
      or focused it grows down to the full pill. Growing never moves the
      target away from the pointer, so it cannot flicker. */
   .grab { position: absolute; top: 0; left: 50%; width: 40px; height: 10px; transform: translateX(-50%); z-index: 5; pointer-events: auto; }
@@ -66,7 +81,9 @@
   /* The full-size button remains the hit area. Only its painted pill grows,
      so hovering near the collapsed edge cannot move the pointer target. */
   .grab-pill { position: relative; display: grid; place-items: center; width: 40px; height: 100%; padding: 0; border: 0; background: transparent; color: var(--fg-muted); cursor: grab; }
-  .grab-pill::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 18px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--bg-chrome); transform: scaleY(0.45); transform-origin: top; opacity: 0.75; pointer-events: none; transition: transform 150ms ease, opacity 150ms ease; }
+  .grab-pill::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 18px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); background: var(--bg-chrome); transform: scaleY(0.45); transform-origin: top; opacity: 0; pointer-events: none; transition: transform 150ms ease, opacity 150ms ease; }
+  /* The pointer near the group's top: a hint of the pill, where it will grow. */
+  .grab.near .grab-pill::before { opacity: 0.75; }
   .grab-pill :global(svg) { position: relative; opacity: 0; transition: opacity 150ms ease; }
   .grab:hover .grab-pill::before, .grab-pill.open::before, .grab-pill:focus-visible::before { transform: scaleY(1); opacity: 1; }
   .grab:hover .grab-pill :global(svg), .grab-pill.open :global(svg), .grab-pill:focus-visible :global(svg) { opacity: 1; }

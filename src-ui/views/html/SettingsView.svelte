@@ -137,8 +137,9 @@
 
   <Section title="Build">
     {#if build}
-      <p class:slow={!build.fast} class="build">
-        {build.profile} · opt {build.opt} · {build.simd ? "SIMD" : "no SIMD"} · {build.gfx}{build.fast ? "" : " — slow, not for timing"}
+      <p class="build">
+        <span>{build.profile} · opt {build.opt} · {build.simd ? "SIMD" : "no SIMD"} · {build.gfx}</span>
+        {#if build.fast}<span class="ui-badge is-ok">optimized</span>{:else}<span class="ui-badge is-warning">slow</span><span class="unfit">not for timing</span>{/if}
       </p>
       {#if !native}<p class="note">bun run wasm:fast builds the optimized one, bun run wasm the dev one.</p>{/if}
     {/if}
@@ -153,6 +154,11 @@
     padding: 0 !important;
     gap: 0 !important;
   }
+  /* A settings page reads as a column, not a 1000 px line: the rules run
+     the panel's width, the content stops at 560 px. */
+  .settings :global(.ui-section > *) {
+    max-width: 560px;
+  }
   .setting {
     display: flex;
     align-items: center;
@@ -163,25 +169,30 @@
   }
   .setting > span {
     min-width: 0;
-    color: var(--fg-muted);
+    color: var(--fg);
   }
   .setting :global(.ui-select-trigger) {
     flex: 0 0 auto;
     width: 160px;
   }
   .note {
-    color: var(--fg-faint);
+    color: var(--fg-muted);
     font-size: var(--text-sm);
     line-height: 1.5;
     margin: 0;
   }
   .build {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
     font-family: var(--font-mono);
     font-size: var(--text-sm);
-    color: var(--ok);
-    margin: 0;
+    color: var(--fg);
   }
-  .build.slow {
-    color: var(--danger);
+  .unfit {
+    color: var(--fg-muted);
+    font-family: inherit;
   }
 </style>

@@ -44,8 +44,14 @@
   // A Figma-style colour picker for one colour leaf: a saturation/brightness
   // square, hue and alpha sliders, an eyedropper, typed values (Hex, RGB, HSL,
   // HSB) and the composition's colours as swatches. A drag is one gesture
-  // (`inspect_scrub`, channel "color"): live on the canvas, one undo step.
+  // (`inspect_scrub`, channel "color"): live on the canvas, one undo step;
+  // with `scrub` off it previews here and sets once on release.
+  // `swatch` makes it the app's one colour control: a swatch button that
+  // opens the picker in a popover (no native colour input anywhere).
   import { onDestroy, untrack } from "svelte";
+  import { Popover } from "bits-ui";
+  import Self from "./ColorPicker.svelte";
+  import X from "@lucide/svelte/icons/x";
   import Pipette from "@lucide/svelte/icons/pipette";
   import Plus from "@lucide/svelte/icons/plus";
   import Pencil from "@lucide/svelte/icons/pencil";
@@ -56,9 +62,15 @@
   import type { Property } from "./PropertyField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
 
-  let { field, node, swatches = [], onSet, onRefresh, onError }: {
+  let { field, node, swatches = [], onSet, onRefresh, onError, scrub = true, tokens: showTokens = true, swatch = false, label = "Colour", heading = undefined, side = "left" }: {
     field: Property; node: string; swatches?: string[];
     onSet: (field: Property, text: string) => void; onRefresh: () => void; onError: (error: string) => void;
+    /** Drags preview live on the canvas (`inspect_scrub`); off, they set once on release. */
+    scrub?: boolean;
+    /** The document's colour tokens (binding the colour to one). */
+    tokens?: boolean;
+    /** A swatch button (named `label`) that opens the picker in a popover (titled `heading`). */
+    swatch?: boolean; label?: string; heading?: string; side?: "left" | "right" | "top" | "bottom";
   } = $props();
   const doc = controllerManager.docClient;
   const locked = $derived(field.edit === "locked");
@@ -88,8 +100,9 @@
 
   function begin() {
     onError("");
-    const s: Session = { leaf: field.leaf, token: 0, failed: false, begun: Promise.resolve(), sending: false, next: null };
+    const s: Session = { leaf: field.leaf, token: 0, failed: !scrub, begun: Promise.resolve(), sending: false, next: null };
     session = s;
+    if (!scrub) return;
     s.begun = doc.command({ op: "inspect_scrub", node, leaf: s.leaf, phase: "begin", token: 0, value: 0, options }).then((r) => {
       if (!r.ok) throw new Error(r.error);
       s.token = r.token;
@@ -226,7 +239,7 @@
     const r = await doc.command<{ dark: boolean; tokens: Token[] }>({ op: "tokens" }).catch(() => null);
     if (r?.tokens) { tokens = r.tokens; dark = r.dark; }
   }
-  $effect(() => { void loadTokens(); });
+  $effect(() => { if (showTokens) void loadTokens(); });
   const current = $derived(field.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null);
   const own = $derived(tokens.filter((t) => t.id));
   function useToken(name: string) { onSet(field, `=@${name}`); }
@@ -263,6 +276,7 @@
   }
 </script>
 
+{#snippet picker()}
 <div class="color-picker" class:locked title={field.why ?? undefined}>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div class="sv" role="slider" tabindex={locked ? -1 : 0} aria-label="Saturation and brightness" aria-valuetext="saturation {Math.round(color.s * 100)}%, brightness {Math.round(color.v * 100)}%" aria-valuenow={Math.round(color.s * 100)}
@@ -306,6 +320,7 @@
   </div>
 </div>
 
+{#if showTokens}
 <div class="swatches-section tokens">
   <div class="swatches-title tokens-head">
     <span>Tokens</span>
@@ -326,8 +341,11 @@
       {#each own as t (t.id)}
         <div class="token-row">
           <input class="ui-input token-name" aria-label="Name of @{t.name}" value={t.name} spellcheck="false" onchange={(e) => editToken(t, "name.text", e.currentTarget.value)} />
-          <label title="Light theme"><span>Light</span><input type="color" value={t.light.slice(0, 7)} onchange={(e) => editToken(t, "token.light", e.currentTarget.value)} /></label>
-          <label title="Dark theme"><span>Dark</span><input type="color" value={t.dark.slice(0, 7)} onchange={(e) => editToken(t, "token.dark", e.currentTarget.value)} /></label>
+          {#each [{ leaf: "token.light", name: "Light", text: t.light }, { leaf: "token.dark", name: "Dark", text: t.dark }] as v (v.leaf)}
+            <Self swatch scrub={false} tokens={false} label="@{t.name} {v.name}" node={t.id ?? ""} {onRefresh} {onError}
+              field={{ leaf: v.leaf, field: v.leaf.slice(6), kind: "color", text: v.text, bind: null, edit: "direct", via: null, why: null }}
+              onSet={(f, text) => editToken(t, f.leaf, text)} />
+          {/each}
         </div>
       {/each}
     </div>
@@ -341,6 +359,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 {#if swatches.length}
   <div class="swatches-section">
@@ -354,6 +373,23 @@
     </div>
   </div>
 {/if}
+{/snippet}
+
+{#if swatch}
+  <Popover.Root>
+    <Popover.Trigger class="color-swatch" aria-label={label} title="{label}: {(field.text ?? '').slice(0, 7).toUpperCase()}" disabled={locked}>
+      <span class="color-chip" style:background={field.text ?? "transparent"}></span>
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Content class="property-popover color-popover" {side} align="start" sideOffset={12} aria-label={label}>
+        <header><strong>{heading ?? label}</strong><Popover.Close class="property-icon" aria-label="Close {heading ?? label}"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
+        {@render picker()}
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
+{:else}
+  {@render picker()}
+{/if}
 
 <style>
   .color-picker { display: flex; flex-direction: column; gap: 14px; padding: var(--panel-pad); }
@@ -364,7 +400,7 @@
     box-shadow: 0 0 0 3px #fff, 0 0 0 4px rgba(0, 0, 0, .25), 0 1px 4px 3px rgba(0, 0, 0, .25); }
   .sliders { display: flex; align-items: center; gap: 8px; }
   .tracks { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 0 7px; }
-  .track { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
+  .track { position: relative; height: 12px; border-radius: var(--radius-full); cursor: pointer; touch-action: none; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
   .track .thumb { top: 50%; width: 12px; height: 12px; }
   .hue { background: linear-gradient(to right, #f00 0%, #ff0 16.67%, #0f0 33.33%, #0ff 50%, #00f 66.67%, #f0f 83.33%, #f00 100%); }
   .alpha, .swatch span { background-color: #fff; background-image: linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%), linear-gradient(45deg, #ccc 25%, transparent 25%, transparent 75%, #ccc 75%); background-size: 8px 8px; background-position: 0 0, 4px 4px; }
@@ -399,7 +435,13 @@
   .token-new { display: flex; gap: 6px; }
   .token-new input, .token-name { flex: 1; }
   .token-rows { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow: auto; }
-  .token-row { display: flex; gap: 6px; align-items: center; }
-  .token-row label { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: var(--text-xs); }
-  .token-row input[type="color"] { width: 24px; height: 24px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; cursor: pointer; }
+  .token-row { display: flex; gap: 4px; align-items: center; }
+  /* The swatch button (`swatch`): a chip in a 24 px square, inside a field
+     (the paint row, a colour property) or alone (a token's light and dark). */
+  :global(.color-swatch) { display: grid; place-items: center; flex: 0 0 auto; width: var(--control-h-sm); height: var(--control-h-sm); padding: 0; border: 0; border-radius: var(--radius); background: transparent; cursor: pointer; }
+  :global(.color-swatch:hover:not(:disabled)) { background: var(--hover); }
+  :global(.color-swatch:disabled) { opacity: 0.4; cursor: default; }
+  :global(.color-swatch[data-state="open"]) { background: var(--active); }
+  :global(.color-chip) { display: block; width: 14px; height: 14px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  :global(.property-popover.color-popover) { width: 240px; }
 </style>

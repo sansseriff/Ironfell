@@ -248,13 +248,13 @@
           <span class="pill" class:rec={recording(m, s)} class:on={f.kind === "state" && f.state === s}>
             {#if renaming === st?.id}
               <!-- svelte-ignore a11y_autofocus -->
-              <input class="rename" aria-label="Rename {s}" value={s} autofocus
+              <input class="ui-input rename" aria-label="Rename {s}" value={s} autofocus
                 onkeydown={(e) => { if (e.key === "Escape") renaming = null; else if (e.key === "Enter") e.currentTarget.blur(); }}
                 onblur={(e) => { const v = e.currentTarget.value.trim(); renaming = null; if (st && v && v !== s) void run(machines.author("rename_state", { state: st.id, name: v })); }} />
             {:else}
               <button class="pill-main" aria-pressed={recording(m, s)} onclick={() => editState(m, s)} ondblclick={() => (renaming = st?.id ?? null)}
                 title={recording(m, s) ? `Editing ${s}: edits to the parts go into it` : `Edit ${s}'s look (double-click to rename)`}>
-                {#if recording(m, s)}<span class="dot"></span>{/if}{s}{#if m.default === s}<span class="def" title="The default state: new instances start in it"><House size={10} strokeWidth={2} /></span>{/if}
+                {#if recording(m, s)}<span class="dot"></span>{/if}{s}{#if m.default === s}<span class="def" title="The default state: new instances start in it"><House size={10} strokeWidth={1.75} /></span>{/if}
               </button>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger class="property-icon pill-menu" aria-label="{s} options" title="Rename, make default, delete"><Ellipsis size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
@@ -274,9 +274,9 @@
             {@const back = between(m, next, s)}
             {@const f2 = focusOf(m)}
             <span class="gap">
-              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}>{#if i === names(m).length - 1}<span class="loop">↺ {next}</span>{:else}<ArrowRight size={11} strokeWidth={2} />{/if}</button>
+              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}>{#if i === names(m).length - 1}<span class="loop">↺ {next}</span>{:else}<ArrowRight size={11} strokeWidth={1.75} />{/if}</button>
               {#if i < names(m).length - 1}
-                <button class="arrow back" class:shared={back.shared} class:none={!back.t} class:on={f2.kind === "pair" && f2.from === next && f2.to === s} onclick={() => timePair(m, next, s)} title={back.label} aria-label={back.label}><ArrowRight size={11} strokeWidth={2} /></button>
+                <button class="arrow back" class:shared={back.shared} class:none={!back.t} class:on={f2.kind === "pair" && f2.from === next && f2.to === s} onclick={() => timePair(m, next, s)} title={back.label} aria-label={back.label}><ArrowRight size={11} strokeWidth={1.75} /></button>
               {/if}
             </span>
           {/if}
@@ -483,26 +483,27 @@
 
 <style>
   .state-editor { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); font-size: var(--text-md); pointer-events: auto; user-select: none; overflow: hidden; z-index: 3; }
-  .head { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; }
+  .head { display: flex; align-items: center; gap: 6px; height: var(--panel-header-h); padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; }
   .crumb { gap: 2px; padding-left: 2px; color: var(--fg-muted); }
   .head :global(.sep) { flex: none; color: var(--fg-faint); }
   .comp { font-weight: 600; margin-right: 6px; }
   .grow { flex: 1; }
   .error { color: var(--danger); font-size: var(--text-sm); max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-  .paused { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: 12px; background: color-mix(in srgb, var(--record) 16%, transparent); font-size: var(--text-sm); }
+  .paused { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--record) 16%, transparent); font-size: var(--text-sm); }
   .empty { padding: 12px 14px; }
   .muted { color: var(--fg-muted); }
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--record); margin-right: 5px; }
 
-  .pills { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-  .pill { display: inline-flex; align-items: center; height: 24px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-sunken); }
+  .pills { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; }
+  .pill { display: inline-flex; align-items: center; height: var(--control-h-sm); border: 1px solid var(--border-strong); border-radius: var(--radius-full); background: var(--bg-sunken); }
   .pill.on { border-color: var(--accent); }
   .pill.rec { border-color: var(--record); background: color-mix(in srgb, var(--record) 16%, transparent); }
   .pill-main { display: inline-flex; align-items: center; height: 22px; padding: 0 4px 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; }
   .def { display: inline-grid; place-items: center; color: var(--fg-muted); margin-left: 4px; }
   /* An icon button inside a 24 px pill. */
-  .pill :global(.pill-menu) { width: 20px; height: 20px; margin-right: 1px; border-radius: 10px; }
-  .rename { width: 90px; height: 20px; margin: 0 4px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 10px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; outline: none; }
+  .pill :global(.pill-menu) { width: 20px; height: 20px; margin-right: 1px; border-radius: var(--radius-full); }
+  /* The rename field (`.ui-input`) covers its 24 px pill, border and all. */
+  .rename { width: 96px; min-height: var(--control-h-sm); height: var(--control-h-sm); margin: -1px; border-radius: var(--radius-full); font-weight: 600; }
   .gap { display: inline-flex; flex-direction: column; gap: 1px; margin: 0 1px; }
   .arrow { display: grid; place-items: center; min-width: 26px; height: 13px; padding: 0; border: 1px solid transparent; border-radius: var(--radius); background: transparent; color: var(--fg-muted); cursor: pointer; }
   .arrow.back :global(svg) { transform: scaleX(-1); }
@@ -553,7 +554,7 @@
   .out-meta { color: var(--fg-muted); font-size: var(--text-sm); white-space: nowrap; }
 
   .tracks { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-  .toolbar { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; }
+  .toolbar { display: flex; align-items: center; gap: 6px; height: var(--panel-header-h); padding: 0 8px; border-bottom: 1px solid var(--border); flex: none; white-space: nowrap; }
   .pair-pick { width: 170px; flex: none; }
   .pair-pick :global(button) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ms { gap: 4px; padding: 0 8px; color: var(--fg-muted); font-size: var(--text-sm); }
@@ -562,7 +563,7 @@
   .toolbar .ease { width: 150px; flex: none; }
   .tsep { width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
   .fx { color: var(--accent); font-style: italic; }
-  .scope { font-size: var(--text-sm); padding: 2px 8px; border-radius: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scope { font-size: var(--text-sm); padding: 2px 8px; border-radius: var(--radius-full); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .scope.shared { background: color-mix(in srgb, var(--record) 16%, transparent); }
   .scope.own { background: var(--accent-soft); }
   .hint { color: var(--fg-muted); font-size: var(--text-sm); margin-left: auto; white-space: nowrap; }

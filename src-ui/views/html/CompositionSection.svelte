@@ -4,6 +4,7 @@
   import Select from "../../lib/ui/Select.svelte";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import PaintRow from "../../lib/ui/PaintRow.svelte";
+  import Section from "../../lib/ui/Section.svelte";
 
   const doc = controllerManager.docClient;
   const entries = $derived(doc.compositions.filter(c => !c.session));
@@ -55,8 +56,7 @@
 {/snippet}
 
 {#if current && fields.length}
-  <section class="ui-section" aria-label="Composition settings" data-section="composition">
-    <header class="ui-section-header"><strong>Composition</strong><span class="ui-section-meta" title={current.name ?? current.id}>{current.name ?? current.id}</span></header>
+  <Section title="Composition" meta={current.name ?? current.id} aria-label="Composition settings" data-section="composition">
     <p class="notation">{current.dims.toUpperCase()} · {text("notation")}</p>
     <!-- Labels over fields, as in every inspector section. -->
     <div class="property-grid">
@@ -78,12 +78,11 @@
       {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Visual guide only. Spacing thins out as you zoom out.</p>{/if}
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
-  </section>
+  </Section>
 {/if}
 
 <style>
   .notation, .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); line-height: 1.5; }
-  .hint { color: var(--fg-faint); }
   .setting { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .error { margin: 0; color: var(--danger); font-size: var(--text-md); }
 </style>

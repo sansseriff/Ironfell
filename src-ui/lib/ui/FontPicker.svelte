@@ -21,6 +21,7 @@
   // family drawn in its own face. Catalog families come with the app;
   // installed ones appear on the native host, previewed by the engine as
   // they scroll into view.
+  import { tick } from "svelte";
   import Check from "@lucide/svelte/icons/check";
   import Search from "@lucide/svelte/icons/search";
   import CircleX from "@lucide/svelte/icons/circle-x";
@@ -81,15 +82,28 @@
     void shown;
     queueMicrotask(previewVisible);
   });
-  // The current family in view when the list opens.
+  // The current family in view, and highlighted, when the list opens.
   $effect(() => {
     if (!list) return;
     const i = shown.findIndex((r) => r.name === value);
     if (i > 4) list.scrollTop = (i - 4) * 36;
+    highlighted = Math.max(0, i);
   });
 
+  // A menu's keyboard (as every Select's): the search keeps focus, arrows
+  // move the highlight, Enter picks it; typing filters and highlights the
+  // first match. The current family keeps its check.
+  let highlighted = $state(0);
+  async function highlight(i: number) {
+    highlighted = Math.max(0, Math.min(shown.length - 1, i));
+    await tick();
+    list?.querySelector("[data-highlighted]")?.scrollIntoView({ block: "nearest" });
+  }
+  const page = () => Math.max(1, Math.floor((list?.clientHeight ?? 360) / 36) - 1);
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Enter" && shown.length) onPick(shown[0].name);
+    const step: Record<string, number> = { ArrowDown: 1, ArrowUp: -1, PageDown: page(), PageUp: -page() };
+    if (e.key in step) { e.preventDefault(); void highlight(highlighted + step[e.key]); }
+    else if (e.key === "Enter" && shown[highlighted]) { e.preventDefault(); onPick(shown[highlighted].name); }
   }
 </script>
 
@@ -98,16 +112,18 @@
   <div class="tools">
     <div class="ui-field search">
       <Search size={14} strokeWidth={1.75} />
-      <input bind:this={search} bind:value={query} placeholder="Search fonts" aria-label="Search fonts" onkeydown={onKey} />
+      <input bind:this={search} bind:value={query} placeholder="Search fonts" aria-label="Search fonts" role="combobox" aria-expanded="true" aria-controls="font-families" aria-activedescendant={shown[highlighted] ? `font-${highlighted}` : undefined}
+        oninput={() => (highlighted = 0)} onkeydown={onKey} />
       {#if query}<IconButton icon={CircleX} label="Clear search" onclick={() => { query = ""; search?.focus(); }} />{/if}
     </div>
     <Select value={filter} items={filters} onChange={(v) => (filter = v)} label="Font filter" />
   </div>
-  <div class="list" bind:this={list} onscroll={previewVisible} role="listbox" aria-label="Font families">
-    {#each shown as row (row.name)}
+  <div class="list" id="font-families" bind:this={list} onscroll={previewVisible} role="listbox" aria-label="Font families">
+    {#each shown as row, i (row.name)}
       {@const p = previews[row.name]}
-      <button class="row" class:current={row.name === value} role="option" aria-selected={row.name === value} title={row.name} onclick={() => onPick(row.name)}>
-        <span class="check">{#if row.name === value}<Check size={14} strokeWidth={1.75} />{/if}</span>
+      <button class="ui-menu-item row" id="font-{i}" role="option" tabindex="-1" aria-selected={row.name === value} data-highlighted={i === highlighted ? "" : undefined} title={row.name}
+        onpointermove={() => (highlighted = i)} onclick={() => onPick(row.name)}>
+        <span class="ui-menu-check">{#if row.name === value}<Check size={14} strokeWidth={1.75} />{/if}</span>
         {#if p}
           <svg class="preview" viewBox="0 0 {p.w} {p.h}" width={(p.w * 20) / p.h} height="20" aria-hidden="true"><path d={p.d} /></svg>
         {:else}
@@ -126,11 +142,11 @@
   .tools { display: flex; flex-direction: column; gap: 8px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); }
   .search { gap: 6px; padding: 0 2px 0 8px; color: var(--fg-muted); }
   .search input { flex: 1; min-width: 0; height: calc(var(--control-h) - 2px); padding: 0; border: none; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); }
-  .list { overflow-y: auto; padding: 4px 0 8px; flex: 1; min-height: 120px; }
-  .row { display: flex; align-items: center; gap: 6px; width: 100%; height: 36px; padding: 0 12px 0 8px; border: none; background: transparent; color: var(--fg); cursor: pointer; text-align: left; }
-  .row:hover, .row.current { background: var(--hover); }
-  .check { width: 18px; display: flex; justify-content: center; flex: none; }
+  .list { overflow-y: auto; padding: 4px; flex: 1; min-height: 120px; }
+  /* A menu item (ui.css), 36 px tall for the face's preview. */
+  .row { width: 100%; height: 36px; border: none; font: inherit; text-align: left; }
+  .row:not([data-highlighted]) { background: transparent; color: var(--fg); }
   .preview { fill: currentColor; flex: none; max-width: 210px; }
-  .plain { font-size: var(--text-lg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .none { padding: 12px var(--panel-pad); color: var(--fg-faint); font-size: var(--text-md); }
+  .plain { font-size: var(--text-lg); }
+  .none { margin: 0; padding: 12px; color: var(--fg-muted); font-size: var(--text-md); }
 </style>

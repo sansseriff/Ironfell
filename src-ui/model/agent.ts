@@ -155,7 +155,10 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // `<look expand="#u #e"/>` with no edit: show those instances' derived
     // insides (component-model.md §9) and ask again; not a repair attempt.
     const picture = pictureRequest(executableReply(text));
-    if (picture && !extractEdit(text) && pictures < MAX_PICTURES) {
+    // A <revise> of the rejected edit is an edit too: a look beside it is taken
+    // after it applies, not instead of it.
+    const editing = !!extractEdit(text) || (!!rejected && !!extractRevise(text));
+    if (picture && !editing && pictures < MAX_PICTURES) {
       messages.push({ role: 'assistant', content: text });
       messages.push((await pictureMessage(picture)).message);
       attempts -= 1;
@@ -164,7 +167,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // Out of pictures: say so rather than end the turn on a reply with no edit.
     // Free the first time (so a prose answer still counts as the first reply);
     // after that it spends an attempt, so it cannot loop.
-    if (picture && !extractEdit(text) && !lookRequest(text) && !executableReply(text).replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim()) {
+    if (picture && !editing && !lookRequest(text) && !executableReply(text).replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim()) {
       trace.push({ attempt: attempts, kind: 'picture', source: picture, ok: false });
       messages.push({ role: 'assistant', content: text });
       messages.push({ role: 'user', content: `No more pictures this request (at most ${MAX_PICTURES}). Finish with an <edit> or with prose from what you have seen.` });
@@ -172,7 +175,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       continue;
     }
     const look = lookRequest(text);
-    if (look && !extractEdit(text) && looks < MAX_LOOKS) {
+    if (look && !editing && looks < MAX_LOOKS) {
       looks += 1;
       trace.push({ attempt: attempts, kind: 'look', ids: look });
       attempts -= 1;
@@ -184,7 +187,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // `<topic name="tables"/>` with no edit: send that part of the prompt
     // and ask again; not a repair attempt.
     const wanted = topicRequest(text);
-    if (wanted && !extractEdit(text) && topicAsks < MAX_TOPIC_ASKS) {
+    if (wanted && !editing && topicAsks < MAX_TOPIC_ASKS) {
       topicAsks += 1;
       trace.push({ attempt: attempts, kind: 'topic', names: wanted });
       attempts -= 1;

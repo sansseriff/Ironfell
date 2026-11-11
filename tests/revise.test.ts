@@ -145,6 +145,21 @@ test('a reply with a <revise> patches the rejected edit and applies it whole', a
   assert.equal(applied.length, 2);
 });
 
+test('a <revise> with a <look picture> beside it is applied, then the picture taken', async () => {
+  const { api, applied } = fakeApi((tx) => tx.ops.some((op: any) => op.id === '#P')
+    ? { ok: false, version: 14, errors: [{ op: tx.ops.length - 1, kind: 'not_found', message: '#P does not exist' }] }
+    : { ok: true, version: 15 });
+  const shots: string[] = [];
+  api.picture = async (source: string) => { shots.push(source); return { name: source, mediaType: 'image/png', data: 'iVBORw0KGgo=' }; };
+  const replies = [`Building it.\n${rejected}`, 'Dropping it.\n<revise><drop op="3"/></revise>\n<look picture="scene"/>', 'Looks right.'];
+  const transport = { name: 'script', complete: async () => ({ text: replies.shift() ?? '' }) };
+  const result = await ask(api, transport as never, 'build it');
+  assert.equal(result.ok, true);
+  assert.equal(applied.length, 2);
+  assert.deepEqual(shots, ['scene']);
+  assert.deepEqual(result.trace!.map((s) => [s.kind, (s as any).ok]), [['edit', false], ['edit', true], ['picture', true], ['prose', undefined]]);
+});
+
 test('a revise that cannot apply is reported, and the model may try again', async () => {
   const { api } = fakeApi((tx) => tx.ops.some((op: any) => op.id === '#P')
     ? { ok: false, version: 14, errors: [{ op: 3, kind: 'not_found', message: '#P does not exist' }] }

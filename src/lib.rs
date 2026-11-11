@@ -182,11 +182,15 @@ pub(crate) fn decide_redraw(
     mut meshes: MessageReader<AssetEvent<Mesh>>,
     mut materials: MessageReader<AssetEvent<crate::vector::view_composite::ViewCompositeMaterial>>,
     liveness: Option<Res<crate::document_bridge::liveness::Liveness>>,
+    // An agent's picture renders offscreen and is read back a few frames after
+    // it is requested, once its bounds hold still; nothing visible changes then.
+    captures: Query<(), With<crate::document_bridge::capture::CaptureView>>,
 ) {
     // A free-running view (plans/specs/free-running.md) renders every frame.
     let live = liveness.is_some_and(|l| l.any());
     // So does a view with tiles left to bake or a chunk about to go cold.
     let changed = live
+        || !captures.is_empty()
         || crate::vector::raster::pending()
         || texture_cameras.iter().any(|c| c.is_active)
         || !lists.is_empty()

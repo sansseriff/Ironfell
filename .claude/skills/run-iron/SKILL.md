@@ -3271,7 +3271,13 @@ to 2026-11-09 (a test called the crate-private `NodeId::from_raw`) because no
 routine check builds it; run it after changing Rust in the `ironfell` crate.
 Agent-log check: call records keep image references, and images are files under
 the log folder's `images/` (`tests/agent-runtime.test.ts`).
-Captures and chat screenshots are in `.agents/vision/` (ignored). Native package
+Captures and chat screenshots are in `.agents/vision/` (ignored). Until 2026-11-10 every capture
+on an idle app failed with `picture capture expired or document changed` after 600
+frames: render on demand stopped drawing three frames after the capture view was
+added, before its readback was queued, so it only worked while something else kept
+the engine rendering (this test captures during boot). `decide_redraw` now renders
+while a `CaptureView` exists; a capture takes ~105 ms. `agent-probe.ts` is the check
+that catches it (a live turn that asks the agent to look). Native package
 and live-provider inference are separate checks and were not run for this change.
 The existing fast smoke, regression and gestures expected outputs are unchanged;
 all passed on the branch rebased onto `a3880ee`.

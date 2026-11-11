@@ -921,6 +921,9 @@ facets! {
         background_color: Color = Value::Color([1.0, 1.0, 1.0, 1.0]),
         grid: Enum = Value::Enum("off".to_owned()) => ["off", "lines", "dots"],
         grid_spacing: Number = Value::Number(20.0),
+        // Moving, resizing and drawing shapes snap to the shown grid's
+        // points (document px, `grid_spacing` apart).
+        grid_snap: Bool = Value::Bool(true),
     }
 
     @dynamic {

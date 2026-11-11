@@ -17,6 +17,10 @@ Icons: import each Lucide icon from its own path only,
 Breaking changes are welcome: never keep backwards compatibility, no migrations or
 shims; a format change bumps the schema and old files stop loading (AGENTS.md).
 
+Rust builds and Rust tests (`build.sh`, `cargo build`, `cargo test`), however long,
+run without asking unless the user's first message asks for confirmations; check in
+before other steps over a minute (AGENTS.md, "Start here").
+
 Council: two members only, the latest Claude Opus and the latest GPT Sol, at high
 effort. Don't require a third provider (AGENTS.md, "Council review").
 

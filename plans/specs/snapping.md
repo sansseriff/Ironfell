@@ -91,6 +91,10 @@ so dragging out the new point's handles keeps it where it snapped.
    composition settings menu, which needs a `web_ffi` export and an `engine_dispatch`
    arm; optional rounding to the pixel grid; moving the port snap onto the same core.
 
+Since 2026-11-11 the composition's shown grid is a target too
+(`composition.grid_snap`, [`panels-and-session.md`](panels-and-session.md#grid-snapping-and-cheap-dots-2026-11-11)):
+moves, resizes and the shape tools snap to grid points in place of objects.
+
 ## 4. Known limits
 
 - **Constraint clusters.** A solved drag moves the cluster's other nodes and may not

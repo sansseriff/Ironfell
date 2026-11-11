@@ -12,10 +12,12 @@ which plans are historical. Where plans disagree, that index decides.
 - Record completed work in `plans/roadmap.md`'s Status table and the owning plan.
 - End commit messages with the `Co-Authored-By` line the session gives you. Git
   workflow (branches, pushing, PRs) is under "Branches, pushing and merging" below.
-- Check in with the user before running a step that takes over a minute: rebuilds,
-  the full smoke, cold test runs. Typical times are in the run-iron skill's
-  "Typical durations" table (marked ⏱); say which step and its estimate, and add or
-  correct a row when a step's time is new or off.
+- Rust builds and Rust test runs (`build.sh`, `cargo build`, `cargo test`, native
+  builds), cold or warm, need no check-in: run them, unless the user's first message
+  in the task asks you to confirm first. Check in before any other step that takes
+  over a minute (the full smoke, `gestures.txt`, latency measurements): say which
+  step and its estimate. Typical times are in the run-iron skill's "Typical
+  durations" table (marked ⏱); add or correct a row when a step's time is new or off.
 
 ## Breaking changes are welcome
 

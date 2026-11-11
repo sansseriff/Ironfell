@@ -69,8 +69,10 @@ struct TextPress {
 pub struct EditRequest {
     pub id: NodeId,
     pub panel: String,
-    /// The container's space → window px (without the node's own placement).
-    pub base: Affine,
+    /// The container's space → the panel's document px (without the node's
+    /// own placement). The view's pan and zoom are applied each frame, so
+    /// the edit follows the camera.
+    pub space: Affine,
     /// Where the pointer was, window px: the caret goes there (a double
     /// click selects the word). `None` selects everything.
     pub at: Option<Point>,
@@ -81,7 +83,8 @@ pub struct EditRequest {
 pub struct TextEdit {
     pub id: NodeId,
     pub panel: String,
-    base: Affine,
+    /// As [`EditRequest::space`].
+    space: Affine,
     draft: String,
     /// The draft's style runs, carried across each edit.
     runs: Vec<iron_text::StyleRun>,
@@ -98,6 +101,7 @@ pub struct TextTool {
     pub edit: Option<TextEdit>,
     pub request: Option<EditRequest>,
     /// A node made by the tool, to edit once its transaction has applied.
+    /// Its container's space → the panel's document px.
     made: Option<(NodeId, String, Affine)>,
     pub inputs: Vec<TextInput>,
     /// What the host was last told, so it hears only of changes.
@@ -223,8 +227,8 @@ pub fn text_tool_system(
                 match lone {
                     Some(r) => {
                         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-                        if let (Some(view), Some(space)) = (views.get(&r.panel), geo.space(&r.chain)) {
-                            text.request = Some(EditRequest { id: r.node(), panel: r.panel.clone(), base: view.affine() * space, at: None, created: None });
+                        if let (Some(_), Some(space)) = (views.get(&r.panel), geo.space(&r.chain)) {
+                            text.request = Some(EditRequest { id: r.node(), panel: r.panel.clone(), space, at: None, created: None });
                         }
                     }
                     None => rest.push((key, m)),
@@ -244,11 +248,11 @@ pub fn text_tool_system(
     // Enter on a grid's cell: edit it, all its words selected.
     if let Some((id, at)) = select.enter_edit.take()
         && let Some(r) = select.reach.get(&id)
-        && let Some(view) = views.get(&r.panel)
+        && views.get(&r.panel).is_some()
     {
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
         if let Some(space) = geo.space(&r.chain) {
-            text.request = Some(EditRequest { id, panel: r.panel.clone(), base: view.affine() * space, at, created: None });
+            text.request = Some(EditRequest { id, panel: r.panel.clone(), space, at, created: None });
             text.last_press = None;
         }
     }
@@ -267,10 +271,9 @@ pub fn text_tool_system(
         {
             let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
             if let Some(space) = geo.space(&r.chain) {
-                let base = view.affine() * space;
-                let local = (base * geo.world(id)).inverse() * screen;
+                let local = (view.affine() * space * geo.world(id)).inverse() * screen;
                 if iron_document::text::measure(&store.0, id).frame.contains(local) {
-                    text.request = Some(EditRequest { id, panel: r.panel.clone(), base, at: Some(screen), created: None });
+                    text.request = Some(EditRequest { id, panel: r.panel.clone(), space, at: Some(screen), created: None });
                     text.last_press = None;
                 }
             }
@@ -278,12 +281,12 @@ pub fn text_tool_system(
     }
 
     // A node the tool made, once it exists.
-    if let Some((id, panel, base)) = text.made.take() {
+    if let Some((id, panel, space)) = text.made.take() {
         if store.0.document().live(id).is_some() {
             let created = Some(store.0.document().version());
-            text.request = Some(EditRequest { id, panel, base, at: None, created });
+            text.request = Some(EditRequest { id, panel, space, at: None, created });
         } else if pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id))) {
-            text.made = Some((id, panel, base));
+            text.made = Some((id, panel, space));
         }
     }
 
@@ -294,11 +297,11 @@ pub fn text_tool_system(
         }
         if editable(&store.0, req.id) {
             let draft = iron_document::text::content(&store.0, req.id);
-            let (anchor, focus) = match req.at {
-                Some(at) => {
+            let (anchor, focus) = match req.at.zip(views.get(&req.panel)) {
+                Some((at, view)) => {
                     let m = iron_document::text::measure_with(&store.0, req.id, &draft, &iron_document::text::runs(&store.0, req.id));
                     let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-                    let local = (req.base * geo.world(req.id) * Affine::translate(m.offset)).inverse() * at;
+                    let local = (view.affine() * req.space * geo.world(req.id) * Affine::translate(m.offset)).inverse() * at;
                     m.layout.word_at(local.x, local.y)
                 }
                 None => (0, draft.len()),
@@ -307,7 +310,7 @@ pub fn text_tool_system(
             sel.selected = vec![req.id];
             *active = ActiveTool::Text;
             let runs = iron_document::text::runs(&store.0, req.id);
-            text.edit = Some(TextEdit { id: req.id, panel: req.panel, base: req.base, draft, runs, anchor, focus, created: req.created, selecting: false });
+            text.edit = Some(TextEdit { id: req.id, panel: req.panel, space: req.space, draft, runs, anchor, focus, created: req.created, selecting: false });
             text.press = None;
         }
     }
@@ -330,9 +333,15 @@ pub fn text_tool_system(
         store.0.cancel_gesture();
         return;
     }
+    // The view's pan and zoom now, so the edit follows the camera.
+    let Some(base) = views.get(&edit.panel).map(|v| v.affine() * edit.space) else {
+        finish_edit(text, &mut store.0, &mut gestures, &mut history, &mut sel, &events);
+        *active = ActiveTool::Select;
+        return;
+    };
     let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
     let measured = iron_document::text::measure_with(&store.0, edit.id, &edit.draft, &edit.runs);
-    let to_screen = edit.base * geo.world(edit.id);
+    let to_screen = base * geo.world(edit.id);
     let to_layout = (to_screen * Affine::translate(measured.offset)).inverse();
     for input in std::mem::take(&mut text.inputs) {
         match input {
@@ -415,7 +424,7 @@ pub fn text_tool_system(
         store.0.preview(edit.id, runs_path(), Value::Str(runs_json));
     }
     let m = iron_document::text::measure_with(&store.0, edit.id, &edit.draft, &edit.runs);
-    let caret = (edit.base * geo_world(&store.0, &drawables, &spatial, edit.id) * Affine::translate(m.offset)).transform_rect_bbox(m.layout.caret(edit.focus));
+    let caret = (base * geo_world(&store.0, &drawables, &spatial, edit.id) * Affine::translate(m.offset)).transform_rect_bbox(m.layout.caret(edit.focus));
     let caret_px = [caret.x0.round() as i32, caret.y0.round() as i32, caret.height().round() as i32];
     let state = (edit.draft.clone(), edit.anchor, edit.focus, caret_px);
     if text.sent.as_ref() != Some(&state) {
@@ -494,7 +503,7 @@ fn arm(
         facets: vec![t.wrap(), body.wrap(), Font::default().wrap(), size.wrap(), fill.wrap(), name.wrap()],
     };
     pending.0.push(TransactionInput { label: "add text".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
-    text.made = Some((id, press.panel.clone(), view.affine() * press.to_comp.inverse()));
+    text.made = Some((id, press.panel.clone(), press.to_comp.inverse()));
 }
 
 /// Commit the draft, or take away a new node left empty.
@@ -569,7 +578,7 @@ pub fn draw_text_overlay(
     }
     let Some(view) = views.get(&edit.panel) else { return };
     let m = iron_document::text::measure_with(&store.0, edit.id, &edit.draft, &edit.runs);
-    let node = edit.base * Geo { store: &store.0, drawables: &drawables, spatial: &spatial }.world(edit.id);
+    let node = view.affine() * edit.space * Geo { store: &store.0, drawables: &drawables, spatial: &spatial }.world(edit.id);
     let at = node * Affine::translate(m.offset);
     let k = dpr.0 as f64;
     let blue = peniko::Color::new(BLUE);

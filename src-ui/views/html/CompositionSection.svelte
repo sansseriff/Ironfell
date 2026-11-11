@@ -5,6 +5,7 @@
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import PaintRow from "../../lib/ui/PaintRow.svelte";
   import Section from "../../lib/ui/Section.svelte";
+  import Checkbox from "../../lib/ui/Checkbox.svelte";
 
   const doc = controllerManager.docClient;
   const entries = $derived(doc.compositions.filter(c => !c.session));
@@ -75,7 +76,10 @@
           <PropertyField field={field("grid_spacing")!} node={current.id} label="Grid spacing (px)" onSet={set} onRefresh={refresh} onError={e => error = e} />
         {/if}
       </div>
-      {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Visual guide only. Spacing thins out as you zoom out.</p>{/if}
+      {#if text("grid") !== "off" && field("grid_snap")}
+        <Checkbox label="Snap to grid" checked={text("grid_snap") === "true"} onChange={on => choose("grid_snap", String(on))} />
+      {/if}
+      {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Moving, resizing and drawing snap to grid points while snapping is on (hold Ctrl or Cmd to place freely). The drawn grid thins out as you zoom out.</p>{/if}
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>

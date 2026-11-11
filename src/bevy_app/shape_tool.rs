@@ -6,7 +6,10 @@
 //! select tool is back, as in Figma.
 //!
 //! The shape goes where the press lands, like a pen path: into the artboard
-//! under it, otherwise into the view's own composition.
+//! under it, otherwise into the view's own composition. On a grid (a
+//! notation's `snap.grid`, or the composition's shown grid with
+//! `grid_snap` on) both corners land on grid points; Ctrl or Cmd bypasses
+//! it, as it does object snapping.
 
 use bevy::prelude::*;
 use iron_document::facet::{Fill, Name as DocName, Radius, Size, Transform2d};
@@ -59,6 +62,7 @@ pub fn shape_tool_system(
     mut pending: ResMut<PendingTransactions>,
     spatial: Res<crate::document_bridge::SpatialScene>,
     drawables: Res<crate::document_bridge::Drawables>,
+    focus: Res<crate::bevy_app::view_focus::ViewFocus>,
 ) {
     let doc = store.0.document();
     if let Some(id) = shapes.select.filter(|&id| doc.live(id).is_some()) {
@@ -93,10 +97,16 @@ pub fn shape_tool_system(
         shapes.press = None;
         return;
     };
-    // The box in the container's space, from the press to the pointer.
-    let to_comp = press.to_comp * view.affine().inverse();
-    let a = to_comp * press.start;
-    let mut d = to_comp * screen - a;
+    // The box in the container's space, from the press to the pointer,
+    // each end on the grid (in the view's document px) when there is one.
+    let grid = Some(focus.grid(&press.panel))
+        .filter(|&g| g > 0.0)
+        .or_else(|| crate::bevy_app::view_focus::canvas_grid(&store.0, view))
+        .filter(|_| !(pointer.modifiers.ctrl || pointer.modifiers.meta));
+    let on_grid = |p: Point| grid.map_or(p, |g| Point::new((p.x / g).round() * g, (p.y / g).round() * g));
+    let to_doc = view.affine().inverse();
+    let a = press.to_comp * on_grid(to_doc * press.start);
+    let mut d = press.to_comp * on_grid(to_doc * screen) - a;
     if pointer.modifiers.shift {
         let side = d.x.abs().max(d.y.abs());
         d = kurbo::Vec2::new(side.copysign(d.x), side.copysign(d.y));

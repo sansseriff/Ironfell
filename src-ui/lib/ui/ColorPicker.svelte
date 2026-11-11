@@ -241,6 +241,10 @@
   $effect(() => { if (showTokens) void loadTokens(); });
   const current = $derived(field.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null);
   const own = $derived(tokens.filter((t) => t.id));
+  // A colour bound to a token reads as locked (a binding has no inverse),
+  // but its binding is still the person's to replace or remove: another
+  // token rebinds it, Detach keeps the colour as a constant.
+  const rebindable = $derived(!locked || current !== null);
   function useToken(name: string) { onSet(field, `=@${name}`); }
   async function detach() {
     const r = await doc.command({ op: "inspect_patch", node, patch: JSON.stringify({ nodes: field.nodes, values: {}, unbind: [field.leaf], label: "detach colour" }) });
@@ -324,9 +328,9 @@
   <div class="swatches-title tokens-head">
     <span>Tokens</span>
     <span class="token-actions">
-      {#if current}<IconButton icon={Unlink} label="Detach from @{current}" title="Detach: keep this colour, stop following @{current}" disabled={locked} onclick={detach} />{/if}
+      {#if current}<IconButton icon={Unlink} label="Detach from @{current}" title="Detach: keep this colour, stop following @{current}" disabled={!rebindable} onclick={detach} />{/if}
       {#if own.length}<IconButton icon={Pencil} label="Edit tokens" title="Edit the document's tokens" pressed={editing} onPressedChange={(on) => editing = on} />{/if}
-      <IconButton icon={Plus} label="New token from this colour" title="New token from this colour" disabled={locked} onclick={() => naming = ""} />
+      <IconButton icon={Plus} label="New token from this colour" title="New token from this colour" disabled={!rebindable} onclick={() => naming = ""} />
     </span>
   </div>
   {#if naming !== null}
@@ -351,7 +355,7 @@
   {:else}
     <div class="swatches">
       {#each tokens as t (t.name)}
-        <button class="swatch token" class:current={t.name === current} class:builtin={!t.id} aria-label="Use @{t.name}" title="@{t.name} · light {t.light.slice(0, 7).toUpperCase()} · dark {t.dark.slice(0, 7).toUpperCase()}{t.id ? '' : ' (adds the theme to the document)'}" disabled={locked} onclick={() => useToken(t.name)}>
+        <button class="swatch token" class:current={t.name === current} class:builtin={!t.id} aria-label="Use @{t.name}" title="@{t.name} · light {t.light.slice(0, 7).toUpperCase()} · dark {t.dark.slice(0, 7).toUpperCase()}{t.id ? '' : ' (adds the theme to the document)'}" disabled={!rebindable} onclick={() => useToken(t.name)}>
           <span style:--light={t.light} style:--dark={t.dark} class:dark></span>
         </button>
       {/each}

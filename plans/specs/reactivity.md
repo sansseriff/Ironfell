@@ -431,7 +431,20 @@ Phase 6, first part (2026-11-10): context, traces, accumulators.
   `default` let (a component's own fallback). Resolved per reader when the graph is
   built (a rename, a reparent or a change of `provide` rebuilds), so a component reads
   it with no port, and a group's own `ink` shadows the theme's for what is under it.
-  A definition may read `@name`: it is the one sanctioned read past its boundary.
+  A definition may read `@name`: it is the one sanctioned read past its boundary,
+  under three rules (2026-11-10, `expand::check_scope`, `ErrorKind::OutOfScope`):
+  1. **Template only.** Context depends on where a picture is placed, and one instance
+     may have several, so inside a definition only a template may read `@name`: never
+     an out port or a model-level `let`. Placement changes how a component looks, not
+     what it computes; what changes behaviour is an input port.
+  2. **Declared, with a default.** The template must hold a `let` of that name that
+     provides (`provide="default"` is the fallback) above the reader. Reading an
+     undeclared name is refused when written, and so is taking a declaration away
+     (a rename, a delete, a reparent, `provide="no"`) while something reads it.
+  3. **Shown.** `Store::context_reads(figure)` lists what a picture reads and the node
+     providing each, or that its own default serves; the inspector's component section
+     shows it under "From context".
+  Colour tokens are the theme and are exempt from 1 and 2.
 - **Stepped producers** (§8, `step.rs`, `ProducerId::STEPS`, `Store::advance_steps`):
   presentation time only, never saved, never undone, **not seekable** (decided
   2026-11-10: a wire is watched in the immediate mode, and scrubbing leaves it be).
@@ -523,7 +536,11 @@ Continuous events and the zoomable plot (2026-11-10):
 - `deref` inside a lambda's body does not resolve (the body is closed before it runs).
 - Tracked reads are opaque to render analysis: a part that uses one is drawn live.
 - `ctx.name` is written `@name`, and there is no `provide` node: a `let` provides.
-  A definition does not declare what it reads; its template's `@names` are the list.
+  A definition declares what it reads with a default `let` in its template (above).
+- An accumulator at rest costs nothing: the step length is republished only while a
+  formula moves its value (`Steps::restless`). Before this fix (2026-11-10) a placed
+  `std:laser` redrew its composition every frame, because frame times jitter and each
+  new `dt` counted as a change.
 - A trace shows on or off along the path, not a level: analog light (brightness
   following power along the fiber) needs a gradient the trace does not yet give.
 - A query has no native host yet (the Tauri shell does not answer `Queries`), no

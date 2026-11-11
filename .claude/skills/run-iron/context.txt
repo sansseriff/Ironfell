@@ -1,0 +1,19 @@
+nav
+ready
+eval (async()=>{const a=await __iron.edit('<edit><place def="std:laser" in="#1" x="40" y="300" name="L0"/></edit>');if(!a.ok)return a;const full=await __iron.view({fidelity:'full',depth:1});const lib=(full.match(/<library id="(#[^"]+)"/)||[])[1];if(!lib)return full.slice(0,500);const d=await __iron.edit('<edit><create id="$d" type="definition" parent="'+lib+'" name="spaced"/><create id="$t" type="template" parent="$d" notation="free"/><create type="let" parent="$t" name="gap" let.provide="default" value="8"/><create type="rect" parent="$t" name="box" x="{= @gap}" y="0" w="30" h="30" fill.color="@accent"/><create id="$g" type="group" parent="#1" name="wide" x="300" y="60"/><create type="let" parent="$g" name="gap" let.provide="yes" value="40"/></edit>');if(!d.ok)return d;const v=await __iron.view({fidelity:'full'});const def=(v.match(/<definition id="(#[^"]+)" name="spaced"/)||[])[1];const g=(v.match(/<group id="(#[^"]+)" name="wide"/)||[])[1];window.__ids={def,g};const p=await __iron.edit('<edit><place def="'+def+'" in="#1" x="60" y="60" name="A"/><place def="'+def+'" in="'+g+'" x="0" y="0" name="B"/></edit>');return p.ok?window.__ids:p})()
+eval (async()=>{const v=await __iron.view({fidelity:'full'});const us=[...v.matchAll(/<use id="(#[^"]+)"[^>]*>/g)].map(m=>m[0]);window.__uses=us;const pick=(n)=>(us.find(u=>new RegExp('name="'+n+'"').test(u))||'').match(/id="(#[^"]+)"/)?.[1];window.__a=pick('A');window.__b=pick('B');return us.map(u=>u.slice(0,90))})()
+dclick 80 75
+sleep 500
+eval window.__ca=[...document.querySelectorAll('.context-read')].map(e=>e.textContent.replace(/\s+/g,' ').trim())
+assert window.__ca.length===1&&/@gap\s*8\s*default/.test(window.__ca[0])
+ddblclick 355 75
+sleep 400
+dclick 355 75
+sleep 500
+eval window.__cb=[...document.querySelectorAll('.context-read')].map(e=>e.textContent.replace(/\s+/g,' ').trim())
+assert window.__cb.length===1&&/@gap\s*40\s*from wide/.test(window.__cb[0])
+shot context-inspector
+eval (async()=>{const r=await __iron.edit('<edit><set id="'+window.__ids.def+'" name="x"/></edit>');const v=await __iron.view({fidelity:'full',scope:window.__ids.def});const box=(v.match(/<rect id="(#[^"]+)"[^>]*name="box"/)||[])[1];const bad=await __iron.edit('<edit><set id="'+box+'" transform2d.y="{= @margin}"/></edit>');window.__bad=bad;return JSON.stringify(bad).slice(0,400)})()
+assert window.__bad.ok===false&&/does not declare/.test(JSON.stringify(window.__bad))
+errors
+quit

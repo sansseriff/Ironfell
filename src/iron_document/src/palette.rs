@@ -116,6 +116,36 @@ pub fn provided(doc: &Document, reader: NodeId, name: &str, tokens: &BTreeMap<St
     tokens.get(name).copied().or(fallback)
 }
 
+/// Whether `name` is served to `reader` from inside `within` (a
+/// definition): a providing or default `let` of that name among the
+/// children of the reader's ancestors, up to `within`. This is the
+/// declaration a definition's context read needs (reactivity.md §6).
+pub fn declared(doc: &Document, reader: NodeId, name: &str, within: NodeId) -> bool {
+    let mut at = doc.node(reader).and_then(|n| n.parent);
+    while let Some(p) = at {
+        let found = doc.children(p).iter().any(|&c| {
+            c != reader
+                && doc.is_live(c)
+                && name_of(doc, c).as_deref() == Some(name)
+                && doc.get::<crate::facet::Let>(c).is_some_and(|l| matches!(l.provide.constant().and_then(Value::as_str), Some("yes" | "default")))
+        });
+        if found {
+            return true;
+        }
+        if p == within {
+            break;
+        }
+        at = doc.node(p).and_then(|n| n.parent);
+    }
+    false
+}
+
+/// Whether `name` is a colour token: a built-in, or one the document has.
+/// Tokens are the theme, read anywhere without a declaration.
+pub fn is_token(doc: &Document, name: &str) -> bool {
+    BUILT_IN.iter().any(|(n, _, _)| *n == name) || tokens(doc).contains_key(name)
+}
+
 /// `token.color` for each token in the theme (`dark` or light): what the
 /// store publishes.
 pub fn publish(doc: &Document, dark: bool) -> BTreeMap<Leaf, Value> {

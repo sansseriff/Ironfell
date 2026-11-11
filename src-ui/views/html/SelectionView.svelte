@@ -2,6 +2,7 @@
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
+  import CompositionSection from "./CompositionSection.svelte";
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { machines, rootOf } from "../../lib/machines.svelte";
@@ -67,7 +68,7 @@
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean; datatype?: string | null; show?: string | null; group?: string | null; suggest?: string[] };
   type MainInfo = { def: string; name: string | null; instances: number; ports: { spec: string; name: string; dir: string; placed: boolean; port: PortInfo }[]; resizable?: boolean; machines?: MachineInfo[] };
   type MachineInfo = { id: string; port: string; pinned: string | null; states: { id: string; name: string | null }[]; transitions: { id: string; name: string | null; from: string | null; to: string | null; ms: string | null; ease: string | null }[] };
-  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[]; constraints?: { node: string; horizontal: string; vertical: string } | null };
+  type Inspected = { node: string; type: string; name: string | null; components: { kind: string; fields: Field[] }[]; addable: string[]; removable: string[]; component: { entity: string; name: string | null; def: string | null; linked: boolean; inputs: Field[]; context: { name: string; from: string | null; provider: string | null; text: string | null }[] } | null; main: MainInfo | null; port: PortInfo | null; table: string | null; sections?: string[]; constraints?: { node: string; horizontal: string; vertical: string } | null };
   // Every section, in the built-in order: what an older engine's inspection
   // (without `sections`) shows.
   const SECTIONS = ["main", "port", "component", "table", "position", "text", "layout", "appearance", "fill", "stroke", "effects", "other", "add"];
@@ -238,6 +239,8 @@
 <section class="html-view properties">
   <header class="panel-heading"><span>Design</span><SlidersHorizontal size={15} strokeWidth={1.5} /></header>
 
+  <CompositionSection />
+
   {#if doc.selection.length || showIn.length}
     <div class="row actions">
       {#if doc.selection.length}
@@ -360,6 +363,17 @@
               {#if g.name}<div class="subheading input-group">{g.name}</div>{/if}
               <div class="field-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
             {/each}
+            <!-- What this picture reads from where it is placed (reactivity.md §6). -->
+            {#if inspected.component.context.length}
+              <div class="subheading input-group" title="Values this picture takes from the group it is placed in, not from its inputs">From context</div>
+              <div class="context-reads" data-section="context">
+                {#each inspected.component.context as c (c.name)}
+                  <div class="context-read" title={c.from ? `@${c.name} is provided by ${c.from}` : `Nothing above provides @${c.name}: the component's own default`}>
+                    <span class="mono">@{c.name}</span><span class="context-value">{c.text ?? "—"}</span><span class="door-label">{c.from ? `from ${c.from}` : "default"}</span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {:else if section === "table" && inspected.table && fields("transform2d").length}
             <div class="property-section" data-section="table">
@@ -544,6 +558,9 @@
 
 <style>
   .properties { padding: 0 !important; font-size: 12px; }
+  .context-reads { display: flex; flex-direction: column; gap: 4px; }
+  .context-read { display: flex; align-items: baseline; gap: 8px; min-height: 22px; font-size: 12px; }
+  .context-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: 30px; font-size: 12px; }
   .door-label { color: var(--fg-muted); font-size: 11px; }
   .door-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

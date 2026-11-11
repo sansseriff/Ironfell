@@ -74,6 +74,59 @@ pub(super) fn sync_document_views(
     }
 }
 
+/// Infinite editor grid: visible viewport only, with stable document-space
+/// origin and CSS-pixel marks. Thin out by powers of two when zoomed out so
+/// neither lines nor dots become an unbounded amount of work.
+fn draw_backdrop(b: &mut crate::vector::DisplayListBuilder<'_>, store: &iron_document::Store, view: &super::panel_views::PanelView, theme: Color, dpr: f64) {
+    let Some(id) = view.composition else { return };
+    let value = |path: &str| store.resolved(id, path.parse().expect("composition leaf"));
+    let custom = value("composition.background").is_some_and(|v| v.as_str() == Some("custom"));
+    let bg = if custom {
+        match value("composition.background_color") {
+            Some(iron_document::Value::Color(c)) => peniko::Color::new(c),
+            _ => peniko::Color::new(theme.to_srgba().to_f32_array()),
+        }
+    } else { peniko::Color::new(theme.to_srgba().to_f32_array()) };
+    let r = view.rect;
+    let rect = kurbo::Rect::new(r.x as f64, r.y as f64, (r.x + r.w) as f64, (r.y + r.h) as f64);
+    b.fill(kurbo::Affine::IDENTITY, bg, rect);
+    let mode = value("composition.grid");
+    let mode = mode.as_ref().and_then(|v| v.as_str()).unwrap_or("off");
+    if mode == "off" { return; }
+    let spacing = value("composition.grid_spacing").and_then(|v| v.as_f64()).unwrap_or(20.0);
+    if !spacing.is_finite() || spacing <= 0.0 || !view.zoom.is_finite() || view.zoom <= 0.0 { return; }
+    let mut step = spacing * view.zoom as f64;
+    let min = 16.0 * dpr;
+    if step < min { step *= 2.0_f64.powf((min / step).log2().ceil()); }
+    if !step.is_finite() || step <= 0.0 { return; }
+    let origin = view.affine() * kurbo::Point::ORIGIN;
+    let x0 = rect.x0 + (origin.x - rect.x0).rem_euclid(step);
+    let y0 = rect.y0 + (origin.y - rect.y0).rem_euclid(step);
+    // Contrast follows the chosen background, including custom colours.
+    let c = bg.components;
+    let light = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.5;
+    let ink = if light { 0.0 } else { 1.0 };
+    let color = peniko::Color::new([ink, ink, ink, if mode == "dots" { 0.22 } else { 0.09 }]);
+    let cols = ((rect.x1 - x0) / step).ceil().max(0.0) as usize;
+    let rows = ((rect.y1 - y0) / step).ceil().max(0.0) as usize;
+    b.clipped(kurbo::Affine::IDENTITY, rect, |b| {
+        if mode == "dots" {
+            for x in 0..cols { for y in 0..rows {
+                b.fill(kurbo::Affine::IDENTITY, color, kurbo::Circle::new((x0 + x as f64 * step, y0 + y as f64 * step), dpr * 0.8));
+            }}
+        } else {
+            for x in 0..cols {
+                let x = x0 + x as f64 * step;
+                b.fill(kurbo::Affine::IDENTITY, color, kurbo::Rect::new(x, rect.y0, x + dpr, rect.y1));
+            }
+            for y in 0..rows {
+                let y = y0 + y as f64 * step;
+                b.fill(kurbo::Affine::IDENTITY, color, kurbo::Rect::new(rect.x0, y, rect.x1, y + dpr));
+            }
+        }
+    });
+}
+
 /// A chunk's key for the backend's raster cache (`VectorLayer::cache`): its
 /// home and first root, which stay while a re-cut keeps it, and whether it
 /// is a render inspector's tinted copy, which must not share its tiles.
@@ -126,12 +179,13 @@ pub fn render_document_layer(
     views: Res<PanelViews>,
     highlights: Res<Highlights>,
     embed_images: Res<super::EmbedImages>,
+    (clear, dpr): (Res<ClearColor>, Res<crate::Dpr>),
 ) {
     let reason = if !changes.is_empty() {
         "document"
     } else if spatial.is_changed() {
         "spatial projection"
-    } else if views.is_changed() || inspector.is_changed() {
+    } else if views.is_changed() || inspector.is_changed() || clear.is_changed() || dpr.is_changed() {
         "panel layout"
     } else if !new_panels.is_empty() {
         "new view"
@@ -282,13 +336,14 @@ pub fn render_document_layer(
         let mut inspected: Vec<(Arc<Recorded>, NodeId, (String, nest::Home, NodeId, u32))> = Vec::new();
         for (entity, mut panel_list, layer) in &mut panel_layers {
             let Some(view) = views.get(&layer.panel) else { continue };
-            // The panel's own list stays empty: its chunks draw.
-            panel_list.rebuild(|_| {});
+            // Screen-space backdrop precedes every content chunk; it is never
+            // raster cached with document geometry or included in exports.
+            panel_list.rebuild(|b| draw_backdrop(b, &store.0, view, clear.0, dpr.0));
             let panel_shows = shows(view.composition, view.loose);
             if !panel_shows {
                 skipped += 1;
             }
-            let mut sub = 0_u32;
+            let mut sub = 1_u32;
             for home in panel_homes(view) {
                 let Some(part) = chunks.homes.get(&home) else { continue };
                 for chunk in &part.chunks {

@@ -127,7 +127,7 @@
     draft = Math.round((s.origin + (e.clientX - s.x) * step * (e.shiftKey ? 0.1 : 1)) * 1000) / 1000;
     if (percent) draft = Math.max(0, Math.min(100, draft));
     if (/^(size\.|radius\.|corners\.|group_clip\.(w|h|radius)|stroke.width|shadow.blur|font\.line_height)/.test(s.leaf)) draft = Math.max(0, draft);
-    if (s.leaf === "font.size") draft = Math.max(1, draft);
+    if (s.leaf === "font.size" || s.leaf === "composition.grid_spacing") draft = Math.max(1, draft);
     const value = draft / factor;
     s.queue = s.queue.then(async () => {
       if (s.failed) return;

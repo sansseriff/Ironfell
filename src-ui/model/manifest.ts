@@ -382,6 +382,11 @@ ${p.contextFields}`,
   definition's template serves only where nothing above provides the name. Colour
   tokens (@ink) are the document's providers; a group's own let named ink shadows the
   token for what is under it. A name nothing provides is a problem on the leaf.
+  Inside a definition, @name (other than a colour token) may be read only in the
+  template, and the template must declare it with its own <let name="gap"
+  provide="default" value="8"/> above the reader; anything else is refused. Context is
+  for how a component looks where it is placed; what changes its behaviour or its
+  outputs is an input port.
   TIME (never saved, runs as the picture plays, not on the timeline):
   a trace remembers a value: <create id="$tr" type="trace" parent="#C" name="tr"
   trace.of="{= #lit.let.value}" trace.delay="2"/> gives $tr.trace.out, the value as it

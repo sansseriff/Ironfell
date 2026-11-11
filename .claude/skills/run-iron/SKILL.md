@@ -46,7 +46,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 2026-11-10): the document crate rebuilds everything above it |
 | ⏱ `build.sh` cold | ~5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
-| ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4 min (cargo 3m 25s, plus binding generation; 2026-11-03) |
+| ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4–5 min (cargo 4m 38s plus binding generation in composition-settings, 2026-11-10; cargo 3m 25s, 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
 | `regression.txt` (`GPU=1`): bindings, model edits, the pendulum, linking, save/load | ~1 min (1m 09s, 2026-11-09) |
 | ⏱ `gestures.txt` (`GPU=1`): select tool, pen, shapes, clipboard, Alt-drag, gizmo, SVG, components | ~2.5 min (2m 25s, 2026-11-09) |
@@ -62,6 +62,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `scope-menu.txt` | ~20 s |
 | `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
 | `plot-view.txt`, `pulses.txt` (`GPU=1`) | ~12 s each (2026-11-10) |
+| `idle.txt`, `context.txt` (`GPU=1`) | ~8 s each (2026-11-10) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -70,6 +71,8 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
+| `composition-settings.ts`, each DPR, warm | ~12 s (2026-11-10) |
+| ⏱ shared-engine Rust lib suite, cold native `dev-opt` | ~5 min compiling; 9m 19s observed including waiting for the concurrent wasm build lock, 2026-11-10. Eight tests run in 0.21 s |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `agent-runtime.ts`, fixture runtime, worker or main | ~2 s (1.90 s, 2026-11-03) |
@@ -188,6 +191,23 @@ Expected: four `assertion passed` lines (a dash with at least four runs, so two 
 on the curve at once; at least eight different dashes; the meter reading both 12 mW and
 0; the version unchanged), `(no page errors)`. `screenshots/pulses.png` shows pale
 dashes along the amber fiber.
+
+`idle.txt` places a laser that is not pulsing, a fiber, a meter and a plot, and counts
+what is drawn over 1.5 s of rest. `context.txt` defines a component whose template
+reads `@gap` with a default, places one on the page and one in a group that provides
+`gap`, and reads the inspector's "From context" rows.
+
+```sh
+cd .claude/skills/run-iron && GPU=1 bun run drive.ts < idle.txt; GPU=1 bun run drive.ts < context.txt; cd -
+```
+
+Expected, `idle.txt`: `{"changed":0,"encode":0,"sync":0}` and two `assertion passed`
+lines. Anything above 0 means a producer publishes every frame (an accumulator's `dt`
+did, until 2026-11-10). Expected, `context.txt`: `["@gap8default"]`,
+`["@gap40from wide"]`, an `out_of_scope` failure saying `@margin` is one "its
+definition does not declare", three `assertion passed` lines, and
+`screenshots/context-inspector.png` with "From context · @gap 40 · from wide" in the
+inspector. Both end with `(no page errors)`.
 
 ## Queries to a slow Model (2026-11-10)
 
@@ -612,7 +632,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
-`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and
@@ -2460,7 +2480,7 @@ restart, the URL's boot targets and the page's storage-only operations
 (`ScopeLibrary`: list, rename, duplicate with its log, import, export, delete
 refused while another tab holds the lock) are covered by `bun test
 tests/scopes.test.ts` (11 tests, a fake engine);
-the Rust side (ids, schema 9, snapshot + log replay equals live through undo and
+the Rust side (ids, schema 10, snapshot + log replay equals live through undo and
 redo, the feed's gap) by `tests/scopes.rs` in `iron_document`.
 
 ### The scope menu (2026-11-03)
@@ -2489,7 +2509,7 @@ rename, and the driver API for the rest. Expected, minus `nav`, `ready`,
 "renamed; stored [\"Notes\",\"Demo\"]"
 "opened Demo, marker back: true"
 "duplicated: Demo copy, new id true, marker true"
-"exported Demo copy (schema 9), imported as Imported"
+"exported Demo copy (schema 10), imported as Imported"
 "deleted Notes; stored [\"Demo\",\"Demo copy\",\"Imported\"]"
 "open: Imported; menu marks Imported; name field Imported"
 "first click asks: Delete?"
@@ -3263,3 +3283,32 @@ Expected, at each DPR: `grab pill: stable hover and menu`, `SVG: 1568×784 PNG w
 drops an SVG with text, picks a real 499-byte HEIC from libheif's corpus, checks model-ready
 raster dimensions and removal, and samples the pill's pointer target for 600 ms.
 The fast `smoke.txt` still prints six `assertion passed` lines and `(no page errors)`.
+
+### Composition canvas settings — 2026-11-10
+
+Owning plan: `plans/specs/panels-and-session.md`, “Composition settings”.
+Build WebGL2 and serve this worktree on 5187, then run from this skill directory:
+
+```sh
+DPR=1 bun run composition-settings.ts
+DPR=2 bun run composition-settings.ts
+```
+
+`URL` overrides the local demo URL. The fixture uses the real inspector controls,
+checks line/dot coverage and custom/theme background pixels, changes the OS theme,
+undoes and reloads the canonical document. Expected per DPR:
+
+```text
+pixels: lines, faint dots, custom colour, light/dark following pass
+PASS composition settings DPR <n>: controls, grid pixels, custom/theme backgrounds, undo, reload; no page errors
+```
+
+Screenshots are under `.agents/composition-settings/dpr<n>/`, including the full
+inspector in light/dark mode. The scope-menu step now reports schema 10; other fast smoke expectations are unchanged.
+Validated on WebGL2 at both DPRs, including pan/zoom without document edits,
+composition isolation, hiding 2D settings in 3D, invalid spacing rejection and
+one-step undo of spacing scrubs. 341 document tests pass (one existing ignored),
+eight shared-engine Rust tests and 115 JS tests pass. Frontend checking has zero
+errors / ten existing warnings. Fast smoke passes all six assertions and reports
+`(no page errors)`. The WebGPU artifact is a marked WebGL2 stub in this worktree;
+no WebGPU browser or native packaged-app validation is claimed.

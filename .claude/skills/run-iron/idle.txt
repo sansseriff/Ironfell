@@ -1,0 +1,10 @@
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit('<edit><place def="std:laser" in="#1" x="40" y="40" name="L1" power="12 mW"/><place def="std:fiber" in="#1" x="230" y="75" name="F1"/><place def="std:meter" in="#1" x="560" y="20" name="M1"/><place def="std:plot" in="#1" x="40" y="300" name="P1"/></edit>');return r.ok?true:r})()
+sleep 1500
+eval (async()=>{await __iron.timings(true);await new Promise(r=>setTimeout(r,1500));const t=await __iron.timings(false);window.__idle=t;return JSON.stringify({changed:t.phases.changed_frame.n,encode:t.phases.encode.n,sync:t.phases.sync.n})})()
+assert window.__idle.phases.changed_frame.n===0
+assert window.__idle.phases.encode.n===0&&window.__idle.phases.sync.n===0
+errors
+quit

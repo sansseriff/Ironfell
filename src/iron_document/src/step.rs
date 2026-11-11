@@ -13,7 +13,8 @@
 //! - An **accumulate** holds a value its own formula advances:
 //!   `accumulate.next` reads `accumulate.value` and `accumulate.dt` (the
 //!   seconds the last step took) and gives the next value. `reset` puts it
-//!   back to `initial`.
+//!   back to `initial`. While its formula leaves it where it is, the step
+//!   length is not republished, so nothing changes and no frame is drawn.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -89,13 +90,31 @@ fn dash(ring: &VecDeque<(f64, Value)>, now: f64, delay: f64) -> String {
 }
 
 impl Steps {
-    /// Start a step to `now` (seconds on the host's clock): how long it
-    /// is, for each accumulator's `dt`, which the store publishes before
-    /// `advance` reads their formulas.
-    pub fn begin(&mut self, doc: &Document, now: f64) -> BTreeMap<Leaf, Value> {
+    /// Start a step to `now` (seconds on the host's clock): how long it is.
+    pub fn tick(&mut self, now: f64) -> f64 {
         let dt = self.last.map_or(0.0, |l| (now - l).clamp(0.0, MAX_DT));
         self.last = Some(now);
-        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).map(|n| (leaf(n, FacetKind::Accumulate, "dt"), Value::Number(dt))).collect()
+        dt
+    }
+
+    /// The `dt` leaf of every live accumulator.
+    pub fn dt_leaves(doc: &Document) -> Vec<Leaf> {
+        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).map(|n| leaf(n, FacetKind::Accumulate, "dt")).collect()
+    }
+
+    /// Whether any accumulator would move this step, read with the step
+    /// length now published (any length above 0 answers the same for a
+    /// formula at rest). The store publishes the real length only then, so
+    /// an accumulator at rest changes nothing from frame to frame.
+    pub fn restless(&self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> bool {
+        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).any(|n| {
+            let f = |field| leaf(n, FacetKind::Accumulate, field);
+            let Some(v) = self.values.get(&n) else { return true };
+            if read(f("reset")).and_then(|v| v.as_bool()).unwrap_or(false) {
+                return read(f("initial")).unwrap_or(Value::Number(0.0)) != *v;
+            }
+            doc.leaf(n, f("next").path).is_some_and(|s| s.expr().is_some()) && read(f("next")).is_some_and(|next| next != *v)
+        })
     }
 
     /// Step every trace and accumulator to `now`. Answers what to publish

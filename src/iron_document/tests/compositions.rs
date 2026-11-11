@@ -266,3 +266,25 @@ fn the_model_and_composition_views_match_their_golden_files() {
     let parsed: ViewQuery = serde_json::from_str(r#"{"relation": "model", "fidelity": "summary"}"#).unwrap();
     assert_eq!(parsed.relation, ViewRelation::Model);
 }
+
+#[test]
+fn canvas_settings_are_local_undoable_and_saved() {
+    let Two { mut store, cartoon, assembly, .. } = two_compositions();
+    let leaf = |s: &str| s.parse::<LeafPath>().unwrap();
+    let before = store.save();
+    let values = [
+        ("composition.background", Value::Enum("custom".into())),
+        ("composition.background_color", Value::Color([0.1, 0.2, 0.3, 1.0])),
+        ("composition.grid", Value::Enum("dots".into())),
+        ("composition.grid_spacing", Value::Number(32.0)),
+    ];
+    store.apply(tx("canvas appearance", values.iter().map(|(p, v)| Op::Set { id: cartoon, path: leaf(p), slot: Slot::Const(v.clone()) }).collect())).unwrap();
+    for (p, v) in &values { assert_eq!(store.resolved(cartoon, leaf(p)), Some(v.clone())); }
+    assert_eq!(store.resolved(assembly, leaf("composition.grid")), Some(Value::Enum("off".into())));
+    let saved = store.save();
+    assert_eq!(Store::load(&saved).unwrap().save(), saved);
+    store.undo(0).unwrap().unwrap();
+    for (p, _) in &values {
+        assert_eq!(store.resolved(cartoon, leaf(p)), Store::load(&before).unwrap().resolved(cartoon, leaf(p)));
+    }
+}

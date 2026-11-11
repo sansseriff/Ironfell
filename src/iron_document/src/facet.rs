@@ -916,6 +916,11 @@ facets! {
         notation: Str = Value::Str("free".to_owned()),
         dims: Enum = Value::Enum("2d".to_owned()) => ["2d", "3d"],
         run: Enum = Value::Enum("auto".to_owned()) => ["auto", "always", "on_demand"],
+        // Editor canvas appearance, shared by views of this composition.
+        background: Enum = Value::Enum("theme".to_owned()) => ["theme", "custom"],
+        background_color: Color = Value::Color([1.0, 1.0, 1.0, 1.0]),
+        grid: Enum = Value::Enum("off".to_owned()) => ["off", "lines", "dots"],
+        grid_spacing: Number = Value::Number(20.0),
     }
 
     @dynamic {

@@ -341,3 +341,37 @@ transaction, including optional-component creation and paint mode changes.
 The canvas ignores keys already consumed by DOM controls, so Escape closes a popover
 without also clearing the selection. The inspector remains an HTML projection as
 noted above; no new authored UI-composition representation is introduced here.
+
+## Composition settings (2026-11-10)
+
+The HTML inspector has a Composition section above object properties, available
+with an empty selection. It follows the last active document composition (the
+same source used by Layers), falling back to main or the first document
+composition. Generated session compositions do not expose document settings.
+It names the composition, its dimensions and notation, and exposes its existing
+run mode. The canvas gear menu retains its run/liveness and per-view developer
+controls.
+
+For 2D compositions it exposes `composition.background` (`theme` or `custom`),
+`background_color`, `grid` (`off`, `lines`, `dots`) and `grid_spacing` (document
+pixels, default 20). These are composition properties, saved and edited through
+`inspect_patch` transactions; the existing property handles and color picker
+provide undo and color scrubbing. Schema **10** loads only the current format.
+The notation remains the context selector for interaction, tools and snapping;
+the visible grid is a guide and does not change snapping policy.
+
+The engine draws a viewport-sized background before the composition's content
+chunks. `theme` follows the existing app canvas light/dark colors immediately;
+a custom color stays fixed. Lines and faint dots are anchored at document origin,
+follow each view's pan/zoom, and keep CSS-pixel thickness at any DPR. Zooming out
+thins spacing by powers of two to bound the viewport work. Their contrast follows
+the chosen background. These are editor canvas settings: SVG exports and embedded
+pictures retain their existing content-only behavior.
+
+Validation: WebGL2 builds; 341 document tests pass (one existing ignored), eight
+shared-engine Rust tests and 115 JS tests pass. Frontend checking reports zero
+errors / ten existing warnings. The required fast smoke passes six assertions
+with no page errors. The focused `composition-settings.ts` browser fixture passes
+at 1× and 2×, checking the controls and canvas pixels, composition switching,
+theme changes without document edits, undo and canonical reload. The document test covers composition locality, one-step undo
+and serialization. Execution results are recorded in the run-iron skill.

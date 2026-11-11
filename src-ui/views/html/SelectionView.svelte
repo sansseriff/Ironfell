@@ -2,6 +2,7 @@
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
+  import CompositionSection from "./CompositionSection.svelte";
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { machines, rootOf } from "../../lib/machines.svelte";
@@ -237,6 +238,8 @@
 
 <section class="html-view properties">
   <header class="panel-heading"><span>Design</span><SlidersHorizontal size={15} strokeWidth={1.5} /></header>
+
+  <CompositionSection />
 
   {#if doc.selection.length || showIn.length}
     <div class="row actions">

@@ -1,0 +1,103 @@
+// Build WebGL2 first. URL=... DPR=1|2 bun run composition-settings.ts
+import { chromium } from 'playwright-core';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
+const dpr = Number(process.env.DPR ?? 1);
+const out = resolve(import.meta.dir, '../../../.agents/composition-settings', `dpr${dpr}`);
+mkdirSync(out, { recursive: true });
+const browser = await chromium.launch({ executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 1680, height: 1000 }, deviceScaleFactor: dpr, colorScheme: 'light' });
+const errors: string[] = [];
+page.on('pageerror', e => errors.push(String(e)));
+page.on('console', m => { if (m.text().includes('panicked at')) errors.push(m.text()); });
+const assert = (ok: unknown, why: string) => { if (!ok) throw new Error(why); };
+const wait = () => page.waitForTimeout(400);
+const waitForComposition = async (name: string) => { await page.waitForFunction(n => document.querySelector('[data-section="composition"] header span')?.textContent?.trim() === n, name); };
+const save = () => page.evaluate(() => (window as any).__iron.save());
+async function choose(name: string, value: string) {
+  await page.getByLabel(name, { exact: true }).click();
+  await page.getByRole('option', { name: value, exact: true }).click();
+  await wait();
+}
+try {
+  await page.goto(process.env.URL ?? 'http://localhost:5187/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default');
+  await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({ fidelity: 'full' })).includes('name="controls"'), { timeout: 180000 });
+  await page.locator('.loading').waitFor({ state: 'detached' });
+  await page.waitForTimeout(1000); // Workspace open finishes after the first document read.
+  await page.locator('.dv-tab', { hasText: /^\s*Controls\s*$/ }).click();
+  const section = page.locator('[data-section="composition"]');
+  await section.waitFor();
+  await waitForComposition('controls');
+  await wait();
+  assert((await section.textContent())?.includes('controls'), 'inspector did not follow Controls');
+  const box = (await page.locator('[data-panel-id="controls"]').boundingBox())!;
+  // Blank lower portion of this fixture: excludes toolbar, artwork and view border.
+  const clip = { x: box.x + 20, y: box.y + box.height - 140, width: 160, height: 100 };
+  writeFileSync(resolve(out, 'clip.json'), JSON.stringify({ clip, dpr }));
+  async function shot(name: string) { await page.screenshot({ path: resolve(out, `${name}.png`), clip }); }
+  await shot('off');
+  await choose('Composition grid', 'Lines');
+  await shot('lines');
+  await choose('Composition grid', 'Dots');
+  await shot('dots');
+  await page.screenshot({ path: resolve(out, 'grid-dots.png') });
+  await page.locator('.dv-tab', { hasText: /^\s*Timeline\s*$/ }).click(); await wait();
+  assert((await section.locator('header span').textContent())?.trim() === 'controls', 'session view lost the followed document composition');
+  await page.locator('.dv-tab', { hasText: /^\s*Main\s*$/ }).click(); await waitForComposition('main');
+  assert((await page.getByLabel('Composition grid', { exact: true }).textContent())?.includes('Off'), 'grid leaked into Main');
+  await page.locator('.dv-tab', { hasText: /^\s*Assembly\s*$/ }).click(); await waitForComposition('assembly');
+  assert(await page.getByLabel('Composition grid', { exact: true }).count() === 0, '2D settings offered in 3D');
+  await page.locator('.dv-tab', { hasText: /^\s*Controls\s*$/ }).click(); await waitForComposition('controls');
+  assert((await page.getByLabel('Composition grid', { exact: true }).textContent())?.includes('Dots'), 'inspector did not retain Controls grid');
+  await choose('Composition grid', 'Lines');
+  const beforeNavigation = await save();
+  await page.mouse.move(clip.x + 80, clip.y + 50);
+  await page.mouse.wheel(7, 11); await wait();
+  await shot('lines-pan');
+  await page.keyboard.press('-'); await wait();
+  await shot('lines-zoom');
+  assert(await save() === beforeNavigation, 'view navigation authored document');
+  await choose('Composition grid', 'Dots');
+  const spacing = page.getByRole('textbox', { name: 'Grid spacing (px)', exact: true });
+  await spacing.fill('32'); await spacing.press('Tab'); await wait();
+  assert(await spacing.inputValue() === '32', 'spacing not set');
+  const beforeInvalid = await save();
+  await spacing.fill('0'); await spacing.press('Tab'); await wait();
+  assert(await save() === beforeInvalid && await spacing.inputValue() === '32', 'invalid spacing changed the document');
+  const sb = (await spacing.boundingBox())!;
+  await page.keyboard.down('Alt');
+  await page.mouse.move(sb.x + 10, sb.y + sb.height / 2); await page.mouse.down();
+  await page.mouse.move(sb.x - 100, sb.y + sb.height / 2, { steps: 6 }); await page.mouse.up();
+  await page.keyboard.up('Alt'); await wait();
+  assert(await spacing.inputValue() === '1', 'spacing scrub went below one pixel');
+  await section.locator('header').click(); await page.keyboard.press('Meta+z'); await wait();
+  assert(await spacing.inputValue() === '32', 'spacing scrub did not undo in one step');
+  await choose('Composition background', 'Custom color');
+  const color = page.getByRole('textbox', { name: 'Background colour hex', exact: true });
+  await color.fill('dceafa'); await color.press('Tab'); await wait();
+  await choose('Composition grid', 'Off');
+  await shot('custom');
+  const custom = await save();
+  await page.emulateMedia({ colorScheme: 'dark' }); await wait();
+  await shot('custom-dark');
+  assert(await save() === custom, 'theme change authored document');
+  await choose('Composition background', 'Match app');
+  await shot('theme-dark');
+  await page.emulateMedia({ colorScheme: 'light' }); await wait();
+  await shot('theme-light');
+  // Undo mode change through the app (focus away from inputs first).
+  await section.locator('header').click();
+  await page.keyboard.press('Meta+z'); await wait();
+  assert(await save() !== custom, 'undo should advance history version');
+  assert(await color.inputValue() === 'DCEAFA' || (await color.inputValue()).toLowerCase() === 'dceafa', 'undo lost custom background');
+  const saved = await save();
+  await page.evaluate(s => (window as any).__iron.load(s), saved); await wait();
+  assert(await save() === saved, 'settings did not survive canonical reload');
+  await page.screenshot({ path: resolve(out, 'inspector-light.png') });
+  await page.emulateMedia({ colorScheme: 'dark' }); await wait();
+  await page.screenshot({ path: resolve(out, 'inspector-dark.png') });
+  execFileSync('python3', [resolve(import.meta.dir, 'composition-settings-pixels.py'), out], { stdio: 'inherit' });
+  assert(!errors.length, errors.join('\n'));
+  console.log(`PASS composition settings DPR ${dpr}: controls, grid pixels, custom/theme backgrounds, undo, reload; no page errors`);
+} catch (e) { await page.screenshot({ path: resolve(out, 'failed.png') }); console.log(await page.locator('[data-section="composition"]').innerText().catch(() => 'no composition section')); throw e; } finally { await browser.close(); }

@@ -1,6 +1,6 @@
 # Panel primitives: panels from the same parts as everything else
 
-**Status: written 2026-11-09; the view selector strip built the same day (§5).**
+**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10.**
 
 Iron's long-term rule for panels: a panel is not special shell code. It is a view (a
 source drawn in a notation, `views.ts`), and the parts that make it up are the parts the
@@ -109,6 +109,10 @@ a small grab pill at its top centre (`GroupGrab.svelte`) stands in for the tabs:
   dockview runs its usual drag: threshold, ghost, drop zones, split or move.
 - **The scope menu** sits in the leftmost top tab bar that is showing, so hiding the
   left side's bar moves it to the centre's, beside the document's composition tabs.
+- **Hover:** the visible pill retracts to a small tab when idle and grows over
+  150 ms when approached. Its button keeps one fixed hit area, and the invisible
+  menu anchor never receives pointer events; this prevents the pill and cursor
+  from alternating under a stationary pointer.
 
 ### The default layout (2026-11-09)
 

@@ -54,9 +54,18 @@
 </div>
 
 <style>
-  .grab { position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 5; pointer-events: auto; }
-  :global(.grab-anchor) { position: absolute; inset: 0; opacity: 0; pointer-events: none; border: 0; padding: 0; background: none; }
-  .grab-pill { display: grid; place-items: center; width: 40px; height: 14px; padding: 0; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 7px 7px; background: var(--bg-chrome); color: var(--fg-muted); cursor: grab; opacity: 0.75; }
-  .grab-pill:hover, .grab-pill.open { opacity: 1; color: var(--fg); height: 18px; }
-  .grab-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+  .grab { position: absolute; top: 0; left: 50%; width: 40px; height: 22px; transform: translateX(-50%); z-index: 5; pointer-events: auto; }
+  /* Workspace's canvas-ui pointer rule otherwise re-enables this invisible
+     trigger over the pill, alternately taking hover and changing the cursor. */
+  :global(.grab-anchor) { position: absolute; inset: 0; opacity: 0; pointer-events: none !important; border: 0; padding: 0; background: none; }
+  /* The full-size button remains the hit area. Only its painted pill grows,
+     so hovering near the collapsed edge cannot move the pointer target. */
+  .grab-pill { position: relative; display: grid; place-items: center; width: 40px; height: 22px; padding: 0; border: 0; background: transparent; color: var(--fg-muted); cursor: grab; }
+  .grab-pill::before { content: ''; position: absolute; inset: 0 0 4px; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 7px 7px; background: var(--bg-chrome); transform: scaleY(0.45); transform-origin: top; opacity: 0.75; pointer-events: none; transition: transform 150ms ease, opacity 150ms ease; }
+  .grab-pill :global(svg) { position: relative; opacity: 0; transition: opacity 150ms ease; }
+  .grab:hover .grab-pill::before, .grab-pill.open::before, .grab-pill:focus-visible::before { transform: scaleY(1); opacity: 1; }
+  .grab:hover .grab-pill :global(svg), .grab-pill.open :global(svg), .grab-pill:focus-visible :global(svg) { opacity: 1; }
+  .grab:hover .grab-pill, .grab-pill.open { color: var(--fg); }
+  .grab-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (prefers-reduced-motion: reduce) { .grab-pill::before, .grab-pill :global(svg) { transition: none; } }
 </style>

@@ -69,9 +69,10 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
+| `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
+| `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
 | `composition-settings.ts`, each DPR, warm | ~12 s (2026-11-10) |
 | ⏱ shared-engine Rust lib suite, cold native `dev-opt` | ~5 min compiling; 9m 19s observed including waiting for the concurrent wasm build lock, 2026-11-10. Eight tests run in 0.21 s |
-| `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s (2026-11-09) |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
 | `bun test tests/` (protocol, document API, scopes) | <1 s |
 | `agent-runtime.ts`, fixture runtime, worker or main | ~2 s (1.90 s, 2026-11-03) |
@@ -3244,7 +3245,7 @@ has not mounted yet. The new fast default smoke passes all six assertions in
 
 `agent-vision.ts` verifies an unopened composition's GPU pixels (a red rectangle),
 unchanged document serialization, invalid/cancelled capture requests, file/paste/drop
-attachments, removal, SVG rejection, model bridge image bytes and transcript
+attachments, removal, malformed SVG rejection, model bridge image bytes and transcript
 thumbnails. It uses a fixture model, without live inference. Run from the repo
 root with a worktree-local Vite server:
 
@@ -3267,6 +3268,21 @@ Captures and chat screenshots are in `.agents/vision/` (ignored). Native package
 and live-provider inference are separate checks and were not run for this change.
 The existing fast smoke, regression and gestures expected outputs are unchanged;
 all passed on the branch rebased onto `a3880ee`.
+
+### Attachment input and hidden-tab pill (2026-11-10)
+
+With Vite serving this checkout, run from `.claude/skills/run-iron`:
+
+```sh
+URL=http://localhost:5187/Ironfell/?gfx=webgl2\&demo bun image-usability-check.ts
+DPR=2 URL=http://localhost:5187/Ironfell/?gfx=webgl2\&demo bun image-usability-check.ts
+```
+
+Expected, at each DPR: `grab pill: stable hover and menu`, `SVG: 1568×784 PNG with text`,
+`HEIC: 64×64 PNG`, `remove: one attachment remains; no page errors`. The test
+drops an SVG with text, picks a real 499-byte HEIC from libheif's corpus, checks model-ready
+raster dimensions and removal, and samples the pill's pointer target for 600 ms.
+The fast `smoke.txt` still prints six `assertion passed` lines and `(no page errors)`.
 
 ### Composition canvas settings — 2026-11-10
 

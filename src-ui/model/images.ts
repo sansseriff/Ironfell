@@ -13,9 +13,10 @@ export interface ModelImage {
 export const MAX_IMAGES = 4;
 export const MAX_IMAGE_BASE64 = 2_800_000;
 const MAX_THUMB_BASE64 = 100_000;
-const THUMB_EDGE = 192;
 const MEDIA_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const HEIC = /\.(heic|heif)$/i;
+const SVG = /\.svg$/i;
 
 /** The leading bytes each format starts with, so a declared type is checked
  *  against what the data is. */
@@ -60,46 +61,41 @@ export function previewOf(image: ModelImage): ModelImage | null {
   return image.thumb ? { name: image.name, mediaType: 'image/jpeg', data: image.thumb, preview: true } : null;
 }
 
-/** Decode before accepting; normalize animation to its first frame and cap dimensions. */
-export async function readChatImage(file: File): Promise<ModelImage> {
-  if (!MEDIA_TYPES.includes(file.type)) throw new Error('Use PNG, JPEG, WebP or GIF images.');
-  if (file.size > 20_000_000) throw new Error('Images must be smaller than 20 MB.');
-  const bitmap = await createImageBitmap(file);
-  try {
-    const scale = Math.min(1, 1568 / Math.max(bitmap.width, bitmap.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Could not read this image.');
-    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    let mediaType: ModelImage['mediaType'] = 'image/png';
-    let data = canvas.toDataURL(mediaType).split(',')[1];
-    if (data.length > MAX_IMAGE_BASE64) {
-      // Detailed photographs compress far better as JPEG. Composite transparency
-      // onto white first so a transparent source never turns black.
-      ctx.globalCompositeOperation = 'destination-over';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      mediaType = 'image/jpeg';
-      data = canvas.toDataURL(mediaType, 0.85).split(',')[1];
-    }
-    if (data.length > MAX_IMAGE_BASE64) throw new Error('This image is too detailed; crop it or use a smaller image.');
-    return { name: file.name.slice(0, 200) || 'Pasted image', mediaType, data, ...thumbnail(bitmap) };
-  } finally { bitmap.close(); }
+type ImageReply = { id: number; image?: ModelImage; error?: string };
+let processor: Worker | undefined;
+let nextImageId = 0;
+const pending = new Map<number, { resolve: (image: ModelImage) => void; reject: (error: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
+
+function failProcessor(error: Error) {
+  processor?.terminate();
+  processor = undefined;
+  for (const task of pending.values()) { clearTimeout(task.timeout); task.reject(error); }
+  pending.clear();
 }
 
-/** A small JPEG on white, for saved history (`previewOf`). */
-function thumbnail(bitmap: ImageBitmap): { thumb?: string } {
-  const scale = Math.min(1, THUMB_EDGE / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return {};
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const thumb = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-  return thumb && thumb.length <= MAX_THUMB_BASE64 ? { thumb } : {};
+/** Decode and resize off the UI thread; output is always a model-supported raster. */
+export function readChatImage(file: File): Promise<ModelImage> {
+  const heic = file.type === 'image/heic' || file.type === 'image/heif' || HEIC.test(file.name);
+  const svg = file.type === 'image/svg+xml' || SVG.test(file.name);
+  if (!heic && !svg && !MEDIA_TYPES.includes(file.type)) return Promise.reject(new Error('Use PNG, JPEG, WebP, GIF, HEIC or SVG images.'));
+  if (file.size > (svg ? 2_000_000 : 20_000_000)) return Promise.reject(new Error(svg ? 'SVG images must be smaller than 2 MB.' : 'Images must be smaller than 20 MB.'));
+  if (!processor) {
+    processor = new Worker(new URL('./image-processing.worker.ts', import.meta.url), { type: 'module' });
+    processor.onmessage = (event: MessageEvent<ImageReply>) => {
+      const task = pending.get(event.data.id);
+      if (!task) return;
+      pending.delete(event.data.id);
+      clearTimeout(task.timeout);
+      if (event.data.image) task.resolve(event.data.image);
+      else task.reject(new Error(event.data.error ?? 'Could not read this image.'));
+    };
+    processor.onerror = () => failProcessor(new Error('Could not read this image.'));
+    processor.onmessageerror = () => failProcessor(new Error('Could not read this image.'));
+  }
+  const id = ++nextImageId;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => failProcessor(new Error('Image conversion took too long.')), 30_000);
+    pending.set(id, { resolve, reject, timeout });
+    processor!.postMessage({ id, file });
+  });
 }

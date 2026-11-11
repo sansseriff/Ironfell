@@ -81,7 +81,8 @@ try {
   }, png);
   await page.waitForFunction(() => document.querySelectorAll('.attachment img').length === 2);
   await page.locator('input[type=file][accept^="image/png"]').setInputFiles({ name: 'bad.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg/>') });
-  await page.getByRole('alert').filter({ hasText: 'Use PNG' }).waitFor();
+  await page.getByRole('alert').waitFor();
+  assert.equal(await page.locator('.attachment img').count(), 2);
   await page.getByRole('textbox', { name: 'Agent instruction' }).fill('Describe this reference');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   await page.locator('.chat-turn:not([data-status=running])').waitFor();

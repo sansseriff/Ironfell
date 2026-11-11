@@ -553,3 +553,23 @@ machine per part, and two small additions.
 - **Not yet:** a state row cannot name a child's state directly (it sets a channel a
   binding reads); `std:plot` is still one machine, not split into legend, labels and
   series parts; the machine panel shows none of this.
+
+### Fixes from a three-state walkthrough (2026-11-11)
+
+Found building a water-phases component by hand (ice, water, steam, with all six
+legs given their own timing and slices):
+
+- **Recording through a bound part.** With a state pinned, an edit to a part already
+  bound to a channel inverts the binding and lands on the channel's `channel.value`,
+  its rest value, which moved every state that does not set the channel; only the
+  first state recorded came out right. `machine::record` now takes that edit into
+  the pinned state's pose. Test:
+  `tests/machine_authoring.rs`
+  `an_edit_to_a_part_bound_to_a_channel_records_into_the_pinned_state`.
+- **Opacity inside instances.** `record_instance` drew parts that render themselves
+  (`whole` false) without their `appearance.opacity`; it now wraps them as `branches`
+  does. Checked by screenshot only.
+- **Not yet, from the same walkthrough:** transitions cannot be named in the UI;
+  tween markup prints `shape="NaN"` with no shape; + Add state drops the selection;
+  graph edge labels overlap; an edit equal to the value already shown records
+  nothing.

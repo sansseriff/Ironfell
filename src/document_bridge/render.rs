@@ -629,7 +629,10 @@ impl Draw<'_> {
                     if whole {
                         self.branches(bl, &[p], into, UNCLIPPED, "", 0, None);
                     } else {
-                        self.node(bl, p, into);
+                        // A part that draws itself keeps its own opacity, as
+                        // `branches` gives every node outside an instance.
+                        let opacity = self.number(p, "appearance.opacity", 1.0).clamp(0.0, 1.0) as f32;
+                        bl.opacity(opacity, UNCLIPPED, |bl| self.node(bl, p, into));
                     }
                 }
             });

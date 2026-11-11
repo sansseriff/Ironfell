@@ -810,8 +810,17 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
         pose.insert(&name, Slot::Const(Value::Number(v)));
         Slot::Bound(Expr::Ref(Leaf { node: ch, path: "channel.value".parse().expect("declared") }))
     };
+    let rest: LeafPath = "channel.value".parse().expect("declared");
     for op in ops {
         match op {
+            // A part already bound to a channel: an edit to it inverts the
+            // binding and lands on the channel's rest value, which every state
+            // that does not set the channel shows. It is the pinned state's.
+            Op::Set { id, path, slot: Slot::Const(Value::Number(v)) } if path == rest && channels.iter().any(|(c, ..)| *c == id) => {
+                let name = channels.iter().find(|(c, ..)| *c == id).map(|(_, n, _)| n.clone()).expect("found");
+                pose.insert(&name, Slot::Const(Value::Number(v)));
+                posed = true;
+            }
             Op::Set { id, path, slot: Slot::Const(Value::Number(v)) } if part_of(id) && path.facet != FacetKind::Name => {
                 let current = doc.leaf(id, path).and_then(|s| s.constant()).and_then(Value::as_f64).or_else(|| path.facet.default_facet().get(path.field).and_then(|s| s.constant()).and_then(Value::as_f64));
                 let slot = record_one(id, path, v, current, &mut out, &mut pose);

@@ -291,3 +291,49 @@ fn a_state_is_made_default_and_deleted() {
     assert_eq!(store.document().children(m).iter().filter(|&&c| store.document().live(c).is_some_and(|n| n.ty.name() == "transition")).count(), 1, "the pair's own transition went with it");
     assert!(machine::delete_state_ops(store.document(), state(&store, "default")).is_err(), "the last state stays");
 }
+
+/// A part already bound to a channel: a drag inverts the binding and writes
+/// the channel's rest value. Pinned, that write is the pinned state's pose,
+/// so the states that do not set the channel (default) stay where they were.
+#[test]
+fn an_edit_to_a_part_bound_to_a_channel_records_into_the_pinned_state() {
+    let mut store = Store::new();
+    let ids = store.document().next_ids(4);
+    let [library, def, template, dot] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("free".into()));
+    store
+        .apply(tx(
+            "card",
+            vec![
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![named("card")] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k(0), facets: vec![t.wrap()] },
+                Op::Create { id: dot, ty: ty("rect"), parent: Some(template), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Appearance::default().wrap(), named("dot")] },
+            ],
+        ))
+        .unwrap();
+    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("add", ops)).unwrap();
+    let m = machine::machines(store.document(), def)[0].0;
+    // state_2 moves the dot: a channel, the dot bound to it.
+    store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
+    store.apply(tx("move", vec![Op::Set { id: dot, path: path("transform2d.x"), slot: Slot::Const(Value::Number(-80.0)) }])).unwrap();
+    let (ch, name, rest) = machine::channels(store.document(), def)[0].clone();
+    assert_eq!(rest, 0.0);
+    // A third state, pinned; the drag writes the channel's value (inverted).
+    let (ops, third) = machine::add_state_ops(store.document(), def).unwrap();
+    store.apply(tx("add", ops)).unwrap();
+    store.pin_state(Some(machine::Pinned::state(def, m, third.clone())));
+    store.apply(tx("move", vec![Op::Set { id: ch, path: path("channel.value"), slot: Slot::Const(Value::Number(100.0)) }])).unwrap();
+    store.advance_machines(0.5);
+    let view = machine::channels(store.document(), def);
+    assert_eq!(view[0].2, 0.0, "the rest value, which default shows, is unchanged");
+    assert_eq!(store.resolved(dot, path("transform2d.x")), Some(Value::Number(100.0)), "the pinned state shows");
+    let s3 = store.document().children(m).iter().copied().find(|&c| store.document().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(third.as_str())).unwrap();
+    assert_eq!(store.document().leaf(s3, LeafPath::new(facet::FacetKind::Args, &name).unwrap()).and_then(|s| s.constant()).and_then(Value::as_f64), Some(100.0));
+    store.pin_state(None);
+    store.advance_machines(0.6);
+    assert_eq!(store.resolved(dot, path("transform2d.x")), Some(Value::Number(0.0)), "at rest: default's place");
+}

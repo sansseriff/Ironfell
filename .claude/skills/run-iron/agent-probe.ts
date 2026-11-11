@@ -89,8 +89,9 @@ const browser = await chromium.launch({
   headless: process.env.HEADED !== '1', args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--no-sandbox'],
 });
 let fatal = '';
+let probePage: import('playwright-core').Page | undefined;
 try {
-  const page = await browser.newPage({ viewport: { width, height } });
+  const page = probePage = await browser.newPage({ viewport: { width, height } });
   page.setDefaultTimeout(15000);
   page.on('pageerror', error => pageErrors.push(String(error)));
   // The page's boot-time pairing tries the default bridge on 4318 and is refused
@@ -174,6 +175,8 @@ try {
   }
 } catch (error) {
   fatal = error instanceof Error ? error.stack ?? error.message : String(error);
+  // The page as the probe gave up on it, beside the report.
+  await probePage?.screenshot({ path: join(runDir, 'stopped.png') }).catch(() => {});
   console.error(`Probe stopped: ${fatal}`);
 } finally {
   await new Promise(r => setTimeout(r, 400)); // the page posts each turn's outcome without waiting
@@ -196,7 +199,7 @@ const out: string[] = [
   `- Turns: ${turns.length} of ${prompts.length} sent${fatal ? ' (the probe stopped early)' : ''}`,
   `- Page errors: ${pageErrors.length}, console errors: ${consoleErrors.length}`, '',
 ];
-if (fatal) out.push('## Probe failure', '', fence(fatal), '');
+if (fatal) out.push('## Probe failure', '', fence(fatal), '', '![where it stopped](stopped.png)', '');
 for (const turn of turns) {
   const outcome = records.find(r => r.kind === 'turn' && r.turn === turn.id);
   const calls = records.filter(r => r.kind === 'call' && r.turn === turn.id);

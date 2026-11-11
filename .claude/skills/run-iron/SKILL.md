@@ -2461,7 +2461,7 @@ restart, the URL's boot targets and the page's storage-only operations
 (`ScopeLibrary`: list, rename, duplicate with its log, import, export, delete
 refused while another tab holds the lock) are covered by `bun test
 tests/scopes.test.ts` (11 tests, a fake engine);
-the Rust side (ids, schema 9, snapshot + log replay equals live through undo and
+the Rust side (ids, schema 10, snapshot + log replay equals live through undo and
 redo, the feed's gap) by `tests/scopes.rs` in `iron_document`.
 
 ### The scope menu (2026-11-03)
@@ -2490,7 +2490,7 @@ rename, and the driver API for the rest. Expected, minus `nav`, `ready`,
 "renamed; stored [\"Notes\",\"Demo\"]"
 "opened Demo, marker back: true"
 "duplicated: Demo copy, new id true, marker true"
-"exported Demo copy (schema 9), imported as Imported"
+"exported Demo copy (schema 10), imported as Imported"
 "deleted Notes; stored [\"Demo\",\"Demo copy\",\"Imported\"]"
 "open: Imported; menu marks Imported; name field Imported"
 "first click asks: Delete?"
@@ -3270,7 +3270,7 @@ PASS composition settings DPR <n>: controls, grid pixels, custom/theme backgroun
 ```
 
 Screenshots are under `.agents/composition-settings/dpr<n>/`, including the full
-inspector in light/dark mode. Existing fast smoke expectations are unchanged.
+inspector in light/dark mode. The scope-menu step now reports schema 10; other fast smoke expectations are unchanged.
 Validated on WebGL2 at both DPRs, including pan/zoom without document edits,
 composition isolation, hiding 2D settings in 3D, invalid spacing rejection and
 one-step undo of spacing scrubs. 341 document tests pass (one existing ignored),

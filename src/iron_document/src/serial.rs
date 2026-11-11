@@ -16,7 +16,8 @@ use std::fmt;
 
 /// The format's version. Only this one loads: there are no saved files
 /// from earlier versions to keep (decided 2026-11-02), so a format change
-/// bumps it and drops the old reader rather than migrating. Schema 9 named
+/// bumps it and drops the old reader rather than migrating. Schema 10 added
+/// the composition canvas settings (background, grid); 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
 pub const SCHEMA: u64 = 10;

@@ -3283,6 +3283,11 @@ Expected, at each DPR: `grab pill: stable hover and menu`, `SVG: 1568×784 PNG w
 drops an SVG with text, picks a real 499-byte HEIC from libheif's corpus, checks model-ready
 raster dimensions and removal, and samples the pill's pointer target for 600 ms.
 The fast `smoke.txt` still prints six `assertion passed` lines and `(no page errors)`.
+It needs `heic-to` and `@resvg/resvg-wasm` installed: in a checkout that pulled this
+without `bun install`, it (and `agent-vision.ts`) time out waiting for `.attachment img`.
+The first run after Vite restarts can do the same while Vite optimises the new
+dependencies; rerun it (2026-11-10, on merged master: both DPRs, `agent-vision.ts`
+worker and main, `composition-settings.ts` both DPRs and 342 document tests pass).
 
 ### Composition canvas settings — 2026-11-10
 

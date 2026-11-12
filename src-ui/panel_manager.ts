@@ -10,6 +10,7 @@ import { copied, setSelectionCount } from './runtime/clipboard';
 import { applyCursor } from './cursors';
 import { TextInputMirror } from './runtime/text_input';
 import { setViewKeys } from './runtime/tool_keys';
+import { commandFailure, setRegistry, setViewCommands, type CommandSpec } from './runtime/commands.svelte';
 
 interface PanelEntry {
   id: string;
@@ -49,7 +50,7 @@ export class PanelManager {
   private session: SessionAdapter | null = null;
   private mode: RuntimeMode = 'worker';
   private canvas: HTMLCanvasElement | null = null;
-  private input = new InputManager({ enableRaw: true });
+  private input = new InputManager({ enableRaw: true, onMenu: (client, canvas) => this.docClient.openMenu(client, canvas) });
   // Canvas text editing's keystrokes (runtime/text_input.ts).
   private textInput: TextInputMirror | null = null;
   /** Save, load, and views of the authored document. Reactive; the shell binds to it. */
@@ -231,6 +232,8 @@ export class PanelManager {
             post: (payload: any) => this.session?.post(payload),
           });
         }
+        // The command registry (commands.rs), for keys and menus.
+        void this.docClient.command({ op: 'commands' }).then((list) => setRegistry(list as CommandSpec[])).catch((e) => console.warn('commands:', e));
         if (this.onInitialized) try { this.onInitialized(); } catch { }
         break;
       case 'clipboard':
@@ -271,7 +274,14 @@ export class PanelManager {
         break;
       case 'focus':
         setViewKeys(data.panel, data.keys);
-        this.docClient.focus = { ...this.docClient.focus, [data.panel]: { palette: data.palette, keys: data.keys } };
+        setViewCommands(data.panel, data.commands);
+        this.docClient.focus = { ...this.docClient.focus, [data.panel]: { palette: data.palette, keys: data.keys, commands: data.commands } };
+        break;
+      case 'menu':
+        this.docClient.menuArrived(data.panel, data.items);
+        break;
+      case 'commandFailed':
+        commandFailure.current = { id: data.id, reason: data.reason, at: performance.now() };
         break;
       case 'convertQuestion':
         this.docClient.convertQuestion = data.question;

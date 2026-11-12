@@ -112,14 +112,14 @@ mod tests {
         let bridge = Bridge::default();
         let old = bridge.open(channel());
         let current = bridge.open(channel());
-        assert!(bridge.enqueue(old, 1, vec![json!({"ty":"undo"})]).is_err());
+        assert!(bridge.enqueue(old, 1, vec![json!({"ty":"command","id":"undo"})]).is_err());
         bridge.close(old);
         assert!(
             bridge
-                .enqueue(current, 1, vec![json!({"ty":"undo"})])
+                .enqueue(current, 1, vec![json!({"ty":"command","id":"undo"})])
                 .is_ok()
         );
-        assert!(matches!(bridge.pop(), Some(Request::Undo)));
+        assert!(matches!(bridge.pop(), Some(Request::Command { .. })));
     }
     #[test]
     fn batch_validation_is_atomic_and_backpressure_is_explicit() {
@@ -130,20 +130,20 @@ mod tests {
                 .enqueue(
                     generation,
                     1,
-                    vec![json!({"ty":"undo"}), json!({"ty":"unknown"})]
+                    vec![json!({"ty":"command","id":"undo"}), json!({"ty":"unknown"})]
                 )
                 .is_err()
         );
         assert!(bridge.pop().is_none());
         assert!(
             bridge
-                .enqueue(generation, 1, vec![json!({"ty":"undo"}); 257])
+                .enqueue(generation, 1, vec![json!({"ty":"command","id":"undo"}); 257])
                 .is_err()
         );
         for sequence in 1..=4 {
             assert!(
                 bridge
-                    .enqueue(generation, sequence, vec![json!({"ty":"undo"}); 256])
+                    .enqueue(generation, sequence, vec![json!({"ty":"command","id":"undo"}); 256])
                     .is_ok()
             );
         }
@@ -153,7 +153,7 @@ mod tests {
                 .is_err()
         );
         for _ in 0..1024 {
-            assert!(matches!(bridge.pop(), Some(Request::Undo)));
+            assert!(matches!(bridge.pop(), Some(Request::Command { .. })));
         }
         assert!(
             bridge

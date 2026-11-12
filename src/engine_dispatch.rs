@@ -92,6 +92,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "next_relation_ids" => { arity(args,1)?; crate::engine_api::document_next_relation_ids(app,argument::<u32>(args,0)?) },
         "place" => { arity(args,3)?; crate::engine_api::document_place(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<u32>(args,2)?)? },
         "schema" => { arity(args,0)?; crate::engine_api::document_schema() },
+        "commands" => { arity(args,0)?; crate::engine_api::commands() },
         "inspect_bind" => { arity(args,3)?; crate::engine_api::document_inspect_bind(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "text_style" => { arity(args,2)?; crate::engine_api::document_text_style(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "fonts" => { arity(args,0)?; crate::engine_api::fonts() },

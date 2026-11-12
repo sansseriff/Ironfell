@@ -21,6 +21,7 @@ pub mod analysis;
 pub mod composition;
 pub mod compose;
 pub mod constraint;
+pub mod commands;
 pub mod contexts;
 pub mod contour;
 pub mod copy;

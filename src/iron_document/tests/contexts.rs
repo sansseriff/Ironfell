@@ -543,7 +543,7 @@ fn every_field_constant_names_its_field() {
         (Field::DOUBLE_CLICK, "tolerance.double_click"), (Field::HIT, "tolerance.hit"), (Field::SECTIONS, "inspector.sections"),
         (Field::HANDLE, "chrome.handle"), (Field::ACCENT, "chrome.accent"), (Field::GRIP, "chrome.grip"), (Field::GRIP_SHAPE, "chrome.grip_shape"), (Field::HOVER, "chrome.hover"),
         (Field::MATE, "plug.mate"), (Field::GRID, "snap.grid"), (Field::DELETE, "affords.delete"), (Field::COMPONENT, "chrome.component"), (Field::CURSOR, "affords.cursor"),
-        (Field::STRIP, "workspace.strip"),
+        (Field::STRIP, "workspace.strip"), (Field::COMMAND_KEYS, "keys.commands"), (Field::MENU, "menu.canvas"),
     ];
     for (f, path) in named {
         assert_eq!(f.path(), path);
@@ -565,4 +565,67 @@ fn the_workspace_strip_is_context_data() {
     let bad = r#"<context name="std:workspace"><rule match="view" workspace.strip="layers nonsense"/></context>"#;
     let refused = contexts::put_ops(store.document(), bad).map(|(ops, _)| store.apply(tx(ops)).is_err()).unwrap_or(true);
     assert!(refused, "an unknown view is refused");
+}
+
+#[test]
+fn commands_are_context_data() {
+    use iron_document::commands;
+    let mut store = Store::new();
+    let world = composition(&mut store, "slide", "free");
+    let r = Resolver::new(store.document(), store.contexts());
+    let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
+    // A free 2D view's right-click menu, and the keys it adds to the
+    // workspace's.
+    assert_eq!(v.get(Field::MENU), "copy paste-here copy-svg | ask draw-on | front back | wrap layout make-component");
+    let global = r.workspace_values().get(Field::COMMAND_KEYS).to_owned();
+    let keys = commands::keymap(&commands::merge_keymaps(&global, v.get(Field::COMMAND_KEYS)));
+    let bound = |chord: &str| keys.iter().find(|(c, _)| c == chord).map(|(_, id)| *id);
+    assert_eq!(bound("mod+alt+g"), Some("wrap"));
+    assert_eq!(bound("mod+z"), Some("undo"));
+    assert_eq!(bound("]"), Some("front"));
+    // Every menu item and bound command is registered.
+    for w in v.get(Field::MENU).split_whitespace().filter(|w| *w != commands::DIVIDER) {
+        assert!(commands::find(w).is_some(), "{w}");
+    }
+    // A document rearranges them as it would a palette.
+    let ctx = r#"<context name="std:free-2d"><rule match="view" menu.canvas="make-component | copy" keys.commands="mod+g:wrap"/></context>"#;
+    let (ops, _) = contexts::put_ops(store.document(), ctx).unwrap();
+    store.apply(tx(ops)).unwrap();
+    let r = Resolver::new(store.document(), store.contexts());
+    let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
+    assert_eq!(v.get(Field::MENU), "make-component | copy");
+    assert_eq!(commands::keymap(v.get(Field::COMMAND_KEYS)), vec![("mod+g".to_owned(), "wrap")]);
+    // Unknown commands and malformed chords are refused, saying why.
+    assert_eq!(
+        contexts::parse(r#"<context name="k"><rule match="view" menu.canvas="copy launch"/></context>"#).unwrap_err().split(" (").next().unwrap(),
+        "menu.canvas=\"copy launch\": unknown command launch"
+    );
+    assert!(contexts::parse(r#"<context name="k"><rule match="view" keys.commands="ctrl+g:wrap"/></context>"#).unwrap_err().contains("ctrl is not a modifier"));
+    assert!(contexts::parse(r#"<context name="k"><rule match="view" keys.commands="mod+g:launch"/></context>"#).unwrap_err().contains("unknown command launch"));
+}
+
+#[test]
+fn bring_to_front_and_send_to_back_restack_among_siblings() {
+    use iron_document::commands::restack_ops;
+    let mut store = Store::new();
+    let world = composition(&mut store, "slide", "free");
+    let mut ids = Vec::new();
+    let mut key = OrderKey::first();
+    let mut ops = Vec::new();
+    for _ in 0..4 {
+        let id = store.document().next_ids(ids.len() + 1)[ids.len()];
+        ops.push(Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: Some(world), order: key.clone(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] });
+        ids.push(id);
+        key = OrderKey::after(&key);
+    }
+    store.apply(tx(ops)).unwrap();
+    let order = |s: &Store| s.document().children(world).to_vec();
+    // The first two to the front, keeping their own order.
+    store.apply(tx(restack_ops(store.document(), &[ids[1], ids[0]], true).unwrap())).unwrap();
+    assert_eq!(order(&store), vec![ids[2], ids[3], ids[0], ids[1]]);
+    assert_eq!(restack_ops(store.document(), &[ids[1]], true).unwrap_err(), "Already in front");
+    // The last to the back.
+    store.apply(tx(restack_ops(store.document(), &[ids[1]], false).unwrap())).unwrap();
+    assert_eq!(order(&store), vec![ids[1], ids[2], ids[3], ids[0]]);
+    assert_eq!(restack_ops(store.document(), &[ids[1]], false).unwrap_err(), "Already at the back");
 }

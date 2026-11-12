@@ -57,8 +57,11 @@ pub const MOD_CTRL: u8 = 2;
 pub const MOD_ALT: u8 = 4;
 pub const MOD_META: u8 = 8;
 
-/// Tool shortcuts from the shell, as keys with their modifier bits:
-/// Escape, Enter, Tab, arrows, Delete/Backspace, and `a` (with Cmd/Ctrl).
+/// What the shell's keys and the menus ask of the tools, in order: named
+/// keys with their modifier bits (Escape, Enter, Tab, arrows,
+/// Delete/Backspace), tool picks (`tool:pen`), chords not yet routed
+/// (`chord:mod+alt+g`, `view_focus::route_tool_keys`), command ids
+/// (`wrap`, `undo`; iron_document `commands.rs`) and a right-click (`menu`).
 #[derive(Resource, Default)]
 pub struct ToolKeys(pub Vec<(String, u8)>);
 
@@ -69,8 +72,8 @@ pub struct ToolKeys(pub Vec<(String, u8)>);
 #[derive(Resource, Default)]
 pub struct Clipboard {
     /// Text from paste events, placed on the next frame: an Iron fragment,
-    /// or SVG to import.
-    pub pastes: Vec<String>,
+    /// or SVG to import; with a window point for Paste here.
+    pub pastes: Vec<(String, Option<Vec2>)>,
     /// SVG already imported (`document_import_svg`), placed like a paste.
     pub imports: Vec<Fragment>,
     /// The last cut's text, until it is pasted once: that first paste moves
@@ -1774,7 +1777,7 @@ fn outermost(doc: &iron_document::Document, selected: &[NodeId]) -> Vec<NodeId> 
 /// selection's, else the first 2D view); beside the selection there, else
 /// into the artboard under the pointer or the view's composition; at the
 /// copied position when that is on screen, else centred in the view.
-fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, reaches: &[Reach], frag: &Fragment, share: bool) -> Option<copy::Placement> {
+fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, reaches: &[Reach], frag: &Fragment, share: bool, here: Option<Vec2>) -> Option<copy::Placement> {
     let doc = geo.doc();
     let two = |v: &&PanelView| v.dims == Dims::Two;
     let under = hits.panel.as_deref().and_then(|p| views.get(p)).filter(two);
@@ -1811,6 +1814,11 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
         })
         .collect();
     let offset = match origins.iter().map(|&p| Rect::from_points(p, p)).reduce(|a, b| a.union(b)) {
+        // Paste here: the copied roots' top-left origin at the point.
+        Some(b) if let Some(at) = here => {
+            let p = to_comp * view.affine().inverse() * Point::new(at.x as f64, at.y as f64);
+            [p.x - b.x0, p.y - b.y0]
+        }
         Some(b) if !origins.iter().any(|p| shown.contains(*p)) => {
             let d = shown.center() - b.center();
             [d.x, d.y]
@@ -1949,7 +1957,7 @@ pub fn select_tool_system(
     v3d: Views3d,
     mut clipboard: ResMut<Clipboard>,
     origin: Res<crate::document_bridge::DocumentOrigin>,
-    (pen, mut edit, focus): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>, Res<crate::bevy_app::view_focus::ViewFocus>),
+    (pen, mut edit, focus, mut menu): (Res<crate::bevy_app::pen::PenTool>, ResMut<PathEdit>, Res<crate::bevy_app::view_focus::ViewFocus>, ResMut<crate::bevy_app::commands::MenuRequest>),
 ) {
     let tool = &mut *tool;
     // The hovered view's tolerances (`tolerance.*`, its focus context).
@@ -1998,11 +2006,30 @@ pub fn select_tool_system(
         _ => pointer.modifiers.ctrl || pointer.modifiers.meta,
     };
 
-    // Shortcuts.
+    // Keys and commands, in order.
+    let mut menu_asked = false;
     for (key, m) in std::mem::take(&mut keys.0) {
         let shift = m & MOD_SHIFT != 0;
-        let command = m & (MOD_CTRL | MOD_META) != 0;
         let reaches = selected_reaches(&sel, tool);
+        // A command that is one transaction (`commands::plan`).
+        let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
+        let two_d = hits.panel.as_deref().and_then(|p| views.get(p)).or_else(|| reaches.first().and_then(|r| views.get(&r.panel))).is_some_and(|v| v.dims == Dims::Two);
+        let planned = crate::bevy_app::commands::plan(&key, &crate::bevy_app::commands::Situation { store: &store.0, selected: &ids, two_d });
+        if let Some(planned) = planned {
+            match planned {
+                Ok(p) => {
+                    if !p.select.is_empty() {
+                        tool.select_when_live = p.select;
+                    }
+                    pending.0.push(p.input);
+                }
+                Err(reason) => {
+                    info!("{key}: {reason}");
+                    events.push(crate::host_events::EngineEvent::CommandFailed { id: key.clone(), reason });
+                }
+            }
+            continue;
+        }
         let doc = store.0.document();
         // Inside a container that navigates (`keys.nav`: a stack's list, a
         // table's grid; ARIA's composites, affordances.md §5.7), arrows, Tab
@@ -2102,34 +2129,9 @@ pub fn select_tool_system(
                 chain.push(next);
                 set_selection(&mut sel, tool, vec![Reach { panel: r.panel.clone(), chain }]);
             }
-            // Wrap the selection in an empty (component-authoring.md §2).
-            "wrap" if !reaches.is_empty() => {
-                let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
-                let extent = |n: NodeId| store.0.extent(n);
-                match iron_document::author::wrap_in_empty(doc, &extent, &ids) {
-                    Ok((ops, empty)) => {
-                        let parent = doc.live(ids[0]).and_then(|n| n.parent);
-                        let main = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(doc, m).is_some());
-                        tool.select_when_live = vec![main.and_then(|m| NodeId::expanded(m, empty)).unwrap_or(empty)];
-                        pending.0.push(TransactionInput { label: "wrap in empty".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
-                    }
-                    Err(e) => info!("wrap in empty: {e}"),
-                }
-            }
-            // Add auto layout (layout-and-tables.md §2.4): a group gets a
-            // layout; siblings are wrapped in a laid-out group.
-            "layout" if !reaches.is_empty() && hits.panel.as_deref().and_then(|p| views.get(p)).is_some_and(|v| v.dims == Dims::Two) => {
-                let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
-                let extent = |n: NodeId| store.0.extent(n);
-                match iron_document::layout::add_ops(doc, &extent, &ids) {
-                    Ok((ops, group)) => {
-                        tool.select_when_live = vec![group];
-                        pending.0.push(TransactionInput { label: "add auto layout".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
-                    }
-                    Err(e) => info!("add auto layout: {e}"),
-                }
-            }
-            "a" if command => {
+            // A right-click: answered once the hover is known (below).
+            "menu" => menu_asked = true,
+            "select-all" => {
                 let (panel, prefix, roots) = match reaches.first() {
                     Some(r) => {
                         let (p, roots) = siblings(doc, &views, r);
@@ -2152,7 +2154,7 @@ pub fn select_tool_system(
                     .collect();
                 set_selection(&mut sel, tool, all);
             }
-            "d" if command => match copy::duplicate(&store.0, &sel.selected) {
+            "duplicate" => match copy::duplicate(&store.0, &sel.selected) {
                 Ok(pasted) => {
                     for note in &pasted.notes {
                         info!("duplicate: {note}");
@@ -2163,7 +2165,7 @@ pub fn select_tool_system(
                 }
                 Err(e) => info!("duplicate: {e}"),
             },
-            "c" | "x" if command => {
+            "copy" | "cut" => {
                 let text = match copy::fragment(&store.0, &sel.selected, &origin.0) {
                     Ok(frag) => {
                         for note in &frag.dropped {
@@ -2177,19 +2179,19 @@ pub fn select_tool_system(
                     }
                 };
                 events.clipboard(text.clone());
-                if key == "x" && !text.is_empty() {
+                if key == "cut" && !text.is_empty() {
                     let ops = outermost(doc, &sel.selected).into_iter().map(|id| Op::Delete { id }).collect();
                     let label = format!("cut {}", type_label(doc, &sel.selected));
                     pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
                     set_selection(&mut sel, tool, Vec::new());
                     clipboard.cut = Some(text);
-                } else if key == "c" {
+                } else if key == "copy" {
                     clipboard.cut = None;
                 }
             }
-            // Copy as SVG (Alt+Shift+C in the shell): the selection's SVG as
-            // clipboard text, for pasting into Figma, a browser or a file.
-            "copysvg" => {
+            // Copy as SVG: the selection's SVG as clipboard text, for pasting
+            // into Figma, a browser or a file.
+            "copy-svg" => {
                 let text = match iron_svg::export(&store.0, &iron_svg::Scope::Nodes(sel.selected.clone())) {
                     Ok(out) => {
                         for cut in &out.cuts {
@@ -2266,15 +2268,15 @@ pub fn select_tool_system(
     // Pasted text is an Iron fragment or SVG (plans/specs/svg-import-export.md);
     // an import from the driver arrives already parsed. Each is placed like a
     // paste and applied as one transaction.
-    let mut arrivals: Vec<(Fragment, bool, &'static str)> = std::mem::take(&mut clipboard.imports).into_iter().map(|f| (f, false, "import SVG")).collect();
-    for text in std::mem::take(&mut clipboard.pastes) {
+    let mut arrivals: Vec<(Fragment, bool, &'static str, Option<Vec2>)> = std::mem::take(&mut clipboard.imports).into_iter().map(|f| (f, false, "import SVG", None)).collect();
+    for (text, at) in std::mem::take(&mut clipboard.pastes) {
         if iron_svg::is_svg_text(&text) {
             match iron_svg::import(&text) {
                 Ok(imported) => {
                     for cut in &imported.cuts {
                         info!("import SVG: {cut}");
                     }
-                    arrivals.push((imported.fragment, false, "import SVG"));
+                    arrivals.push((imported.fragment, false, "import SVG", at));
                 }
                 Err(e) => warn!("import SVG: {e}"),
             }
@@ -2296,7 +2298,7 @@ pub fn select_tool_system(
             let r = view.rect;
             let c = view.affine().inverse() * Point::new((r.x + r.w * 0.5) as f64, (r.y + r.h * 0.5) as f64);
             match iron_document::table::fragment(rows, [c.x, c.y]) {
-                Ok(f) => arrivals.push((f, false, "paste table")),
+                Ok(f) => arrivals.push((f, false, "paste table", at)),
                 Err(e) => warn!("paste table: {e}"),
             }
             continue;
@@ -2312,7 +2314,7 @@ pub fn select_tool_system(
             let r = view.rect;
             let c = view.affine().inverse() * Point::new((r.x + r.w * 0.5) as f64, (r.y + r.h * 0.5) as f64);
             match iron_document::text::fragment(&text, [c.x, c.y]) {
-                Ok(f) => arrivals.push((f, false, "paste text")),
+                Ok(f) => arrivals.push((f, false, "paste text", at)),
                 Err(e) => warn!("paste text: {e}"),
             }
             continue;
@@ -2328,12 +2330,12 @@ pub fn select_tool_system(
         if share {
             clipboard.cut = None;
         }
-        arrivals.push((frag, share, "paste"));
+        arrivals.push((frag, share, "paste", at));
     }
-    for (frag, share, verb) in arrivals {
+    for (frag, share, verb, here) in arrivals {
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
         let reaches = selected_reaches(&sel, tool);
-        let Some(place) = paste_placement(&geo, &hits, &views, &reaches, &frag, share) else {
+        let Some(place) = paste_placement(&geo, &hits, &views, &reaches, &frag, share, here) else {
             info!("{verb}: no 2D view to paste into");
             continue;
         };
@@ -3541,6 +3543,21 @@ pub fn select_tool_system(
             }
         }
     }
+    // A right-click selects what it is on, as Figma's does: a hovered node
+    // not selected replaces the selection, empty canvas clears it, and on
+    // the selection (or a grip of it) it stays. Then the view's menu.
+    if menu_asked {
+        let view = hits.panel.as_deref().and_then(|p| views.get(p)).map(|v| v.panel.clone());
+        match &tool.hover {
+            Some(h) if !sel.selected.contains(&h.node()) => {
+                let h = h.clone();
+                set_selection(&mut sel, tool, vec![h]);
+            }
+            None if view.is_some() && top_hit(&hits).is_none() && !tool.pressing() => set_selection(&mut sel, tool, Vec::new()),
+            _ => {}
+        }
+        menu.0 = view;
+    }
     let hovered = tool.hover.as_ref().map(Reach::node).or(sel.probe);
     if sel.hovered != hovered {
         sel.hovered = hovered;
@@ -4501,7 +4518,7 @@ pub fn navigate_views(
     // The zoom keys act on the view under the pointer, else the one holding
     // the selection, else the main viewer; Shift+2 prefers the selection's.
     let selection_view = sel.selected.first().and_then(|id| tool.reach.get(id)).and_then(|r| views.get(&r.panel));
-    let to_selection = keys.0.iter().any(|(k, _)| k == "zoomsel");
+    let to_selection = keys.0.iter().any(|(k, _)| k == "zoom-selection");
     let target = (if to_selection { selection_view.or(under) } else { under.or(selection_view) })
         .or_else(|| views.get(crate::panels::VIEWER_PANEL))
         .filter(|v| v.dims == Dims::Two)
@@ -4509,7 +4526,7 @@ pub fn navigate_views(
     let mut rest = Vec::new();
     for (key, m) in std::mem::take(&mut keys.0) {
         let on_timeline = timeline.is_some() && target.as_ref().is_some_and(|v| v.composition == timeline);
-        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoomfit" | "zoomsel" | "zoom100" | "zoomin" | "zoomout") && (key == "zoomfit" || !on_timeline)) else {
+        let Some(view) = target.as_ref().filter(|_| matches!(key.as_str(), "zoom-fit" | "zoom-selection" | "zoom-100" | "zoom-in" | "zoom-out") && (key == "zoom-fit" || !on_timeline)) else {
             rest.push((key, m));
             continue;
         };
@@ -4518,7 +4535,7 @@ pub fn navigate_views(
         let camera = cameras.0.entry(view.panel.clone()).or_default();
         let at_centre = (size * 0.5 - camera.pan) / camera.scale(dpr.0);
         // Fitting the timeline fits its clips in time (`F`, Shift+1).
-        if key == "zoomfit" && timeline.is_some() && view.composition == timeline {
+        if key == "zoom-fit" && timeline.is_some() && view.composition == timeline {
             if let Err(e) = iron_document::timeline_view::fit(&mut store.0, (size.x / camera.scale(dpr.0)) as f64) {
                 warn!("timeline fit: {e}");
             }
@@ -4526,11 +4543,11 @@ pub fn navigate_views(
             continue;
         }
         match key.as_str() {
-            "zoomfit" | "zoomsel" => {
+            "zoom-fit" | "zoom-selection" => {
                 let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
                 // Boxes in the panel's document px: its top-level nodes, or
                 // the selection as reached in this panel.
-                let frames: Vec<Affine> = if key == "zoomsel" {
+                let frames: Vec<Affine> = if key == "zoom-selection" {
                     sel.selected.iter().filter_map(|id| tool.reach.get(id)).filter(|r| r.panel == view.panel).filter_map(|r| geo.frame(&r.chain)).collect()
                 } else {
                     nest::panel_roots(&store.0.document(), view).iter().filter_map(|&n| geo.frame(&[n])).collect()
@@ -4547,12 +4564,12 @@ pub fn navigate_views(
                 camera.pan = pan_keeping(view, c, centre, z * k);
                 camera.zoom = z;
             }
-            "zoom100" => {
+            "zoom-100" => {
                 camera.pan = pan_keeping(view, at_centre, centre, k);
                 camera.zoom = 1.0;
             }
             _ => {
-                let z = (camera.zoom * if key == "zoomin" { 2.0 } else { 0.5 }).clamp(ZOOM.0, ZOOM.1);
+                let z = (camera.zoom * if key == "zoom-in" { 2.0 } else { 0.5 }).clamp(ZOOM.0, ZOOM.1);
                 camera.pan = pan_keeping(view, at_centre, centre, z * k);
                 camera.zoom = z;
             }

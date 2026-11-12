@@ -1,0 +1,55 @@
+# The canvas's right-click menu and command keys (iron_document commands.rs,
+# plans/specs/contexts.md §4.2): a right-click selects what it is on and opens
+# the view's `menu.canvas` (std:free-2d), each item enabled or saying why not;
+# an item runs its command as one transaction; the same commands run from
+# their chords (`keys.commands`), which the engine routes by the view under
+# the pointer.
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$c" type="composition" name="slide" notation="free" dims="2d"/></edit>`); window.__slide=r.aliases['$c']; return 1})()
+eval __dock.addPanel({ id: 'slide', component: 'view', title: 'Slide', params: { spec: { source: 'slide', notation: 'composition' } }, position: { referencePanel: 'viewer', direction: 'within' } }).id
+sleep 1200
+# a, then b over it (a later sibling draws on top).
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><create type="rect" parent="${window.__slide}" name="a" x="100" y="100" w="120" h="80" color="#e04040ff"/><create type="rect" parent="${window.__slide}" name="b" x="160" y="140" w="120" h="80" color="#40a040ff"/></edit>`); return r.ok})()
+sleep 800
+eval window.order = async () => { const v = await __iron.view({fidelity:'full', scope: window.__slide}); return [...v.matchAll(/<rect id="[^"]+"[^>]*name="(\w+)"/g)].map(m => m[1]).join(' '); }
+eval window.menu = () => [...document.querySelectorAll('[data-canvas-menu] [data-command]')].map(e => e.dataset.command + (e.hasAttribute('data-disabled') ? '(off: ' + e.title + ')' : '')).join(' ')
+eval order()
+# Right-click on a alone: it is selected, and the menu offers the view's commands.
+pmove slide 120 110
+sleep 300
+down right
+up right
+sleep 800
+eval [__iron.selection().length, menu()]
+shot menu-on-a
+# Bring to front: one transaction; b is now under a.
+clickel [data-canvas-menu] [data-command="front"]
+sleep 800
+eval order()
+logs applied
+# On empty canvas: the selection clears; Paste here stays, Copy says why not.
+pmove slide 600 500
+sleep 300
+down right
+up right
+sleep 800
+eval [__iron.selection().length, menu()]
+key Escape
+sleep 300
+# The keys: select a (in front now) and send it back ([), then wrap it
+# (Cmd+Alt+G), and undo the wrap (Cmd+Z, std:workspace's).
+pclick slide 120 110
+sleep 500
+key BracketLeft
+sleep 800
+eval order()
+key Meta+Alt+KeyG
+sleep 800
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope: window.__slide}); return [__iron.selection().length, /<empty /.test(v)]})()
+key Meta+z
+sleep 600
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope: window.__slide}); return [await order(), /<empty /.test(v)]})()
+errors
+quit

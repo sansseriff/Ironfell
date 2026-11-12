@@ -299,7 +299,7 @@ failing test 2 stays a constant. The test is what keeps this plan from becoming
 | **Conventions and checks** | A schematic wants every pin connected; a slide a title | Vision 09's conventions, ECM phase 4's obligations, as lint rules shown as gentle warnings |
 | **The world's appearance and templates** | Background, grid, a schematic sheet's border and title block, a slide master; what a new composition of a notation starts with | — |
 | **Units and number display** | Engineering notation (4.7 kΩ) in a schematic, scientific in physics, rounded in a deck | — |
-| **Menus and commands** | Right-click menus and a command palette are §2.7's actions with `when` clauses | VS Code's model |
+| **Menus and commands** | Right-click menus and a command palette are §2.7's actions with `when` clauses | VS Code's model. **First slice built 2026-11-12** (§4.3) |
 | **Import, export, clipboard, drop** | A schematic exports a netlist as well as SVG; an image dropped in a deck is a picture, in a schematic nothing | — |
 | **Navigation** | Wheel pans or zooms; CAD-style or Blender-style orbit; zoom to fit a sheet | keymap and gesture data |
 | **An accessibility tree** | Having taken ARIA's semantics, export them: the shell mirrors the canvas's roles as a real accessibility tree | Screen readers on canvas content; it falls out of the design |
@@ -310,6 +310,46 @@ Already in the model and only named by the bundle: which picture a definition sh
 in a notation (definitions carry a template per notation).
 
 ---
+
+### 4.3 Built: commands, their keys and the canvas menu (2026-11-12)
+
+Commands were in three places: key names matched in `select.rs`'s key loop, chords
+hard-coded in `input_manager.ts` (⌘⌥G, ⇧A, ⌥⇧C, ⌘D, ⌘Z, the zoom keys), and the
+inspector calling engine verbs directly. Now:
+
+- **The registry** (`iron_document::commands::COMMANDS`): each command's id, label,
+  Lucide icon, whether it acts on the selection, what it does with the clipboard
+  (`write`, `read`) and where it runs (`engine`, or `shell` for Paste here and Ask the
+  model). Mechanism, so code; the `commands` call hands it to the shell and could
+  hand it to the model's manifest.
+- **Two view fields arrange them** (match="view"): `keys.commands`, `chord:command`
+  pairs (`mod+alt+g:wrap ]:front`; `mod` is Cmd on macOS, Ctrl elsewhere; checked by
+  `commands::chord`), and `menu.canvas`, command ids with `|` between groups.
+  std:workspace holds the keys every view has (undo, redo, select all, copy, cut,
+  duplicate, the zoom keys); a view's own win over them (`merge_keymaps`). std:free-2d
+  adds Figma's (⌥⌘G wrap, ⇧A auto layout, ⌥⇧C copy as SVG, ⌥⌘K create component,
+  `]`/`[` front/back) and its menu: `copy paste-here copy-svg | ask draw-on | front
+  back | wrap layout make-component`.
+- **Keys:** the shell sends any chord a view binds as `chord:<chord>` (by key code,
+  `runtime/chords.ts`); `view_focus::route_tool_keys` turns it into the command id by
+  the keymap of the view under the pointer, so commands run in key order with every
+  other key. The shell's only decisions are the browser's: start a clipboard write in
+  the key event, and leave Cmd+C to the page when page text is selected.
+- **One transaction each:** `bevy_app::commands::plan` makes a command's transaction
+  from the store and the selection (wrap, layout, make-component, front, back,
+  draw-on); the others (copy, cut, duplicate, select all, undo, zoom) keep their
+  handlers, by id. `menu`, `command` and `paste` (with an optional point) are protocol
+  messages; `undo`/`redo` became `command`.
+- **The menu:** a right-click selects what it is on (empty canvas clears the
+  selection, a click on the selection keeps it), then `menu_system` resolves the
+  view's `menu.canvas`: each item with its chord and, made as a dry run of its plan,
+  whether it can run and why not. `CanvasMenu.svelte` draws what it is sent (a Bits
+  dropdown anchored at the click, since the items arrive after the event). The
+  inspector's Create component and Wrap in empty run the same commands.
+
+Not yet: submenus (Figma's Copy/Paste as, Add motion), commands contributed by node
+rules (a table cell's Merge), commands defined by a document (`<command>` with a body
+in model markup), a command palette, and Group (⌘G), Flip, Show/Hide and Lock.
 
 ## 5. Work order
 

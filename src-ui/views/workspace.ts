@@ -21,6 +21,7 @@ import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import { lastActive, noteActive } from './active_view.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
+import { registerShellCommand } from '../runtime/commands.svelte';
 
 /** The layout every document starts from: the Main view (the `main`
  *  composition and loose nodes; its view id stays `viewer`), the session's
@@ -402,6 +403,20 @@ export function showComposition(source: string): string | null {
   current.addPanel({ id, component: 'view', title: titleOf(source), params: { spec: { source, notation: 'composition' } }, position: viewer });
   return id;
 }
+
+/** Show the model's chat (the Model view): its open view comes to the
+ *  front, or one opens beside the main viewer; then its composer takes the
+ *  keys. The `ask` command (commands.rs): the model reads the selection as
+ *  "this" (model/agent.ts). */
+export function showModelChat() {
+  if (!current) return;
+  const model = { source: 'document', notation: 'conversation' };
+  const existing = current.panels.find((p) => specOf(p)?.notation === model.notation && specOf(p)?.source === model.source);
+  if (existing) existing.api.setActive();
+  else current.addPanel({ id: freshId(current, 'Model'), component: 'view', title: 'Model', params: { spec: model }, position: current.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'right' } : undefined });
+  requestAnimationFrame(() => (document.querySelector('.model-view textarea') as HTMLTextAreaElement | null)?.focus());
+}
+registerShellCommand('ask', () => showModelChat());
 
 /** The views onto narratives (their sources), for the driver. */
 export function openNarratives(): string[] {

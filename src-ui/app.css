@@ -25,7 +25,7 @@
   --bg-input: #ffffff;
   --fg: #3b3b3b;
   --fg-muted: #616161;
-  --fg-faint: #767676;
+  --fg-faint: #6b6b6b;
   --border: #e5e5e5;
   --border-strong: #cecece;
   --tab-outline: #e0e0e0;
@@ -37,6 +37,8 @@
   --accent-fg: #ffffff;
   --accent-soft: rgba(0, 95, 184, 0.12);
   --danger: #b3261e;
+  /* A destructive fill (a highlighted danger item, a primary delete), white text on it. */
+  --danger-fill: #b3261e;
   --warning: #856404;
   --ok: #1a7f37;
   --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.15);
@@ -96,6 +98,7 @@
     --accent-fg: #ffffff;
     --accent-soft: rgba(0, 120, 212, 0.25);
     --danger: #f48771;
+    --danger-fill: #c4402f;
     --warning: #cca700;
     --ok: #4ec9b0;
     --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
@@ -127,6 +130,7 @@
   --accent-fg: #ffffff;
   --accent-soft: rgba(0, 120, 212, 0.25);
   --danger: #f48771;
+  --danger-fill: #c4402f;
   --warning: #cca700;
   --ok: #4ec9b0;
   --menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);

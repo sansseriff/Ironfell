@@ -135,7 +135,7 @@
         <span>{build.profile} · opt {build.opt} · {build.simd ? "SIMD" : "no SIMD"} · {build.gfx}</span>
         {#if build.fast}<span class="ui-badge is-ok">optimized</span>{:else}<span class="ui-badge is-warning">slow</span><span class="unfit">not for timing</span>{/if}
       </p>
-      {#if !native}<p class="note">bun run wasm:fast builds the optimized one, bun run wasm the dev one.</p>{/if}
+      {#if !native}<p class="note"><code>bun run wasm:fast</code> builds the optimized one, <code>bun run wasm</code> the dev one.</p>{/if}
     {/if}
     {#if busy}<p class="note">Restarting…</p>{/if}
     {#if !native}<p class="note">A renderer or runtime change restarts the app; the document is kept, its undo history is not.</p>{/if}
@@ -169,6 +169,7 @@
     flex: 0 0 auto;
     width: 160px;
   }
+  .note code { font-family: var(--font-mono); font-size: var(--text-xs); }
   .note {
     color: var(--fg-muted);
     font-size: var(--text-sm);

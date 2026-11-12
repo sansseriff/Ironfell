@@ -1,11 +1,11 @@
 <script lang="ts">
-  import Scan from "@lucide/svelte/icons/scan";
+  import SquareRoundCorner from "@lucide/svelte/icons/square-round-corner";
   let { kind }: { kind: "opacity" | "radius" | "tl" | "tr" | "bl" | "br" } = $props();
   const rotation = $derived(({ tl: 0, tr: 90, br: 180, bl: 270 } as Record<string, number>)[kind] ?? 0);
 </script>
 
 {#if kind === "radius"}
-  <Scan size={14} strokeWidth={1.75} />
+  <SquareRoundCorner size={14} strokeWidth={1.75} />
 {:else}
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     {#if kind === "opacity"}

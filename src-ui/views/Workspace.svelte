@@ -108,7 +108,7 @@
   .dock :global(.dv-pre-actions-container) {
     flex: none;
   }
-  .dock :global(.dv-tab) {
+  .dock :global(.dv-tabs-container > .dv-tab) {
     position: relative;
     padding: 0;
     margin-top: 5px;
@@ -120,12 +120,12 @@
   /* A hovered inactive tab takes a faint tint over its whole shape, down to
      the bar's line, as in VS Code; its box never changes. `!important`:
      dockview sets every inactive tab's background with a longer selector. */
-  .dock :global(.dv-tab.dv-inactive-tab:hover) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-inactive-tab:hover) {
     background: var(--tab-hover) !important;
   }
   /* Faint dividers between unselected tabs; none beside the active tab or a
      hovered one. */
-  .dock :global(.dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab::before) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab::before) {
     content: "";
     position: absolute;
     left: -1px;
@@ -136,16 +136,16 @@
     pointer-events: none;
   }
   /* Only dividers: the active tab's ::before is its left fillet. */
-  .dock :global(.dv-tab.dv-inactive-tab:hover + .dv-tab.dv-inactive-tab::before),
-  .dock :global(.dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab:hover::before) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-inactive-tab:hover + .dv-tab.dv-inactive-tab::before),
+  .dock :global(.dv-tabs-container > .dv-tab.dv-inactive-tab + .dv-tab.dv-inactive-tab:hover::before) {
     display: none;
   }
-  .dock :global(.dv-tab.dv-active-tab) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-active-tab) {
     z-index: 1;
     border-color: var(--tab-outline);
   }
-  .dock :global(.dv-tab.dv-active-tab::before),
-  .dock :global(.dv-tab.dv-active-tab::after) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-active-tab::before),
+  .dock :global(.dv-tabs-container > .dv-tab.dv-active-tab::after) {
     content: "";
     position: absolute;
     bottom: 0;
@@ -157,11 +157,11 @@
      colour outside it. The 8px box ends on the tab's side border, so the
      ring's top meets that border's 1px column exactly and its fill covers
      the border below the curve; the ring's bottom meets the bar's line. */
-  .dock :global(.dv-tab.dv-active-tab::before) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-active-tab::before) {
     left: -8px;
     background: radial-gradient(circle at 0 0, transparent 6.6px, var(--tab-outline) 7.2px, var(--tab-outline) 7.8px, var(--bg) 8.4px);
   }
-  .dock :global(.dv-tab.dv-active-tab::after) {
+  .dock :global(.dv-tabs-container > .dv-tab.dv-active-tab::after) {
     right: -8px;
     background: radial-gradient(circle at 100% 0, transparent 6.6px, var(--tab-outline) 7.2px, var(--tab-outline) 7.8px, var(--bg) 8.4px);
   }

@@ -91,7 +91,7 @@
   opacity: 0.4;
 }
 .ui-menu-item.is-danger { color: var(--danger); }
-.ui-menu-item.is-danger[data-highlighted] { background: var(--danger); color: #fff; }
+.ui-menu-item.is-danger[data-highlighted] { background: var(--danger-fill); color: #fff; }
 .dv-context-menu-item { white-space: nowrap; }
 .dv-context-menu-item--disabled { pointer-events: none; }
 .ui-menu-item .ui-hint {
@@ -111,6 +111,8 @@
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
+/* In a menu with a check (or icon) gutter, headings start where the labels do. */
+.ui-menu:has(.ui-menu-check) .ui-menu-heading { padding-left: 30px; }
 .ui-menu-item .ui-menu-check { width: 14px; display: flex; flex: 0 0 14px; }
 .ui-menu-item .ui-submenu-chevron { margin-left: auto; color: var(--fg-faint); }
 .ui-menu-item[data-highlighted] .ui-submenu-chevron { color: inherit; }
@@ -231,7 +233,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 .ui-button.is-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-fg); }
 .ui-button.is-primary:hover:not(:disabled):not([data-disabled]) { background: var(--accent); filter: brightness(1.1); }
 .ui-button.is-danger { color: var(--danger); }
-.ui-button.is-danger.is-primary { border-color: var(--danger); background: var(--danger); color: #fff; }
+.ui-button.is-danger.is-primary { border-color: var(--danger-fill); background: var(--danger-fill); color: #fff; }
 .ui-button.is-danger.is-outline { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .ui-button.is-small { min-height: var(--control-h-sm); padding: 0 8px; font-size: var(--text-sm); }
 .ui-button.is-block { width: 100%; }
@@ -384,7 +386,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   gap: 8px;
   min-height: var(--panel-header-h);
   padding: 0 8px 0 var(--panel-pad);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-raised);
   font-weight: 600;
 }
 .ui-popover-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
@@ -410,7 +412,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   font-size: var(--text-md);
   outline: none;
 }
-.ui-dialog-title { display: flex; align-items: center; min-height: var(--panel-header-h); padding: 0 var(--panel-pad); border-bottom: 1px solid var(--border); font-size: var(--text-lg); font-weight: 600; }
+.ui-dialog-title { display: flex; align-items: center; min-height: var(--panel-header-h); padding: 0 var(--panel-pad); border-bottom: 1px solid var(--border-raised); font-size: var(--text-lg); font-weight: 600; }
 .ui-dialog-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
 .ui-dialog-description { color: var(--fg-muted); line-height: 1.5; }
 .ui-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 var(--panel-pad) var(--panel-pad); }

@@ -646,7 +646,7 @@
   .stroke-options > :global(.ui-icon-button) { margin-bottom: 2px; }
   .readout-field { display: flex; flex-direction: column; gap: 4px; }
   .readout { padding: 0 8px; color: var(--fg-muted); }
-  .effect-row { display: flex; align-items: center; gap: 4px; }
+  .effect-row { display: flex; align-items: center; gap: 8px; }
   .effect-row :global(.effect-trigger) { flex: 1; gap: 8px; padding: 0 8px; color: var(--fg); cursor: pointer; }
   .effect-row :global(.effect-trigger span) { flex: 1; text-align: left; }
   .effect-row :global(.effect-trigger svg) { flex: none; color: var(--fg-muted); }

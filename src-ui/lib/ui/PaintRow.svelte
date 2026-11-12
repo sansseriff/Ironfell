@@ -94,7 +94,7 @@
 </div>
 
 <style>
-  .paint-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .paint-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   /* One field (`.ui-field`): the swatch, the colour and the opacity. The
      fields inside lose their own shells. */
   .paint-value { display: grid; grid-template-columns: 26px minmax(0, 1fr) 64px; flex: 1; align-items: center; overflow: hidden; }

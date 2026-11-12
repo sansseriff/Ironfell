@@ -48,6 +48,7 @@ import { QuerySubscriptions } from './query_subscriptions';
 import { PendingRequests } from './pending_requests';
 import type { ClientRequest, RequestPayload, UiRequest, UiEvent } from './protocol';
 import { lastCopied } from './clipboard';
+import { runCommand, type MenuItem } from './commands.svelte';
 import { documentArguments, type DocumentCommand } from './protocol.generated';
 import { Scopes, webLocks, type ScopeState } from './scopes';
 import { OpfsScopeStorage } from './scope_storage';
@@ -136,7 +137,12 @@ export class DocumentClient {
   /** What each view offers, by panel, resolved from its focus context
    *  (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse pen`,
    *  `|` sharing a slot) and keymap (`v:select r:rect`). */
-  focus: Record<string, { palette: string; keys: string }> = $state({});
+  focus: Record<string, { palette: string; keys: string; commands: string }> = $state({});
+  /** The open right-click menu (EngineEvent `menu`): the view it is for, its
+   *  items (`null` a divider), and where the click was, in window and canvas
+   *  CSS px. */
+  menu: { panel: string; items: (MenuItem | null)[]; client: { x: number; y: number }; canvas: { x: number; y: number }; at: number } | null = $state(null);
+  private menuAnchor: { client: { x: number; y: number }; canvas: { x: number; y: number } } | null = null;
   /** Font families whose files have arrived (plans/specs/text.md §4), so
    *  the picker can mark what will draw at once. */
   loadedFonts: string[] = $state([]);
@@ -322,8 +328,29 @@ export class DocumentClient {
   subscribe<T>(command: DocumentCommand, value: (result: T) => void, error?: (error: unknown) => void) {
     return this.subscriptions.subscribe(command, value, error);
   }
-  undo() { this.post?.({ ty: 'undo' }); }
-  redo() { this.post?.({ ty: 'redo' }); }
+  undo() { void this.runCommand('undo'); }
+  redo() { void this.runCommand('redo'); }
+
+  /** Run a command by id (commands.rs): a menu item, a button. `at` is the
+   *  canvas point a right-click was at, for Paste here. */
+  runCommand(id: string, at: { x: number; y: number } | null = null) {
+    const post = this.post;
+    return post ? runCommand(post, id, at) : Promise.resolve();
+  }
+
+  /** A right-click on the canvas at these points: the engine selects what
+   *  it is on and answers with the view's menu (`menuArrived`). */
+  openMenu(client: { x: number; y: number }, canvas: { x: number; y: number }) {
+    this.menuAnchor = { client, canvas };
+    this.post?.({ ty: 'mousemove', x: canvas.x, y: canvas.y });
+    this.post?.({ ty: 'menu' });
+  }
+
+  menuArrived(panel: string, items: (MenuItem | null)[]) {
+    const anchor = this.menuAnchor;
+    this.menuAnchor = null;
+    this.menu = anchor && items.length ? { panel, items, ...anchor, at: performance.now() } : null;
+  }
 
   setApiKey(key: string) {
     this.apiKey = key;

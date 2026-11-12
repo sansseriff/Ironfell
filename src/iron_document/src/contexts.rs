@@ -46,6 +46,12 @@ pub enum Kind {
     /// a built-in's short name (`layers model library narratives`, the last
     /// meaning every narrative).
     Views,
+    /// A command keymap: `chord:command` pairs, space-separated
+    /// (`mod+alt+g:wrap ]:front`; [`crate::commands::chord`]).
+    Chords,
+    /// A menu: command ids in order, `|` between groups
+    /// (`copy paste-here | front back`).
+    Commands,
 }
 
 /// The short names a `Views` field takes.
@@ -166,6 +172,15 @@ pub const FIELDS: &[FieldSpec] = &[
     FieldSpec { domain: "chrome", name: "component", view: true, kind: Kind::Choice, options: &["on", "off"], doc: "whether a component instance wears its authoring chrome: the violet frame, its chip, and its input pins for linking (match=\"view\")" },
     FieldSpec { domain: "affords", name: "cursor", view: false, kind: Kind::Choice, options: &["auto", "trim-start", "trim-end"], doc: "the cursor over it, when its press does something the arrow would not say: moving where a span starts or ends (a timeline clip's first or last key; auto: what the tool shows)" },
     FieldSpec { domain: "workspace", name: "strip", view: true, kind: Kind::Views, options: &["layers model narratives library"], doc: "the views a view selector strip offers, in order (panel-primitives.md): its icons switch which of them a panel shows (std:workspace, match=\"view\")" },
+    FieldSpec {
+        domain: "keys",
+        name: "commands",
+        view: true,
+        kind: Kind::Chords,
+        options: &[""],
+        doc: "the commands a view's keys reach, chord:command pairs (mod is Cmd on macOS, Ctrl elsewhere; mod+alt+g:wrap shift+1:zoom-fit); std:workspace's apply in every view, a view's own win (match=\"view\")",
+    },
+    FieldSpec { domain: "menu", name: "canvas", view: true, kind: Kind::Commands, options: &[""], doc: "the commands a right-click on a view's canvas offers, in order, | between groups (match=\"view\")" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -215,6 +230,8 @@ impl Field {
     pub const COMPONENT: Field = Field(27);
     pub const CURSOR: Field = Field(28);
     pub const STRIP: Field = Field(29);
+    pub const COMMAND_KEYS: Field = Field(30);
+    pub const MENU: Field = Field(31);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -936,6 +953,14 @@ fn rule(attrs: Vec<(String, String)>) -> Result<Rule, String> {
                 if let Some(w) = v.split_whitespace().find(|w| !VIEW_NAMES.contains(w) && !w.split_once(':').is_some_and(|(n, s)| !n.is_empty() && !s.is_empty())) {
                     return Err(format!("{k}=\"{v}\": {w} is not a view ({}, or notation:source)", VIEW_NAMES.join(", ")));
                 }
+                Val::Text(Arc::from(v.split_whitespace().collect::<Vec<_>>().join(" ")))
+            }
+            Kind::Chords => {
+                crate::commands::check_keymap(&v).map_err(|e| format!("{k}=\"{v}\": {e}"))?;
+                Val::Text(Arc::from(v.split_whitespace().collect::<Vec<_>>().join(" ")))
+            }
+            Kind::Commands => {
+                crate::commands::check_menu(&v).map_err(|e| format!("{k}=\"{v}\": {e}"))?;
                 Val::Text(Arc::from(v.split_whitespace().collect::<Vec<_>>().join(" ")))
             }
             Kind::Keys => {

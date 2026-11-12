@@ -45,9 +45,21 @@ pub enum Request {
         key: String,
         m: u8,
     },
+    /// Pasted text; at canvas px `x`, `y` (Paste here) or placed as a
+    /// paste is (where it was, or centred in the view).
     Paste {
         text: String,
+        x: Option<f32>,
+        y: Option<f32>,
     },
+    /// A command by id (iron_document `commands.rs`): a menu item, a
+    /// button, `__iron`. Runs in key order with the keys.
+    Command {
+        id: String,
+    },
+    /// A right-click at the pointer: select what it is on, then answer with
+    /// the view's menu (a `menu` event).
+    Menu,
     TextInput {
         text: String,
         anchor: u32,
@@ -78,8 +90,6 @@ pub enum Request {
     Keyup {
         key: String,
     },
-    Undo,
-    Redo,
     StartRunning,
     StopRunning,
     ReleaseApp,
@@ -184,8 +194,8 @@ pub fn dispatch(app: &mut crate::WorkerApp, request: Request) -> (Option<Value>,
             edge = true;
             None
         }
-        Paste { text } => {
-            api::clipboard_paste(app, text);
+        Paste { text, x, y } => {
+            api::clipboard_paste(app, text, x.zip(y));
             edge = true;
             None
         }
@@ -226,13 +236,13 @@ pub fn dispatch(app: &mut crate::WorkerApp, request: Request) -> (Option<Value>,
             edge = true;
             None
         }
-        Undo => {
-            api::undo(app);
+        Command { id } => {
+            api::command(app, id);
             edge = true;
             None
         }
-        Redo => {
-            api::redo(app);
+        Menu => {
+            api::tool_key(app, "menu".into(), 0);
             edge = true;
             None
         }
@@ -304,7 +314,9 @@ mod tests {
     #[test]
     fn shared_input_messages_round_trip_and_reject_incomplete_text() {
         for message in [
-            json!({"ty":"paste","text":"<svg/>"}),
+            json!({"ty":"paste","text":"<svg/>","x":12.5,"y":40.0}),
+            json!({"ty":"command","id":"undo"}),
+            json!({"ty":"menu"}),
             json!({"ty":"textInput","text":"hello","anchor":1,"focus":5}),
             json!({"ty":"leftBtDown","x":50.25,"y":60.5}),
             json!({"ty":"toolKey","key":"v","m":0}),

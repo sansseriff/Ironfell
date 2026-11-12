@@ -81,6 +81,7 @@ export type DocumentCommand =
   | { op: 'next_relation_ids'; n: number }
   | { op: 'place'; parent: string; after: string; count: number }
   | { op: 'schema' }
+  | { op: 'commands' }
   | { op: 'inspect_bind'; node: string; leaf: string; expr: string }
   | { op: 'text_style'; node: string; patch: string }
   | { op: 'fonts' }
@@ -171,6 +172,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'next_relation_ids': return { fn: command.op, args: [command.n] };
     case 'place': return { fn: command.op, args: [command.parent, command.after, command.count] };
     case 'schema': return { fn: command.op, args: [] };
+    case 'commands': return { fn: command.op, args: [] };
     case 'inspect_bind': return { fn: command.op, args: [command.node, command.leaf, command.expr] };
     case 'text_style': return { fn: command.op, args: [command.node, command.patch] };
     case 'fonts': return { fn: command.op, args: [] };
@@ -190,7 +192,9 @@ export type EngineRequest =
   | { ty: 'middleBt'; down: boolean }
   | { ty: 'modifiers'; m: number }
   | { ty: 'toolKey'; key: string; m: number }
-  | { ty: 'paste'; text: string }
+  | { ty: 'paste'; text: string; x?: number | null; y?: number | null }
+  | { ty: 'command'; id: string }
+  | { ty: 'menu' }
   | { ty: 'textInput'; text: string; anchor: number; focus: number }
   | { ty: 'textMotion'; motion: string; extend: boolean }
   | { ty: 'textToggle'; what: string }
@@ -199,8 +203,6 @@ export type EngineRequest =
   | { ty: 'autoAnimation'; autoAnimation: number }
   | { ty: 'keydown'; key: string }
   | { ty: 'keyup'; key: string }
-  | { ty: 'undo' }
-  | { ty: 'redo' }
   | { ty: 'startRunning' }
   | { ty: 'stopRunning' }
   | { ty: 'releaseApp' }
@@ -227,7 +229,9 @@ export type EngineEvent =
   | { ty: 'queries'; requests: ({ node: string; seq: number; model: string; input: unknown })[] }
   | { ty: 'textEdit'; active: boolean; node: string; text: string; anchor: number; focus: number; caret: [number, number, number] }
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
-  | { ty: 'focus'; panel: string; palette: string; keys: string }
+  | { ty: 'focus'; panel: string; palette: string; keys: string; commands: string }
+  | { ty: 'menu'; panel: string; items: ({ id: string; label: string; icon: string; chord: string; enabled: boolean; reason: string; clip: string; runs: string } | null)[] }
+  | { ty: 'commandFailed'; id: string; reason: string }
   | { ty: 'renderLost'; kind: string; error: string }
   | { ty: 'open'; panel: string; node: string; name: string; stands_for: string | null }
 ;

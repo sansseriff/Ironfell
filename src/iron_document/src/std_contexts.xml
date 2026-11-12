@@ -25,6 +25,9 @@
   <rule match="view" palette.tools="select rect|ellipse|table|empty pen text" keys.tools="v:select p:pen r:rect o:ellipse t:text" inspector.sections="main port component table position text layout appearance fill stroke effects other add"/>
   <!-- Where a component's main is, a port can be placed on it. -->
   <rule match="view state:main" palette.tools="select rect|ellipse|table|port|empty pen text"/>
+  <!-- Its commands (commands.rs): Figma's keys, and Figma's right-click
+       menu as far as Iron has the commands. -->
+  <rule match="view" keys.commands="mod+alt+g:wrap shift+a:layout alt+shift+c:copy-svg mod+alt+k:make-component ]:front [:back" menu.canvas="copy paste-here copy-svg | ask draw-on | front back | wrap layout make-component"/>
 </context>
 
 <context name="std:3d">
@@ -97,6 +100,8 @@
      is a press on the bar. -->
 <context name="std:workspace">
   <rule match="view" workspace.strip="layers model narratives library"/>
+  <!-- Keys every view has (a view's own keys.commands win over these). -->
+  <rule match="view" keys.commands="mod+z:undo mod+shift+z:redo mod+y:redo mod+a:select-all mod+c:copy mod+x:cut mod+d:duplicate shift+1:zoom-fit shift+2:zoom-selection shift+0:zoom-100 =:zoom-in shift+=:zoom-in mod+=:zoom-in mod+shift+=:zoom-in -:zoom-out mod+-:zoom-out"/>
 </context>
 
 <context name="std:timeline-tracks">

@@ -4,6 +4,7 @@
 mod input_accum;
 pub(crate) mod tolerances;
 pub(crate) mod view_focus;
+pub(crate) mod commands;
 mod interaction;
 pub(crate) mod manipulate;
 mod picking;
@@ -262,6 +263,9 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
         (
             view_focus::route_tool_keys.before(select::navigate_views),
             view_focus::view_focus_system.after(select::select_tool_system),
+            // A right-click's menu, once the click has selected and the
+            // focus follows the selection.
+            commands::menu_system.after(view_focus::view_focus_system),
             interaction::publish_interaction_state.after(select::sync_session_selection).before(GestureSystems),
             // The schematic's placement and wire tools (schematic.md §4).
             schematic_tool::schematic_tool_system.after(pen::pen_tool_system).before(select::select_tool_system),
@@ -387,6 +391,7 @@ fn init_shared_resources(app: &mut App) {
     app.init_resource::<select::ShellModifiers>();
     app.init_resource::<select::ToolKeys>();
     app.init_resource::<view_focus::ViewFocus>();
+    app.init_resource::<commands::MenuRequest>();
     app.init_resource::<select::Clipboard>();
 }
 

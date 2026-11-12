@@ -2,8 +2,10 @@
 //! tools create into, the container its selection is open in, and its states
 //! (`editing-text`, `editing-points`, `main`). What the view offers resolves
 //! against it, as context data: its palette, which the shell draws, and its
-//! keymap, through which plain letter keys reach tools. No tool or key is
-//! named here.
+//! keymap, through which plain letter keys reach tools; its command keymap
+//! (`keys.commands`, std:workspace's merged under the view's own), through
+//! which the shell's chords reach commands; and its right-click menu
+//! (`menu.canvas`). No tool, command or key is named here.
 
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
@@ -15,11 +17,15 @@ use crate::bevy_app::text_tool::TextTool;
 use crate::document_bridge::{DocumentStore, PanelViews, nest};
 use crate::host_events::{EngineEvent, HostEvents};
 
-/// What a view offers: its palette and keymap, as context values.
+/// What a view offers: its palette and keymaps, as context values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Offer {
     pub palette: String,
     pub keys: String,
+    /// Chords to commands, std:workspace's under the view's own.
+    pub commands: String,
+    /// Its right-click menu: command ids, `|` between groups.
+    pub menu: String,
     pub tolerances: crate::bevy_app::tolerances::Tolerances,
     pub chrome: Chrome,
     /// The grid placement, wiring and moves round to, px (`snap.grid`; 0
@@ -91,6 +97,11 @@ impl ViewFocus {
     pub fn chrome(&self, panel: &str) -> Chrome {
         self.views.iter().find(|(v, ..)| v == panel).map(|(_, _, o)| o.chrome).unwrap_or_default()
     }
+
+    /// A view's offer, if it has been focused.
+    pub fn offer(&self, panel: &str) -> Option<&Offer> {
+        self.views.iter().find(|(v, ..)| v == panel).map(|(_, _, o)| o)
+    }
 }
 
 /// The composition grid a 2D view's moves, resizes and new shapes snap
@@ -106,11 +117,12 @@ pub fn canvas_grid(store: &iron_document::Store, view: &crate::document_bridge::
     (shown && on && g.is_finite() && g > 0.0).then_some(g)
 }
 
-/// Turn plain letter keys into tool picks (`tool:<id>`) through the keymap
+/// Turn plain letter keys into tool picks (`tool:<id>`), and the shell's
+/// chords (`chord:mod+alt+g`) into command ids (`wrap`), through the keymaps
 /// of the view under the pointer (or the last one it was over; before any,
-/// the first view that binds the letter). A letter that view does not bind
-/// is dropped. Keys with modifiers, and named keys
-/// (`escape`, `enter`, …), pass untouched.
+/// the first view that binds the key). A key or chord that view does not
+/// bind is dropped. Keys with modifiers, named keys (`escape`, `enter`, …)
+/// and commands already named pass untouched, in their order.
 pub fn route_tool_keys(hits: Res<crate::PointerHits>, mut focus: ResMut<ViewFocus>, mut keys: ResMut<ToolKeys>) {
     if let Some(p) = &hits.panel
         && focus.last_panel.as_deref() != Some(p.as_str())
@@ -121,14 +133,25 @@ pub fn route_tool_keys(hits: Res<crate::PointerHits>, mut focus: ResMut<ViewFocu
         return;
     }
     let focus = &*focus;
-    let tool_for = |key: &str| -> Option<String> {
-        let bound = |o: &Offer| contexts::keymap(&o.keys).into_iter().find(|(k, _)| *k == key).map(|(_, t)| t.to_owned());
+    let lookup = |bound: &dyn Fn(&Offer) -> Option<String>| -> Option<String> {
         match &focus.last_panel {
             Some(p) => focus.views.iter().find(|(v, ..)| v == p).and_then(|(_, _, o)| bound(o)),
             None => focus.views.iter().find_map(|(_, _, o)| bound(o)),
         }
     };
+    let tool_for = |key: &str| lookup(&|o: &Offer| contexts::keymap(&o.keys).into_iter().find(|(k, _)| *k == key).map(|(_, t)| t.to_owned()));
+    let command_for = |chord: &str| lookup(&|o: &Offer| iron_document::commands::keymap(&o.commands).into_iter().find(|(c, _)| c == chord).map(|(_, id)| id.to_owned()));
     keys.0.retain_mut(|(key, m)| {
+        if let Some(chord) = key.strip_prefix("chord:") {
+            return match iron_document::commands::chord(chord).ok().and_then(|c| command_for(&c)) {
+                Some(id) => {
+                    *key = id;
+                    *m = 0;
+                    true
+                }
+                None => false,
+            };
+        }
         if *m != 0 || key.chars().count() != 1 {
             return true;
         }
@@ -166,6 +189,7 @@ pub fn view_focus_system(
         return;
     }
     let r = Resolver::new(doc, store.0.contexts());
+    let global = r.workspace_values().get(Field::COMMAND_KEYS).to_owned();
     let mut next = Vec::new();
     for view in &views.0 {
         let reach = select.reach.values().find(|r| r.panel == view.panel && sel.selected.contains(&r.node()));
@@ -204,9 +228,17 @@ pub fn view_focus_system(
             hover: v.get(Field::HOVER) != "off",
             component: v.get(Field::COMPONENT) != "off",
         };
-        let offer = Offer { palette: v.get(Field::PALETTE).to_owned(), keys: v.get(Field::KEYS).to_owned(), tolerances, chrome, grid: num(Field::GRID, 0.0).max(0.0) };
-        if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys) != (&offer.palette, &offer.keys)) {
-            events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone() });
+        let offer = Offer {
+            palette: v.get(Field::PALETTE).to_owned(),
+            keys: v.get(Field::KEYS).to_owned(),
+            commands: iron_document::commands::merge_keymaps(&global, v.get(Field::COMMAND_KEYS)),
+            menu: v.get(Field::MENU).to_owned(),
+            tolerances,
+            chrome,
+            grid: num(Field::GRID, 0.0).max(0.0),
+        };
+        if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys, &o.commands) != (&offer.palette, &offer.keys, &offer.commands)) {
+            events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone(), commands: offer.commands.clone() });
         }
         next.push((view.panel.clone(), f, offer));
     }

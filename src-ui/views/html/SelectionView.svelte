@@ -9,6 +9,7 @@
   import { machines, rootOf } from "../../lib/machines.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
+  import { commandFailure } from "../../runtime/commands.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
@@ -60,15 +61,14 @@
       linkError = String(e);
     }
   }
-  // Make a component of the picked pictures (component-model.md §5.5): one
-  // linked instance of a new definition takes their place.
-  let makeError = $state("");
-  async function makeComponent() {
-    makeError = "";
-    try {
-      const r = await doc.command({ op: 'make_component', ids: JSON.stringify(doc.selection), name: "component" });
-      if (!r.ok) makeError = r.error;
-    } catch (e) { makeError = String(e); }
+  // The title's actions are commands (commands.rs), as the canvas menu's and
+  // keys' are: Create component (component-model.md §5.5), Wrap in empty. A
+  // refusal arrives as a `commandFailed` event and shows here.
+  let ranAt = $state(0);
+  const commandError = $derived(ranAt > 0 && commandFailure.current && commandFailure.current.at >= ranAt && ["make-component", "wrap"].includes(commandFailure.current.id) ? commandFailure.current.reason : "");
+  function command(id: string) {
+    ranAt = performance.now();
+    void doc.runCommand(id);
   }
   // The attachment task: started from the title's Attach points, it stays
   // mounted (and open) when the selection empties.
@@ -274,7 +274,7 @@
        do with the selection, one row of icon buttons. -->
   {#if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
-    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-badge" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={makeComponent} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => author("wrap", { ids: doc.selection })} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-badge" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={() => command("make-component")} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
   <AttachmentTask bind:this={attach} />
   {#if showIn.length}
@@ -285,7 +285,7 @@
     </div>
   {/if}
   {#if linkError}<p class="error">{linkError}</p>{/if}
-  {#if makeError}<p class="error">{makeError}</p>{/if}
+  {#if commandError}<p class="error">{commandError}</p>{/if}
   {#if doc.question}
     <div class="question" role="dialog" aria-label="Merge entities">
       <p>Both pictures already stand for an entity. Which one should remain?</p>

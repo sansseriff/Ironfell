@@ -33,8 +33,15 @@ pub enum EngineEvent {
     LinkDrop { spec: String, node: String, x: f32, y: f32 },
     /// What a view offers, resolved from its focus context
     /// (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse
-    /// pen`, `|` sharing a slot) and keymap (`v:select r:rect`).
-    Focus { panel: String, palette: String, keys: String },
+    /// pen`, `|` sharing a slot), keymap (`v:select r:rect`) and command
+    /// keymap (`mod+alt+g:wrap ]:front`, every chord it binds).
+    Focus { panel: String, palette: String, keys: String, commands: String },
+    /// A right-click's menu (`menu.canvas` of the view it was over, after
+    /// the click selected what it was on): its items in order, `None` for a
+    /// divider. Empty when there is no menu there.
+    Menu { panel: String, items: Vec<Option<MenuItem>> },
+    /// A command could not run, and why (a menu or a button asked for it).
+    CommandFailed { id: String, reason: String },
     /// The renderer stopped: the GPU device was lost or wgpu reported an
     /// error (`render_loss`). `kind` is wgpu's error type (`DeviceLost`,
     /// `Validation`, `OutOfMemory`, `Internal`). The main world still runs.
@@ -45,6 +52,23 @@ pub enum EngineEvent {
     /// timeline names its pieces: `band <key> …`), `stands_for` what it
     /// projects, if anything.
     Open { panel: String, node: String, name: String, stands_for: Option<String> },
+}
+
+/// A right-click menu's item: a command as the view offers it now.
+#[derive(Debug, Clone, Serialize)]
+pub struct MenuItem {
+    pub id: String,
+    pub label: String,
+    pub icon: String,
+    /// Its chord in the view's keymap (`mod+alt+g`), or empty.
+    pub chord: String,
+    pub enabled: bool,
+    /// Why it is disabled, or empty.
+    pub reason: String,
+    /// `none`, `write` or `read`: what it does with the clipboard.
+    pub clip: String,
+    /// `engine` or `shell`.
+    pub runs: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

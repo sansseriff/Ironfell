@@ -2,6 +2,8 @@ import type { UiRequest } from './protocol';
 import { oppositeVectorBackendUrl } from './variant_policy';
 import { beginCopy, canvasOwnsCopy, pastedFragment } from './clipboard';
 import { isToolLetter } from './tool_keys';
+import { commandsFor } from './commands.svelte';
+import { chordOf } from './chords';
 
 export interface InputPoster {
     post(data: UiRequest): void;
@@ -9,6 +11,9 @@ export interface InputPoster {
 
 export interface InputManagerOptions {
     enableRaw?: boolean;
+    /** A right-click on the canvas, in window and canvas CSS px: the shell
+     *  asks the engine for that view's menu (CanvasMenu.svelte). */
+    onMenu?: (client: { x: number; y: number }, canvas: { x: number; y: number }) => void;
 }
 
 /**
@@ -154,6 +159,12 @@ export class InputManager {
         });
         this.listen(canvas, 'pointercancel', () => this.cancelInput());
         this.listen(window, 'blur', () => this.cancelInput());
+        // A right-click opens Iron's menu, not the browser's.
+        this.listen(canvas, 'contextmenu', (e: MouseEvent) => {
+            e.preventDefault();
+            const r = canvas.getBoundingClientRect();
+            this.options.onMenu?.({ x: e.clientX, y: e.clientY }, { x: e.clientX - r.left, y: e.clientY - r.top });
+        });
         // A middle press must not start the browser's autoscroll.
         this.listen(canvas, 'mousedown', (e: MouseEvent) => {
             if (e.button === 1) e.preventDefault();
@@ -224,87 +235,37 @@ export class InputManager {
         // Headless controls (menus, popovers, selects) consume their keys
         // before this window listener. Closing one must not also act on canvas.
         if (event.defaultPrevented) return;
-        {
-            const target = event.target as HTMLElement | null;
-            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-            const selectAll = key === 'a' && (event.metaKey || event.ctrlKey);
-            // Tool keys: whatever the views' keymaps bind (context data,
-            // contexts.md §2.7); by default Figma's V, P, R, O and T.
-            const toolSwitch = isToolLetter(key) && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
-            if (!editing && (InputManager.TOOL_KEYS.includes(key) || selectAll || toolSwitch)) {
-                event.preventDefault();
-                this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
-                return;
-            }
-            // View zoom (Figma's keys): Shift+1 fit, Shift+2 selection,
-            // Shift+0 100%, +/- in and out, alone or with Cmd/Ctrl (instead
-            // of the browser's page zoom).
-            const zoom = event.shiftKey && event.code === 'Digit1' ? 'zoomfit'
-                : event.shiftKey && event.code === 'Digit2' ? 'zoomsel'
-                : event.shiftKey && event.code === 'Digit0' ? 'zoom100'
-                : !event.altKey && (key === '=' || key === '+') ? 'zoomin'
-                : !event.altKey && key === '-' ? 'zoomout'
-                : null;
-            if (!editing && zoom) {
-                event.preventDefault();
-                this.post({ ty: 'toolKey', key: zoom, m: InputManager.mods(event) });
-                return;
-            }
-        }
-        // Copy, cut and duplicate (Cmd/Ctrl+C, X, D). Copy and cut write the
-        // clipboard from here, while this key event still counts as a user
-        // gesture; the worker supplies the content (runtime/clipboard.ts).
-        const command = event.metaKey || event.ctrlKey;
-        if (command && !event.altKey && (key === 'c' || key === 'x') && canvasOwnsCopy(event.target)) {
-            event.preventDefault();
-            if (event.repeat) return;
-            beginCopy(() => this.post({ ty: 'toolKey', key, m: InputManager.mods(event) }));
-            return;
-        }
-        // Wrap in an empty (Cmd/Ctrl+Alt+G, Figma's "frame selection";
-        // component-authoring.md §2). By code: Alt changes the character.
-        if (command && event.altKey && !event.shiftKey && event.code === 'KeyG') {
-            const target = event.target as HTMLElement | null;
-            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-            if (!editing) {
-                event.preventDefault();
-                if (!event.repeat) this.post({ ty: 'toolKey', key: 'wrap', m: 0 });
-                return;
-            }
-        }
-        // Add auto layout (Shift+A, Figma's; layout-and-tables.md §2.4). The
-        // key also goes on to Bevy, where Shift+A runs a 3D camera left; the
-        // engine acts on 'layout' only with the pointer over a 2D view.
-        if (!command && !event.altKey && event.shiftKey && event.code === 'KeyA' && !event.repeat) {
-            const target = event.target as HTMLElement | null;
-            const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-            if (!editing) this.post({ ty: 'toolKey', key: 'layout', m: 0 });
-        }
-        // Copy as SVG (Alt+Shift+C; Figma has no default). By key code: with
-        // Alt held, macOS reports the character it types. Cmd+Shift+C and
-        // Cmd+Alt+C belong to the browser's developer tools.
-        if (!command && event.altKey && event.shiftKey && event.code === 'KeyC' && canvasOwnsCopy(event.target)) {
-            event.preventDefault();
-            if (event.repeat) return;
-            beginCopy(() => this.post({ ty: 'toolKey', key: 'copysvg', m: InputManager.mods(event) }));
-            return;
-        }
-        if (command && !event.altKey && key === 'd' && canvasOwnsCopy(event.target)) {
-            // Also keeps the browser's bookmark shortcut away.
+        const target = event.target as HTMLElement | null;
+        const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        // Tool keys: whatever the views' keymaps bind (context data,
+        // contexts.md §2.7); by default Figma's V, P, R, O and T.
+        const toolSwitch = isToolLetter(key) && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+        if (!editing && (InputManager.TOOL_KEYS.includes(key) || toolSwitch)) {
             event.preventDefault();
             this.post({ ty: 'toolKey', key, m: InputManager.mods(event) });
             return;
         }
-        // Editor commands are decided here and sent as commands, not keys:
-        // Cmd/Ctrl+Z undoes, Cmd/Ctrl+Shift+Z or Ctrl+Y redoes.
-        if ((event.metaKey || event.ctrlKey) && (key === 'z' || key === 'y')) {
-            const target = event.target as HTMLElement | null;
-            if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-            event.preventDefault();
-            if (event.repeat) return;
-            const redo = key === 'y' || event.shiftKey;
-            this.post({ ty: redo ? 'redo' : 'undo' });
-            return;
+        // Commands: a chord any view's `keys.commands` binds goes to the
+        // engine, which picks the command by the keymap of the view under
+        // the pointer (commands.svelte.ts). A command on the selection
+        // leaves the key to the browser when the canvas has none, or when
+        // page text is selected (Cmd+C copies that text); a clipboard
+        // command starts the write here, inside the user gesture.
+        const chord = editing ? null : chordOf(event);
+        const bound = chord ? commandsFor(chord) : [];
+        if (chord && bound.length) {
+            const onSelection = bound.every((c) => c.selection);
+            const copies = bound.some((c) => c.clip === 'write');
+            if (!(onSelection || copies) || canvasOwnsCopy(event.target)) {
+                event.preventDefault();
+                if (event.repeat) return;
+                const send = () => this.post({ ty: 'toolKey', key: `chord:${chord}`, m: 0 });
+                if (copies) beginCopy(send);
+                else send();
+                // Without Cmd/Ctrl the key goes on to Bevy too (Shift+A also
+                // moves a 3D camera left).
+                if (event.metaKey || event.ctrlKey) return;
+            }
         }
         // NOTE: keys are whitelisted twice — here and in `map_key_str_to_bevy_key`
         // in src/web_ffi.rs. A new shortcut must be added to both or it silently
@@ -319,8 +280,7 @@ export class InputManager {
             return;
         }
         // Don't steal keystrokes from HTML form controls layered over the canvas
-        const target = event.target as HTMLElement | null;
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (editing) return;
         event.preventDefault();
         this.keyPressed.add(key);
         if (!this.keyFrameScheduled) {

@@ -46,7 +46,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10): the document crate rebuilds everything above it |
-| ⏱ `build.sh` cold | ~5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06) |
+| ⏱ `build.sh` cold | ~3–5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06; 3m 00s in a fresh T3 worktree, 2026-11-12) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4–5 min (cargo 4m 38s plus binding generation in composition-settings, 2026-11-10; cargo 3m 25s, 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |
 | `regression.txt` (`GPU=1`): bindings, model edits, the pendulum, linking, save/load | ~1 min (1m 09s, 2026-11-09) |
@@ -57,6 +57,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |
 | `keys.txt` | ~30 s |
+| `menu.txt` (right-click menu, command keys) | ~15 s |
 | `sequence.txt` | ~30 s |
 | `schematic.txt` | ~40 s |
 | `scopes.txt` | ~15 s |
@@ -620,6 +621,16 @@ cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < smoke.txt; cd 
 .claude/skills/run-iron/serve.sh stop
 ```
 
+**In a worktree, never run `serve.sh`:** it kills whatever listens on :5173, which is
+the user's own Vite for the main checkout. Serve the worktree on another port and
+point the driver at it; start Vite with `--force` after a wasm rebuild, or it can keep
+serving the old binary (2026-11-12: a worktree's engine ran yesterday's contexts):
+
+```bash
+bunx vite --port 5185 --strictPort --force &
+export URL="http://localhost:5185/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog"
+```
+
 The shell is a dock of views (`src-ui/views/`, plans/specs/panels-and-session.md):
 tabs and splits, each a view onto a composition or an HTML view. The
 document-space commands below address the **Main** tab, whose view id is
@@ -664,7 +675,7 @@ is now a resistor component, not a slider), 3 step errors on the old layout and 
 interaction a unit test cannot reach: a real pointer or keyboard gesture through the
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `canvas-grid.txt`, `sequence.txt`, `text.txt`,
-`text-styles.txt`, `keys.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
+`text-styles.txt`, `keys.txt`, `menu.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
 `narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
@@ -2146,6 +2157,58 @@ applied "model edit" (1 ops, Model) -> v6
 Native: `--test contexts` covers view rules (palette and keys by focus, `main`, a
 container in focus, a notation named by a document context that extends a built-in
 one, view and node fields kept apart).
+
+## Commands and the canvas menu (2026-11-12)
+
+`iron_document::commands` registers the editor's commands (id, label, icon, whether
+it acts on the selection, clipboard use, engine or shell); contexts arrange them:
+`keys.commands` (chord:command pairs; std:workspace's apply in every view, a view's
+own win) and `menu.canvas` (the right-click menu, `|` between groups; std:free-2d).
+The shell sends a bound chord as `toolKey chord:<chord>`, and the engine picks the
+command by the keymap of the view under the pointer (`view_focus::route_tool_keys`).
+A right-click sends `menu`; the select tool selects what it is on, and
+`bevy_app::commands::menu_system` answers with the items, each made as a dry run of
+its plan so a disabled one says why. After a build, with Vite up:
+
+```sh
+cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < menu.txt; cd -
+```
+
+Right-click on `a` (under `b`) selects it and offers the ten items, Send to back
+disabled; Bring to front applies one "bring to front"; right-click on empty canvas
+clears the selection, leaving Paste here and Ask enabled; `[` sends `a` back,
+Cmd+Alt+G wraps it in an empty and Cmd+Z undoes that. Inspect
+`screenshots/menu-on-a.png`. Expected, minus `nav`, `ready`, `screenshot` and
+`clicked` lines:
+
+```
+{"enabled":false,"guides":[]}
+1
+"slide"
+true
+undefined
+undefined
+"a b"
+[1,"copy paste-here copy-svg ask draw-on front back(off: Already at the back) wrap layout make-component"]
+"b a"
+applied "open demo scene" (302 ops, System) -> v1
+applied "model edit" (1 ops, Model) -> v2
+applied "model edit" (2 ops, Model) -> v3
+applied "bring to front" (1 ops, Human) -> v4
+[0,"copy(off: Select something first) paste-here copy-svg(off: Select something first) ask draw-on(off: Select a shape first) front(off: Select something first) back(off: Select something first) wrap(off: Select something first) layout(off: Select something first) make-component(off: Select something first)"]
+"a b"
+[1,true]
+["a b",false]
+(no page errors)
+```
+
+Native: `--test contexts` `commands_are_context_data` (the built-in menu and keys, a
+document's override, refusals) and `bring_to_front_and_send_to_back_restack_among_siblings`;
+`commands.rs`'s unit tests (chords, merging keymaps); `bun test tests/chords.test.ts`.
+
+**Known stale (2026-11-12):** `layout.txt` hard-codes node `#3v` and expect-versions
+from a demo of 298 ops; the demo now opens with 302, so its second edit fails and the
+rest cascades. Its Shift+A half passes when run with the ids found by name.
 
 ## Keyboard navigation by context (2026-10-27)
 

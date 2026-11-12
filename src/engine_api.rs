@@ -2200,30 +2200,32 @@ pub fn document_schema() -> String {
     iron_document::registry::schema_json().to_string()
 }
 
-pub fn undo(app: &mut WorkerApp) {
-    history_request(app, crate::document_bridge::HistoryOp::Undo);
-}
-
-pub fn redo(app: &mut WorkerApp) {
-    history_request(app, crate::document_bridge::HistoryOp::Redo);
-}
-
-/// Undo and redo travel with the other shortcuts (`ToolKeys`), so they
-/// apply in the order the keys were pressed: a tool's transaction from an
-/// earlier key reaches `PendingTransactions` when the tool handles it, and
-/// an undo queued straight into `HistoryRequests` would overtake it on a
-/// slow frame (undoing the previous change instead).
-fn history_request(app: &mut WorkerApp, op: crate::document_bridge::HistoryOp) {
-    if let Some(mut keys) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ToolKeys>() {
-        let key = match op {
-            crate::document_bridge::HistoryOp::Undo => "undo",
-            crate::document_bridge::HistoryOp::Redo => "redo",
-        };
-        keys.0.push((key.to_owned(), 0));
+/// Run a command (iron_document `commands.rs`) by id. Engine commands
+/// travel with the keys (`ToolKeys`), so they apply in the order they were
+/// asked for: a tool's transaction from an earlier key reaches
+/// `PendingTransactions` when the tool handles it, and an undo queued
+/// straight into `HistoryRequests` would overtake it on a slow frame
+/// (undoing the previous change instead). A shell command, or an unknown
+/// id, is refused here: the shell runs its own.
+pub fn command(app: &mut WorkerApp, id: String) {
+    match iron_document::commands::find(&id) {
+        Some(c) if c.runs == iron_document::commands::Runs::Engine => {
+            if let Some(mut keys) = app.world_mut().get_resource_mut::<crate::bevy_app::select::ToolKeys>() {
+                keys.0.push((c.id.to_owned(), 0));
+            }
+        }
+        Some(_) => warn!("command {id}: the shell runs it"),
+        None => warn!("unknown command {id}"),
     }
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
+}
+
+/// The command registry (`commands.rs`) as JSON: id, label, icon, whether
+/// it needs a selection, its clipboard use and where it runs.
+pub fn commands() -> String {
+    iron_document::commands::registry_json().to_string()
 }
 
 pub fn set_modifiers(app: &mut WorkerApp, bits: u8) {
@@ -2240,9 +2242,9 @@ pub fn tool_key(app: &mut WorkerApp, key: String, bits: u8) {
     }
 }
 
-pub fn clipboard_paste(app: &mut WorkerApp, text: String) {
+pub fn clipboard_paste(app: &mut WorkerApp, text: String, at: Option<(f32, f32)>) {
     if let Some(mut clip) = app.world_mut().get_resource_mut::<crate::bevy_app::select::Clipboard>() {
-        clip.pastes.push(text);
+        clip.pastes.push((text, at.map(|(x, y)| bevy::math::Vec2::new(x, y))));
     }
 }
 

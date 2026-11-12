@@ -6,6 +6,7 @@
   import LinkPopover from "./lib/LinkPopover.svelte";
   import { controllerManager } from "./controller-manager.svelte";
   import LatencyFilm from "./lib/LatencyFilm.svelte";
+  import CanvasMenu from "./lib/CanvasMenu.svelte";
 
   const filming = new URLSearchParams(location.search).get('latencyFilm') === '1';
 
@@ -29,9 +30,6 @@
     bind:this={canvasEl}
     id="bevy-canvas"
     tabindex="0"
-    oncontextmenu={(e) => {
-      e.preventDefault();
-    }}
   ></canvas>
 
   <!-- HTML UI layer floats above; only interactive elements re-enable pointer events -->
@@ -45,6 +43,7 @@
 
   <ConvertDialog />
   <LinkPopover />
+  <CanvasMenu />
 
   <WebGL2Warning
     show={controllerManager.showBackendWarning}

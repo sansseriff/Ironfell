@@ -14,6 +14,7 @@ def ts_type(t):
     if t in ['u8','u32','u64','i64','f32','f64','usize']: return 'number'
     if t in ['Value', 'serde_json::Value']: return 'unknown'
     if t == 'FontRequest': return '{ family: string; file: string }'
+    if t == 'MenuItem': return '{ id: string; label: string; icon: string; chord: string; enabled: boolean; reason: string; clip: string; runs: string }'
     if t == 'QueryRequest': return '{ node: string; seq: number; model: string; input: unknown }'
     if re.fullmatch(r'\[f32;\s*3\]',t): return '[number, number, number]'
     if t.startswith('Option<'): return ts_type(t[7:-1])+' | null'

@@ -35,12 +35,14 @@
 
   let {
     node,
+    nodes = [node],
     field,
     patch,
     refresh,
     onError,
   }: {
     node: string;
+    nodes?: string[];
     field: (kind: string, name: string, text?: string, valueKind?: string) => Property;
     patch: (values: Record<string, string>, remove?: string[], label?: string) => Promise<void>;
     refresh: () => void;
@@ -59,25 +61,25 @@
     doc.command({ op: 'fonts' }).then((c: FontCatalog) => (catalog = c)).catch(() => {});
   });
 
-  const family = $derived(field("font", "family", "Inter", "str").text ?? "Inter");
-  const weight = $derived(Number(field("font", "weight", "400").text ?? 400));
-  const align = $derived(field("font", "align", "left", "enum").text ?? "left");
-  const valign = $derived(field("font", "valign", "top", "enum").text ?? "top");
-  const sizing = $derived(field("text", "sizing", "auto_width", "enum").text ?? "auto_width");
-  const tabular = $derived(field("font", "tabular", "false", "bool").text === "true");
-  const italic = $derived(field("font", "italic", "false", "bool").text === "true");
+  const family = $derived(field("font", "family").mixed ? "Mixed" : field("font", "family", "Inter", "str").text ?? "Inter");
+  const weight = $derived(field("font", "weight").mixed ? NaN : Number(field("font", "weight", "400").text ?? 400));
+  const align = $derived(field("font", "align").mixed ? "" : field("font", "align", "left", "enum").text ?? "left");
+  const valign = $derived(field("font", "valign").mixed ? "" : field("font", "valign", "top", "enum").text ?? "top");
+  const sizing = $derived(field("text", "sizing").mixed ? "" : field("text", "sizing", "auto_width", "enum").text ?? "auto_width");
+  const tabular = $derived(!field("font", "tabular").mixed && field("font", "tabular", "false", "bool").text === "true");
+  const italic = $derived(!field("font", "italic").mixed && field("font", "italic", "false", "bool").text === "true");
   const content = $derived(field("text", "content", "", "str"));
-  const underline = $derived(field("font", "underline", "false", "bool").text === "true");
-  const strike = $derived(field("font", "strike", "false", "bool").text === "true");
+  const underline = $derived(!field("font", "underline").mixed && field("font", "underline", "false", "bool").text === "true");
+  const strike = $derived(!field("font", "strike").mixed && field("font", "strike", "false", "bool").text === "true");
   const fill = $derived(field("fill", "color", "#000000ff", "color"));
 
   // Characters selected in the canvas edit: styling goes to them alone
   // (plans/specs/text.md §2.1); otherwise to the whole node.
-  const rangeSelected = $derived(doc.textEdit.active && doc.textEdit.node === node && doc.textEdit.anchor !== doc.textEdit.focus);
+  const rangeSelected = $derived(nodes.length === 1 && doc.textEdit.active && doc.textEdit.node === node && doc.textEdit.anchor !== doc.textEdit.focus);
   async function style(patch: Record<string, unknown>) {
     onError("");
     try {
-      const r = await doc.command({ op: 'text_style', node: node, patch: JSON.stringify(patch) });
+      const r = await doc.command({ op: 'text_style', node: node, patch: JSON.stringify({ ...patch, nodes }) });
       if (!r.ok) onError(r.error);
       refresh();
     } catch (e) { onError(String(e)); }
@@ -103,7 +105,7 @@
 
   const known = $derived((catalog as FontCatalog | null)?.families.find((f) => f.name.toLowerCase() === family.toLowerCase()));
   const installed = $derived(!!(catalog as FontCatalog | null)?.system.some((n) => n.toLowerCase() === family.toLowerCase()));
-  const missing = $derived(!!catalog && !known && !installed);
+  const missing = $derived(family !== "Mixed" && !!catalog && !known && !installed);
   const weights = $derived.by(() => {
     const all = catalog?.weights ?? [{ weight: 400, name: "Regular" }];
     const [lo, hi] = known?.weights ?? [100, 900];
@@ -127,7 +129,7 @@
   let expr = $state("");
   async function bind(text: string) {
     onError("");
-    const r = await doc.command({ op: 'inspect_bind', node: node, leaf: "text.content", expr: text });
+    const r = await doc.command({ op: 'inspect_patch', node, patch: JSON.stringify({ nodes, values: text ? { "text.content": `=${text}` } : {}, unbind: text ? [] : ["text.content"], label: "bind text content" }) });
     if (!r.ok) onError(r.error);
     else binding = false;
   }
@@ -153,7 +155,7 @@
   </div>
 
   <div class="pair">
-    <Select value={String(weights.some((w) => w.value === String(weight)) ? weight : weights[0]?.value)} items={weights} onChange={(v) => style({ weight: Number(v) })} label="Font weight" />
+    <Select placeholder="Mixed" value={Number.isNaN(weight) ? "" : String(weights.some((w) => w.value === String(weight)) ? weight : weights[0]?.value)} items={weights} onChange={(v) => style({ weight: Number(v) })} label="Font weight" />
     <div class="size">
       <PropertyField field={field("font", "size", "24")} {node} compact label="Font size" onSet={setField} onRefresh={refresh} {onError} />
       <DropdownMenu.Root>
@@ -171,12 +173,12 @@
     <!-- Four independent toggles in the segmented control's track. -->
     <div class="ui-segmented" role="group" aria-label="Text style">
       {#each [{ what: "bold", icon: Bold, label: "Bold", title: "Bold (⌘B)", on: weight >= 600 }, { what: "italic", icon: Italic, label: "Italic", title: "Italic (⌘I)", on: italic }, { what: "underline", icon: Underline, label: "Underline", title: "Underline (⌘U)", on: underline }, { what: "strike", icon: Strikethrough, label: "Strikethrough", title: "Strikethrough (⌘⇧X)", on: strike }] as const as t (t.what)}
-        <Toggle.Root class="ui-segment" aria-label={t.label} title={t.title} pressed={!rangeSelected && t.on} onPressedChange={() => toggle(t.what)}><t.icon size={14} strokeWidth={1.75} /></Toggle.Root>
+        <Toggle.Root class="ui-segment" aria-label={t.label} title={field("font", t.what === "bold" ? "weight" : t.what).mixed ? `${t.title} · Mixed` : t.title} aria-pressed={field("font", t.what === "bold" ? "weight" : t.what).mixed ? "mixed" : undefined} pressed={!rangeSelected && t.on} onPressedChange={() => toggle(t.what)}><t.icon size={14} strokeWidth={1.75} /></Toggle.Root>
       {/each}
     </div>
     <div class="ui-field color" title={rangeSelected ? "Colour of the selected characters" : "Text colour"}>
       <ColorPicker swatch field={fill} {node} label={rangeSelected ? "Selection colour picker" : "Text colour picker"} heading={rangeSelected ? "Selection colour" : "Text colour"} scrub={!rangeSelected} tokens={!rangeSelected} onSet={setColor} onRefresh={refresh} {onError} />
-      <input aria-label={rangeSelected ? "Selection colour" : "Text colour"} value={(fill.text ?? "").slice(1, 7).toUpperCase()} spellcheck="false" onkeydown={onEnter} onchange={(e) => setColor(fill, e.currentTarget.value.startsWith("#") ? e.currentTarget.value : `#${e.currentTarget.value}`)} />
+      <input aria-label={rangeSelected ? "Selection colour" : "Text colour"} placeholder={(fill.mixedColor ?? fill.mixed) ? "Mixed" : undefined} value={(fill.mixedColor ?? fill.mixed) ? "" : (fill.text ?? "").slice(1, 7).toUpperCase()} spellcheck="false" onkeydown={onEnter} onchange={(e) => setColor(fill, e.currentTarget.value.startsWith("#") ? e.currentTarget.value : `#${e.currentTarget.value}`)} />
     </div>
   </div>
   {#if rangeSelected}<p class="note">Styling the selected characters</p>{/if}
@@ -228,7 +230,7 @@
     <TextInput class="mono" aria-label="Content expression" placeholder={'"P = " + fmt(n12.slider.value, 2)'} bind:value={expr} onkeydown={(e: KeyboardEvent) => { if (e.key === "Enter") bind(expr); if (e.key === "Escape") binding = false; }} />
     <p class="hint">An expression: <code>fmt(x, 2)</code>, <code>fmt(q, "kPa", 1)</code>, <code>sci(x, 3)</code>, joined with <code>+</code>.</p>
   {:else}
-    <textarea class="ui-input" aria-label="Text content" rows="2" value={content.text ?? ""} disabled={content.edit === "locked"} title={content.why ?? ""} onchange={(e) => set("text.content", e.currentTarget.value, "edit text")}></textarea>
+    <textarea class="ui-input" aria-label="Text content" rows="2" placeholder={content.mixed ? "Mixed" : undefined} value={content.mixed ? "" : content.text ?? ""} disabled={content.edit === "locked"} title={content.why ?? ""} onchange={(e) => set("text.content", e.currentTarget.value, "edit text")}></textarea>
   {/if}
 </Section>
 

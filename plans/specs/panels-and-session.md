@@ -3,8 +3,8 @@
 **Status:** design note, 2026-10-12. Built: the dock presenter and views, pan and zoom,
 and the session tier with the selection (see "Built so far" at the end). Not yet built:
 the workspace root, the inspector as a bound session composition, and selection in undo.
-A first HTML inspector is built; it currently inspects the first selected node, with
-context-driven section order and scoped reactive reads. It came out of a conversation
+An HTML inspector is built with context-driven section order, scoped reactive reads
+and selection-wide mixed-value properties (2026-11-11). It came out of a conversation
 after the select tool (plans/specs/select-tool.md) and records the direction agreed there. It
 revises one earlier verdict, in document-spine.md §4; see "What this changes" below.
 
@@ -195,8 +195,8 @@ tracked in [`handoff-product.md`](../handoff-product.md).
   per user. Collaboration argues for beside it.
 - **How the inspector's per-component templates become definitions**, and whether a
   definition's inspector is part of its "notation" (ECM §5).
-- **Whether an inspector of several nodes edits through each node's own handle**, or
-  refuses when any one is locked.
+- Multiple selection edits through each node's own handle; a shared field is locked
+  when any member is locked. Conflicting writes to a shared source are refused atomically.
 
 ## Built so far
 
@@ -292,8 +292,8 @@ Follow-ups:
 sectioned controls, paired numeric fields, percent and degree presentation, Lucide
 icons, colour/hex editing, Bits UI selects and a gradient preview. The default right
 pane is 280 px wide. Bindings still invert through handles and locked values retain
-their reason. Multiple selection explicitly identifies that only its first item is
-being edited; mixed-value batch editing is not implemented.
+their reason. The initial pass edited only the first selected item; the 2026-11-11 follow-up below
+replaces that behavior with mixed-value batch editing.
 
 Alt while hovering a numeric input shows an `ew-resize` cursor. Alt-drag previews through
 `document_inspect_scrub`, which returns a store gesture token; move, release and cancel
@@ -375,3 +375,43 @@ with no page errors. The focused `composition-settings.ts` browser fixture passe
 at 1× and 2×, checking the controls and canvas pixels, composition switching,
 theme changes without document edits, undo and canonical reload. The document test covers composition locality, one-step undo
 and serialization. Execution results are recorded in the run-iron skill.
+
+
+## Multiple-selection properties (2026-11-11)
+
+The HTML inspector subscribes to every selected object, including changes that keep
+its first object selected. It offers the properties all members support, shows
+shared values normally and differing values as **Mixed**, and names the selection
+by its object count. Optional facets may be absent on some members; changing their
+fields adds them only as part of that edit. Missing facets remain missing on undo.
+
+Each numeric, enum, boolean, paint, content or formatting edit addresses the
+selection captured by that control. Numeric and color scrubs preview the full
+selection and commit once; cancellation restores it. Text styles apply to every
+selected box and clear the corresponding run overrides. A single text's selected
+character range retains its existing styling behavior. Mixed style toggles turn
+on for all boxes; toggling again turns them off.
+
+**Fill** follows Figma's mixed-content presentation: differing fills show
+"Click + to replace mixed content" and a + action. It replaces every selected fill
+with one solid gray fill, removing gradients and replacing fill bindings, in one
+undoable transaction. The resulting paint row edits the shared fill normally.
+
+**Selection colors** is a separate section below Effects. It lists original paints
+grouped by leaf and value. Each row recolors only matching selected objects, so
+changing the red fill leaves blue fills and strokes alone. A normal Stroke edit
+unifies that property across the selection. RGB and alpha report mixed states
+independently; alpha-only edits preserve each object's RGB.
+
+Batch edits plan every target before one transaction through `iron_document`.
+Each member's handle is respected; any locked/invalid member or conflicting write
+to a shared binding source rejects the whole edit. Specialized main/port/component
+controls remain single-selection sections. Inspector controls remain an HTML
+projection, as above.
+
+Validation: both wasm backends build; frontend check and 129 JavaScript tests pass.
+`.claude/skills/run-iron/multi-properties.ts` passes at DPR 1 and 2, covering mixed
+fields, + replacement and undo, lower selection colors, shape/ellipse selection,
+optional strokes, alpha preservation, numeric/color scrubs, invalid and conflicting
+batches, text formatting and one-step undo. Light/dark screenshots checked. The fast
+smoke and existing character-range text-styles regression pass without page errors.

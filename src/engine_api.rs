@@ -1693,6 +1693,11 @@ fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_do
         Value::Vec2(_) => nums(2).map(|v| Value::Vec2([v[0], v[1]])),
         Value::Vec3(_) => nums(3).map(|v| Value::Vec3([v[0], v[1], v[2]])),
         Value::Color(c) => {
+            if let Some(alpha) = t.strip_prefix("alpha:") {
+                let alpha = alpha.parse::<f32>().map_err(|e| e.to_string())?;
+                if !alpha.is_finite() { return Err("opacity must be finite".into()); }
+                return Ok(Value::Color([c[0], c[1], c[2], alpha.clamp(0.0, 1.0)]));
+            }
             let h = t.trim_start_matches('#');
             let ch = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok().map(|b| b as f32 / 255.0);
             match h.len() {
@@ -1706,86 +1711,129 @@ fn inspector_value(current: &iron_document::Value, text: &str) -> Result<iron_do
     value.ok_or_else(|| format!("{t:?} is not a {:?}", current.kind()))
 }
 
-pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) -> String {
-    use iron_document::{Actor, FacetKind, Leaf, LeafPath, NodeId, Op, Slot, Value};
+// Explicit targets keep an in-flight inspector edit attached to the selection
+// that began it, even if the session selection changes before it arrives.
+fn inspector_targets(node: &str, options: &serde_json::Value) -> Result<Vec<iron_document::NodeId>, String> {
+    let names: Vec<String> = match options.get("nodes") {
+        Some(nodes) => serde_json::from_value(nodes.clone()).map_err(|e| e.to_string())?,
+        None => vec![node.to_owned()],
+    };
+    let mut ids = Vec::new();
+    for name in names {
+        let id = name.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
+        if !ids.contains(&id) { ids.push(id); }
+    }
+    if ids.is_empty() { return Err("an inspector edit needs a target".into()); }
+    Ok(ids)
+}
+
+fn inspector_patch_ops(store: &iron_document::Store, id: iron_document::NodeId, patch: &serde_json::Value) -> Result<Vec<iron_document::Op>, String> {
+    use iron_document::{FacetKind, Leaf, LeafPath, Op, Slot, Value};
     use std::collections::BTreeMap;
+    let mut writes: BTreeMap<Leaf, Value> = BTreeMap::new();
+    // Formulas (`=expr` or `{= expr}`, typed in any field) set the leaf's
+    // binding itself; `$self.k` is this entity's argument `k`.
+    let mut bindings: Vec<Op> = Vec::new();
+    if let Some(values) = patch.get("values").and_then(|v| v.as_object()) {
+        for (leaf, text) in values {
+            let path = leaf.parse::<LeafPath>().map_err(|e| e.to_string())?;
+            if let Some(formula) = text.as_str().and_then(inspector_formula) {
+                let formula = formula.replace("$self.", &format!("#{}.args.", id.to_string().trim_start_matches('#')));
+                let expr = iron_document::Expr::parse(&formula).map_err(|e| format!("formula: {e}"))?;
+                bindings.push(Op::Set { id, path, slot: Slot::Bound(expr) });
+                continue;
+            }
+            let current = inspector_current(store, id, path).ok_or_else(|| format!("no property {id}.{path}"))?;
+            let value = inspector_value(&current, text.as_str().ok_or("a property value must be text")?)?;
+            // An animated leaf keys the playhead (After Effects' stopwatch).
+            if let Some(keyed) = iron_document::timeline_view::set_animated_ops(store, iron_document::Leaf { node: id, path }, value.clone()) {
+                bindings.extend(keyed);
+                continue;
+            }
+            // `replace` (pasted data): a constant replaces the formula
+            // instead of editing through it.
+            if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.document().leaf(id, path).is_some_and(|s| s.expr().is_some()) {
+                bindings.push(Op::Set { id, path, slot: Slot::Const(value) });
+                continue;
+            }
+            let (target, value) = iron_document::handle::resolve_target(store.document(), store.reactive(), Leaf { node: id, path }, value)?;
+            if let Some(prior) = writes.insert(target, value.clone()) && prior != value {
+                return Err(format!("linked fields require conflicting values of {target}"));
+            }
+        }
+    }
+    let mut adds = BTreeMap::new();
+    let mut ops = Vec::new();
+    for (target, value) in writes {
+        if store.document().facet(target.node, target.path.facet).is_none() {
+            let comp = adds.entry((target.node, target.path.facet)).or_insert_with(|| target.path.facet.default_facet());
+            comp.set(target.path.field, Slot::Const(value)).map_err(|e| e.to_string())?;
+        } else {
+            ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
+        }
+    }
+    // Remove a formula: the leaf keeps the value it shows now.
+    if let Some(unbind) = patch.get("unbind").and_then(|v| v.as_array()) {
+        for leaf in unbind {
+            let path = leaf.as_str().ok_or("unbind takes leaf paths")?.parse::<LeafPath>().map_err(|e| e.to_string())?;
+            let value = store.resolved(id, path).ok_or_else(|| format!("{id}.{path} has no value to keep"))?;
+            if matches!(value, Value::Fn(_)) {
+                return Err("a function has no constant form; edit its formula instead".into());
+            }
+            ops.push(Op::Set { id, path, slot: Slot::Const(value) });
+        }
+    }
+    let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp }).collect();
+    added.append(&mut ops);
+    for op in bindings {
+        // A binding on an optional component not yet added adds it.
+        if let Op::Set { id, path, slot } = &op
+            && store.document().facet(*id, path.facet).is_none()
+        {
+            let mut comp = path.facet.default_facet();
+            comp.set(path.field, slot.clone()).map_err(|e| e.to_string())?;
+            added.push(Op::AddFacet { id: *id, facet: comp });
+        } else {
+            added.push(op);
+        }
+    }
+    if let Some(kinds) = patch.get("add").and_then(|v| v.as_array()) {
+        for kind in kinds {
+            let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
+            if store.document().facet(id, kind).is_none() { added.push(Op::AddFacet { id, facet: kind.default_facet() }); }
+        }
+    }
+    if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
+        for kind in remove {
+            let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
+            if store.document().facet(id, kind).is_some() { added.push(Op::RemoveFacet { id, kind }); }
+        }
+    }
+    Ok(added)
+}
+
+pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) -> String {
+    use iron_document::{Actor, Op};
     let mut run = || -> Result<serde_json::Value, String> {
-        let id = node.parse::<NodeId>().map_err(|e| e.to_string())?;
         let patch: serde_json::Value = serde_json::from_str(&patch).map_err(|e| e.to_string())?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
-        let mut writes: BTreeMap<Leaf, Value> = BTreeMap::new();
-        // Formulas (`=expr` or `{= expr}`, typed in any field) set the leaf's
-        // binding itself; `$self.k` is this entity's argument `k`.
-        let mut bindings: Vec<Op> = Vec::new();
-        if let Some(values) = patch.get("values").and_then(|v| v.as_object()) {
-            for (leaf, text) in values {
-                let path = leaf.parse::<LeafPath>().map_err(|e| e.to_string())?;
-                if let Some(formula) = text.as_str().and_then(inspector_formula) {
-                    let formula = formula.replace("$self.", &format!("#{}.args.", id.to_string().trim_start_matches('#')));
-                    let expr = iron_document::Expr::parse(&formula).map_err(|e| format!("formula: {e}"))?;
-                    bindings.push(Op::Set { id, path, slot: Slot::Bound(expr) });
-                    continue;
+        let ids = inspector_targets(&node, &patch)?;
+        let mut added = Vec::new();
+        for id in ids {
+            for op in inspector_patch_ops(&store.0, id, &patch)? {
+                if let Op::Set { id, path, slot } = &op {
+                    if let Some(Op::Set { slot: prior, .. }) = added.iter().find(|o| matches!(o, Op::Set { id: other, path: p, .. } if other == id && p == path)) {
+                        if prior != slot { return Err(format!("linked fields require conflicting values of {id}.{path}")); }
+                        continue;
+                    }
                 }
-                let current = inspector_current(&store.0, id, path).ok_or_else(|| format!("no property {id}.{path}"))?;
-                let value = inspector_value(&current, text.as_str().ok_or("a property value must be text")?)?;
-                // An animated leaf keys the playhead (After Effects' stopwatch).
-                if let Some(keyed) = iron_document::timeline_view::set_animated_ops(&store.0, iron_document::Leaf { node: id, path }, value.clone()) {
-                    bindings.extend(keyed);
-                    continue;
-                }
-                // `replace` (pasted data): a constant replaces the formula
-                // instead of editing through it.
-                if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.0.document().leaf(id, path).is_some_and(|s| s.expr().is_some()) {
-                    bindings.push(Op::Set { id, path, slot: Slot::Const(value) });
-                    continue;
-                }
-                let (target, value) = iron_document::handle::resolve_target(store.0.document(), store.0.reactive(), Leaf { node: id, path }, value)?;
-                if let Some(prior) = writes.insert(target, value.clone()) && prior != value {
-                    return Err(format!("linked fields require conflicting values of {target}"));
-                }
-            }
-        }
-        let mut adds = BTreeMap::new();
-        let mut ops = Vec::new();
-        for (target, value) in writes {
-            if store.0.document().facet(target.node, target.path.facet).is_none() {
-                let comp = adds.entry((target.node, target.path.facet)).or_insert_with(|| target.path.facet.default_facet());
-                comp.set(target.path.field, Slot::Const(value)).map_err(|e| e.to_string())?;
-            } else if store.0.document().leaf(target.node, target.path).and_then(|s| s.constant()) != Some(&value) {
-                ops.push(Op::Set { id: target.node, path: target.path, slot: Slot::Const(value) });
-            }
-        }
-        // Remove a formula: the leaf keeps the value it shows now.
-        if let Some(unbind) = patch.get("unbind").and_then(|v| v.as_array()) {
-            for leaf in unbind {
-                let path = leaf.as_str().ok_or("unbind takes leaf paths")?.parse::<LeafPath>().map_err(|e| e.to_string())?;
-                let value = store.0.resolved(id, path).ok_or_else(|| format!("{id}.{path} has no value to keep"))?;
-                if matches!(value, Value::Fn(_)) {
-                    return Err("a function has no constant form; edit its formula instead".into());
-                }
-                ops.push(Op::Set { id, path, slot: Slot::Const(value) });
-            }
-        }
-        let mut added: Vec<_> = adds.into_iter().map(|((id, _), comp)| Op::AddFacet { id, facet: comp }).collect();
-        added.append(&mut ops);
-        for op in bindings {
-            // A binding on an optional component not yet added adds it.
-            if let Op::Set { id, path, slot } = &op
-                && store.0.document().facet(*id, path.facet).is_none()
-            {
-                let mut comp = path.facet.default_facet();
-                comp.set(path.field, slot.clone()).map_err(|e| e.to_string())?;
-                added.push(Op::AddFacet { id: *id, facet: comp });
-            } else {
                 added.push(op);
             }
         }
-        if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
-            for kind in remove {
-                let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
-                if store.0.document().facet(id, kind).is_some() { added.push(Op::RemoveFacet { id, kind }); }
-            }
-        }
+        added.retain(|op| match op {
+            Op::Set { id, path, slot } => store.0.document().leaf(*id, *path) != Some(slot),
+            _ => true,
+        });
         if added.is_empty() { return Ok(serde_json::json!({"ok": true})); }
         let label = patch.get("label").and_then(|v| v.as_str()).unwrap_or("edit appearance").to_owned();
         store.0.apply(iron_document::TransactionInput { label, actor: Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops: added, exact: false })
@@ -1800,8 +1848,8 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
 pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, phase: String, token: u32, value: f64, options: Option<String>) -> String {
     use iron_document::{Actor, GestureId, Handle, Value};
     let mut run = || -> Result<serde_json::Value, String> {
-        let id = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
         let options: serde_json::Value = serde_json::from_str(options.as_deref().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        let ids = inspector_targets(&node, &options)?;
         let leaves: Vec<String> = if let Some(leaves) = options.get("leaves") { serde_json::from_value(leaves.clone()).map_err(|e| e.to_string())? } else { vec![leaf.clone()] };
         if leaves.is_empty() { return Err("a scrub needs a property".into()); }
         let paths = leaves.iter().map(|l| l.parse::<iron_document::LeafPath>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
@@ -1812,29 +1860,40 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
         let rgba = channel == Some("color");
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
         if phase == "begin" {
-            for &path in &paths {
-                let current = inspector_current(&store.0, id, path);
-                if !(matches!(current, Some(Value::Number(_))) && !alpha && !rgba || matches!(current, Some(Value::Color(_))) && (alpha || rgba)) { return Err("this property cannot be scrubbed as a number".into()); }
-                if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
+            for &id in &ids {
+                for &path in &paths {
+                    let current = inspector_current(&store.0, id, path);
+                    if !(matches!(current, Some(Value::Number(_))) && !alpha && !rgba || matches!(current, Some(Value::Color(_))) && (alpha || rgba)) { return Err("this property cannot be scrubbed as a number".into()); }
+                    if let Handle::Locked(why) = store.0.handle(id, path) { return Err(why); }
+                }
             }
-            let gesture = store.0.begin_gesture(&[id]);
+            let gesture = store.0.begin_gesture(&ids);
             return Ok(serde_json::json!({"ok": true, "token": gesture.0}));
         }
         if store.0.active_gesture() != Some(GestureId(token as u64)) { return Err("the gesture ended or was cancelled by another edit".into()); }
         match phase.as_str() {
             "move" => {
                 if !value.is_finite() { return Err("value must be finite".into()); }
-                for path in paths {
-                    let next = if rgba {
-                        let packed = value.clamp(0.0, u32::MAX as f64) as u32;
-                        Value::Color(packed.to_be_bytes().map(|c| c as f32 / 255.0))
-                    } else if alpha {
-                        let Some(Value::Color(mut color)) = inspector_current(&store.0, id, path) else { return Err("no colour".into()); };
-                        color[3] = value.clamp(0.0, 1.0) as f32;
-                        Value::Color(color)
-                    } else { Value::Number(value) };
-                    store.0.preview_target(id, path, next)?;
+                let mut writes = std::collections::BTreeMap::new();
+                for &id in &ids {
+                    for &path in &paths {
+                        let next = if rgba {
+                            let packed = value.clamp(0.0, u32::MAX as f64) as u32;
+                            Value::Color(packed.to_be_bytes().map(|c| c as f32 / 255.0))
+                        } else if alpha {
+                            let Some(Value::Color(mut color)) = inspector_current(&store.0, id, path) else { store.0.cancel_gesture(); return Err("no colour".into()); };
+                            color[3] = value.clamp(0.0, 1.0) as f32;
+                            Value::Color(color)
+                        } else { Value::Number(value) };
+                        let resolved = iron_document::handle::resolve_target(store.0.document(), store.0.reactive(), iron_document::Leaf { node: id, path }, next);
+                        let (target, next) = match resolved { Ok(v) => v, Err(error) => { store.0.cancel_gesture(); return Err(error); } };
+                        if let Some(prior) = writes.insert(target, next.clone()) && prior != next {
+                            store.0.cancel_gesture();
+                            return Err(format!("linked fields require conflicting values of {target}"));
+                        }
+                    }
                 }
+                for (target, next) in writes { store.0.preview(target.node, target.path, next); }
             }
             "commit" => {
                 if let Some(r) = store.0.commit_gesture(format!("set {leaf}"), Actor::Human, crate::host_services::unix_millis()) {
@@ -2346,9 +2405,11 @@ pub fn document_inspect_bind(app: &mut WorkerApp, node: String, leaf: String, ex
 /// in Figma.
 pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> String {
     use iron_document::facet::Fill;
-    use iron_document::{Actor, FacetKind, LeafStruct, NodeId, Op, Slot, TransactionInput, Value};
+    use iron_document::{Actor, FacetKind, LeafStruct, Op, Slot, TransactionInput, Value};
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
-    let Ok(id) = node.parse::<NodeId>() else { return fail(format!("bad id {node:?}")) };
+    let options: serde_json::Value = match serde_json::from_str(&patch) { Ok(v) => v, Err(e) => return fail(e.to_string()) };
+    let ids = match inspector_targets(&node, &options) { Ok(ids) => ids, Err(e) => return fail(e) };
+    let id = ids[0];
     let patch: iron_text::RunStyle = match serde_json::from_str(&patch) {
         Ok(p) => p,
         Err(e) => return fail(e.to_string()),
@@ -2357,6 +2418,7 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
         active_info.remaining_frames = 10;
     }
     if let Some(mut tool) = app.world_mut().get_resource_mut::<crate::bevy_app::text_tool::TextTool>()
+        && ids.len() == 1
         && tool.editing() == Some(id)
         && tool.has_range()
     {
@@ -2364,32 +2426,34 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
         return serde_json::json!({"ok": true, "range": true}).to_string();
     }
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
-    if store.0.document().live(id).is_none_or(|n| n.ty.name() != "text") {
-        return fail(format!("{id} is not text"));
-    }
-    let leaf = |p: &str| p.parse::<iron_document::LeafPath>().expect("declared leaf");
     let mut ops = Vec::new();
-    let mut set = |path: &str, v: Value| ops.push(Op::Set { id, path: leaf(path), slot: Slot::Const(v) });
-    if let Some(f) = &patch.family { set("font.family", Value::Str(f.clone())); }
-    if let Some(v) = patch.size { set("font.size", Value::Number(v as f64)); }
-    if let Some(v) = patch.weight { set("font.weight", Value::Number(v as f64)); }
-    if let Some(v) = patch.italic { set("font.italic", Value::Bool(v)); }
-    if let Some(v) = patch.underline { set("font.underline", Value::Bool(v)); }
-    if let Some(v) = patch.strike { set("font.strike", Value::Bool(v)); }
-    if let Some(c) = patch.color {
-        if store.0.document().facet(id, FacetKind::Fill).is_some() {
-            set("fill.color", Value::Color(c));
-        } else {
-            let mut fill = Fill::default();
-            fill.color = Slot::Const(Value::Color(c));
-            ops.push(Op::AddFacet { id, facet: fill.wrap() });
+    for id in ids {
+        if store.0.document().live(id).is_none_or(|n| n.ty.name() != "text") {
+            return fail(format!("{id} is not text"));
         }
-    }
-    let text = iron_document::text::content(&store.0, id);
-    let runs = iron_document::text::runs(&store.0, id);
-    let cleared = iron_text::runs::clear(&text, &runs, &patch);
-    if cleared != runs {
-        ops.push(Op::Set { id, path: leaf("text.runs"), slot: Slot::Const(Value::Str(iron_text::runs::to_json(&cleared))) });
+        let leaf = |p: &str| p.parse::<iron_document::LeafPath>().expect("declared leaf");
+        let mut set = |path: &str, v: Value| ops.push(Op::Set { id, path: leaf(path), slot: Slot::Const(v) });
+        if let Some(f) = &patch.family { set("font.family", Value::Str(f.clone())); }
+        if let Some(v) = patch.size { set("font.size", Value::Number(v as f64)); }
+        if let Some(v) = patch.weight { set("font.weight", Value::Number(v as f64)); }
+        if let Some(v) = patch.italic { set("font.italic", Value::Bool(v)); }
+        if let Some(v) = patch.underline { set("font.underline", Value::Bool(v)); }
+        if let Some(v) = patch.strike { set("font.strike", Value::Bool(v)); }
+        if let Some(c) = patch.color {
+            if store.0.document().facet(id, FacetKind::Fill).is_some() {
+                set("fill.color", Value::Color(c));
+            } else {
+                let mut fill = Fill::default();
+                fill.color = Slot::Const(Value::Color(c));
+                ops.push(Op::AddFacet { id, facet: fill.wrap() });
+            }
+        }
+        let text = iron_document::text::content(&store.0, id);
+        let runs = iron_document::text::runs(&store.0, id);
+        let cleared = iron_text::runs::clear(&text, &runs, &patch);
+        if cleared != runs {
+            ops.push(Op::Set { id, path: leaf("text.runs"), slot: Slot::Const(Value::Str(iron_text::runs::to_json(&cleared))) });
+        }
     }
     if ops.is_empty() {
         return serde_json::json!({"ok": true}).to_string();

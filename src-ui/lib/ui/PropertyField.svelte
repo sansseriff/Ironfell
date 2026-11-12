@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  export type Property = { leaf: string; field: string; kind: string | null; text: string | null; full?: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null; key?: "none" | "animated" | "on"; error?: string | null;
+  export type Property = { mixed?: boolean; mixedColor?: boolean; mixedAlpha?: boolean; nodes?: string[]; leaf: string; field: string; kind: string | null; text: string | null; full?: string | null; bind: string | null; edit: string; via: string | null; why: string | null; options?: string[] | null; key?: "none" | "animated" | "on"; error?: string | null;
     /** A component input's declared type (types-and-units.md §3.1). */
     datatype?: string | null; auto?: boolean; unit?: string | null; show?: string | null; group?: string | null };
 </script>
@@ -17,7 +17,7 @@
   import EasingField from "./EasingField.svelte";
   import ColorPicker from "./ColorPicker.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
-  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, mixed = false, hideSwatch = false, colorDigits = 8, zeroLabel }: {
+  let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, hideSwatch = false, colorDigits = 8, mixed = (channel === "alpha" ? f.mixedAlpha : f.kind === "color" && colorDigits === 6 ? f.mixedColor : f.mixed) ?? f.mixed ?? false, zeroLabel }: {
     field: Property; node: string;
     onSet: (field: Property, text: string) => void | Promise<void>;
     onRefresh: () => void; onError: (error: string) => void;
@@ -45,8 +45,8 @@
   // field shows its formula; Remove keeps the value it shows now.
   let formula = $state(false);
   // A colour bound to a token (`@series-2`, palette.rs) shows as the token.
-  const token = $derived(f.kind === "color" ? f.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null : null);
-  const editingFormula = $derived(formula || (!!f.bind && f.edit !== "via" && !token));
+  const token = $derived(!mixed && f.kind === "color" ? f.bind?.match(/^@([A-Za-z0-9_-]+)$/)?.[1] ?? null : null);
+  const editingFormula = $derived(formula || (!mixed && !!f.bind && f.edit !== "via" && !token));
   const isFormula = (text: string) => /^\s*(=|\{=)/.test(text);
   // `| auto` (stored as NaN): the field is empty with "Auto" in it, and the
   // Auto toggle puts it back.
@@ -61,7 +61,7 @@
       formula = false;
     } else if (channel === "alpha") {
       const alpha = Math.round(Math.max(0, Math.min(100, Number(text))) / 100 * 255).toString(16).padStart(2, "0");
-      await onSet(f, (f.text ?? "#000000ff").slice(0, 7) + alpha);
+      await onSet(f, `alpha:${parseInt(alpha, 16) / 255}`);
     } else {
       // A number field also takes a quantity ("400 nm"), sent as typed.
       const n = Number(text);
@@ -99,7 +99,7 @@
   }
   async function unbind() {
     onError("");
-    const r = await doc.command({ op: 'inspect_patch', node, patch: JSON.stringify({ values: {}, unbind: [f.leaf], label: `remove formula from ${f.leaf}` }) });
+    const r = await doc.command({ op: 'inspect_patch', node, patch: JSON.stringify({ nodes: f.nodes, values: {}, unbind: [f.leaf], label: `remove formula from ${f.leaf}` }) });
     if (!r.ok) onError(r.error);
     formula = false;
     onRefresh();
@@ -125,7 +125,7 @@
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     dragging = true; draft = numberValue * factor;
     onError("");
-    const s = { node, leaf: f.leaf, origin: draft, x: e.clientX, token: 0, options: JSON.stringify({ channel, leaves: scrubLeaves }), failed: false, queue: Promise.resolve() };
+    const s = { node, leaf: f.leaf, origin: draft, x: e.clientX, token: 0, options: JSON.stringify({ channel, leaves: scrubLeaves, nodes: f.nodes }), failed: false, queue: Promise.resolve() };
     session = s;
     s.queue = doc.command({ op: 'inspect_scrub', node: s.node, leaf: s.leaf, phase: "begin", token: 0, value: 0, options: s.options }).then((r) => {
       if (!r.ok) throw new Error(r.error);
@@ -201,19 +201,19 @@
         onchange={(e) => change(e.currentTarget)} />
       {#if f.bind && !locked}<IconButton icon={Unlink} label={`Remove the formula from ${displayLabel}`} title="Remove formula (keep the current value)" onclick={unbind} />{/if}
     {:else if f.kind === "bool"}
-      <Checkbox label={displayLabel} showLabel={false} checked={f.text === "true"} disabled={locked} onChange={(on) => onSet(f, String(on))} />
+      <Checkbox label={displayLabel} showLabel={false} indeterminate={mixed} checked={!mixed && f.text === "true"} disabled={locked} onChange={(on) => onSet(f, String(on))} />
     {:else if f.field === "easing" || (f.field === "ease" && f.kind === "str")}
       <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
       <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if options && segmented}
-      <Segmented label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      <Segmented label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if options}
-      <Select label={displayLabel} value={f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      <Select placeholder={mixed ? "Mixed" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if f.kind === "color" && channel !== "alpha"}
       {#if !hideSwatch}<ColorPicker swatch field={f} {node} label={displayLabel} {onSet} {onRefresh} {onError} />{/if}
-      <input aria-label={`${displayLabel} hex`} class="hex" value={(f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
+      <input aria-label={`${displayLabel} hex`} class="hex" placeholder={mixed ? "Mixed" : undefined} value={mixed ? "" : (f.text ?? "").slice(1, colorDigits + 1).toUpperCase()} disabled={locked} onchange={(e) => onSet(f, `#${e.currentTarget.value.replace("#", "")}`)} />
     {:else}
       <input aria-label={displayLabel} class:number={numeric} type="text" inputmode={numeric ? "decimal" : undefined} value={zero ? "" : fieldText()} {placeholder} disabled={locked}
         oninput={(e) => { if (isFormula(e.currentTarget.value)) formula = true; }}

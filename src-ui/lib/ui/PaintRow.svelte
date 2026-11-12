@@ -39,7 +39,7 @@
   <Popover.Root bind:open>
     <div class="ui-field paint-value">
       <Popover.Trigger class="color-swatch" aria-label="{label} paint settings" title="Edit {label.toLowerCase()}">
-        <span class="color-chip" style:background={paint}></span>
+        <span class="color-chip" style:background={color.mixed ? "repeating-linear-gradient(135deg, var(--fg-faint) 0 4px, var(--raised) 4px 8px)" : paint}></span>
       </Popover.Trigger>
       {#if gradient.length}
         <button class="paint-name" onclick={() => open = true}>{mode === "radial" ? "Radial" : "Linear"}</button>

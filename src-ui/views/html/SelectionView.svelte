@@ -2,6 +2,7 @@
   // The session's selection (source: selection): what is picked, Link and
   // Show in, and Link's merge question. The seed of the inspector
   // (plans/specs/panels-and-session.md).
+  import { selectionProperties, selectionColors } from "../../lib/ui/selection-properties";
   import CompositionSection from "./CompositionSection.svelte";
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
@@ -75,7 +76,7 @@
   const showIn = $derived(doc.counterparts.figures.filter((f) => f.node !== doc.selection[0] && f.composition !== null));
 
   // The inspector (a first, HTML version; plans/specs/panels-and-session.md):
-  // the first selected node's fields, each edited through its handle, so a
+  // the selection's shared fields, each edited through its handle, so a
   // linearly bound value edits its source and a locked one says why.
   type Field = Property;
   type PortInfo = { spec: string; name: string | null; kind: string | null; dir: string | null; connector: string | null; gender: string | null; follow: boolean | null; signal: string | null; bind: string | null; kinds: string[]; editable?: boolean; datatype?: string | null; show?: string | null; group?: string | null; suggest?: string[] };
@@ -90,23 +91,34 @@
   let generation = 0;
   let separateCorners = $state(false);
   let strokeAnchor: HTMLDivElement | undefined = $state();
+  let inspections: Inspected[] = $state([]);
+  const colors = $derived(selectionColors(inspections));
   async function refresh() {
-    const node = doc.selection[0];
+    const nodes = [...doc.selection];
     const request = ++generation, session = doc.generation;
-    if (!node) { inspected = null; return; }
+    if (!nodes.length) { inspections = []; inspected = null; return; }
     try {
-      const r = await doc.command({ op: 'inspect', node: node });
-      if (request === generation && session === doc.generation && doc.selection[0] === node) inspected = r;
+      const results = await Promise.all(nodes.map(node => doc.command<Inspected>({ op: 'inspect', node })));
+      if (request === generation && session === doc.generation && nodes.join() === doc.selection.join()) {
+        inspections = results.filter(Boolean); inspected = selectionProperties(inspections);
+      }
     } catch (e) { if (request === generation && session === doc.generation) setError = String(e); }
   }
-  let previousNode: string | undefined;
   $effect(() => {
     void doc.generation;
-    const node = doc.selection[0];
+    const nodes = [...doc.selection];
     generation++;
-    if (previousNode !== node) { previousNode = node; separateCorners = false; inspected = null; setError = ""; }
-    if (!node || !active()) return;
-    return doc.subscribe<Inspected>({ op: 'inspect', node }, r => { inspected = r; }, e => { setError = String(e); });
+    separateCorners = false; inspected = null; inspections = []; setError = "";
+    if (!nodes.length || !active()) return;
+    const results = new Map<string, Inspected>();
+    const stops = nodes.map(node => doc.subscribe<Inspected>({ op: 'inspect', node }, r => {
+      results.set(node, r);
+      if (results.size === nodes.length) {
+        inspections = nodes.map(n => results.get(n)!).filter(Boolean);
+        inspected = selectionProperties(inspections);
+      }
+    }, e => { setError = String(e); }));
+    return () => { for (const stop of stops) stop(); };
   });
   // Timing (a key, a clip) is not a picture: no picture actions in the title.
   const TIMED = ["key", "clip"];
@@ -119,7 +131,7 @@
   function fields(kind: string): Field[] { return (inspected as Inspected | null)?.components.find(c => c.kind === kind)?.fields ?? []; }
   function supports(kind: string): boolean { return !!inspected && (inspected.addable.includes(kind) || inspected.components.some(c => c.kind === kind)); }
   function field(kind: string, name: string, text = "0", valueKind = "number"): Field {
-    return fields(kind).find(f => f.field === name) ?? { leaf: `${kind}.${name}`, field: name, text, kind: valueKind, bind: null, edit: "direct", via: null, why: null };
+    return fields(kind).find(f => f.field === name) ?? { leaf: `${kind}.${name}`, field: name, text, kind: valueKind, nodes: inspections.map(i => i.node), bind: null, edit: "direct", via: null, why: null };
   }
   const cornerLeaves = ["corners.tl", "corners.tr", "corners.br", "corners.bl"];
   const cornerField = $derived.by(() => {
@@ -127,7 +139,7 @@
     const locked = corners.find(f => f.edit === "locked");
     return { ...corners[0], edit: locked ? "locked" : corners[0].edit, why: locked?.why ?? null, bind: corners.find(f => f.bind)?.bind ?? null };
   });
-  const mixedCorners = $derived(["tr", "br", "bl"].some(k => field("corners", k).text !== field("corners", "tl").text));
+  const mixedCorners = $derived(cornerLeaves.some(k => fields("corners").find(f => f.leaf === k)?.mixed) || ["tr", "br", "bl"].some(k => field("corners", k).text !== field("corners", "tl").text));
   // Facets offered as "add" buttons: auto layout on a group
   // (layout-and-tables.md §2), and how a child sits in one, only where a
   // layout already places it (its position is locked by it).
@@ -139,19 +151,23 @@
   const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
   // Effects have their own list/presenter. Drop shadow is the currently
   // supported effect; future renderable effect components get entries here.
+  const mixedFill = $derived(inspections.length > 1 && [...fields("fill"), ...fields("gradient")].some(f => f.mixed));
+  function replaceFill() {
+    return patch({ "fill.color": "#808080ff", "fill.opacity": "1" }, ["gradient"], "replace mixed fill", undefined, true);
+  }
   const effectTypes = [{ kind: "shadow", label: "Drop shadow" }];
   const effects = $derived(effectTypes.filter(e => fields(e.kind).length));
-  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance", target?: string, replace = false) {
+  async function patch(values: Record<string, string>, remove: string[] = [], label = "edit appearance", target?: string, replace = false, nodes?: string[]) {
     if (!inspected) return;
     const node = target ?? inspected.node;
     setError = "";
     try {
-      const r = await doc.command({ op: 'inspect_patch', node: node, patch: JSON.stringify({ values, remove, label, replace }) });
+      const r = await doc.command({ op: 'inspect_patch', node: node, patch: JSON.stringify({ values, remove, label, replace, nodes: nodes ?? (target ? [target] : inspections.map(i => i.node)) }) });
       if (!r.ok) setError = r.error;
       await refresh();
     } catch (e) { setError = String(e); }
   }
-  function set(f: Field, text: string) { return patch({ [f.leaf]: text }, [], `set ${f.leaf}`); }
+  function set(f: Field, text: string) { return patch({ [f.leaf]: text }, [], `set ${f.leaf}`, undefined, false, f.nodes); }
   // Detach a linked instance: its picture and ports become authored.
   async function detach() {
     if (!inspected?.component) return;
@@ -244,14 +260,14 @@
     if (!inspected) return;
     setError = "";
     try {
-      const r = await doc.command({ op: 'component', node: inspected.node, kind: kind, add: add });
+      const r = await doc.command({ op: 'inspect_patch', node: inspected.node, patch: JSON.stringify({ nodes: inspections.map(i => i.node), [add ? "add" : "remove"]: [kind], label: `${add ? "add" : "remove"} ${kind}` }) });
       if (!r.ok) setError = `${kind}: ${r.error}`;
       await refresh();
     } catch (e) { setError = String(e); }
   }
 </script>
 
-<section class="html-view properties inspector">
+<section class="html-view properties inspector" data-selection={inspections.map(i => i.node).join(" ")}>
   <CompositionSection />
 
   <!-- The object: its name, its kind (the id in the tooltip), and what to
@@ -298,7 +314,7 @@
         </div>
       {/if}
       {#if setError}<p class="error">{setError}</p>{/if}
-      {#if doc.selection.length > 1}<p class="selection-note">{doc.selection.length} selected · editing the first item</p>{/if}
+      {#if doc.selection.length > 1}<p class="selection-note">Edits apply to all selected objects. Differing values show Mixed.</p>{/if}
       {#snippet portEditor(p: PortInfo, editable: boolean)}
         <div class="property-grid port-grid" data-section="port-editor">
           <label class="port-field">Name<TextInput value={p.name ?? ""} disabled={!editable} onchange={(e: Event) => editPort(p.spec, { name: (e.currentTarget as HTMLInputElement).value })} /></label>
@@ -437,7 +453,7 @@
             </Disclosure>
           </Section>
         {:else if section === "text" && (fields("text").length)}
-          <TextSection node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
+          <TextSection nodes={inspections.map(i => i.node)} node={inspected.node} {field} {patch} {refresh} onError={(e) => setError = e} />
         {:else if section === "layout" && ((fields("size").length && textSizing !== "auto_width") || fields("radius").length)}
           <Section title="Layout" class="property-section" headerClass="component" data-section="layout">
             <div class="ui-subheading">{fields("size").length ? "Dimensions" : "Radii"}</div>
@@ -472,8 +488,10 @@
           </Section>
         {:else if section === "fill" && (supports("fill") || fields("gradient").length)}
           <Section title="Fill" class="property-section" headerClass="component" data-section="fill">
-            {#snippet actions()}{#if !fields("fill").length && !fields("gradient").length}<IconButton icon={Plus} label="Add fill" onclick={() => component("fill", true)} />{/if}{/snippet}
-            {#if fields("fill").length || fields("gradient").length}
+            {#snippet actions()}{#if mixedFill}<IconButton icon={Plus} label="Replace mixed fill" title="Replace every selected fill with one solid fill" onclick={replaceFill} />{:else if !fields("fill").length && !fields("gradient").length}<IconButton icon={Plus} label="Add fill" onclick={() => component("fill", true)} />{/if}{/snippet}
+            {#if mixedFill}
+              <EmptyState inline>Click + to replace mixed content</EmptyState>
+            {:else if fields("fill").length || fields("gradient").length}
               <PaintRow node={inspected.node} label="Fill" color={field("fill", "color", "#808080ff", "color")} opacity={field("fill", "opacity", "1")} gradient={fields("gradient")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} onMode={paintMode} onRemove={() => patch({}, ["fill", "gradient"], "remove fill")} />
             {:else}<EmptyState inline>No fill</EmptyState>{/if}
           </Section>
@@ -560,6 +578,13 @@
           <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? kind}</Button>{/each}</div>
         {/if}
       {/each}
+      {#if colors.length}
+        <Section title="Selection colors" class="property-section" data-section="selection-colors">
+          {#each colors as color (`${color.leaf}:${color.nodes!.join()}`)}
+            <PaintRow node={color.nodes![0]} label={`${titles[color.leaf.split(".")[0]] ?? color.field} ${color.text!.slice(0, 7).toUpperCase()}`} {color} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
+          {/each}
+        </Section>
+      {/if}
     </div>
   {:else}
     <EmptyState icon={MousePointer2} title="Make a selection">Select an object to see its properties.</EmptyState>

@@ -71,6 +71,7 @@ AGENTS.md, check in with the user before running a step marked ⏱ (over a minut
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
+| `multi-properties.ts`, each DPR, warm | ~5 s (4.48 s, 2026-11-11; selection-wide edits, paint picker, mixed values and undo) |
 | `composition-settings.ts`, each DPR, warm | ~12 s (2026-11-10) |
 | ⏱ shared-engine Rust lib suite, cold native `dev-opt` | ~5 min compiling; 9m 19s observed including waiting for the concurrent wasm build lock, 2026-11-10. Eight tests run in 0.21 s |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
@@ -3330,3 +3331,30 @@ eight shared-engine Rust tests and 115 JS tests pass. Frontend checking has zero
 errors / ten existing warnings. Fast smoke passes all six assertions and reports
 `(no page errors)`. The WebGPU artifact is a marked WebGL2 stub in this worktree;
 no WebGPU browser or native packaged-app validation is claimed.
+
+
+## Multiple-selection properties (2026-11-11)
+
+`multi-properties.ts` checks the inspector with actual selected rectangles, an
+ellipse and text boxes. Build both wasm backends before running it (rebinding a
+backend while the browser runs triggers Vite's full reload).
+
+```sh
+cd .claude/skills/run-iron
+bun run multi-properties.ts
+DPR=2 bun run multi-properties.ts
+```
+
+`URL` overrides the browser URL when the main checkout's Vite uses another port.
+Expected: one line each for mixed stroke width, mixed fill + replacement and its
+single undo / lower selection colors, heterogeneous optional facets, opacity and
+numeric scrubbing, color-picker scrubbing, matching selection colors, atomic
+invalid/conflicting binding rejection, and text formatting; then
+`multi-properties DPR=1: pass (no page errors)` (or `DPR=2`). Each property edit or
+scrub is one undo for the whole selection. RGB and alpha have independent mixed
+states. The existing fast smoke and `text-styles.txt` expected outputs are unchanged.
+
+Screenshots in `.agents/multi-properties/`: `mixed-shapes-1x.png`,
+`paints-lower-1x.png`, `mixed-text-1x.png`, `text-dark-1x.png` and their `2x` counterparts.
+Mixed Fill offers "Click + to replace mixed content"; + makes one shared solid fill,
+and Selection colors sits below Effects and edits only the matching paints.

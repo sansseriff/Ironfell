@@ -93,20 +93,20 @@
   const opaque = $derived(hex.slice(0, 7));
 
   // ── The drag gesture ───────────────────────────────────────────────────
-  type Session = { leaf: string; token: number; failed: boolean; begun: Promise<void>; sending: boolean; next: number | null };
+  type Session = { node: string; options: string; field: Property; leaf: string; token: number; failed: boolean; begun: Promise<void>; sending: boolean; next: number | null };
   let session: Session | null = null;
-  const options = JSON.stringify({ channel: "color" });
+  const options = $derived(JSON.stringify({ channel: "color", nodes: field.nodes }));
   const packed = (h: string) => parseInt(h.slice(1, 9), 16);
 
   function begin() {
     onError("");
-    const s: Session = { leaf: field.leaf, token: 0, failed: !scrub, begun: Promise.resolve(), sending: false, next: null };
+    const s: Session = { node, options, field, leaf: field.leaf, token: 0, failed: !scrub, begun: Promise.resolve(), sending: false, next: null };
     session = s;
     if (!scrub) return;
-    s.begun = doc.command({ op: "inspect_scrub", node, leaf: s.leaf, phase: "begin", token: 0, value: 0, options }).then((r) => {
+    s.begun = doc.command({ op: "inspect_scrub", node: s.node, leaf: s.leaf, phase: "begin", token: 0, value: 0, options: s.options }).then((r) => {
       if (!r.ok) throw new Error(r.error);
       s.token = r.token;
-    }).catch(() => { s.failed = true; });
+    }).catch((e) => { s.failed = true; onError(String(e)); });
   }
   // Only the newest colour goes to the engine; moves queue no deeper than one.
   function pump(s: Session) {
@@ -114,8 +114,8 @@
     const value = s.next; s.next = null; s.sending = true;
     s.begun.then(async () => {
       if (s.failed) return;
-      const r = await doc.command({ op: "inspect_scrub", node, leaf: s.leaf, phase: "move", token: s.token, value, options });
-      if (!r.ok) s.failed = true;
+      const r = await doc.command({ op: "inspect_scrub", node: s.node, leaf: s.leaf, phase: "move", token: s.token, value, options: s.options });
+      if (!r.ok) { s.failed = true; onError(r.error); }
     }).catch(() => { s.failed = true; }).finally(() => { s.sending = false; pump(s); });
   }
   function preview(next: Hsva) {
@@ -131,12 +131,11 @@
     const settle = async () => {
       await s.begun;
       while (s.sending || s.next !== null) await new Promise((r) => setTimeout(r, 4));
-      if (!s.failed && s.token) {
-        const r = await doc.command({ op: "inspect_scrub", node, leaf: s.leaf, phase: cancel ? "cancel" : "commit", token: s.token, value: 0, options });
+      if (s.token) {
+        const r = await doc.command({ op: "inspect_scrub", node: s.node, leaf: s.leaf, phase: cancel || s.failed ? "cancel" : "commit", token: s.token, value: 0, options: s.options });
         if (!r.ok) onError(r.error);
-      } else if (!cancel) {
-        // An older engine, or a property the gesture cannot drive: one edit.
-        onSet(field, final);
+      } else if (!cancel && !scrub) {
+        onSet(s.field, final);
       }
     };
     settle().catch((e) => onError(String(e))).finally(onRefresh);
@@ -244,7 +243,7 @@
   const own = $derived(tokens.filter((t) => t.id));
   function useToken(name: string) { onSet(field, `=@${name}`); }
   async function detach() {
-    const r = await doc.command({ op: "inspect_patch", node, patch: JSON.stringify({ values: {}, unbind: [field.leaf], label: "detach colour" }) });
+    const r = await doc.command({ op: "inspect_patch", node, patch: JSON.stringify({ nodes: field.nodes, values: {}, unbind: [field.leaf], label: "detach colour" }) });
     if (!r.ok) onError(r.error);
     onRefresh();
   }
@@ -377,8 +376,8 @@
 
 {#if swatch}
   <Popover.Root>
-    <Popover.Trigger class="color-swatch" aria-label={label} title="{label}: {(field.text ?? '').slice(0, 7).toUpperCase()}" disabled={locked}>
-      <span class="color-chip" style:background={field.text ?? "transparent"}></span>
+    <Popover.Trigger class="color-swatch" aria-label={label} title="{label}: {field.mixed ? 'Mixed' : (field.text ?? '').slice(0, 7).toUpperCase()}" disabled={locked}>
+      <span class="color-chip" style:background={field.mixed ? "repeating-linear-gradient(135deg, var(--fg-faint) 0 4px, var(--raised) 4px 8px)" : field.text ?? "transparent"}></span>
     </Popover.Trigger>
     <Popover.Portal>
       <Popover.Content class="property-popover color-popover" {side} align="start" sideOffset={12} aria-label={label}>

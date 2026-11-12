@@ -111,14 +111,33 @@
     separateCorners = false; inspected = null; inspections = []; setError = "";
     if (!nodes.length || !active()) return;
     const results = new Map<string, Inspected>();
+    // One node's inspection alone can arrive mid-scrub, ahead of the
+    // others': merged, the selection would read Mixed for a moment, and
+    // the Fill row (with its open picker) would give way to the mixed
+    // state. So a multi-selection rereads every node in one batch and
+    // applies them together.
+    let live = true, reading = false, again = false;
+    const readAll = async () => {
+      if (reading) { again = true; return; }
+      reading = true;
+      try {
+        do {
+          again = false;
+          const all = await Promise.all(nodes.map(node => doc.command<Inspected>({ op: 'inspect', node })));
+          if (!live || again) continue;
+          inspections = all.filter(Boolean);
+          inspected = selectionProperties(inspections);
+        } while (live && again);
+      } catch (e) { if (live) setError = String(e); }
+      finally { reading = false; }
+    };
     const stops = nodes.map(node => doc.subscribe<Inspected>({ op: 'inspect', node }, r => {
       results.set(node, r);
-      if (results.size === nodes.length) {
-        inspections = nodes.map(n => results.get(n)!).filter(Boolean);
-        inspected = selectionProperties(inspections);
-      }
+      if (results.size < nodes.length) return;
+      if (nodes.length === 1) { inspections = [r].filter(Boolean); inspected = selectionProperties(inspections); }
+      else void readAll();
     }, e => { setError = String(e); }));
-    return () => { for (const stop of stops) stop(); };
+    return () => { live = false; for (const stop of stops) stop(); };
   });
   // Timing (a key, a clip) is not a picture: no picture actions in the title.
   const TIMED = ["key", "clip"];

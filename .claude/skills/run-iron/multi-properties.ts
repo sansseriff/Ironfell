@@ -62,6 +62,25 @@ try {
   await until(async () => { const d = await save(); return JSON.stringify(d.facets.fill[a]) === JSON.stringify(d.facets.fill[b]); });
   await input('Fill colour hex').fill('44AA66'); await input('Fill colour hex').press('Tab');
   await until(async () => { const d = await save(); return Math.abs(d.facets.fill[a].color.rgba[1] - 170 / 255) < .001 && JSON.stringify(d.facets.fill[a]) === JSON.stringify(d.facets.fill[b]); });
+  // A shared fill's picker drag: the row must not flip to Mixed mid-scrub
+  // (which closed the picker, cancelled the drag and selected the panel's text).
+  await page.getByRole('button', { name: 'Fill paint settings', exact: true }).click();
+  const fillSquare = page.getByRole('slider', { name: 'Saturation and brightness', exact: true });
+  await fillSquare.hover();
+  const fillBox = (await fillSquare.boundingBox())!;
+  const textBefore = await page.evaluate(() => String(document.getSelection()));
+  await page.mouse.move(fillBox.x + fillBox.width * .2, fillBox.y + fillBox.height * .3);
+  await page.mouse.down(); await page.mouse.move(fillBox.x + fillBox.width * .8, fillBox.y + fillBox.height * .1, { steps: 8 });
+  await page.waitForTimeout(150);
+  assert(await fillSquare.isVisible(), 'shared fill picker closed mid-drag');
+  await page.mouse.up();
+  await until(async () => { const d = await save(); return Math.abs(d.facets.fill[a].color.rgba[1] - 170 / 255) > .01 && JSON.stringify(d.facets.fill[a]) === JSON.stringify(d.facets.fill[b]); });
+  assert(await fillSquare.isVisible(), 'shared fill picker closed after the drag');
+  assert(await page.evaluate(() => String(document.getSelection())) === textBefore, 'picker drag selected page text');
+  await page.getByRole('button', { name: 'Close fill settings', exact: true }).click();
+  await undo();
+  await until(async () => await input('Fill colour hex').inputValue() === '44AA66');
+  console.log('shared fill: picker drag recolours both and stays open, one undo');
   await undo();
   await until(async () => await input('Fill colour hex').inputValue() === '808080');
   await undo();

@@ -3437,9 +3437,10 @@ DPR=2 bun run multi-properties.ts
 ```
 
 `URL` overrides the browser URL when the main checkout's Vite uses another port.
-Expected: one line each for mixed stroke width, mixed fill + replacement and its
+Expected: one line each for mixed stroke width, shared fill picker drag, mixed fill + replacement and its
 single undo / lower selection colors, heterogeneous optional facets, opacity and
-numeric scrubbing, color-picker scrubbing, matching selection colors, atomic
+numeric scrubbing, color-picker scrubbing (a shared fill's picker stays open through
+a drag and recolours every shape), matching selection colors, atomic
 invalid/conflicting binding rejection, and text formatting; then
 `multi-properties DPR=1: pass (no page errors)` (or `DPR=2`). Each property edit or
 scrub is one undo for the whole selection. RGB and alpha have independent mixed

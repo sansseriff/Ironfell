@@ -146,6 +146,8 @@
   function drag(axis: Axis) {
     return (e: PointerEvent) => {
       if (locked || e.button !== 0) return;
+      // A drag here never selects the page's text.
+      e.preventDefault();
       const el = e.currentTarget as HTMLElement;
       el.setPointerCapture(e.pointerId);
       el.focus();

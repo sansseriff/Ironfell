@@ -598,7 +598,13 @@
           </Section>
         {/each}
         {:else if section === "add" && (inspected.addable.some(k => addKinds.includes(k)))}
-          <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? sentence(kind)}</Button>{/each}</div>
+          <!-- A facet not yet added is its section's title with a + (Figma's
+               "Auto layout +"), as Stroke and Effects are when empty. -->
+          {#each inspected.addable.filter(k => addKinds.includes(k)) as kind (kind)}
+            <Section title={titles[kind] ?? sentence(kind)} class="property-section is-addable" data-add={kind}>
+              {#snippet actions()}<IconButton icon={Plus} label="Add {kind}" title="Add {(titles[kind] ?? sentence(kind)).toLowerCase()}" onclick={() => component(kind, true)} />{/snippet}
+            </Section>
+          {/each}
         {/if}
       {/each}
       {#if colors.length}
@@ -621,7 +627,6 @@
   .attach { display: contents; }
   .button-row, .inline-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
   .button-row { gap: 4px; }
-  .add { padding: 12px var(--panel-pad); }
   .sections { display: flex; flex-direction: column; }
   .title { padding: 0 var(--panel-pad); min-height: var(--panel-header-h); border-bottom: 1px solid var(--border); }
   .title-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -504,10 +504,10 @@
                 <div class="readout-field"><span class="ui-subheading">Position</span><div class="ui-field readout" title="Strokes currently render centred on the outline">Centre</div></div>
                 <PropertyField field={field("stroke", "width", "1")} node={inspected.node} label="Weight" onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                 <Popover.Root>
-                  <Popover.Trigger class="property-icon" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
-                  <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} customAnchor={strokeAnchor} aria-label="Stroke settings">
-                    <header><strong>Stroke settings</strong><Popover.Close class="property-icon" aria-label="Close stroke settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
-                    <div class="property-popover-body">
+                  <Popover.Trigger class="ui-icon-button" aria-label="Stroke settings" title="Stroke settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
+                  <Popover.Portal><Popover.Content class="ui-popover" side="left" align="center" sideOffset={12} customAnchor={strokeAnchor} aria-label="Stroke settings">
+                    <header><strong>Stroke settings</strong><Popover.Close class="ui-icon-button" aria-label="Close stroke settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
+                    <div class="ui-popover-body">
                       <div class="ui-subheading">Basic</div>
                       <div class="property-grid">
                         {#each fields("stroke").filter(f => ["join", "cap", "miter", "dash", "dash_offset", "path_length"].includes(f.field)) as f (f.leaf)}
@@ -543,7 +543,7 @@
           <Section title="Effects" class="property-section" headerClass="component" data-section="effects">
             {#snippet actions()}
               <DropdownMenu.Root>
-                <DropdownMenu.Trigger class="property-icon" aria-label="Add effect" title="Add effect"><Plus size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+                <DropdownMenu.Trigger class="ui-icon-button" aria-label="Add effect" title="Add effect"><Plus size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal><DropdownMenu.Content class="ui-menu" side="left" align="start" sideOffset={10}>
                   {#each effectTypes as effect}<DropdownMenu.Item class="ui-menu-item" data-effect-type={effect.kind} disabled={fields(effect.kind).length > 0} onSelect={() => component(effect.kind, true)}>{effect.label}</DropdownMenu.Item>{/each}
                 </DropdownMenu.Content></DropdownMenu.Portal>
@@ -553,9 +553,9 @@
               <div class="effect-row">
                 <Popover.Root>
                   <Popover.Trigger class="ui-field effect-trigger" aria-label="{effect.label} settings"><Square size={14} strokeWidth={1.75} /><span>{effect.label}</span><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
-                  <Popover.Portal><Popover.Content class="property-popover" side="left" align="start" sideOffset={12} aria-label="{effect.label} settings">
-                    <header><strong>{effect.label}</strong><Popover.Close class="property-icon" aria-label="Close effect settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
-                    <div class="property-popover-body">
+                  <Popover.Portal><Popover.Content class="ui-popover" side="left" align="start" sideOffset={12} aria-label="{effect.label} settings">
+                    <header><strong>{effect.label}</strong><Popover.Close class="ui-icon-button" aria-label="Close effect settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
+                    <div class="ui-popover-body">
                       <PaintRow node={inspected.node} label="Shadow" color={field(effect.kind, "color", "#00000040", "color")} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />
                       <div class="property-grid">
                         {#each fields(effect.kind).filter(f => f.kind === "number") as f (f.leaf)}<PropertyField field={f} node={inspected.node} label={{ dx: "X", dy: "Y", blur: "Blur" }[f.field]} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}
@@ -636,7 +636,7 @@
   .appearance-grid.has-corners { grid-template-columns: repeat(2, minmax(0, 1fr)) 24px; align-items: center; }
   .individual-corners { padding-right: 32px; }
   .stroke-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: end; }
-  .stroke-options > :global(.property-icon) { margin-bottom: 2px; }
+  .stroke-options > :global(.ui-icon-button) { margin-bottom: 2px; }
   .readout-field { display: flex; flex-direction: column; gap: 4px; }
   .readout { padding: 0 8px; color: var(--fg-muted); }
   .effect-row { display: flex; align-items: center; gap: 4px; }

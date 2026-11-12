@@ -101,7 +101,7 @@
     <ChevronDown size={12} strokeWidth={1.75} />
   </Popover.Trigger>
   <Popover.Portal>
-    <Popover.Content class="property-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
+    <Popover.Content class="ui-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
       <div class="easing-list" role="listbox" tabindex="0" aria-label={label} aria-activedescendant="easing-{highlighted}" onkeydown={onKey}>
         {#each CURVES as c, i (c.value)}
           <!-- svelte-ignore a11y_click_events_have_key_events -->

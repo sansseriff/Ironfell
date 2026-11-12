@@ -117,18 +117,18 @@
     {#each slots as slot (slot.join("|"))}
       {#if slot.length === 1}
         {@const t = TOOLS[slot[0]]}
-        <button class="property-icon is-tool tool" aria-pressed={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
+        <button class="ui-icon-button is-tool tool" aria-pressed={doc.tool === slot[0]} title={title(slot[0])} aria-label={t.label} onclick={() => pick(slot[0])}>
           <t.icon size={18} strokeWidth={1.75} />
         </button>
       {:else}
         {@const id = current(slot)}
         {@const t = TOOLS[id]}
         <div class="group">
-          <button class="property-icon is-tool tool" aria-pressed={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
+          <button class="ui-icon-button is-tool tool" aria-pressed={doc.tool === id} title={title(id)} aria-label={t.label} onclick={() => pick(id)}>
             <t.icon size={18} strokeWidth={1.75} />
           </button>
           <DropdownMenu.Root bind:open={() => menu[slot.join("|")] ?? false, (v) => (menu[slot.join("|")] = v)}>
-            <DropdownMenu.Trigger class="property-icon is-tool-menu" title="Shape tools" aria-label="Shape tools">
+            <DropdownMenu.Trigger class="ui-icon-button is-tool-menu" title="Shape tools" aria-label="Shape tools">
               <ChevronDown size={12} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
@@ -161,7 +161,7 @@
   .previewing .of { opacity: 0.75; }
   .previewing :global(.stop) { border-radius: 50%; color: inherit; background: color-mix(in srgb, currentColor 12%, transparent); }
   .previewing :global(.stop:hover:not(:disabled)) { color: inherit; background: color-mix(in srgb, currentColor 22%, transparent); }
-  /* The floating tool palette: the tool buttons (`.property-icon.is-tool`,
+  /* The floating tool palette: the tool buttons (`.ui-icon-button.is-tool`,
      36 px, larger than a panel's) on a raised bar with the composer's radius. */
   .toolbar {
     position: absolute;

@@ -51,10 +51,10 @@
       </div>
     </div>
     <Popover.Portal>
-      <Popover.Content class="property-popover color-popover" side="left" align="start" sideOffset={12} aria-label="{label} paint settings">
+      <Popover.Content class="ui-popover color-popover" side="left" align="start" sideOffset={12} aria-label="{label} paint settings">
         <header>
           <strong>{label}</strong>
-          <Popover.Close class="property-icon" aria-label="Close {label.toLowerCase()} settings"><X size={14} strokeWidth={1.75} /></Popover.Close>
+          <Popover.Close class="ui-icon-button" aria-label="Close {label.toLowerCase()} settings"><X size={14} strokeWidth={1.75} /></Popover.Close>
         </header>
         {#if onMode}
           <div class="paint-types-row">

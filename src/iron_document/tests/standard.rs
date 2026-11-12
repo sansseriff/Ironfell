@@ -79,8 +79,10 @@ fn the_library_recolours_its_cards_for_the_theme() {
     store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
     assert!(standard::library_theme_ops(store.document(), true).is_empty(), "built in the light theme's colours");
     let dark = standard::library_theme_ops(store.document(), false);
-    // Each card's fill and edge, each label's ink.
-    assert_eq!(dark.len(), standard::ENTRIES.len() * 3);
+    // Each card's fill and edge, each label's ink, and the previews' dark
+    // ink and light surfaces: the Readout's figure, the Laser's body, the
+    // dial's face, rim and reading, and nine of the Plot's baked tokens.
+    assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 9);
     store.apply_session(dark).unwrap();
     assert!(standard::library_theme_ops(store.document(), false).is_empty());
 }
@@ -100,6 +102,21 @@ fn the_library_previews_read_in_both_themes() {
     let mut store = Store::new();
     let first = store.document().next_session_ids(1)[0];
     store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
+    // Every colour leaf in the Library, to see the light theme come back as built.
+    let colours = |doc: &Document| -> Vec<(NodeId, Value)> {
+        let mut out = Vec::new();
+        for id in doc.live_nodes().map(|n| n.id) {
+            for f in doc.facets_of(id) {
+                for field in f.field_names() {
+                    if let Some(v @ Value::Color(_)) = f.get(field).and_then(|s| s.constant()) {
+                        out.push((id, v.clone()));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let built = colours(store.document());
     for light in [false, true] {
         store.apply_session(standard::library_theme_ops(store.document(), light)).unwrap();
         let doc = store.document();
@@ -115,6 +132,10 @@ fn the_library_previews_read_in_both_themes() {
         for &cell in doc.children(lib).iter().filter(|&&c| matches!(named(c).as_deref(), Some("readout" | "meter" | "laser"))) {
             let card = doc.children(cell).iter().copied().find(|&c| named(c).as_deref() == Some("card")).unwrap();
             let paper = colour(card).unwrap();
+            if !light {
+                // A tile in the dark, not a sheet of paper: no channel above #3a.
+                assert!(paper[..3].iter().all(|&v| v <= 0x3a as f32 / 255.0), "the dark tile glares: {paper:?}");
+            }
             let Some(preview) = doc.children(cell).iter().copied().find(|&c| named(c).as_deref() == Some("preview")) else { continue };
             let mut stack = vec![preview];
             while let Some(id) = stack.pop() {
@@ -134,5 +155,9 @@ fn the_library_previews_read_in_both_themes() {
             }
         }
         assert_eq!(texts, 2, "the Readout's figure and the Dial meter's reading");
+        if light {
+            assert_eq!(colours(doc), built, "the light theme is the Library as built");
+        }
     }
 }
+

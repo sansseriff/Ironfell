@@ -9,11 +9,11 @@
 </script>
 
 <Popover.Root onOpenChange={(open) => { if (open) void doc.connectLocalAgent().then(() => doc.loadAgentModels()); }}>
-  <Popover.Trigger class="property-icon" aria-label="Agent settings" title="Agent settings"><Settings2 size={14} strokeWidth={1.75} /></Popover.Trigger>
+  <Popover.Trigger class="ui-icon-button" aria-label="Agent settings" title="Agent settings"><Settings2 size={14} strokeWidth={1.75} /></Popover.Trigger>
   <Popover.Portal>
-    <Popover.Content class="property-popover agent-settings" side="top" align="end" sideOffset={8}>
+    <Popover.Content class="ui-popover agent-settings" side="top" align="end" sideOffset={8}>
       <header>Agent connection · {doc.agentProvider}</header>
-      <div class="property-popover-body">
+      <div class="ui-popover-body">
       {#if doc.agentProvider === 'anthropic'}
         <label>Anthropic API key<TextInput type="password" aria-label="Anthropic API key" value={doc.apiKey} onchange={(event: Event) => doc.setApiKey((event.currentTarget as HTMLInputElement).value)} /></label>
         <label>API model<TextInput aria-label="API model" value={doc.modelName} onchange={(event: Event) => doc.setAgentModel((event.currentTarget as HTMLInputElement).value.trim())} /></label>

@@ -137,7 +137,7 @@
 </div>
 
 <style>
-  /* Inside a `.property-popover`: its header is the shared one. */
+  /* Inside a `.ui-popover`: its header is the shared one. */
   .fonts { display: flex; flex-direction: column; max-height: min(560px, 80vh); }
   .tools { display: flex; flex-direction: column; gap: 8px; padding: 12px var(--panel-pad); border-bottom: 1px solid var(--border); }
   .search { gap: 6px; padding: 0 2px 0 8px; color: var(--fg-muted); }

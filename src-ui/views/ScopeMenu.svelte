@@ -125,7 +125,7 @@
         <ChevronDown size={12} strokeWidth={1.75} />
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content class="property-popover scope-popover" side="bottom" align="start" sideOffset={4} aria-label="Scopes">
+        <Popover.Content class="ui-popover scope-popover" side="bottom" align="start" sideOffset={4} aria-label="Scopes">
           {#if !doc.scopes}
             <div class="body">
               <p>This page is not saved: it opened with <code>?demo</code> (or as a benchmark, or without browser storage).</p>
@@ -181,7 +181,7 @@
                   </BitsButton.Root>
                   <!-- One element both ways, so focus stays on it for the second press. -->
                   <BitsButton.Root
-                    class="property-icon delete {confirming === s.id ? 'confirming' : ''}"
+                    class="ui-icon-button delete {confirming === s.id ? 'confirming' : ''}"
                     disabled={busy}
                     aria-label={confirming === s.id ? `Delete ${s.name}: cannot be undone` : `Delete ${s.name}`}
                     title={confirming === s.id ? "Click again to delete; this cannot be undone" : "Delete"}

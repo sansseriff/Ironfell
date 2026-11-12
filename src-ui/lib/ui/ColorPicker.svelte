@@ -384,8 +384,8 @@
       <span class="color-chip" style:background={field.mixed ? "repeating-linear-gradient(135deg, var(--fg-faint) 0 4px, var(--raised) 4px 8px)" : field.text ?? "transparent"}></span>
     </Popover.Trigger>
     <Popover.Portal>
-      <Popover.Content class="property-popover color-popover" {side} align="start" sideOffset={12} aria-label={label}>
-        <header><strong>{heading ?? label}</strong><Popover.Close class="property-icon" aria-label="Close {heading ?? label}"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
+      <Popover.Content class="ui-popover color-popover" {side} align="start" sideOffset={12} aria-label={label}>
+        <header><strong>{heading ?? label}</strong><Popover.Close class="ui-icon-button" aria-label="Close {heading ?? label}"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
         {@render picker()}
       </Popover.Content>
     </Popover.Portal>
@@ -446,5 +446,5 @@
   :global(.color-swatch:disabled) { opacity: 0.4; cursor: default; }
   :global(.color-swatch[data-state="open"]) { background: var(--active); }
   :global(.color-chip) { display: block; width: 14px; height: 14px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border-strong); }
-  :global(.property-popover.color-popover) { width: 240px; }
+  :global(.ui-popover.color-popover) { width: 240px; }
 </style>

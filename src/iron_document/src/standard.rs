@@ -279,15 +279,45 @@ const LIB_ROW: f64 = 116.0;
 const LIB_INSET: f64 = 6.0;
 
 /// The Library's card and label colours for a theme, in sRGB.
-/// (fill, edge, label). The previews are baked in the light theme's
-/// colours (the components' own dark ink and bodies), so every card is
-/// paper they read on: `--bg-sunken` in the light theme, a dimmed paper
-/// in the dark one, as Figma's assets panel shows thumbnails on light
-/// tiles. The edge and the label follow the shell's tokens
-/// (src-ui/app.css): `--border` or `--border-strong`, `--fg-muted`.
+/// (fill, edge, label), from the shell's tokens (src-ui/app.css): the card
+/// is `--bg-sunken` with a `--border` edge in the light theme, `--raised`
+/// with a `--border-strong` edge in the dark one (a tile lifted off the
+/// panel without glaring, as Figma's dark assets panel), and the label is
+/// `--fg-muted`. The previews inside are recoloured to match
+/// ([`PREVIEW_DARK`]).
 pub fn library_colours(light: bool) -> ([f32; 4], [f32; 4], [f32; 4]) {
     let hex = |c: u32| [((c >> 16) & 0xff) as f32 / 255.0, ((c >> 8) & 0xff) as f32 / 255.0, (c & 0xff) as f32 / 255.0, 1.0];
-    if light { (hex(0xf3f3f3), hex(0xe5e5e5), hex(0x616161)) } else { (hex(0xd6d6d6), hex(0x3c3c3c), hex(0x9d9d9d)) }
+    if light { (hex(0xf3f3f3), hex(0xe5e5e5), hex(0x616161)) } else { (hex(0x2a2b2e), hex(0x3c3c3c), hex(0x9d9d9d)) }
+}
+
+/// The previews are baked in the light theme's colours; in the dark one each
+/// colour here (light, dark) becomes its partner, and back. They are the
+/// colours the baked previews hold: the Readout's and Dial meter's ink, the
+/// Laser's body, the dial's face and rim, and the Plot's theme tokens as
+/// baked (palette.rs `BUILT_IN`: surface, grid, ink, axis). Accents (the
+/// beam, needle, fiber, series) and `muted` read on both and stay. Every
+/// value is distinct, so the mapping runs either way.
+const PREVIEW_DARK: &[(u32, u32)] = &[
+    (0x1a1a1f, 0xe8e8ea), // text ink
+    (0x2e3342, 0x8a93a8), // laser body
+    (0xf2f5fa, 0x1c1d1f), // dial face
+    (0x4d5261, 0x8a90a0), // dial rim
+    (0xfcfcfb, 0x1a1a19), // @surface
+    (0xe1e0d9, 0x2c2c2a), // @grid
+    (0x0b0b0b, 0xf0efec), // @ink
+    (0xc3c2b7, 0x383835), // @axis
+];
+
+/// A preview colour in the theme (`light`): its partner in
+/// [`PREVIEW_DARK`] when it holds the other theme's, else itself.
+fn preview_colour(c: [f32; 4], light: bool) -> [f32; 4] {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let rgb = (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2]);
+    let found = PREVIEW_DARK.iter().find_map(|&(l, d)| if light && rgb == d { Some(l) } else if !light && rgb == l { Some(d) } else { None });
+    match found {
+        Some(x) => [((x >> 16) & 0xff) as f32 / 255.0, ((x >> 8) & 0xff) as f32 / 255.0, (x & 0xff) as f32 / 255.0, c[3]],
+        None => c,
+    }
 }
 
 /// The ops building the Library tab's session composition: a grid of
@@ -350,8 +380,9 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
     ops
 }
 
-/// The session ops recolouring the Library's cards and labels for the
-/// theme (`light`), or none when they already wear it. The Library's
+/// The session ops recolouring the Library's cards, labels and previews
+/// for the theme (`light`), or none when they already wear it. Only the
+/// Library's session composition is touched, never a document's components. The Library's
 /// colours are constants (its previews are baked), so a theme switch sets
 /// them, as the timeline regenerates in its palette (timeline_view.rs).
 pub fn library_theme_ops(doc: &Document, light: bool) -> Vec<Op> {
@@ -376,6 +407,19 @@ pub fn library_theme_ops(doc: &Document, light: bool) -> Vec<Op> {
                     set(c, FacetKind::Stroke, "color", edge, have_edge.as_ref());
                 }
                 Some("label") => set(c, FacetKind::Fill, "color", ink, have_fill.as_ref()),
+                Some("preview") => {
+                    let mut stack = doc.children(c).to_vec();
+                    while let Some(id) = stack.pop() {
+                        stack.extend(doc.children(id).iter().copied());
+                        let fill = doc.get::<Fill>(id).and_then(|f| f.color.constant().cloned());
+                        let edge = doc.get::<Stroke>(id).and_then(|s| s.color.constant().cloned());
+                        for (kind, have) in [(FacetKind::Fill, fill), (FacetKind::Stroke, edge)] {
+                            if let Some(Value::Color(was)) = have {
+                                set(id, kind, "color", preview_colour(was, light), Some(&Value::Color(was)));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }

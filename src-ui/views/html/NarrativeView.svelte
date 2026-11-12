@@ -516,7 +516,7 @@
           {#if !overflow.has("view") || !overflow.has("value")}<span class="sep"></span>{/if}
           {#if !overflow.has("view")}
             <DropdownMenu.Root onOpenChange={(o) => o && loadCompositions()}>
-              <DropdownMenu.Trigger class="property-icon" aria-label="Insert a view block" title="Insert a view block">
+              <DropdownMenu.Trigger class="ui-icon-button" aria-label="Insert a view block" title="Insert a view block">
                 <SquareCode size={14} strokeWidth={1.75} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -531,7 +531,7 @@
           {/if}
           <span class="ui-spacer"></span>
           <DropdownMenu.Root onOpenChange={(o) => o && overflow.has("view") && loadCompositions()}>
-            <DropdownMenu.Trigger class="property-icon" aria-label="More" title="More">
+            <DropdownMenu.Trigger class="ui-icon-button" aria-label="More" title="More">
               <Ellipsis size={14} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>

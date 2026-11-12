@@ -84,7 +84,7 @@
   <IconButton icon={PanelTopClose} size={16} large label="Hide tab bar" title="Hide the tab bar: the views keep a grab handle to switch, drag and show it again" onclick={() => setTabBarHidden(group.id, true)} />
   <IconButton icon={Settings} size={16} large label="Settings" onclick={settings} />
   <DropdownMenu.Root bind:open onOpenChange={opened}>
-    <DropdownMenu.Trigger class="property-icon large" title="Open a view" aria-label="Open a view">
+    <DropdownMenu.Trigger class="ui-icon-button large" title="Open a view" aria-label="Open a view">
       <Plus size={16} strokeWidth={1.75} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>

@@ -67,7 +67,7 @@
 {#if info}
   <div class="settings canvas-ui" class:below-ruler={spec.source === "timeline"}>
     <DropdownMenu.Root bind:open onOpenChange={(o) => o && refresh()}>
-      <DropdownMenu.Trigger class="property-icon large trigger" title="Composition settings" aria-label="Composition settings">
+      <DropdownMenu.Trigger class="ui-icon-button large trigger" title="Composition settings" aria-label="Composition settings">
         <Settings2 size={16} strokeWidth={1.75} />
         {#if info.live}<span class="live" aria-hidden="true"></span>{/if}
       </DropdownMenu.Trigger>
@@ -115,7 +115,7 @@
   .settings.below-ruler {
     top: 64px;
   }
-  /* A 28 px icon button (`.property-icon.large`) floating over the canvas:
+  /* A 28 px icon button (`.ui-icon-button.large`) floating over the canvas:
      raised, with the menus' border and shadow so it reads on any picture. */
   .settings :global(.trigger) {
     position: relative;

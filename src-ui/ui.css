@@ -226,7 +226,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 
 /* Icon-only buttons: 24 px in panels and fields' ends, 28 px (`large`) in
    toolbars and headers. */
-.property-icon {
+.ui-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -240,24 +240,24 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   color: var(--fg-muted);
   cursor: pointer;
 }
-.property-icon:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
-.property-icon:disabled, .property-icon[data-disabled] { opacity: 0.4; cursor: default; }
-.property-icon[data-state="on"], .property-icon[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
-.property-icon[data-state="on"]:hover:not(:disabled), .property-icon[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
-.property-icon[data-state="open"] { background: var(--active); color: var(--fg); }
-.property-icon.large { width: var(--control-h); height: var(--control-h); }
+.ui-icon-button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+.ui-icon-button:disabled, .ui-icon-button[data-disabled] { opacity: 0.4; cursor: default; }
+.ui-icon-button[data-state="on"], .ui-icon-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+.ui-icon-button[data-state="on"]:hover:not(:disabled), .ui-icon-button[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+.ui-icon-button[data-state="open"] { background: var(--active); color: var(--fg); }
+.ui-icon-button.large { width: var(--control-h); height: var(--control-h); }
 /* Variants, each one place: `is-nav` a 28 px rail button that switches
    views (the view strip; its pressed state is the view shown); `is-tool` a
    floating canvas tool, 36 px, filled with the accent when it is the tool
    in use; `is-tool-menu` the narrow chevron beside a tool that opens its
    group; `is-row` a 20 px button inside a 22 px list row (the timeline's
    key buttons). */
-.property-icon.is-nav { width: var(--control-h); height: var(--control-h); }
-.property-icon.is-tool { width: 36px; height: 36px; border-radius: var(--radius-lg); color: var(--fg); }
-.property-icon.is-tool[aria-pressed="true"],
-.property-icon.is-tool[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
-.property-icon.is-tool-menu { width: 16px; height: 36px; }
-.property-icon.is-row { width: calc(var(--control-h-sm) - 4px); height: calc(var(--control-h-sm) - 4px); }
+.ui-icon-button.is-nav { width: var(--control-h); height: var(--control-h); }
+.ui-icon-button.is-tool { width: 36px; height: 36px; border-radius: var(--radius-lg); color: var(--fg); }
+.ui-icon-button.is-tool[aria-pressed="true"],
+.ui-icon-button.is-tool[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--accent-fg); }
+.ui-icon-button.is-tool-menu { width: 16px; height: 36px; }
+.ui-icon-button.is-row { width: calc(var(--control-h-sm) - 4px); height: calc(var(--control-h-sm) - 4px); }
 
 /* ---- Segmented control (bits-ui ToggleGroup) --------------------------- */
 
@@ -350,7 +350,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 /* ---- Popovers and dialogs ---------------------------------------------- */
 
 /* Property popovers share the inspector's scale and theme, including portals. */
-.property-popover {
+.ui-popover {
   z-index: 900;
   width: 280px;
   max-width: calc(100vw - 24px);
@@ -365,7 +365,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   font-size: var(--text-md);
   outline: none;
 }
-.property-popover header {
+.ui-popover header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -375,7 +375,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   border-bottom: 1px solid var(--border);
   font-weight: 600;
 }
-.property-popover-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
+.ui-popover-body { display: flex; flex-direction: column; gap: 12px; padding: var(--panel-pad); }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 
 /* A modal dialog (bits-ui Dialog): the overlay, the box, its title, body
@@ -491,10 +491,12 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   border-radius: var(--radius-sm);
   background: var(--bg-sunken);
   color: var(--fg-muted);
-  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-weight: 500;
   white-space: nowrap;
 }
+/* An id or a value, which reads as code. */
+.ui-badge.is-mono { font-family: var(--font-mono); font-weight: 400; }
 .ui-badge.is-pill {
   gap: 3px;
   min-height: 20px;

@@ -168,7 +168,7 @@
             </BitsButton.Root>
           {/if}
           <DropdownMenu.Root>
-            <DropdownMenu.Trigger class="property-icon large" aria-label="More for {r.name}" title="More">
+            <DropdownMenu.Trigger class="ui-icon-button large" aria-label="More for {r.name}" title="More">
               <Ellipsis size={16} strokeWidth={1.75} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>

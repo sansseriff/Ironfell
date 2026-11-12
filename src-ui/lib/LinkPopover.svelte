@@ -81,9 +81,9 @@
 
 <Popover.Root open={!!drop} onOpenChange={(open) => { if (!open) doc.linkDrop = null; }}>
   <Popover.Portal>
-    <Popover.Content class="property-popover link-popover" customAnchor={anchor} side="bottom" align="start" sideOffset={14} alignOffset={14} aria-label="Link a port">
+    <Popover.Content class="ui-popover link-popover" customAnchor={anchor} side="bottom" align="start" sideOffset={14} alignOffset={14} aria-label="Link a port">
       <header class="head"><span>Link <strong>{portName}</strong></span></header>
-      <div class="property-popover-body">
+      <div class="ui-popover-body">
         <div class="group"><span class="ui-subheading">Drives</span><Select label="Drives" value={leaf} items={props.map((f) => ({ value: f.leaf, label: labels[f.leaf] ?? f.leaf }))} onChange={pick} /></div>
         <div class="map">
           <span>When {portName} goes from</span>

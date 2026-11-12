@@ -257,7 +257,7 @@
                 {#if recording(m, s)}<span class="dot"></span>{/if}{s}{#if m.default === s}<span class="def" title="The default state: new instances start in it"><House size={10} strokeWidth={1.75} /></span>{/if}
               </button>
               <DropdownMenu.Root>
-                <DropdownMenu.Trigger class="property-icon pill-menu" aria-label="{s} options" title="Rename, make default, delete"><Ellipsis size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+                <DropdownMenu.Trigger class="ui-icon-button pill-menu" aria-label="{s} options" title="Rename, make default, delete"><Ellipsis size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.Content class="ui-menu" side="top" sideOffset={6} align="start">
                     <DropdownMenu.Item class="ui-menu-item" onSelect={() => (renaming = st?.id ?? null)}>Rename</DropdownMenu.Item>
@@ -429,11 +429,11 @@
                     <span class="vals">{fmt(pose(m, f.from, c.name))} → {fmt(pose(m, f.to, c.name))}</span>
                     {#if w}
                       <Popover.Root>
-                        <Popover.Trigger class="property-icon" aria-label="{c.name}'s slice" title="Its slice: exact times, easing, remove"><Ellipsis size={14} strokeWidth={1.75} /></Popover.Trigger>
+                        <Popover.Trigger class="ui-icon-button" aria-label="{c.name}'s slice" title="Its slice: exact times, easing, remove"><Ellipsis size={14} strokeWidth={1.75} /></Popover.Trigger>
                         <Popover.Portal>
-                          <Popover.Content class="property-popover slice-popover" side="top" align="start" sideOffset={6} aria-label="{c.name}'s slice">
+                          <Popover.Content class="ui-popover slice-popover" side="top" align="start" sideOffset={6} aria-label="{c.name}'s slice">
                             <header><strong>{c.name} in {f.from} → {f.to}</strong></header>
-                            <div class="property-popover-body">
+                            <div class="ui-popover-body">
                               {#if w.shaped}<p class="muted">Shaped by a formula (tween.shape).</p>
                               {:else}
                                 <label class="ui-field ms"><span>Start</span><input inputmode="decimal" value={Math.round((w.start ?? 0) * ms)} onchange={(e) => run(machines.patch(w.id, { "tween.start": String(Math.max(0, Math.min(1, Number(e.currentTarget.value) / ms))) }, "slice start"))} /><span>ms</span></label>

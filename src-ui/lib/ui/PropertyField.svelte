@@ -241,7 +241,7 @@
   .locked .label { opacity: 0.4; }
   /* The field's shell is `.ui-field` (ui.css); its parts sit in a row. */
   .control { overflow: hidden; }
-  .control > :global(.property-icon) { margin-right: 1px; }
+  .control > :global(.ui-icon-button) { margin-right: 1px; }
   .control.bare { display: flex; align-items: center; gap: 4px; min-height: var(--control-h); overflow: visible; }
   .control.bare > :global(.ui-segmented) { flex: 1; min-width: 0; }
   .prefix { flex: none; padding-left: 8px; color: var(--fg-faint); }

@@ -144,7 +144,7 @@
         <ChevronDown size={12} strokeWidth={1.75} />
       </Popover.Trigger>
       <Popover.Portal>
-        <Popover.Content class="property-popover" side="left" align="start" sideOffset={12} customAnchor={anchor}>
+        <Popover.Content class="ui-popover" side="left" align="start" sideOffset={12} customAnchor={anchor}>
           {#if catalog}
             <FontPicker value={family} {catalog} onClose={() => (pickerOpen = false)} onPick={(name) => { pickerOpen = false; void style({ family: name }); }} />
           {/if}
@@ -159,7 +159,7 @@
     <div class="size">
       <PropertyField field={field("font", "size", "24")} {node} compact label="Font size" onSet={setField} onRefresh={refresh} {onError} />
       <DropdownMenu.Root>
-        <DropdownMenu.Trigger class="property-icon" aria-label="Font sizes" title="Font sizes"><ChevronDown size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
+        <DropdownMenu.Trigger class="ui-icon-button" aria-label="Font sizes" title="Font sizes"><ChevronDown size={14} strokeWidth={1.75} /></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content class="ui-menu" side="bottom" align="end" sideOffset={4}>
             {#each SIZES as s}<DropdownMenu.Item class="ui-menu-item" onSelect={() => style({ size: s })}>{s}</DropdownMenu.Item>{/each}
@@ -199,10 +199,10 @@
     <Segmented label="Vertical alignment" iconOnly value={valign} onChange={(v) => set("font.valign", v, "align text")}
       items={[{ value: "top", icon: ArrowUpToLine, label: "Align top" }, { value: "middle", icon: AlignVerticalCenter, label: "Align middle" }, { value: "bottom", icon: ArrowDownToLine, label: "Align bottom" }].map((a) => ({ ...a, title: sizing === "fixed" ? a.label : `${a.label} (fixed size boxes)` }))} />
     <Popover.Root>
-      <Popover.Trigger class="property-icon" aria-label="Type settings" title="Type settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
-      <Popover.Portal><Popover.Content class="property-popover" side="left" align="center" sideOffset={12} aria-label="Type settings">
-        <header><strong>Type settings</strong><Popover.Close class="property-icon" aria-label="Close type settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
-        <div class="property-popover-body">
+      <Popover.Trigger class="ui-icon-button" aria-label="Type settings" title="Type settings"><SlidersHorizontal size={14} strokeWidth={1.75} /></Popover.Trigger>
+      <Popover.Portal><Popover.Content class="ui-popover" side="left" align="center" sideOffset={12} aria-label="Type settings">
+        <header><strong>Type settings</strong><Popover.Close class="ui-icon-button" aria-label="Close type settings"><X size={14} strokeWidth={1.75} /></Popover.Close></header>
+        <div class="ui-popover-body">
           <div class="group"><div class="ui-subheading">Resizing</div>
             <Select value={sizing} items={[{ value: "auto_width", label: "Auto width" }, { value: "auto_height", label: "Auto height" }, { value: "fixed", label: "Fixed size" }]} onChange={(v) => set("text.sizing", v, "resize text")} label="Resizing" />
           </div>

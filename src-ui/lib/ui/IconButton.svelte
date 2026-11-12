@@ -1,6 +1,6 @@
 <script lang="ts">
   // An icon-only button (AGENTS.md): Bits UI's Button, or its Toggle when
-  // `pressed` is given, in the Inspector's `.property-icon` look (`large`
+  // `pressed` is given, in the Inspector's `.ui-icon-button` look (`large`
   // for toolbars). `label` is the accessible name and the tooltip; the icon
   // is a Lucide component.
   import { Button, Toggle } from "bits-ui";
@@ -30,11 +30,11 @@
 </script>
 
 {#if pressed === undefined}
-  <Button.Root class="property-icon {large ? 'large' : ''} {extra}" aria-label={label} title={title ?? label} {...rest}>
+  <Button.Root class="ui-icon-button {large ? 'large' : ''} {extra}" aria-label={label} title={title ?? label} {...rest}>
     <Icon size={size} strokeWidth={1.75} />
   </Button.Root>
 {:else}
-  <Toggle.Root class="property-icon {large ? 'large' : ''} {extra}" aria-label={label} title={title ?? label} {pressed} {onPressedChange} {...rest}>
+  <Toggle.Root class="ui-icon-button {large ? 'large' : ''} {extra}" aria-label={label} title={title ?? label} {pressed} {onPressedChange} {...rest}>
     <Icon size={size} strokeWidth={1.75} />
   </Toggle.Root>
 {/if}

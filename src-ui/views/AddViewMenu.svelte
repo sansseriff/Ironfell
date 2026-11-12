@@ -106,7 +106,7 @@
           {#each narratives as n (n.id)}
             <DropdownMenu.Item class="ui-menu-item" onSelect={() => add(titleOf(n.name || n.id), { source: n.name || n.id, notation: "narrative" })}>{titleOf(n.name || n.id)}</DropdownMenu.Item>
           {/each}
-          <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Notes", { source: "notes", notation: "narrative" })}>New narrative… <span class="ui-hint">notes</span></DropdownMenu.Item>
+          <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Notes", { source: "notes", notation: "narrative" })}>New narrative…</DropdownMenu.Item>
         </DropdownMenu.Group>
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
@@ -119,7 +119,7 @@
         <DropdownMenu.Group>
           <DropdownMenu.GroupHeading class="ui-menu-heading">Developer</DropdownMenu.GroupHeading>
           {#if appSettings.developer}
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Latency", LATENCY_VIEW)}>Latency <span class="ui-hint">input to screen</span></DropdownMenu.Item>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => add("Latency", LATENCY_VIEW)} title="Input-to-screen latency">Latency</DropdownMenu.Item>
           {/if}
           <DropdownMenu.Sub>
             <DropdownMenu.SubTrigger class="ui-menu-item"><span>Stress test</span><ChevronRight class="ui-submenu-chevron" size={14} strokeWidth={1.75} /></DropdownMenu.SubTrigger>

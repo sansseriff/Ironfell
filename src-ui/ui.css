@@ -27,7 +27,8 @@
 /* dockview's own context menu (a tab's right-click) is the same menu: its
    vendor classes share these rules (dockview.css keeps only its layout). */
 .ui-menu,
-.dv-context-menu {
+.dv-context-menu,
+.dv-tabs-overflow-container {
   /* Above dialogs (1000–1001), so a select opened inside one shows. */
   z-index: 1100;
   min-width: 180px;
@@ -66,7 +67,8 @@
   color: var(--fg-muted);
 }
 .ui-menu-item,
-.dv-context-menu-item {
+.dv-context-menu-item,
+.dv-tabs-overflow-container .dv-tab {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -79,7 +81,8 @@
 }
 .ui-menu-item > span:not(.ui-hint) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ui-menu-item[data-highlighted],
-.dv-context-menu-item:hover {
+.dv-context-menu-item:hover,
+.dv-tabs-overflow-container .dv-tab:hover {
   background: var(--accent);
   color: var(--accent-fg);
 }
@@ -87,6 +90,8 @@
 .dv-context-menu-item.dv-context-menu-item--disabled {
   opacity: 0.4;
 }
+.ui-menu-item.is-danger { color: var(--danger); }
+.ui-menu-item.is-danger[data-highlighted] { background: var(--danger); color: #fff; }
 .dv-context-menu-item { white-space: nowrap; }
 .dv-context-menu-item--disabled { pointer-events: none; }
 .ui-menu-item .ui-hint {
@@ -99,6 +104,13 @@
   color: inherit;
   opacity: 0.8;
 }
+/* A line of status inside a menu, under the items it describes, aligned
+   with their labels (past the check gutter). Not an item and not a heading. */
+.ui-menu-note {
+  padding: 2px 8px 6px 30px;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
 .ui-menu-item .ui-menu-check { width: 14px; display: flex; flex: 0 0 14px; }
 .ui-menu-item .ui-submenu-chevron { margin-left: auto; color: var(--fg-faint); }
 .ui-menu-item[data-highlighted] .ui-submenu-chevron { color: inherit; }
@@ -106,7 +118,7 @@
 .dv-context-menu-separator {
   height: 1px;
   margin: 4px 2px;
-  background: var(--border);
+  background: var(--border-raised);
 }
 
 /* ---- Fields ------------------------------------------------------------ */
@@ -491,6 +503,7 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
   border-radius: var(--radius-sm);
   background: var(--bg-sunken);
   color: var(--fg-muted);
+  font-family: var(--font-ui);
   font-size: var(--text-xs);
   font-weight: 500;
   white-space: nowrap;

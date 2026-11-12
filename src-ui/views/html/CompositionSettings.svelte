@@ -75,27 +75,23 @@
         <DropdownMenu.Content class="ui-menu" side="bottom" sideOffset={6} align="end">
           <div class="ui-menu-heading">Run</div>
           {#each MODES as m (m.id)}
-            <DropdownMenu.Item class="ui-menu-item" onSelect={() => set(m.id)} data-run={m.id}>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={() => set(m.id)} data-run={m.id} title={m.hint}>
               <span class="ui-menu-check">{#if info.run === m.id}<Check size={14} strokeWidth={1.75} />{/if}</span>
               <span>{m.label}</span>
-              <span class="ui-hint">{m.hint}</span>
             </DropdownMenu.Item>
           {/each}
+          <div class="ui-menu-note" data-status>{status}</div>
           <div class="ui-menu-separator"></div>
-          <div class="ui-menu-heading status" data-status>{status}</div>
-          <div class="ui-menu-separator"></div>
-          <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps>
+          <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps title="Frames this view renders per second">
             <span class="ui-menu-check">{#if showFps}<Check size={14} strokeWidth={1.75} />{/if}</span>
             <span>Show FPS</span>
-            <span class="ui-hint">Frames this view renders per second</span>
           </DropdownMenu.Item>
           {#if settings.developer}
             <div class="ui-menu-separator"></div>
             <div class="ui-menu-heading">Developer</div>
-            <DropdownMenu.Item class="ui-menu-item" onSelect={onInspect} data-inspector>
+            <DropdownMenu.Item class="ui-menu-item" onSelect={onInspect} data-inspector title="Chunks, culling and tiles beside the view">
               <span class="ui-menu-check">{#if inspecting}<Check size={14} strokeWidth={1.75} />{/if}</span>
               <span>Render inspector</span>
-              <span class="ui-hint">Chunks, culling and tiles beside the view</span>
             </DropdownMenu.Item>
           {/if}
         </DropdownMenu.Content>
@@ -134,8 +130,5 @@
     height: 6px;
     border-radius: 50%;
     background: var(--accent);
-  }
-  .status {
-    font-weight: 400;
   }
 </style>

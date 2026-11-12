@@ -53,7 +53,7 @@
         <DropdownMenu.Item class="ui-menu-item" disabled={!history.current.turns.length} onSelect={() => history.newChat()}>
           <span class="ui-menu-check"><SquarePen size={14} strokeWidth={1.75} /></span><span>New chat</span>
         </DropdownMenu.Item>
-        <DropdownMenu.Item class="ui-menu-item" disabled={busy || !history.current.turns.length} onSelect={() => confirming = true}>
+        <DropdownMenu.Item class="ui-menu-item is-danger" disabled={busy || !history.current.turns.length} onSelect={() => confirming = true}>
           <span class="ui-menu-check"><Trash size={14} strokeWidth={1.75} /></span><span>Delete this chat…</span>
         </DropdownMenu.Item>
       </DropdownMenu.Content>

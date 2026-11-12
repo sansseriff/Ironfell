@@ -122,6 +122,8 @@
   });
   // Timing (a key, a clip) is not a picture: no picture actions in the title.
   const TIMED = ["key", "clip"];
+  // A facet with no title of its own, in the inspector's sentence case.
+  const sentence = (kind: string) => kind.charAt(0).toUpperCase() + kind.slice(1).replaceAll("_", " ");
   const titles: Record<string, string> = { key: "Key", clip: "Clip", transform2d: "Position", size: "Layout", radius: "Dimensions", appearance: "Appearance", fill: "Fill", gradient: "Gradient", stroke: "Stroke", corners: "Corner radius", arc: "Arc", shadow: "Drop shadow", group_clip: "Clip content", layout: "Auto layout", layout_item: "In layout", table: "Table style", rules: "Lines" };
   const order = ["transform2d", "size", "radius", "layout", "layout_item", "appearance", "corners", "arc", "group_clip", "fill", "gradient", "stroke", "shadow"];
   const components = $derived.by(() => {
@@ -268,13 +270,15 @@
 </script>
 
 <section class="html-view properties inspector" data-selection={inspections.map(i => i.node).join(" ")}>
-  <CompositionSection />
+  <!-- The composition's settings while nothing is selected, as Figma shows
+       the page's: a selection gets the whole panel. -->
+  {#if !doc.selection.length}<CompositionSection />{/if}
 
   <!-- The object: its name, its kind (the id in the tooltip), and what to
        do with the selection, one row of icon buttons. -->
   {#if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
-    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-badge" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={() => command("make-component")} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={() => command("make-component")} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
   <AttachmentTask bind:this={attach} />
   {#if showIn.length}
@@ -569,13 +573,13 @@
           </Section>
         {:else if section === "other"}
         {#each otherComponents as c (c.kind)}
-          <Section title={titles[c.kind] ?? c.kind} class="property-section" headerClass="component" data-kind={c.kind}>
+          <Section title={titles[c.kind] ?? sentence(c.kind)} class="property-section" headerClass="component" data-kind={c.kind}>
             {#snippet actions()}{#if inspected?.removable.includes(c.kind)}<IconButton icon={Minus} label="Remove {c.kind}" onclick={() => component(c.kind, false)} />{/if}{/snippet}
             <div class="property-grid">{#each c.fields as f (f.leaf)}<PropertyField field={f} node={inspected.node} onSet={set} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
           </Section>
         {/each}
         {:else if section === "add" && (inspected.addable.some(k => addKinds.includes(k)))}
-          <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? kind}</Button>{/each}</div>
+          <div class="button-row add">{#each inspected.addable.filter(k => addKinds.includes(k)) as kind}<Button small variant="outline" aria-label="Add {kind}" onclick={() => component(kind, true)}><Plus size={14} strokeWidth={1.75} />{titles[kind] ?? sentence(kind)}</Button>{/each}</div>
         {/if}
       {/each}
       {#if colors.length}
@@ -634,7 +638,10 @@
   .constraints-selects { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
   .disclosed { margin-top: 8px; }
   .appearance-grid.has-corners { grid-template-columns: repeat(2, minmax(0, 1fr)) 24px; align-items: center; }
-  .individual-corners { padding-right: 32px; }
+  /* Figma's column: every row of fields keeps the 24 px action column at the
+     right (and its 8 px gap), empty or not, so the right edges of X/Y, W/H,
+     opacity and corners line up. A grid with its own action column fills it. */
+  .inspector :global(.property-grid:not(.has-corners)) { padding-right: calc(var(--control-h-sm) + 8px); }
   .stroke-options { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: end; }
   .stroke-options > :global(.ui-icon-button) { margin-bottom: 2px; }
   .readout-field { display: flex; flex-direction: column; gap: 4px; }

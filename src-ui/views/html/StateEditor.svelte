@@ -19,6 +19,7 @@
   import { onDestroy } from "svelte";
   import { DropdownMenu, Popover } from "bits-ui";
   import ArrowRight from "@lucide/svelte/icons/arrow-right";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Ellipsis from "@lucide/svelte/icons/ellipsis";
@@ -274,7 +275,7 @@
             {@const back = between(m, next, s)}
             {@const f2 = focusOf(m)}
             <span class="gap">
-              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}>{#if i === names(m).length - 1}<span class="loop">↺ {next}</span>{:else}<ArrowRight size={11} strokeWidth={1.75} />{/if}</button>
+              <button class="arrow" class:shared={fwd.shared} class:none={!fwd.t} class:on={f2.kind === "pair" && f2.from === s && f2.to === next} onclick={() => timePair(m, s, next)} title={fwd.label} aria-label={fwd.label}>{#if i === names(m).length - 1}<span class="loop"><RotateCcw size={11} strokeWidth={1.75} />{next}</span>{:else}<ArrowRight size={11} strokeWidth={1.75} />{/if}</button>
               {#if i < names(m).length - 1}
                 <button class="arrow back" class:shared={back.shared} class:none={!back.t} class:on={f2.kind === "pair" && f2.from === next && f2.to === s} onclick={() => timePair(m, next, s)} title={back.label} aria-label={back.label}><ArrowRight size={11} strokeWidth={1.75} /></button>
               {/if}
@@ -530,7 +531,7 @@
   .edge.on .elabel { fill: var(--accent); font-weight: 600; }
   .elabel { fill: var(--fg-muted); font-size: var(--text-xs); }
   .edge:focus, .node:focus { outline: none; }
-  .loop { font-size: var(--text-xs); padding: 0 2px; white-space: nowrap; }
+  .loop { display: inline-flex; align-items: center; gap: 2px; font-size: var(--text-xs); padding: 0 2px; white-space: nowrap; }
   .arrowhead { fill: var(--fg-muted); }
 
   .name-col { width: 200px; flex: none; box-sizing: border-box; padding: 0 8px; }

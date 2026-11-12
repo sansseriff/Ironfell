@@ -9,7 +9,7 @@
   import { controllerManager } from "../../controller-manager.svelte";
   import { pixelRatioFor, saveSettings, settings, type Appearance, type RenderScale, type Renderer } from "../../runtime/settings.svelte";
   import { setAppearance } from "../../runtime/theme.svelte";
-  import { Switch } from "bits-ui";
+  import Switch from "../../lib/ui/Switch.svelte";
   import Select from "../../lib/ui/Select.svelte";
   import Button from "../../lib/ui/Button.svelte";
   import Section from "../../lib/ui/Section.svelte";
@@ -83,10 +83,8 @@
     </div>
     <p class="note">
       This screen reports {screenW}×{screenH} at {fmt(display)}; a full-screen canvas renders at
-      {px(pixelRatioFor(settings.renderScale))} px. On a 4K display set to "looks like 2560×1440", macOS has
-      the browser draw 5120×2880 and shrinks it to 3840×2160, so ~44% of canvas pixels are never seen.
-      "Match a 4K panel" renders at the panel's density instead; text and controls stay sharp. A browser
-      can't tell this from a native 5K display, so it is a choice, not a detection. Applies at once.
+      {px(pixelRatioFor(settings.renderScale))} px. On a scaled 4K display, "Match a 4K panel" renders only the
+      pixels the panel shows. Applies at once.
     </p>
   </Section>
   {/if}
@@ -106,7 +104,7 @@
       />
     </div>
     {#if build && !build.classic && !native}
-      <p class="note">Classic needs a WebGPU build with it: ./build-wasm.sh webgpu classic</p>
+      <p class="note">Vello Classic needs a WebGPU build that includes it.</p>
     {/if}
   </Section>
 
@@ -114,9 +112,7 @@
     {#if native}<p class="note">Native Bevy runtime with parallel simulation and rendering.</p>{:else}
     <div class="setting">
       <span>Run in a worker</span>
-      <Switch.Root class="ui-switch" disabled={busy} checked={controllerManager.runtimeMode === "worker"} onCheckedChange={setMode} aria-label="Run in a worker">
-        <Switch.Thumb class="ui-switch-thumb" />
-      </Switch.Root>
+      <Switch disabled={busy} checked={controllerManager.runtimeMode === "worker"} onChange={setMode} label="Run in a worker" />
     </div>
     {/if}
     <div class="setting">
@@ -128,11 +124,9 @@
   <Section title="Developer">
     <div class="setting">
       <span>Developer mode</span>
-      <Switch.Root class="ui-switch" checked={settings.developer} onCheckedChange={setDeveloper} aria-label="Developer mode">
-        <Switch.Thumb class="ui-switch-thumb" />
-      </Switch.Root>
+      <Switch checked={settings.developer} onChange={setDeveloper} label="Developer mode" />
     </div>
-    <p class="note">Adds the render inspector to each composition's settings menu (top right of the tab): the composition beside a view of its chunks, culling and raster tiles.</p>
+    <p class="note">Adds the render inspector to each composition's settings menu.</p>
   </Section>
 
   <Section title="Build">

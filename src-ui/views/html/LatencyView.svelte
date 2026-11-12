@@ -31,7 +31,7 @@
   // still; while it moves, each lags by its own latency.
   import Button from "../../lib/ui/Button.svelte";
   import { getContext, onMount } from "svelte";
-  import { Switch } from "bits-ui";
+  import Switch from "../../lib/ui/Switch.svelte";
   import Crosshair from "@lucide/svelte/icons/crosshair";
   import { controllerManager } from "../../controller-manager.svelte";
   import type { ViewSpec } from "../views";
@@ -245,9 +245,7 @@
     </ul>
     <div class="setting">
       <span>Continuous rendering</span>
-      <Switch.Root class="ui-switch" checked={continuous} disabled={!ready} onCheckedChange={setContinuous} aria-label="Continuous rendering">
-        <Switch.Thumb class="ui-switch-thumb" />
-      </Switch.Root>
+      <Switch checked={continuous} disabled={!ready} onChange={setContinuous} label="Continuous rendering" />
     </div>
     <p class="readout" data-latency-stats>
       {stats.rate} events/s · event age p50 {stats.age.toFixed(1)} ms · rAF {stats.raf} Hz

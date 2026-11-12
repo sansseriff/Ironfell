@@ -7,7 +7,7 @@
   // (src/document_bridge/inspector.rs).
   import { onDestroy } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
-  import Checkbox from "../../lib/ui/Checkbox.svelte";
+  import Switch from "../../lib/ui/Switch.svelte";
   import type { ViewSpec } from "../views";
 
   let { spec, panel }: { spec: ViewSpec; panel?: string } = $props();
@@ -133,10 +133,10 @@
     {/if}
   {/if}
   <div class="toggles">
-    <Checkbox label="Chunk colours" checked={options.tint} onChange={() => toggle("tint")} />
-    <Checkbox label="Chunk bounds" checked={options.outlines} onChange={() => toggle("outlines")} />
-    <Checkbox label="Dim culled" checked={options.dim} onChange={() => toggle("dim")} />
-    <Checkbox label="Raster squares" checked={options.tiles} onChange={() => toggle("tiles")} />
+    <Switch showLabel label="Chunk colours" checked={options.tint} onChange={() => toggle("tint")} />
+    <Switch showLabel label="Chunk bounds" checked={options.outlines} onChange={() => toggle("outlines")} />
+    <Switch showLabel label="Dim culled" checked={options.dim} onChange={() => toggle("dim")} />
+    <Switch showLabel label="Raster squares" checked={options.tiles} onChange={() => toggle("tiles")} />
   </div>
 </div>
 

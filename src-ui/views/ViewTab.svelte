@@ -15,6 +15,7 @@
   import BookOpen from "@lucide/svelte/icons/book-open";
   import Settings from "@lucide/svelte/icons/settings";
   import Timer from "@lucide/svelte/icons/timer";
+  import ChartGantt from "@lucide/svelte/icons/chart-gantt";
   import Layers from "@lucide/svelte/icons/layers";
   import X from "@lucide/svelte/icons/x";
   import Pencil from "@lucide/svelte/icons/pencil";
@@ -73,7 +74,8 @@
     settings: Settings,
     latency: Timer,
   };
-  const Icon = $derived(notation ? ICONS[notation] : Shapes);
+  // The timeline is a session composition, but reads as a timeline.
+  const Icon = $derived(spec?.source === "timeline" ? ChartGantt : notation ? ICONS[notation] : Shapes);
 
   let title = $state(api.title ?? "");
   const sub = api.onDidTitleChange((e) => (title = e.title));
@@ -134,7 +136,7 @@
         <ContextMenu.Item class="ui-menu-item" onSelect={() => void beginRename()}>
           <Pencil size={14} strokeWidth={1.75} /> Rename composition
         </ContextMenu.Item>
-        <ContextMenu.Item class="ui-menu-item danger" onSelect={() => void remove()}>
+        <ContextMenu.Item class="ui-menu-item is-danger" onSelect={() => void remove()}>
           <Trash size={14} strokeWidth={1.75} /> Delete composition
         </ContextMenu.Item>
         <ContextMenu.Separator class="ui-menu-separator" />
@@ -166,9 +168,6 @@
   .rename {
     width: 120px;
     min-height: var(--control-h-sm);
-  }
-  :global(.ui-menu-item.danger) {
-    color: var(--danger);
   }
   .view-tab :global(.close) {
     margin-left: 2px;

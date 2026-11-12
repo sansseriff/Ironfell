@@ -234,6 +234,8 @@
   .compact { gap: 0; }
   .compact .binding { display: none; }
   .label { color: var(--fg-muted); }
+  /* A generic facet's field names its leaf ("source"): sentence case, as every label. */
+  .label::first-letter { text-transform: uppercase; }
   .bound, .binding { color: var(--accent); }
   .binding, .field-error { font-size: var(--text-xs); overflow-wrap: anywhere; }
   .field-error { color: var(--danger); }

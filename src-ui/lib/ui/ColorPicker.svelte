@@ -445,6 +445,6 @@
   :global(.color-swatch:hover:not(:disabled)) { background: var(--hover); }
   :global(.color-swatch:disabled) { opacity: 0.4; cursor: default; }
   :global(.color-swatch[data-state="open"]) { background: var(--active); }
-  :global(.color-chip) { display: block; width: 14px; height: 14px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px var(--border-strong); }
+  :global(.color-chip) { display: block; width: 14px; height: 14px; border-radius: var(--radius-sm); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 22%, transparent); }
   :global(.ui-popover.color-popover) { width: 240px; }
 </style>

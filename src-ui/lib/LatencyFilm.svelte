@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import BevyPanel from './BevyPanel.svelte';
   import Button from './ui/Button.svelte';
-  import Checkbox from './ui/Checkbox.svelte';
+  import Switch from './ui/Switch.svelte';
   import TextInput from './ui/TextInput.svelte';
   import { controllerManager } from '../controller-manager.svelte';
   import { pixelRatio } from '../runtime/settings.svelte';
@@ -128,7 +128,7 @@
   <header>
     <div class="heading"><strong>Iron · latency filming</strong><span>{label}</span>
       <Button variant="outline" small disabled={busy || !controllerManager.isInitialized} onclick={() => prepare(doc.generation,true)}>Reset target</Button>
-      <Checkbox label="Continuous rendering" checked={continuous} disabled={!ready || busy} onChange={setContinuous} />
+      <Switch showLabel label="Continuous rendering" checked={continuous} disabled={!ready || busy} onChange={setContinuous} />
       <label class="fps-row">Camera fps <TextInput class="fps" type="number" min="30" max="10000" bind:value={cameraText} /></label>
       <Button variant="outline" small disabled={!ready || busy || !cameraFps || cameraFps < 30} onclick={exportSetup}>Export setup</Button>
     </div>

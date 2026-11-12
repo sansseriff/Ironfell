@@ -5,7 +5,8 @@
 }
 
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --font-ui: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: var(--font-ui);
   line-height: 1.5;
   font-weight: 400;
 
@@ -24,7 +25,7 @@
   --bg-input: #ffffff;
   --fg: #3b3b3b;
   --fg-muted: #616161;
-  --fg-faint: #8b8b8b;
+  --fg-faint: #767676;
   --border: #e5e5e5;
   --border-strong: #cecece;
   --tab-outline: #e0e0e0;
@@ -43,6 +44,8 @@
   --scrollbar: rgba(0, 0, 0, 0.22);
   --scrollbar-hover: rgba(0, 0, 0, 0.38);
   --raised: #ffffff;
+  /* A rule inside a raised surface (menu separators, popover headers). */
+  --border-raised: #e5e5e5;
 
   /* One scale for every control (ui.css, src-ui/lib/ui/), after Figma UI3:
      text, radii, control heights and panel insets. Components use these,
@@ -100,6 +103,7 @@
     --scrollbar: rgba(255, 255, 255, 0.2);
     --scrollbar-hover: rgba(255, 255, 255, 0.34);
     --raised: #2a2b2e;
+    --border-raised: #45464b;
   }
 }
 
@@ -130,6 +134,7 @@
   --scrollbar: rgba(255, 255, 255, 0.2);
   --scrollbar-hover: rgba(255, 255, 255, 0.34);
   --raised: #2a2b2e;
+  --border-raised: #45464b;
 }
 
 *,

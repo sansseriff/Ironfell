@@ -178,7 +178,7 @@
                 <DropdownMenu.Item class="ui-menu-item" onSelect={() => act(() => library.duplicate(r.id))}><Copy size={14} strokeWidth={1.75} /><span>Duplicate</span></DropdownMenu.Item>
                 <DropdownMenu.Item class="ui-menu-item" onSelect={() => act(() => exportScope(r))}><Download size={14} strokeWidth={1.75} /><span>Export .json</span></DropdownMenu.Item>
                 <DropdownMenu.Separator class="ui-menu-separator" />
-                <DropdownMenu.Item class="ui-menu-item danger" disabled={r.busy} onSelect={() => (deleting = r)}><Trash size={14} strokeWidth={1.75} /><span>Delete…</span></DropdownMenu.Item>
+                <DropdownMenu.Item class="ui-menu-item is-danger" disabled={r.busy} onSelect={() => (deleting = r)}><Trash size={14} strokeWidth={1.75} /><span>Delete…</span></DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
@@ -332,8 +332,5 @@
     margin: 14px 0 0;
     color: var(--fg-muted);
     font-size: var(--text-sm);
-  }
-  :global(.ui-menu-item.danger) {
-    color: var(--danger);
   }
 </style>

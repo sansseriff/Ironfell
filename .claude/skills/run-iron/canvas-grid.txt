@@ -60,10 +60,11 @@ eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); r
 shot text-pan
 key Escape
 sleep 500
-# The inspector's Composition section (empty selection) sets the grid's
-# opacity: one place for every grid setting.
+# The inspector's Composition section (shown with an empty selection: click
+# empty canvas) sets the grid's opacity: one place for every grid setting.
 key Escape
-sleep 300
+dclick 100 650
+sleep 500
 eval (() => { const i = document.querySelector('[data-section="composition"] input[aria-label="Grid opacity"]'); if (!i) return 'no field'; i.focus(); i.value = '50'; i.dispatchEvent(new Event('change', {bubbles: true})); return 1; })()
 assert __wait(async () => (await __iron.view({fidelity:'full'})).match(/<composition[^>]*name="main"[^>]*>/)[0].includes('grid_opacity="0.5"'))
 shot grid-opacity

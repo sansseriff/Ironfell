@@ -2644,10 +2644,18 @@ pub fn select_tool_system(
                             let label = projected_label(geo.doc(), &ids, "trim").unwrap_or_else(|| format!("resize {}", type_label(geo.doc(), &ids)));
                             let nodes: Vec<NodeId> = resize_parts.iter().map(|p| p.id).collect();
                             // A rotated box's edges are not on the axes: no snapping.
-                            let snap = (!tool.snap_off && manipulate::axis_aligned(frame)).then(|| snap_session(&geo, &view, &mine, k)).flatten().map(|mut s| {
+                            let mut snap = (!tool.snap_off && manipulate::axis_aligned(frame)).then(|| snap_session(&geo, &view, &mine, k)).flatten().map(|mut s| {
                                 s.lines = false;
                                 s
                             });
+                            // On a grid, the moved edges land on its lines
+                            // instead.
+                            let grid = Some(focus.grid(&view.panel)).filter(|&g| g > 0.0).or_else(|| crate::bevy_app::view_focus::canvas_grid(geo.store, &view));
+                            if let Some(g) = grid.filter(|_| manipulate::axis_aligned(frame)) {
+                                let s = snap.get_or_insert_with(|| manipulate::SnapSession::new(Rect::ZERO, Vec::new(), Vec::new(), 0.0));
+                                s.lines = false;
+                                s.grid = Some((g, Point::ORIGIN));
+                            }
                             store.0.begin_gesture(&nodes);
                             tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 {
                                 label,
@@ -3026,16 +3034,19 @@ pub fn select_tool_system(
                         })
                         .collect();
                     let mut snap = if tool.snap_off { None } else { snap_session(&geo, &view, &mine, k) };
-                    // On a grid (`snap.grid`), the lead mover's origin lands
-                    // on it instead.
+                    // On a notation's grid (`snap.grid`), the lead mover's
+                    // origin lands on it instead; on the composition's shown
+                    // grid, the movers' box's top left corner.
                     let grid = focus.grid(&view.panel);
-                    if grid > 0.0
-                        && let Some(lead) = mine.first()
-                        && let Some(space) = geo.space(&lead.chain)
-                    {
-                        let origin = space * geo.world(lead.node()) * Point::ORIGIN;
+                    let on_grid = if grid > 0.0 {
+                        mine.first().and_then(|lead| geo.space(&lead.chain).map(|space| (grid, space * geo.world(lead.node()) * Point::ORIGIN)))
+                    } else {
+                        crate::bevy_app::view_focus::canvas_grid(geo.store, &view)
+                            .and_then(|g| mine.iter().filter_map(|r| snap_box(&geo, &r.chain)).reduce(|a, b| a.union(b)).map(|b| (g, b.origin())))
+                    };
+                    if let Some(on_grid) = on_grid {
                         let s = snap.get_or_insert_with(|| manipulate::SnapSession::new(Rect::ZERO, Vec::new(), Vec::new(), 0.0));
-                        s.grid = Some((grid, origin));
+                        s.grid = Some(on_grid);
                     }
                     store.0.begin_gesture(&ids);
                     for (id, inv, anchor) in grabs {

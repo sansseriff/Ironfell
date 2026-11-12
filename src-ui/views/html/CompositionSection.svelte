@@ -5,6 +5,7 @@
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import PaintRow from "../../lib/ui/PaintRow.svelte";
   import Section from "../../lib/ui/Section.svelte";
+  import Checkbox from "../../lib/ui/Checkbox.svelte";
 
   const doc = controllerManager.docClient;
   const entries = $derived(doc.compositions.filter(c => !c.session));
@@ -43,6 +44,9 @@
       if (f.field === "grid_spacing" && !/^\s*(=|\{=)/.test(value) && (!Number.isFinite(Number(value)) || Number(value) <= 0)) {
         throw new Error("Grid spacing must be greater than zero.");
       }
+      if (f.field === "grid_opacity" && !/^\s*(=|\{=)/.test(value) && !(Number(value) >= 0 && Number(value) <= 1)) {
+        throw new Error("Grid opacity must be between 0% and 100%.");
+      }
       const r = await doc.command({ op: "inspect_patch", node: id, patch: JSON.stringify({ values: { [f.leaf]: value }, label: "edit composition settings" }) });
       if (!r.ok) throw new Error(r.error);
       await refresh();
@@ -74,8 +78,14 @@
         {#if text("grid") !== "off" && field("grid_spacing")}
           <PropertyField field={field("grid_spacing")!} node={current.id} label="Grid spacing (px)" onSet={set} onRefresh={refresh} onError={e => error = e} />
         {/if}
+        {#if text("grid") !== "off" && field("grid_opacity")}
+          <PropertyField field={field("grid_opacity")!} node={current.id} label="Grid opacity" onSet={set} onRefresh={refresh} onError={e => error = e} />
+        {/if}
       </div>
-      {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Visual guide only. Spacing thins out as you zoom out.</p>{/if}
+      {#if text("grid") !== "off" && field("grid_snap")}
+        <Checkbox label="Snap to grid" checked={text("grid_snap") === "true"} onChange={on => choose("grid_snap", String(on))} />
+      {/if}
+      {#if text("grid") !== "off" && field("grid_spacing")}<p class="hint">Moving, resizing and drawing snap to grid points while snapping is on (hold Ctrl or Cmd to place freely). The drawn grid thins out as you zoom out.</p>{/if}
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>

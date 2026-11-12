@@ -93,6 +93,19 @@ impl ViewFocus {
     }
 }
 
+/// The composition grid a 2D view's moves, resizes and new shapes snap
+/// to, in its document px: `composition.grid_spacing` while the grid is
+/// shown (`grid` not `off`) and `grid_snap` is on. A notation's own grid
+/// (`snap.grid`, [`ViewFocus::grid`]) takes precedence where it sets one.
+pub fn canvas_grid(store: &iron_document::Store, view: &crate::document_bridge::PanelView) -> Option<f64> {
+    let id = view.composition.filter(|_| view.dims == Dims::Two)?;
+    let get = |p: &str| store.resolved(id, p.parse().expect("composition leaf"));
+    let shown = get("composition.grid").is_some_and(|v| v.as_str().is_some_and(|m| m != "off"));
+    let on = get("composition.grid_snap") == Some(iron_document::Value::Bool(true));
+    let g = get("composition.grid_spacing")?.as_f64()?;
+    (shown && on && g.is_finite() && g > 0.0).then_some(g)
+}
+
 /// Turn plain letter keys into tool picks (`tool:<id>`) through the keymap
 /// of the view under the pointer (or the last one it was over; before any,
 /// the first view that binds the letter). A letter that view does not bind

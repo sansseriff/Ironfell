@@ -1,0 +1,71 @@
+# The composition grid as a snapping target, a text edit following the
+# camera, and token rebinding in the Fill popover (2026-11-11).
+# GPU=1 SIZE=1680x1000@1 bun run drive.ts < canvas-grid.txt
+# In the Main tab the square covers (500,420)-(580,500).
+nav
+ready
+eval __iron.snapping(false)
+eval window.__wait = async test => { const until = Date.now() + 5000; while (Date.now() < until) { if (await test()) return true; await new Promise(r => setTimeout(r, 50)); } return false; }
+eval window.__tag = async name => (await __iron.view({fidelity:'full'})).match(new RegExp('<rect[^>]*name="' + name + '"[^>]*>'))?.[0] ?? ''
+eval window.__box = async name => { const t = await __tag(name); return ['x','y','w','h'].map(a => Number(t.match(new RegExp(' ' + a + '="([^"]+)"'))?.[1])); }
+eval window.__main = async () => (await __iron.view({fidelity:'full'})).match(/<composition id="([^"]+)" name="main"/)?.[1]
+eval window.__set = async attrs => { const r = await __iron.edit(`<edit><set id="${await __main()}" ${attrs}/></edit>`); if (!r.ok) throw new Error(JSON.stringify(r)); return r.ok; }
+assert __set('grid="dots" grid_spacing="20"')
+sleep 500
+shot grid-dots
+# Move by (23, 7): the box's top left (523, 427) lands on (520, 420).
+ddrag 540 460 563 467
+assert __wait(async () => { const [x, y] = await __box('square'); return x === 520 && y === 420; })
+# Resize from the bottom right corner (600, 500) to (613, 517): edges at 620, 520.
+ddrag 600 500 613 517
+assert __wait(async () => { const [x, y, w, h] = await __box('square'); return x === 520 && y === 420 && w === 100 && h === 100; })
+# Draw a rectangle from (903, 603) to (961, 647): (900, 600) to (960, 640).
+key r
+ddrag 903 603 961 647
+assert __wait(async () => { const [x, y, w, h] = await __box('rectangle'); return x === 900 && y === 600 && w === 60 && h === 40; })
+key Meta+z
+# Snapping off: the move lands where the pointer does.
+assert __set('grid_snap="false"')
+ddrag 560 460 567 463
+assert __wait(async () => { const [x, y] = await __box('square'); return x === 527 && y === 423; })
+eval __box('square')
+# Tokens: pick one for the square's fill, then another rebinds it.
+dclick 560 460
+sleep 500
+clickel button[aria-label="Fill paint settings"]
+sleep 500
+eval window.__tokens = [...document.querySelectorAll('button.swatch.token')].map(b => b.getAttribute('aria-label').replace('Use @', ''))
+clickel button[aria-label="Use @accent"]
+assert __wait(async () => (await __tag('square')).includes('@accent'))
+eval [document.querySelector('button[aria-label="Use @series-2"]')?.disabled, document.querySelector('button[aria-label^="Detach"]')?.disabled]
+clickel button[aria-label="Use @series-2"]
+assert __wait(async () => (await __tag('square')).includes('@series-2'))
+shot token-rebind
+eval __tag('square')
+key Escape
+key Escape
+sleep 300
+# A text edit follows a pan: the caret's textarea moves with the view.
+key t
+dclick 750 130
+sleep 800
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); t.value = 'Pan me'; t.setSelectionRange(6, 6); t.dispatchEvent(new Event('input')); return t.value; })()
+sleep 500
+eval window.__caret = (() => { const t = document.querySelector('textarea[aria-label="Text"]'); return [parseFloat(t.style.left), parseFloat(t.style.top)]; })()
+mdrag viewer 600 400 700 450
+sleep 500
+# The middle drag pans about 90 × 45 of its 100 × 50; before the fix the caret stayed put.
+assert __wait(async () => { const t = document.querySelector('textarea[aria-label="Text"]'); const dx = parseFloat(t.style.left) - __caret[0], dy = parseFloat(t.style.top) - __caret[1]; return dx > 80 && dx < 105 && dy > 38 && dy < 55 && Math.abs(dx - 2 * dy) < 4; })
+eval (() => { const t = document.querySelector('textarea[aria-label="Text"]'); return [parseFloat(t.style.left) - __caret[0], parseFloat(t.style.top) - __caret[1]]; })()
+shot text-pan
+key Escape
+sleep 500
+# The inspector's Composition section (empty selection) sets the grid's
+# opacity: one place for every grid setting.
+key Escape
+sleep 300
+eval (() => { const i = document.querySelector('[data-section="composition"] input[aria-label="Grid opacity"]'); if (!i) return 'no field'; i.focus(); i.value = '50'; i.dispatchEvent(new Event('change', {bubbles: true})); return 1; })()
+assert __wait(async () => (await __iron.view({fidelity:'full'})).match(/<composition[^>]*name="main"[^>]*>/)[0].includes('grid_opacity="0.5"'))
+shot grid-opacity
+errors
+quit

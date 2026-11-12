@@ -358,7 +358,7 @@ pixels, default 20). These are composition properties, saved and edited through
 `inspect_patch` transactions; the existing property handles and color picker
 provide undo and color scrubbing. Schema **10** loads only the current format.
 The notation remains the context selector for interaction, tools and snapping;
-the visible grid is a guide and does not change snapping policy.
+the visible grid was a guide only; since 2026-11-11 it is a snapping target (below).
 
 The engine draws a viewport-sized background before the composition's content
 chunks. `theme` follows the existing app canvas light/dark colors immediately;
@@ -415,3 +415,44 @@ fields, + replacement and undo, lower selection colors, shape/ellipse selection,
 optional strokes, alpha preservation, numeric/color scrubs, invalid and conflicting
 batches, text formatting and one-step undo. Light/dark screenshots checked. The fast
 smoke and existing character-range text-styles regression pass without page errors.
+
+## Grid snapping and cheap dots (2026-11-11)
+
+**Dots were slow.** The backdrop is a screen-space display list
+(`draw_backdrop`, `src/document_bridge/render.rs`) with no raster cache key: its
+commands are in window px and depend on the view's pan and zoom, so it is rebuilt
+on every view change and always drawn live. The raster tiles of render-cache.md §5
+only serve chunks recorded in composition space with a stable key, which a pan
+moves by their layer's transform. In dots mode the list held one circle per
+visible dot, rows × columns (about 65 × 45 in a 1040 × 714 view at the 16 px
+minimum step), each a path the renderer flattens and rasterises: several
+thousand commands per pan frame, above the 2,000 the raster heuristic treats as
+about 4 ms of encode, before any content. Lines were cheap: one rect per line.
+
+Now each row of dots is one rect filled with a linear gradient that repeats
+every step along x (a `w`-wide dot with a one-pixel ramp either side, the
+coverage of a rasterised square): about 45 rect fills, which take the renderer's
+rect path, and the GPU makes the dots per pixel. Marks are clamped to the view
+instead of clipped, so no clip layer is pushed either.
+
+**Snapping.** `composition.grid_snap` (Bool, default true; schema 11) makes the
+shown grid a snapping target, replacing the "visual guide only" rule above:
+while `grid` is not `off`, a move puts the movers' box's top left corner on a
+grid point, a resize puts the moved edges on grid lines, and the rectangle and
+ellipse tools put both corners on grid points, in the view's document px, at
+`grid_spacing` whatever the drawn grid's zoom thinning. A notation's own
+`snap.grid` (schematics) still takes precedence and still snaps the lead
+mover's origin. Ctrl or Cmd bypasses both, as for object snapping; on a grid,
+object snapping is off. `view_focus::canvas_grid` reads the settings.
+
+**Opacity.** `composition.grid_opacity` (Number 0–1, default 0.15) is the
+marks' alpha for both lines and dots (they were fixed at 0.09 and 0.22); 0 hides
+the marks but keeps snapping.
+
+**Where to set it.** Every grid setting lives in one place, the inspector's
+Composition section (empty selection): Grid, spacing, opacity (shown as a
+percent) and a "Snap to grid" checkbox, each one `inspect_patch` transaction.
+The canvas gear menu does not repeat them.
+
+Validation: `canvas-grid.txt` (run-iron skill), the fast smoke and
+`snapping.txt` pass; 345 document tests pass.

@@ -123,9 +123,11 @@ pub(crate) struct SnapSession {
     /// Guides are drawn as lines with crosses (a move), or as the crosses
     /// alone (a resize, Figma's).
     pub lines: bool,
-    /// The view's grid (`snap.grid`), and the lead mover's origin at the
-    /// press, panel document px: a move puts that origin on the grid, in
-    /// place of object snapping.
+    /// The grid, and the point a move puts on it, at the press, in panel
+    /// document px: the lead mover's origin for a notation's grid
+    /// (`snap.grid`), the movers' box's top left corner for the
+    /// composition's shown grid (`composition.grid_snap`). On a grid, moves
+    /// and resizes snap to it in place of object snapping.
     pub grid: Option<(f64, Point)>,
 }
 
@@ -171,7 +173,12 @@ fn snap_resize(s: &SnapSession, frame: Affine, grip: (f64, f64), anchor: (f64, f
                 iron_spatial::snap::Line { at: if vertical { at.x } else { at.y }, rate: (e - a) / (u0 - a) }
             })
             .collect();
-        if let Some(c) = s.targets.snap_lines(vertical, &lines, tol) {
+        let snapped = match s.grid {
+            // The moved edge onto the nearest grid line, whatever the reach.
+            Some((g, _)) => lines.iter().find(|l| l.at.is_finite() && l.rate.abs() > 1e-9).map(|l| ((l.at / g).round() * g - l.at) / l.rate),
+            None => s.targets.snap_lines(vertical, &lines, tol),
+        };
+        if let Some(c) = snapped {
             if vertical { out.x = c } else { out.y = c }
         }
     }
@@ -499,6 +506,7 @@ impl Manip {
                 // The crosses where the moved edges now meet targets.
                 if let (Some(s), TransformKind::Resize { grip }) = (&mut t.snap, t.kind)
                     && !snap_bypassed(mods)
+                    && s.grid.is_none()
                 {
                     let moved = (a * t.frame).transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, 1.0, 1.0));
                     let edges = |g: f64, alt: bool| -> Vec<f64> { if g == 0.5 { vec![] } else if alt { vec![0.0, 1.0] } else { vec![g] } };

@@ -2242,9 +2242,12 @@ pub fn tool_key(app: &mut WorkerApp, key: String, bits: u8) {
     }
 }
 
+/// `at` is a canvas point in CSS px (Paste here); the engine places it in
+/// window px, as a pointer move is.
 pub fn clipboard_paste(app: &mut WorkerApp, text: String, at: Option<(f32, f32)>) {
+    let at = at.map(|(x, y)| app.to_physical_size(x, y));
     if let Some(mut clip) = app.world_mut().get_resource_mut::<crate::bevy_app::select::Clipboard>() {
-        clip.pastes.push((text, at.map(|(x, y)| bevy::math::Vec2::new(x, y))));
+        clip.pastes.push((text, at));
     }
 }
 

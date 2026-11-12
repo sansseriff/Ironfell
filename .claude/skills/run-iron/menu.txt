@@ -51,5 +51,19 @@ eval (async()=>{const v=await __iron.view({fidelity:'full', scope: window.__slid
 key Meta+z
 sleep 600
 eval (async()=>{const v=await __iron.view({fidelity:'full', scope: window.__slide}); return [await order(), /<empty /.test(v)]})()
+# Paste here: copy a, right-click lower right, and the copy's top left
+# lands at the click in document px (pan 0, zoom 1), at any pixel ratio.
+pclick slide 120 110
+sleep 400
+key Meta+KeyC
+sleep 600
+pmove slide 700 520
+sleep 300
+down right
+up right
+sleep 800
+clickel [data-canvas-menu] [data-command="paste-here"]
+sleep 1000
+eval (async()=>{const v=await __iron.view({fidelity:'full', scope: window.__slide}); const m=[...v.matchAll(/<rect [^>]*name="a" x="([-\d.]+)" y="([-\d.]+)"/g)]; return m.map(x=>x[1]+','+x[2]).join(' ')})()
 errors
 quit

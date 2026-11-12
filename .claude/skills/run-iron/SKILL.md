@@ -2177,7 +2177,9 @@ cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < menu.txt; cd -
 Right-click on `a` (under `b`) selects it and offers the ten items, Send to back
 disabled; Bring to front applies one "bring to front"; right-click on empty canvas
 clears the selection, leaving Paste here and Ask enabled; `[` sends `a` back,
-Cmd+Alt+G wraps it in an empty and Cmd+Z undoes that. Inspect
+Cmd+Alt+G wraps it in an empty and Cmd+Z undoes that; Cmd+C on `a` then Paste here
+at (700, 520) puts the copy's top left there (the point arrives in CSS px and the
+engine scales it to window px, so run it at `@2` too). Inspect
 `screenshots/menu-on-a.png`. Expected, minus `nav`, `ready`, `screenshot` and
 `clicked` lines:
 
@@ -2199,6 +2201,7 @@ applied "bring to front" (1 ops, Human) -> v4
 "a b"
 [1,true]
 ["a b",false]
+"100,100 700,520"
 (no page errors)
 ```
 

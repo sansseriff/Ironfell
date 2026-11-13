@@ -47,7 +47,7 @@ pub enum Kind {
     /// meaning every narrative).
     Views,
     /// A command keymap: `chord:command` pairs, space-separated
-    /// (`mod+alt+g:wrap ]:front`; [`crate::commands::chord`]).
+    /// (`mod+alt+g:create-control ]:front`; [`crate::commands::chord`]).
     Chords,
     /// A menu: command ids in order, `|` between groups
     /// (`copy paste-here | front back`).
@@ -178,7 +178,7 @@ pub const FIELDS: &[FieldSpec] = &[
         view: true,
         kind: Kind::Chords,
         options: &[""],
-        doc: "the commands a view's keys reach, chord:command pairs (mod is Cmd on macOS, Ctrl elsewhere; mod+alt+g:wrap shift+1:zoom-fit); std:workspace's apply in every view, a view's own win (match=\"view\")",
+        doc: "the commands a view's keys reach, chord:command pairs (mod is Cmd on macOS, Ctrl elsewhere; mod+alt+g:create-control shift+1:zoom-fit); std:workspace's apply in every view, a view's own win (match=\"view\")",
     },
     FieldSpec { domain: "menu", name: "canvas", view: true, kind: Kind::Commands, options: &[""], doc: "the commands a right-click on a view's canvas offers, in order, | between groups (match=\"view\")" },
 ];

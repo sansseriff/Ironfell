@@ -219,16 +219,16 @@ fiber's end inverts onto what placed its partner: it moves the meter (`handle` n
 prefers, among several linear sources, a placed node over a derived one, not the
 dragged node's own container, and a leaf of the same kind as the dragged one).
 
-**Empties are also pivots.** The dial meter's needle hangs off an empty at the dial's
-centre whose rotation is bound to the reading, rather than giving shapes movable
-origins. An empty is an editor marker, a small box with a cross (hairline, a quiet
-blue; `EMPTY_HALF` = 6 units), which a bare empty is hovered and picked by; an empty
-with children is a container whose box includes its marker. The marker is not
-document content: the select tool's overlay draws it only for empties a click could
-reach in the current scope (never inside a closed instance, whose ports show their
-own ring instead, §4.3), and only within 30 px of the pointer, fading with distance;
-a selected empty always shows it. Changing how an
-empty looks is not built. Anchors exist only in 2D.
+**Empties are also controls/pivots.** The dial needle can hang off an empty
+whose rotation is bound to its reading. The user-facing flow is **Create control**,
+then click the pivot or use the selection centre. A static control's **Place pivot**
+mode keeps artwork fixed; unsafe bound/animated/overridden cases are refused without
+mutation. Constant CSS-size origin markers, axis/rotation handles, draggable name
+tags and Show controls replace the old tiny document-size fading cross. Controls are
+shown only in the current reachable scope; port anchors keep their port interaction.
+[`component-authoring.md` §8](component-authoring.md#8-2d-control-redesign-built-2026-11-13)
+owns the exact semantics and restrictions. Custom control appearance remains later.
+Anchors exist only in 2D.
 
 ### 4.3 Plugging and mates (2026-10-18)
 

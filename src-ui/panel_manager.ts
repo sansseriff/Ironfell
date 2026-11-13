@@ -10,7 +10,7 @@ import { copied, setSelectionCount } from './runtime/clipboard';
 import { applyCursor } from './cursors';
 import { TextInputMirror } from './runtime/text_input';
 import { setViewKeys } from './runtime/tool_keys';
-import { commandFailure, setRegistry, setViewCommands, type CommandSpec } from './runtime/commands.svelte';
+import { controlState, commandFailure, setRegistry, setViewCommands, type CommandSpec } from './runtime/commands.svelte';
 
 interface PanelEntry {
   id: string;
@@ -279,6 +279,11 @@ export class PanelManager {
         break;
       case 'menu':
         this.docClient.menuArrived(data.panel, data.items);
+        break;
+      case 'controlState':
+        commandFailure.current = null;
+        controlState.placing = data.placing;
+        controlState.visible = data.visible;
         break;
       case 'commandFailed':
         commandFailure.current = { id: data.id, reason: data.reason, at: performance.now() };

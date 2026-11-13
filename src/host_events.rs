@@ -34,12 +34,14 @@ pub enum EngineEvent {
     /// What a view offers, resolved from its focus context
     /// (plans/specs/contexts.md §2.7): its palette (`select rect|ellipse
     /// pen`, `|` sharing a slot), keymap (`v:select r:rect`) and command
-    /// keymap (`mod+alt+g:wrap ]:front`, every chord it binds).
+    /// keymap (`mod+alt+g:create-control ]:front`, every chord it binds).
     Focus { panel: String, palette: String, keys: String, commands: String },
     /// A right-click's menu (`menu.canvas` of the view it was over, after
     /// the click selected what it was on): its items in order, `None` for a
     /// divider. Empty when there is no menu there.
     Menu { panel: String, items: Vec<Option<MenuItem>> },
+    /// Session-only control placement and visibility shared with the inspector.
+    ControlState { placing: String, visible: bool },
     /// A command could not run, and why (a menu or a button asked for it).
     CommandFailed { id: String, reason: String },
     /// The renderer stopped: the GPU device was lost or wgpu reported an

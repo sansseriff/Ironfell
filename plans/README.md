@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-11 for the 2D view fixes (cheap dots, grid snapping, text edits under a pan, token rebinding). Update this file whenever a plan is added,
+**Updated:** 2026-11-13 for the 2D control/pivot workflow. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -53,7 +53,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`free-running.md`](specs/free-running.md) | When a view renders every frame: live sources, the run mode (auto / always / on demand), bubbling through embeds; the settings menu; the Stats composition that replaced the `bevy_ui` overlay | Approved and built 2026-10-18 |
 | [`infinite-canvas-architecture-patterns.md`](specs/infinite-canvas-architecture-patterns.md) | Gesture ownership, typed UI protocol, bounds, overlays, chunks | Phase 3 done; phase 1 done (store ownership, one pointer state machine, the 3D gizmo); phase 2 done 2026-10-26 (typed protocol, shared input routing, lifecycle and scoped reads); 4–5 in the render handoff |
 | [`text.md`](specs/text.md) | Text nodes, fonts (catalog, on-demand loading, installed fonts natively), glyph rendering, editing, `fmt` readouts, the Text inspector | Scaffold done 2026-10-17; §9 lists what is open |
-| [`component-authoring.md`](specs/component-authoring.md) | Making components from the UI: mains, the port and empty tools, links and lines, the joint handle, the Library tab | Approved and built 2026-10-18 |
+| [`component-authoring.md`](specs/component-authoring.md) | Making components from the UI: mains, the port and empty tools, links and lines, the joint handle, the Library tab | Approved and built 2026-10-18; 2D control/pivot redesign built 2026-11-13 (§8) |
 | [`component-model.md`](specs/component-model.md) | Components: authored vs expanded instances, ports as the one interface, overrides, scope, libraries, render analysis; amends ECM §4, §6.1, §9 | Approved 2026-10-18; phases 0–4 done (the `Facet` rename; `in` ports replace parameters; linked instances, schema 7; overrides, edit translation, scope; anchors and empties; make component with nesting; plugging, mates and nested overrides); 7 done 2026-11-06 (the model's `<place>`, `<make-component>`, `<look expand>`). 5 waits on the project container, 6 is render-track work |
 | [`snapping.md`](specs/snapping.md) | Object snapping and smart guides in 2D compositions (Figma's edges and centres), the core in `iron_spatial::snap` | Phases 1–2 and most of 3 built 2026-10-20 (moving, resizing, path points, the pen); the shape tools, 4–5 open |
 | [`layout-and-tables.md`](specs/layout-and-tables.md) | A layout engine for 2D compositions (Taffy inside `iron_layout`: stacks and grids on groups, published by a layout producer), tables on it (rows of text cells, merges, boxed and light presets, the `<table>` model op and compact view, spreadsheet paste), | Phases 0–3 done 2026-10-26 (style inheritance deferred) |

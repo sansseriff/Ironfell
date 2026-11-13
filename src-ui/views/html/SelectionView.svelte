@@ -12,7 +12,7 @@
   import StateSection from "./StateSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
-  import { commandFailure } from "../../runtime/commands.svelte";
+  import { controlState, commandFailure } from "../../runtime/commands.svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import PropertyField, { type Property } from "../../lib/ui/PropertyField.svelte";
   import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
@@ -66,12 +66,11 @@
     }
   }
   // The title's actions are commands (commands.rs), as the canvas menu's and
-  // keys' are: Create component (component-model.md §5.5), Wrap in empty. A
+  // keys' are: Create component (component-model.md §5.5), Create control. A
   // refusal arrives as a `commandFailed` event and shows here.
-  let ranAt = $state(0);
-  const commandError = $derived(ranAt > 0 && commandFailure.current && commandFailure.current.at >= ranAt && ["make-component", "wrap"].includes(commandFailure.current.id) ? commandFailure.current.reason : "");
+  const commandError = $derived(commandFailure.current && ["make-component", "create-control", "place-pivot"].includes(commandFailure.current.id) ? commandFailure.current.reason : "");
   function command(id: string) {
-    ranAt = performance.now();
+    commandFailure.current = null;
     void doc.runCommand(id);
   }
   // The attachment task: started from the title's Attach points, it stays
@@ -340,7 +339,21 @@
     <SliceSection slices={sliceSel} />
   {:else if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
-    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name && !inspected.main && !inspected.component}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}{#if inspected.main || inspected.component}<IconButton icon={ComponentIcon} label="Make component" title="Make a component holding this one" onclick={() => command("make-component")} />{:else}<Button small variant="outline" onclick={() => command("make-component")} title="Make a component of the selection"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>{/if}<IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+    {#if inspected.components.some(c => c.kind === "transform2d")}
+    <div class="control-actions">
+      <Checkbox label="Show controls" checked={controlState.visible} onChange={() => command("show-controls")} />
+      {#if inspected.type === "empty"}<Button small variant="outline" title="Keep artwork in place. Requires static coordinates without animation, bindings, port anchors or instance overrides." onclick={() => command("place-pivot")}>Place pivot</Button>{/if}
+    </div>
+    {/if}
+    {#if controlState.placing}
+      <div class="control-placement" role="status">
+        <strong>Place pivot</strong>
+        <span>Click the canvas. Artwork stays in place. ⌘/Ctrl bypasses snapping. Escape cancels.</span>
+        <Button small variant="outline" onclick={() => command("pivot-centre")}>Use selection centre</Button>
+        <Button small onclick={() => command("cancel-pivot")}>Cancel</Button>
+      </div>
+    {/if}
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name && !inspected.main && !inspected.component}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type === "empty" ? "control" : inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}{#if inspected.main || inspected.component}<IconButton icon={ComponentIcon} label="Make component" title="Make a component holding this one" onclick={() => command("make-component")} />{:else}<Button small variant="outline" onclick={() => command("make-component")} title="Make a component of the selection"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>{/if}{#if inspected.components.some(c => c.kind === "transform2d")}<IconButton icon={SquareDashed} label="Create control" title="Create control: click a pivot or use selection centre (⌘⌥G)" onclick={() => command("create-control")} />{/if}{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or a control in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
   <AttachmentTask bind:this={attach} />
   {#if showIn.length}
@@ -687,6 +700,10 @@
 </section>
 
 <style>
+  .control-actions { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; gap: 8px; }
+  .control-placement { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: var(--raised); border-bottom: 1px solid var(--border-strong); font-size: var(--text-md); }
+  .control-placement span { width: 100%; color: var(--fg-muted); }
+
   .properties { padding: 0 !important; gap: 0 !important; font-size: var(--text-md); }
   .show-in { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px calc(var(--panel-pad) - 8px); border-bottom: 1px solid var(--border); }
   .attach { display: contents; }

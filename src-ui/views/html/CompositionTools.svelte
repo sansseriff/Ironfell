@@ -49,7 +49,7 @@
     text: { label: "Text", icon: Type },
     table: { label: "Table", icon: Table },
     port: { label: "Port", icon: CircleDot },
-    empty: { label: "Empty", icon: Crosshair },
+    empty: { label: "Control", icon: Crosshair },
     // The schematic's (schematic.md §3): the wire, and placing each
     // standard part (`place:<key>`).
     wire: { label: "Wire", icon: Cable },

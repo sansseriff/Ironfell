@@ -97,13 +97,13 @@ pub fn author_tool_system(
                 t.x = Slot::Const(Value::Number(local.x));
                 t.y = Slot::Const(Value::Number(local.y));
                 let mut name = iron_document::facet::Name::default();
-                name.text = Slot::Const(Value::Str("empty".into()));
+                name.text = Slot::Const(Value::Str("Control".into()));
                 let order = match main {
                     Some(_) => iron_document::expand::main_template(doc, parent).map_or_else(iron_document::OrderKey::first, |t| after_last(doc, Some(t))),
                     None => after_last(doc, Some(parent)),
                 };
                 let shown = if main.is_some() { NodeId::expanded(parent, id) } else { Some(id) };
-                (vec![Op::Create { id, ty: TypeId::lookup("empty").expect("registered"), parent: Some(parent), order, facets: vec![t.wrap(), name.wrap()] }], shown, "add empty")
+                (vec![Op::Create { id, ty: TypeId::lookup("empty").expect("registered"), parent: Some(parent), order, facets: vec![t.wrap(), name.wrap()] }], shown, "add control")
             }
         }
     };

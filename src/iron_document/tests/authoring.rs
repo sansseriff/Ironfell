@@ -148,9 +148,8 @@ fn ports_inputs_wraps_links_and_lines_are_authored_on_the_main() {
     // the empty, the beam inside it, nothing moving on screen.
     let shown_beam = NodeId::expanded(main, beam).unwrap();
     let before = store.world_affine(shown_beam).translation();
-    let extent = |n: NodeId| store.extent(n);
-    let (ops, empty) = author::wrap_in_empty(store.document(), &extent, &[shown_beam]).unwrap();
-    apply(&mut store, "wrap", ops);
+    let (ops, empty) = author::create_control(&store, &[shown_beam], None).unwrap();
+    apply(&mut store, "create control", ops);
     let doc = store.document();
     assert_eq!(doc.live(beam).unwrap().parent, Some(empty));
     assert_eq!(doc.live(empty).map(|n| n.ty.name()), Some("empty"));
@@ -372,4 +371,97 @@ fn a_pinned_state_opens_its_main_and_counts_edits_it_cannot_hold() {
     assert_eq!(store.shared_edits(), 1, "a deleted part is gone from every state");
     store.pin_state(None);
     assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 0);
+}
+
+fn content(store: &Store) -> serde_json::Value {
+    let mut v: serde_json::Value = serde_json::from_str(&store.save()).unwrap();
+    for k in ["version", "next_ids", "next_rels"] { v.as_object_mut().unwrap().remove(k); }
+    v
+}
+
+fn near_affine(a: Affine2, b: Affine2) {
+    for (a,b) in a.0.into_iter().zip(b.0) { assert!((a-b).abs() < 1e-8, "{a} != {b}"); }
+}
+
+#[test]
+fn control_creation_and_relocation_preserve_full_nested_affines_and_undo() {
+    let Desk { mut store, comp, body, beam } = desk();
+    let parent = store.document().next_id();
+    let mut t = Transform2d::default();
+    t.x = Slot::Const(Value::Number(28.0)); t.y = Slot::Const(Value::Number(-13.0));
+    t.rot = Slot::Const(Value::Number(0.7)); t.sx = Slot::Const(Value::Number(-2.0)); t.sy = Slot::Const(Value::Number(0.4));
+    apply(&mut store, "nested", vec![
+        Op::Create { id: parent, ty: ty("group"), parent: Some(comp), order: key(8), facets: vec![t.wrap()] },
+        Op::Reparent { id: body, parent: Some(parent), order: key(0) },
+        Op::Reparent { id: beam, parent: Some(parent), order: key(1) },
+        Op::Set { id: beam, path: path("transform2d.rot"), slot: Slot::Const(Value::Number(-0.2)) },
+    ]);
+    let before = [store.world_affine(body), store.world_affine(beam)];
+    let (ops, control) = author::create_control(&store, &[body,beam], Some([97.0, -31.0])).unwrap();
+    apply(&mut store, "create control", ops);
+    for (n,a) in [body,beam].into_iter().zip(before) { near_affine(store.world_affine(n),a); }
+    apply(&mut store, "rotate and scale control", vec![
+        Op::Set { id: control, path: path("transform2d.rot"), slot: Slot::Const(Value::Number(0.9)) },
+        Op::Set { id: control, path: path("transform2d.sx"), slot: Slot::Const(Value::Number(-1.3)) },
+        Op::Set { id: control, path: path("transform2d.sy"), slot: Slot::Const(Value::Number(2.1)) },
+    ]);
+    let pose = [store.world_affine(body), store.world_affine(beam)];
+    let pre_pivot = content(&store);
+    let ops = author::relocate_pivot(&store, control, [-42.0, 79.0]).unwrap();
+    apply(&mut store, "place pivot", ops);
+    for (n,a) in [body,beam].into_iter().zip(pose) { near_affine(store.world_affine(n),a); }
+    let after = content(&store);
+    store.undo(0).unwrap().unwrap(); assert_eq!(content(&store),pre_pivot);
+    store.redo(0).unwrap().unwrap(); assert_eq!(content(&store),after);
+    for _ in 0..3 { store.undo(0).unwrap().unwrap(); }
+    assert!(!store.document().is_live(control));
+    for (n,a) in [body,beam].into_iter().zip(before) { near_affine(store.world_affine(n),a); }
+    assert_eq!(store.document().live(body).unwrap().parent, Some(parent));
+}
+
+#[test]
+fn pivot_relocation_through_main_preserves_all_instances() {
+    let Desk { mut store, body, beam, .. } = desk();
+    let (made,input) = store.make_component(&[body,beam],"part",Actor::Human).unwrap();
+    apply(&mut store,"make",input.ops);
+    let shown = NodeId::expanded(made.picture,beam).unwrap();
+    let (ops, control) = author::create_control(&store,&[shown],None).unwrap();
+    apply(&mut store,"control",ops);
+    let duplicate = copy::duplicate(&store,&[made.picture]).unwrap();
+    let instance = duplicate.roots[0]; apply(&mut store,"duplicate",duplicate.ops);
+    let main_control = NodeId::expanded(made.picture,control).unwrap();
+    let instance_control = NodeId::expanded(instance,control).unwrap();
+    let instances = [made.picture,instance];
+    let poses: Vec<_> = instances.iter().map(|&n| store.world_affine(NodeId::expanded(n,beam).unwrap())).collect();
+    let ops = author::relocate_pivot(&store,main_control,[12.0,19.0]).unwrap();
+    apply(&mut store,"pivot",ops);
+    for (n,a) in instances.into_iter().zip(poses) { near_affine(store.world_affine(NodeId::expanded(n,beam).unwrap()),a); }
+    assert!(author::relocate_pivot(&store,instance_control,[3.0,4.0]).unwrap_err().contains("main component"));
+    apply(&mut store,"override",vec![Op::Set { id: instance_control, path: path("transform2d.x"), slot: Slot::Const(Value::Number(33.0)) }]);
+    assert!(author::relocate_pivot(&store,main_control,[3.0,4.0]).unwrap_err().contains("overrides"));
+}
+
+#[test]
+fn controls_reject_observed_bound_singular_and_animated_coordinates_atomically() {
+    let Desk { mut store, body, beam, .. } = desk();
+    apply(&mut store,"bound",vec![Op::Set { id: body, path: path("transform2d.x"), slot: Slot::Bound(Expr::parse(&format!("{beam}.transform2d.x + 10")).unwrap()) }]);
+    let snapshot = content(&store);
+    assert!(author::create_control(&store,&[body],None).unwrap_err().contains("static"));
+    assert!(author::create_control(&store,&[beam],None).unwrap_err().contains("binding reads"));
+    assert_eq!(content(&store),snapshot);
+    store.undo(0).unwrap().unwrap();
+    let (ops,control) = author::create_control(&store,&[body,beam],None).unwrap(); apply(&mut store,"control",ops);
+    apply(&mut store,"zero",vec![Op::Set { id: control, path: path("transform2d.sx"), slot: Slot::Const(Value::Number(0.0)) }]);
+    assert!(author::relocate_pivot(&store,control,[1.0,2.0]).unwrap_err().contains("zero-scale"));
+    store.undo(0).unwrap().unwrap();
+    let clip = store.document().next_id();
+    let mut c = facet::Clip::default(); c.prop = Slot::Const(Value::Str("transform2d.rot".into()));
+    let rel = store.document().next_relation_id();
+    apply(&mut store,"animate",vec![
+        Op::Create { id: clip, ty: ty("clip"), parent: None, order: key(9), facets: vec![c.wrap(), facet::Timing::default().wrap()] },
+        Op::Link { rel: Relation { id: rel, rel: RelKind::Animates, from: clip, to: control, data: std::collections::BTreeMap::new() } },
+    ]);
+    let snapshot = content(&store);
+    assert!(author::relocate_pivot(&store,control,[1.0,2.0]).unwrap_err().contains("Animated"));
+    assert_eq!(content(&store),snapshot);
 }

@@ -576,11 +576,11 @@ fn commands_are_context_data() {
     let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
     // A free 2D view's right-click menu, and the keys it adds to the
     // workspace's.
-    assert_eq!(v.get(Field::MENU), "copy paste-here copy-svg | ask draw-on | front back | wrap layout make-component");
+    assert_eq!(v.get(Field::MENU), "copy paste-here copy-svg | ask draw-on | front back | create-control place-pivot show-controls layout make-component");
     let global = r.workspace_values().get(Field::COMMAND_KEYS).to_owned();
     let keys = commands::keymap(&commands::merge_keymaps(&global, v.get(Field::COMMAND_KEYS)));
     let bound = |chord: &str| keys.iter().find(|(c, _)| c == chord).map(|(_, id)| *id);
-    assert_eq!(bound("mod+alt+g"), Some("wrap"));
+    assert_eq!(bound("mod+alt+g"), Some("create-control"));
     assert_eq!(bound("mod+z"), Some("undo"));
     assert_eq!(bound("]"), Some("front"));
     // Every menu item and bound command is registered.
@@ -588,19 +588,19 @@ fn commands_are_context_data() {
         assert!(commands::find(w).is_some(), "{w}");
     }
     // A document rearranges them as it would a palette.
-    let ctx = r#"<context name="std:free-2d"><rule match="view" menu.canvas="make-component | copy" keys.commands="mod+g:wrap"/></context>"#;
+    let ctx = r#"<context name="std:free-2d"><rule match="view" menu.canvas="make-component | copy" keys.commands="mod+g:create-control"/></context>"#;
     let (ops, _) = contexts::put_ops(store.document(), ctx).unwrap();
     store.apply(tx(ops)).unwrap();
     let r = Resolver::new(store.document(), store.contexts());
     let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
     assert_eq!(v.get(Field::MENU), "make-component | copy");
-    assert_eq!(commands::keymap(v.get(Field::COMMAND_KEYS)), vec![("mod+g".to_owned(), "wrap")]);
+    assert_eq!(commands::keymap(v.get(Field::COMMAND_KEYS)), vec![("mod+g".to_owned(), "create-control")]);
     // Unknown commands and malformed chords are refused, saying why.
     assert_eq!(
         contexts::parse(r#"<context name="k"><rule match="view" menu.canvas="copy launch"/></context>"#).unwrap_err().split(" (").next().unwrap(),
         "menu.canvas=\"copy launch\": unknown command launch"
     );
-    assert!(contexts::parse(r#"<context name="k"><rule match="view" keys.commands="ctrl+g:wrap"/></context>"#).unwrap_err().contains("ctrl is not a modifier"));
+    assert!(contexts::parse(r#"<context name="k"><rule match="view" keys.commands="ctrl+g:create-control"/></context>"#).unwrap_err().contains("ctrl is not a modifier"));
     assert!(contexts::parse(r#"<context name="k"><rule match="view" keys.commands="mod+g:launch"/></context>"#).unwrap_err().contains("unknown command launch"));
 }
 

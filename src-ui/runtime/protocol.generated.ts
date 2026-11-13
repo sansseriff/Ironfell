@@ -231,6 +231,7 @@ export type EngineEvent =
   | { ty: 'linkDrop'; spec: string; node: string; x: number; y: number }
   | { ty: 'focus'; panel: string; palette: string; keys: string; commands: string }
   | { ty: 'menu'; panel: string; items: ({ id: string; label: string; icon: string; chord: string; enabled: boolean; reason: string; clip: string; runs: string } | null)[] }
+  | { ty: 'controlState'; placing: string; visible: boolean }
   | { ty: 'commandFailed'; id: string; reason: string }
   | { ty: 'renderLost'; kind: string; error: string }
   | { ty: 'open'; panel: string; node: string; name: string; stands_for: string | null }

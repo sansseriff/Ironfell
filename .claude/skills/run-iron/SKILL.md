@@ -76,6 +76,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
+| `transform-controls.ts`, each DPR, warm | ~10–15 s (2026-11-13): pivot creation/relocation, tag and rotation drags, snapping, undo/refusals and scaled controls |
 | `multi-properties.ts`, each DPR, warm | ~5 s (4.48 s, 2026-11-11; selection-wide edits, paint picker, mixed values and undo) |
 | `composition-settings.ts`, each DPR, warm | ~12 s (2026-11-10) |
 | ⏱ shared-engine Rust lib suite, cold native `dev-opt` | ~5 min compiling; 9m 19s observed including waiting for the concurrent wasm build lock, 2026-11-10. Eight tests run in 0.21 s |
@@ -1084,15 +1085,16 @@ undefined
 [[240,475],["meter 15.8865646945 mW","short fiber 10 mW"]]
 ["meter 15.8865646945 mW","short fiber 0 W"]
 clicked button[title^="Make a component"]
-"component use"
+"component"
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Port")
 "in"
-clicked button[title^="Wrap the selection"]
+clicked button[title^="Create control:"]
+clicked button:has-text("Use selection centre")
 "\"Link in\""
 clicked .link-popover button.primary
 1
-1
+assertion passed
 [[545,175],[683,320],["meter 0 W","short fiber 0 W"]]
 [[465,300],[545,175]]
 [[600,300],[600,300],["meter 15.8865646945 mW","short fiber 0 W"]]
@@ -1268,11 +1270,11 @@ unplugs it. The meter is grabbed by its half of the joint handle (its port
 is joined to the fiber's end). Component authoring (component-authoring.md):
 an ellipse and a needle drawn top right and marquee-picked become a
 `component` whose main is selected; the port tool on its left edge adds
-`in`; entering the main (two clicks on the needle) and Wrap in empty makes
-the needle's empty; a line from the main's `in` pin onto it opens the link
+`in`; entering the main (two clicks on the needle), Create control and Use
+selection centre makes the needle's control; a line from the main's `in` pin onto it opens the link
 popover ("Link in"), whose Link binds the empty's rotation ("bind
 transform2d.rot"); the main's Ports list has 1 row; Cmd+D on the main makes
-1 `component` entity. The joint handle on the meter: its half pulls the
+1 numbered `component 2` entity (asserted). The joint handle on the meter: its half pulls the
 meter off (0 W, the fiber's end stays), the fiber's half pulls the end off
 (the meter stays), the centre moves the meter to (600, 300) with the end on
 it (15.88… mW); each undone. The Library tab: a slider and a laser dragged
@@ -3485,3 +3487,43 @@ Screenshots in `.agents/multi-properties/`: `mixed-shapes-1x.png`,
 `paints-lower-1x.png`, `mixed-text-1x.png`, `text-dark-1x.png` and their `2x` counterparts.
 Mixed Fill offers "Click + to replace mixed content"; + makes one shared solid fill,
 and Selection colors sits below Effects and edits only the matching paints.
+
+
+## 2D transform controls (2026-11-13)
+
+`transform-controls.ts` is the focused UI gate for component-authoring §8. After
+building, serve this worktree on an isolated Vite port, then run:
+
+```sh
+URL='http://localhost:5182/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default' bun run .claude/skills/run-iron/transform-controls.ts
+DPR=2 URL='http://localhost:5182/Ironfell/?gfx=webgl2&demo&showcase=0&layout=default' bun run .claude/skills/run-iron/transform-controls.ts
+```
+
+Expected, for each DPR:
+
+```text
+creation: chosen pivot, cancellation, siblings, artwork preserved
+pivot: pose preserved, centre shortcut, atomic undo; tag moves contents; rotation fixes origin
+snapping to centres/path anchors, selection cancellation and bound-control refusal: pass
+centre creation and visibility: pass
+transform-controls DPR=1: pass (no page errors)
+```
+
+The final line is `DPR=2` for the second run. The rotation drag is repeated with
+nonuniform control scale to verify the 34 CSS px handle distance. Screenshots are
+`.agents/transform-controls/controls-{1,2}x.png` and `controls-dark-{1,2}x.png`.
+Show controls hides unselected controls; selected ones retain editing feedback.
+
+Validation: both wasm backends build; 399 Rust tests pass across `iron_document`,
+`iron_spatial` and `iron_svg`; 131 JS tests pass; frontend checking has zero errors
+and 12 existing warnings. Worker DPR 1/2 and main-thread DPR 1 focused workflows, fast smoke (six assertions),
+`regression.txt` and `gestures.txt` pass with no page errors. The gesture authoring
+step now uses Create control → Use selection centre and checks the numbered
+`component 2` instance, replacing its stale exact `component` name readout.
+
+The store tests cover full affine preservation under nested rotation, reflection
+and nonuniform scale; atomic undo/redo; main edits across instances; and refusal of
+bound readers, animated coordinates, singular transforms and instance overrides.
+The safe policy refuses origin edits of port anchors or attached controls that have
+coordinate readers, instead of baking/removing bindings or animation. See
+`plans/specs/component-authoring.md` §8 for the complete restrictions.

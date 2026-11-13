@@ -602,8 +602,8 @@ sleep 600
 eval reads()
 # Component authoring (component-authoring.md). From shapes: an ellipse and
 # a needle, marquee-picked, become a component shown by its main; the port
-# tool places an `in` on the main; the needle, entered and wrapped in an
-# empty, is the pivot; a line from the main's `in` pin onto it opens the link
+# tool places an `in` on the main; the needle, entered and given a control
+# at its centre, is the pivot; a line from the main's `in` pin onto it opens the link
 # popover, whose Link binds the empty's rotation in the definition. Cmd+D on
 # the main makes an instance.
 key o
@@ -629,7 +629,9 @@ eval document.querySelector('[data-section="port-editor"] input')?.value
 dclick 785 70
 dclick 785 70
 sleep 400
-clickel button[title^="Wrap the selection"]
+clickel button[title^="Create control:"]
+sleep 200
+clickel button:has-text("Use selection centre")
 sleep 600
 key Escape
 sleep 200
@@ -645,7 +647,7 @@ sleep 600
 eval document.querySelectorAll('[data-section="ports"] .port-row').length
 key Meta+d
 sleep 600
-eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return (v.match(/<entity[^>]*name="component"[^>]*>/g) || []).length; })()
+assert (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); return (v.match(/<entity[^>]*name="component 2"[^>]*>/g) || []).length === 1; })()
 # The joint handle on the fiber's end at the meter: the meter's half pulls
 # the meter off, the fiber's half the fiber's end, the centre moves the meter
 # with the end still plugged in; each undone.

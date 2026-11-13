@@ -27,7 +27,7 @@
   <rule match="view state:main" palette.tools="select rect|ellipse|table|port|empty pen text"/>
   <!-- Its commands (commands.rs): Figma's keys, and Figma's right-click
        menu as far as Iron has the commands. -->
-  <rule match="view" keys.commands="mod+alt+g:wrap shift+a:layout alt+shift+c:copy-svg mod+alt+k:make-component ]:front [:back" menu.canvas="copy paste-here copy-svg | ask draw-on | front back | wrap layout make-component"/>
+  <rule match="view" keys.commands="mod+alt+g:create-control shift+a:layout alt+shift+c:copy-svg mod+alt+k:make-component ]:front [:back" menu.canvas="copy paste-here copy-svg | ask draw-on | front back | create-control place-pivot show-controls layout make-component"/>
 </context>
 
 <context name="std:3d">

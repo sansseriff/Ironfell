@@ -97,7 +97,7 @@
       <Select value={control} items={(info?.controls ?? []).map(c => ({ value: c.id, label: c.name || c.id }))} onChange={v => { control = v; editing = ""; }} label="Endpoint control" disabled={busy} />
     </label>
     <p>Choose an empty, then collect points from both paths. Apply keeps their current positions. Offsets follow the control’s rotation and scale; tangents stay in the path’s frame.</p>
-    {#if !info?.controls.length}<p>Add an Empty inside this main using the shape toolbar, then return here.</p>{/if}
+    {#if !info?.controls.length}<p>Add a Control inside this main using the shape toolbar, then return here.</p>{/if}
     {#if candidate}<Button small onclick={() => toggle(candidate!.id)} disabled={busy}> {picked.includes(candidate.id) ? "Remove" : "Collect"} canvas point {candidate.index}</Button>{/if}
     <div class="paths">
       {#each info?.paths ?? [] as path (path.id)}

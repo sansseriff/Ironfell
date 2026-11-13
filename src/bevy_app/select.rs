@@ -140,8 +140,8 @@ const HANDLE_END: f64 = 7.0;
 const POINT_HIT: f64 = 7.0;
 /// A selected edge's stroke while editing a path's points, CSS px.
 const EDGE_WIDTH: f64 = 2.0;
-/// CSS px from an empty within which its marker shows, fading out.
-const EMPTY_NEAR: f64 = 30.0;
+/// CSS px from a control within which its name tag appears.
+const EMPTY_NEAR: f64 = 52.0;
 
 /// CSS px from a port's anchor within which it is hot, and within which a
 /// dragged port snaps onto another (component-model.md §4.3).
@@ -617,6 +617,16 @@ pub struct SelectTool {
     /// Object snapping turned off (`__iron.snapping(false)`; the setting of
     /// plans/specs/snapping.md phase 5 will own it).
     pub snap_off: bool,
+    placement: Option<PivotPlacement>,
+    controls_hidden: bool,
+    pivot_guides: Vec<iron_spatial::snap::Guide>,
+    pivot_preview: Option<(String, Point)>,
+}
+
+struct PivotPlacement {
+    reaches: Vec<Reach>,
+    relocate: bool,
+    version: iron_document::Version,
 }
 
 impl SelectTool {
@@ -630,6 +640,7 @@ impl SelectTool {
 
     /// The guides the current move lines up along.
     pub(crate) fn snap_guides(&self) -> &[iron_spatial::snap::Guide] {
+        if self.placement.is_some() { return &self.pivot_guides; }
         match &self.gesture {
             Gesture::Edit(m) => m.snap().map_or(&[], |s| &s.guides[..]),
             _ => &[],
@@ -1321,6 +1332,7 @@ impl Geo<'_> {
     fn selection_frame(&self, items: &[&Reach]) -> Option<Affine> {
         match items {
             [] => None,
+            [one] if self.ty(one.node()) == "empty" && self.doc().children(one.node()).is_empty() => None,
             [one] => self.frame(&one.chain),
             many => {
                 let r = many
@@ -1386,9 +1398,8 @@ impl Geo<'_> {
     fn resize_capabilities(&self, chain: &[NodeId], out: &mut Vec<bool>) {
         let Some(&id) = chain.last() else { return };
         let Some((_, kind)) = self.local_box(id) else { return };
-        // A group's box, or an empty's marker with what hangs off it, is
-        // resized through its children.
-        if kind == Kind::Group || (kind == Kind::Fixed && !self.doc().children(id).is_empty()) {
+        // Groups resize through children. Controls move and rotate as one.
+        if kind == Kind::Group {
             for &c in self.doc().children(id) {
                 let mut sub = chain.to_vec();
                 sub.push(c);
@@ -2052,6 +2063,50 @@ fn children(cx: &Resolver, r: &Reach) -> Vec<Reach> {
         .collect()
 }
 
+fn queue_control(result: Result<(Vec<Op>, Option<NodeId>), String>, reaches: &[Reach], pending: &mut PendingTransactions, select: &mut Vec<NodeId>, events: &crate::host_events::HostEvents) {
+    match result {
+        Ok((ops, made)) => {
+            if let Some(id) = made {
+                let root = reaches[0].node().path().first().copied();
+                *select = vec![root.filter(|_| reaches[0].node().is_expanded()).and_then(|m| NodeId::expanded(m,id)).unwrap_or(id)];
+            }
+            pending.0.push(TransactionInput { label: "place control pivot".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+        }
+        Err(reason) => events.push(crate::host_events::EngineEvent::CommandFailed { id: "place-pivot".into(), reason }),
+    }
+}
+
+fn control_name(geo: &Geo, id: NodeId) -> String {
+    geo.doc().get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("Control").to_owned()
+}
+
+fn control_handles(geo: &Geo, view: &PanelView, r: &Reach, k: f64) -> (Point, Point, Rect) {
+    let at = view.affine() * geo.space(&r.chain).unwrap_or(Affine::IDENTITY) * geo.world(r.node()) * Point::ORIGIN;
+    let width = label_outline(&control_name(geo,r.node()), (11.0*k) as f32).map_or(60.0*k, |(_,w)| w);
+    let w = view.affine() * geo.space(&r.chain).unwrap_or(Affine::IDENTITY) * geo.world(r.node());
+    let dy = w * Point::new(0.0,-1.0) - at;
+    let tip = at + dy / dy.hypot().max(1e-9) * (34.0*k);
+    (at, tip, Rect::new(at.x+16.0*k,at.y-22.0*k,at.x+26.0*k+width,at.y-3.0*k))
+}
+
+fn reachable_controls(geo: &Geo, view: &PanelView, reaches: &[Reach]) -> Vec<Reach> {
+    let Some(comp) = view.composition else { return Vec::new() };
+    let here: Vec<_> = reaches.iter().filter(|r| r.panel == view.panel).collect();
+    geo.doc().nodes_of_type(iron_document::TypeId::lookup("empty").expect("registered")).filter_map(|e| {
+        if geo.doc().facet(e, iron_document::FacetKind::Anchor).is_some() { return None; }
+        let mut chain = vec![e];
+        let mut up = e;
+        while let Some(p) = geo.doc().live(up).and_then(|n| n.parent) {
+            if p == comp { break; }
+            chain.push(p); up = p;
+        }
+        if geo.doc().live(up).and_then(|n| n.parent) != Some(comp) { return None; }
+        chain.reverse();
+        if !here.iter().any(|r| r.node() == e) && target_index(&geo.contexts(), &chain, &here, false)+1 != chain.len() { return None; }
+        Some(Reach { panel: view.panel.clone(), chain })
+    }).collect()
+}
+
 /// The topmost hit under the pointer: its chain and how it was hit.
 pub(crate) enum Source {
     Overlay(usize),
@@ -2172,6 +2227,44 @@ pub fn select_tool_system(
     for (key, m) in std::mem::take(&mut keys.0) {
         let shift = m & MOD_SHIFT != 0;
         let reaches = selected_reaches(&sel, tool);
+        if matches!(key.as_str(), "create-control" | "place-pivot") {
+            let ids: Vec<_> = reaches.iter().map(Reach::node).collect();
+            let relocate = key == "place-pivot";
+            let checked = if relocate {
+                ids.first().filter(|_| ids.len() == 1).ok_or("Select one control".to_owned()).and_then(|&id| iron_document::author::relocate_pivot(&store.0, id, store.0.local_affine(id).translation()).map(|_| ()))
+            } else { iron_document::author::create_control(&store.0, &ids, None).map(|_| ()) };
+            match checked {
+                Ok(()) if reaches.first().and_then(|r| views.get(&r.panel)).is_some_and(|v| v.dims == Dims::Two) => {
+                    tool.placement = Some(PivotPlacement { reaches, relocate, version: store.0.document().version() });
+                    *edit = PathEdit::default();
+                    events.push(crate::host_events::EngineEvent::ControlState { placing: if relocate { "pivot" } else { "create" }.into(), visible: !tool.controls_hidden });
+                }
+                other => events.push(crate::host_events::EngineEvent::CommandFailed { id: key.clone(), reason: other.err().unwrap_or_else(|| "Controls need a 2D canvas".into()) }),
+            }
+            continue;
+        }
+        if key == "show-controls" {
+            tool.controls_hidden = !tool.controls_hidden;
+            events.push(crate::host_events::EngineEvent::ControlState { placing: tool.placement.as_ref().map_or("", |p| if p.relocate { "pivot" } else { "create" }).into(), visible: !tool.controls_hidden });
+            continue;
+        }
+        if tool.placement.is_some() && matches!(key.as_str(), "escape" | "cancel-pivot" | "undo" | "redo" | "pivot-centre") {
+            if key == "pivot-centre" {
+                let p = tool.placement.as_ref().expect("checked");
+                let ids: Vec<_> = p.reaches.iter().map(Reach::node).collect();
+                let result = if p.relocate {
+                    let id = ids[0];
+                    let centre = store.0.extent(id).map(|r| [r.center().x, r.center().y]).unwrap_or(store.0.local_affine(id).translation());
+                    iron_document::author::relocate_pivot(&store.0, id, centre).map(|ops| (ops, None))
+                } else { iron_document::author::create_control(&store.0, &ids, None).map(|(ops, id)| (ops, Some(id))) };
+                queue_control(result, &p.reaches, &mut pending, &mut tool.select_when_live, &events);
+            }
+            tool.placement = None;
+            tool.pivot_preview = None;
+            tool.pivot_guides.clear();
+            events.push(crate::host_events::EngineEvent::ControlState { placing: "".into(), visible: !tool.controls_hidden });
+            if key != "undo" && key != "redo" { continue; }
+        }
         // A command that is one transaction (`commands::plan`).
         let ids: Vec<NodeId> = reaches.iter().map(|r| r.node()).collect();
         let two_d = hits.panel.as_deref().and_then(|p| views.get(p)).or_else(|| reaches.first().and_then(|r| views.get(&r.panel))).is_some_and(|v| v.dims == Dims::Two);
@@ -2553,6 +2646,11 @@ pub fn select_tool_system(
         return;
     }
 
+    if *active != ActiveTool::Select && tool.placement.take().is_some() {
+        tool.pivot_preview = None;
+        tool.pivot_guides.clear();
+        events.push(crate::host_events::EngineEvent::ControlState { placing: "".into(), visible: !tool.controls_hidden });
+    }
     // Another tool has the pointer (`pen`, `shape_tool`); a gesture already
     // under way finishes.
     if *active != ActiveTool::Select && matches!(tool.gesture, Gesture::Idle) {
@@ -2581,6 +2679,67 @@ pub fn select_tool_system(
         tool.pointer_at = pointer_at;
     }
     let doc_point = |v: &PanelView| v.affine().inverse() * screen;
+
+    if let Some(p) = &tool.placement {
+        let ids: Vec<_> = p.reaches.iter().map(Reach::node).collect();
+        if ids != sel.selected || p.version != store.0.document().version() || *active != ActiveTool::Select || views.get(&p.reaches[0].panel).is_none() {
+            tool.placement = None;
+            tool.pivot_preview = None;
+            tool.pivot_guides.clear();
+            events.push(crate::host_events::EngineEvent::ControlState { placing: "".into(), visible: !tool.controls_hidden });
+        }
+    }
+    if let Some(p) = &tool.placement {
+        let view = views.get(&p.reaches[0].panel).expect("live placement view");
+        if hits.panel.as_deref() == Some(&view.panel) && !space {
+            let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+            let mut at = doc_point(view);
+            tool.pivot_guides.clear();
+            if !tool.snap_off && !mods(MOD_META) {
+                let mut targets = Vec::new();
+                let prefix = &p.reaches[0].chain[..p.reaches[0].chain.len()-1];
+                let roots = prefix.last().map_or_else(|| nest::panel_roots(geo.doc(), view), |&n| geo.doc().children(n).to_vec());
+                let mut candidates: Vec<Vec<NodeId>> = roots.into_iter().map(|n| { let mut c = prefix.to_vec(); c.push(n); c }).collect();
+                let mut i = 0;
+                while i < candidates.len() {
+                    let chain = candidates[i].clone();
+                    let n = *chain.last().expect("candidate");
+                    if geo.ty(n) == "empty" || geo.ty(n) == "group" {
+                        for &child in geo.doc().children(n) { let mut c = chain.clone(); c.push(child); candidates.push(c); }
+                    }
+                    i += 1;
+                }
+                for chain in candidates {
+                    let n = *chain.last().expect("candidate");
+                    if let Some(b) = snap_box(&geo, &chain) { targets.push(b); }
+                    let Some(space) = geo.space(&chain) else { continue };
+                    let world = space * geo.world(n);
+                    if geo.ty(n) == "empty" { let c = world * Point::ORIGIN; targets.push(Rect::from_points(c, c)); }
+                    if geo.is_points(n) {
+                        for (_, q, _, _) in geo.points(n) { let c = world * q; targets.push(Rect::from_points(c,c)); }
+                    }
+                }
+                let snap = iron_spatial::snap::Targets::new(targets).snap(Rect::from_points(at, at), SNAP_REACH * k / view.affine().as_coeffs()[0].hypot(view.affine().as_coeffs()[1]).max(1e-9), [true,true]);
+                at += snap.delta; tool.pivot_guides = snap.guides;
+            }
+            tool.pivot_preview = Some((view.panel.clone(), at));
+            if pointer.just_pressed_left {
+                let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+                let id = p.reaches[0].node();
+                let parent = geo.doc().live(id).and_then(|n| n.parent);
+                let map = geo.space(&p.reaches[0].chain).unwrap_or(Affine::IDENTITY) * parent.map_or(Affine::IDENTITY, |n| geo.world(n));
+                let local = map.inverse() * at;
+                let ids: Vec<_> = p.reaches.iter().map(Reach::node).collect();
+                let result = if p.relocate { iron_document::author::relocate_pivot(&store.0, id, [local.x, local.y]).map(|ops| (ops, None)) }
+                    else { iron_document::author::create_control(&store.0, &ids, Some([local.x, local.y])).map(|(ops,id)| (ops,Some(id))) };
+                queue_control(result, &p.reaches, &mut pending, &mut tool.select_when_live, &events);
+                tool.placement = None; tool.pivot_preview = None; tool.pivot_guides.clear();
+                events.push(crate::host_events::EngineEvent::ControlState { placing: "".into(), visible: !tool.controls_hidden });
+            }
+        }
+        if tool.cursor != "crosshair" { events.cursor("crosshair".into()); tool.cursor = "crosshair".into(); }
+        return;
+    }
 
     // ---- The 3D gizmo ----
     // While the selection is meshes in one 3D view, the transform gizmo
@@ -2740,6 +2899,33 @@ pub fn select_tool_system(
                     None => *edit = PathEdit::default(),
                 }
             }
+            // Screen-space control handles beat the artwork and selection box.
+            if view.dims == Dims::Two && edit.reach.is_none() && !mods(MOD_META) {
+                let controls = reachable_controls(&geo, &view, &reaches);
+                if let Some((r, rotate)) = controls.into_iter().rev().find_map(|r| {
+                    let selected = sel.selected.contains(&r.node());
+                    if tool.controls_hidden && !selected { return None; }
+                    let (at, tip, tag) = control_handles(&geo, &view, &r, k);
+                    let named = selected || at.distance(screen) <= EMPTY_NEAR*k || tag.contains(screen);
+                    if selected && tip.distance(screen) <= 10.0*k { return Some((r,true)); }
+                    (at.distance(screen) <= 12.0*k || (named && tag.contains(screen))).then_some((r,false))
+                }) {
+                    if rotate {
+                        let mut parts = Vec::new(); geo.parts(&r.chain, false, &mut parts);
+                        if geo.rotatable(&parts) {
+                            let at = geo.space(&r.chain).unwrap_or(Affine::IDENTITY) * geo.world(r.node()) * Point::ORIGIN;
+                            let frame = Affine::translate((at.x-0.5, at.y-0.5));
+                            let rot0 = parts.first().map(|p| p.trs[2]);
+                            store.0.begin_gesture(&[r.node()]);
+                            tool.gesture = Gesture::Edit(Manip::Transform(manipulate::Transform2 { label: "rotate control".into(), view: view.clone(), kind: TransformKind::Rotate, frame, start: doc_point(&view), parts, rot0, snap: None }));
+                        }
+                    } else {
+                        set_selection(&mut sel, tool, vec![r]);
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Move { click: Click::Keep } };
+                    }
+                    break 'press;
+                }
+            }
             // A lone rect's corner dots and a lone ellipse's arc handles
             // come before the box's grips too.
             if view.dims == Dims::Two
@@ -2845,6 +3031,10 @@ pub fn select_tool_system(
                             break 'press;
                         }
                         Some(Grip::Rotate(..)) => {
+                            let frame = if let [r] = mine[..] && geo.ty(r.node()) == "empty" {
+                                let at = geo.space(&r.chain).unwrap_or(Affine::IDENTITY) * geo.world(r.node()) * Point::ORIGIN;
+                                Affine::translate((at.x - 0.5, at.y - 0.5))
+                            } else { frame };
                             let rot0 = (rotate_parts.len() == 1).then(|| rotate_parts[0].trs[2]);
                             let label = format!("rotate {}", type_label(geo.doc(), &ids));
                             let nodes: Vec<NodeId> = rotate_parts.iter().map(|p| p.id).collect();
@@ -3703,6 +3893,19 @@ pub fn select_tool_system(
                 }
             }
         }
+        if let Some(view) = view.filter(|v| v.dims == Dims::Two && !space && !mods(MOD_META) && edit.reach.is_none()) {
+            for r in reachable_controls(&geo, view, &reaches).into_iter().rev() {
+                let selected = sel.selected.contains(&r.node());
+                if tool.controls_hidden && !selected { continue; }
+                let (at,tip,tag) = control_handles(&geo,view,&r,k);
+                if selected && tip.distance(screen) <= 10.0*k {
+                    cursor = "rotate:0".into(); on_grip = true; break;
+                }
+                if at.distance(screen) <= 12.0*k || ((selected || at.distance(screen) <= EMPTY_NEAR*k || tag.contains(screen)) && tag.contains(screen)) {
+                    cursor = "move".into(); on_grip = true; break;
+                }
+            }
+        }
         // A joint shows its handle; a lone hot port its ring.
         let joint = view
             .filter(|v| v.dims == Dims::Two && *active == ActiveTool::Select && !space && !on_grip && !gizmo_hot && edit.reach.is_none())
@@ -4518,54 +4721,34 @@ pub fn draw_select_overlay(
                 {
                     b.stroke(Affine::IDENTITY, thin.clone(), blue, (to_screen * to_comp.inverse()) * r.to_path(0.1));
                 }
-                // Empties: a box with a cross, for the ones a click here could
-                // reach (not inside a closed instance), near the pointer and
-                // fading with distance; a selected one always.
-                if let Some(comp) = view.composition.filter(|c| !c.is_session()) {
-                    let doc = geo.doc();
-                    let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == o.panel).collect();
-                    let near = tool.pointer_at.as_ref().filter(|(p, _)| p == &o.panel).map(|(_, at)| *at);
-                    let h = crate::document_bridge::EMPTY_HALF;
-                    let mut marker = kurbo::BezPath::new();
-                    marker.move_to((-h, -h));
-                    marker.line_to((h, -h));
-                    marker.line_to((h, h));
-                    marker.line_to((-h, h));
-                    marker.close_path();
-                    marker.move_to((-h, 0.0));
-                    marker.line_to((h, 0.0));
-                    marker.move_to((0.0, -h));
-                    marker.line_to((0.0, h));
-                    for e in doc.nodes_of_type(iron_document::TypeId::lookup("empty").expect("registered")) {
-                        let selected = sel.selected.contains(&e);
-                        let at = to_screen * geo.world(e) * Point::ORIGIN;
-                        let fade = match near {
-                            _ if selected => 1.0,
-                            Some(p) => 1.0 - (p.distance(at) / (EMPTY_NEAR * k)).min(1.0),
-                            None => 0.0,
-                        };
-                        if fade <= 0.0 || !doc.is_live(e) {
-                            continue;
-                        }
-                        let mut chain = vec![e];
-                        let mut up = e;
-                        while let Some(p) = doc.live(up).and_then(|n| n.parent) {
-                            if p == comp {
-                                break;
-                            }
-                            chain.push(p);
-                            up = p;
-                        }
-                        if doc.live(up).and_then(|n| n.parent) != Some(comp) {
-                            continue;
-                        }
-                        chain.reverse();
-                        if !selected && target_index(&geo.contexts(), &chain, &here, false) + 1 != chain.len() {
-                            continue;
-                        }
-                        let c = peniko::Color::new([0.45, 0.55, 0.75, 0.9 * fade as f32]);
-                        b.stroke(Affine::IDENTITY, thin.clone(), c, (to_screen * geo.world(e)) * marker.clone());
+                // Control chrome is constructed in window pixels: constant CSS size.
+                for r in reachable_controls(&geo, view, &reaches) {
+                    let selected = sel.selected.contains(&r.node());
+                    if tool.controls_hidden && !selected { continue; }
+                    let (at, tip, tag) = control_handles(&geo, view, &r, k);
+                    let hot = tool.pointer_at.as_ref().is_some_and(|(p,q)| p == &o.panel && (at.distance(*q) <= EMPTY_NEAR*k || tag.contains(*q)));
+                    let c = if selected || hot { blue } else { peniko::Color::new([0.45,0.55,0.75,0.85]) };
+                    b.fill(Affine::IDENTITY, peniko::Color::new([1.0,1.0,1.0,0.9]), kurbo::Circle::new(at, 7.0*k));
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(1.5*k), c, kurbo::Circle::new(at, 7.0*k));
+                    let mut cross = kurbo::BezPath::new();
+                    let y = (tip-at) / 34.0;
+                    let x = kurbo::Vec2::new(-y.y,y.x);
+                    cross.move_to(at - x*11.0); cross.line_to(at + x*22.0);
+                    cross.move_to(at - y*11.0); cross.line_to(tip);
+                    b.stroke(Affine::IDENTITY, thin.clone(), c, cross);
+                    if selected {
+                        b.fill(Affine::IDENTITY, c, kurbo::Circle::new(tip, 4.0*k));
                     }
+                    if selected || hot {
+                        b.fill(Affine::IDENTITY, c, kurbo::RoundedRect::from_rect(tag, 3.0*k));
+                        if let Some((text,_)) = label_outline(&control_name(&geo,r.node()), (11.0*k) as f32) {
+                            b.fill(Affine::translate((tag.x0+5.0*k,tag.y0+4.0*k)), peniko::Color::new([1.0,1.0,1.0,1.0]), text);
+                        }
+                    }
+                }
+                if let Some((panel,at)) = &tool.pivot_preview && panel == &o.panel {
+                    let p = to_screen * *at;
+                    b.stroke(Affine::IDENTITY, kurbo::Stroke::new(2.0*k), blue, kurbo::Circle::new(p, 10.0*k));
                 }
                 // A standard component on its way out of the Library tab.
                 if let Gesture::Library { key, at } = &tool.gesture

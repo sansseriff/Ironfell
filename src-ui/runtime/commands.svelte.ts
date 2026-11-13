@@ -52,7 +52,7 @@ export function commandSpec(id: string): CommandSpec | undefined {
   return registry.get(id);
 }
 
-/** Record a view's command keymap, `mod+alt+g:wrap ]:front …` (canonical
+/** Record a view's command keymap, `mod+alt+g:create-control ]:front …` (canonical
  *  chords, as the engine sends them). */
 export function setViewCommands(panel: string, keys: string) {
   const map = new Map<string, string>();
@@ -114,3 +114,6 @@ export async function runCommand(post: Post, id: string, at: { x: number; y: num
   if (spec.clip === 'write') beginCopy(() => post({ ty: 'command', id }));
   else post({ ty: 'command', id });
 }
+
+/** Session-only control placement and visibility, owned by the engine. */
+export const controlState: { placing: string; visible: boolean } = $state({ placing: "", visible: true });

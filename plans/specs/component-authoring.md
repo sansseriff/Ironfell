@@ -1,6 +1,6 @@
 # Component authoring
 
-**Status:** approved 2026-10-18, building. **Builds on:**
+**Status:** foundation built 2026-10-18; 2D control redesign built 2026-11-13. **Builds on:**
 [`component-model.md`](component-model.md) (definitions, linked instances, overrides,
 ports, anchors, plugging and mates). **Goal:** every part of the Components tab's demo
 (laser, fiber, dial meter, slider, their wiring) can be made from the UI, without code.
@@ -22,7 +22,7 @@ must preserve each point's contour ownership. See that plan's §3.1.
 | How instances are made | Duplicate or copy a main (or an instance), or drag one in from the Library tab |
 | Colours | Mains solid violet with a `◆◆ name` chip; instances a lighter violet with a `◇ name` chip; parts inside either keep the selection blue (fixing Figma's complaint that both look alike); ports teal |
 | Physical ports and settings | A port with an anchor on a picture is physical (plugs, snaps, mates); one without is a setting (laser power, fiber length, meter range), reached by a connection line |
-| Pivots | Not a special verb: **add empty**, **wrap in empty**, and a **link** from an input to the empty's rotation, with a mapping |
+| Pivots | **Create control**, place its pivot (or use the selection centre), then link its rotation. **Place pivot** repositions a static origin while artwork stays in place (§8). |
 | Port matching | Same kind; for `value` ports, the same dimension of their values; matching connector and genders when set |
 | Fiber to fiber | Allowed: the dropped end follows the end it lands on, which holds |
 | A joint's two parts | A split handle on hover: drag a half to pull that part off, the centre to move the joint |
@@ -62,9 +62,10 @@ Duplicating or copying a main makes a linked instance (an entity in the model an
   is its facing, drawn as a short arrow while it is hot or selected.
 - **Settings**: the inspector's Component section on a main has **+ input**, which adds a
   `port_spec` with no anchor.
-- **Empties**: **Add empty** (a tool in the shape menu: click to place) and **Wrap in
-  empty** (Cmd+Alt+G, and in the inspector): the selection becomes children of a new empty
-  at its centre, positions kept.
+- **Controls**: the shape menu's **Control** places a standalone transform. Select
+  sibling objects and **Create control** (Cmd+Alt+G or the inspector), then click its
+  pivot, or choose **Use selection centre**. The objects become children; their full
+  world transforms stay unchanged. The stored primitive remains `empty`.
 
 ## 3. Links: lines from ports
 
@@ -163,3 +164,49 @@ Duplicating or copying a main makes a linked instance (an entity in the model an
   refused by design (a link lives in a definition); the Library is not searchable; the
   standard definitions are not editable (no main); 3D.
 
+
+## 8. 2D control redesign (built 2026-11-13)
+
+**Create control** replaces Wrap in empty in the inspector, command registry, default
+context menu and Cmd+Alt+G binding. It enters explicit **Place pivot** mode before
+mutating the document. Click the canvas or choose **Use selection centre**. Cancel or
+Escape leaves no transaction. Changing the selection, document, tool or closing the
+placement view cancels it too; undo/redo cancel placement before handling history.
+The author API is `create-control {ids, x?, y?}`; coordinates are in the common
+parent's space. A single object's default name is `<object name> pivot`.
+
+On an existing control, **Place pivot** changes its origin while compensating each
+direct child's translation through the inverse of the control's linear transform.
+Rotation, reflection, nonuniform scale and nested parent transforms are preserved;
+zero scale is refused. Placement uses the existing `iron_spatial::snap::Targets`
+mechanism for edges/centres/corners, path anchors and other controls' origins. Cmd/Ctrl
+bypasses snapping. The API `place-pivot {node, x, y}` uses the same planner.
+
+Move drags on the origin or its name tag move the contents. The separate rotation
+handle, 34 CSS px from the origin, and box rotation both rotate about the actual origin.
+The marker radius is 7 CSS px and its hit radius is 12 CSS px, independent of view zoom,
+object scale and DPR; short axes follow the control's orientation. Controls appear only
+where the current scope can reach them. **Show controls** in the inspector and
+composition settings hides unselected controls; selected controls remain visible so
+editing keeps its feedback. Names appear on proximity/selection and their tags can be
+dragged over overlapping artwork. Port anchors retain the existing port rings, facing
+arrows and plugging interaction, rather than receiving a competing control handle.
+
+**Safe relocation policy:** no baking, rewriting or deleting animation/bindings.
+Creation and relocation require static transform slots on every node whose coordinates
+change. They refuse bindings reading those transforms (including attached path points),
+clips on any affected node or its instances, instance transform overrides, constraints,
+auto layout/resizing constraints and port anchors, with a visible reason. Edit a main
+rather than an instance; open a nested component's own main for its controls. Edits in
+a main translate through `iron_document`, preserving unmodified instance poses. These
+restrictions deliberately preserve the document and current pose on rejection. Existing
+bound/animated controls still move/rotate through their usual handles; only origin
+relocation is restricted. Shape/colour/radius customization remains a later follow-up.
+
+Verification: `tests/authoring.rs` covers rotated/scaled/reflected nested transforms,
+full affine preservation, atomic undo/redo, mains and instances, overrides, bound
+readers, singular transforms and clips. `transform-controls.ts` drives the real UI at
+DPR 1 and 2: create/cancel/Escape, click and centre placement, pivot preservation and
+undo, name-tag movement, rotation about the origin, snapping to centres/path anchors,
+selection cancellation, visible binding refusal, visibility synchronization and light/
+dark screenshots. Run-iron fast smoke and the broad gesture fixture remain gates.

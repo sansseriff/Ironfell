@@ -191,7 +191,11 @@ impl Pick<'_> {
                 }
                 continue;
             }
-            if let Some(d) = self.drawables.0.get(&id) {
+            // Control origins are hit by select's CSS-pixel overlay, not by
+            // a document-size marker that grows with zoom/object scale.
+            let control = self.doc.live(id).is_some_and(|n| n.ty.name() == "empty")
+                && self.doc.facet(id, iron_document::FacetKind::Anchor).is_none();
+            if !control && let Some(d) = self.drawables.0.get(&id) {
                 let local = nest::world_2d(self.store, self.spatial, id).inverse() * p;
                 if d.shape.contains_local(Vec2::new(local.x as f32, local.y as f32)) {
                     self.out.push(crate::Hit2D { chain: chain.clone(), background: false, z: self.z as f32, space, through: None });

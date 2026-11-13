@@ -48,7 +48,7 @@ import { QuerySubscriptions } from './query_subscriptions';
 import { PendingRequests } from './pending_requests';
 import type { ClientRequest, RequestPayload, UiRequest, UiEvent } from './protocol';
 import { lastCopied } from './clipboard';
-import { runCommand, type MenuItem } from './commands.svelte';
+import { controlState, runCommand, type MenuItem } from './commands.svelte';
 import { documentArguments, type DocumentCommand } from './protocol.generated';
 import { Scopes, webLocks, type ScopeState } from './scopes';
 import { OpfsScopeStorage } from './scope_storage';
@@ -205,6 +205,8 @@ export class DocumentClient {
     this.dispose();
     this.sessionId = sessionId;
     this.generation++;
+    controlState.placing = '';
+    controlState.visible = true;
     this.pending.attach(sessionId);
     this.post = post;
     this.sessionStarted = false;

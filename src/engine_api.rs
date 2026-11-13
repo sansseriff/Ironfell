@@ -607,7 +607,8 @@ pub fn document_make_component(app: &mut WorkerApp, ids: String, name: String) -
 ///   the main's space;
 /// - `add_input {def, name, default?}`: a setting;
 /// - `edit_port {spec, patch}`: `author::PortPatch`;
-/// - `wrap {ids}`: wrap siblings in an empty;
+/// - `create-control {ids, x?, y?}`: siblings under a control at the chosen pivot;
+/// - `place-pivot {node, x, y}`: relocate a static control without moving its contents;
 /// - `connect {a, b}`: two ports, by a line;
 /// - `add_empty {parent, x, y}`: an empty in `parent` (a main: its definition).
 pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> String {
@@ -788,15 +789,20 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let patch: author::PortPatch = serde_json::from_value(a.get("patch").cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
                 ("edit port".into(), author::edit_port(doc, id("spec")?, &patch)?, None)
             }
-            "wrap" => {
-                let ids: Vec<iron_document::NodeId> = a.get("ids").and_then(|v| v.as_array()).ok_or("ids missing")?.iter().filter_map(|v| v.as_str()?.parse().ok()).collect();
-                let extent = |n: iron_document::NodeId| store.0.extent(n);
-                let (ops, empty) = author::wrap_in_empty(store.0.document(), &extent, &ids)?;
+            "create-control" => {
+                let ids: Vec<iron_document::NodeId> = a.get("ids").and_then(|v| v.as_array()).ok_or("ids missing")?.iter().map(|v| v.as_str().ok_or("Invalid selection id".to_owned())?.parse().map_err(|e| format!("Invalid selection id: {e}"))).collect::<Result<_,_>>()?;
+                let pivot = match (a.get("x"), a.get("y")) {
+                    (None, None) => None,
+                    (Some(x), Some(y)) => Some([x.as_f64().ok_or("Invalid pivot x")?, y.as_f64().ok_or("Invalid pivot y")?]),
+                    _ => return Err("Specify both pivot x and y".into()),
+                };
+                let (ops, empty) = author::create_control(&store.0, &ids, pivot)?;
                 // Inside a main the empty lands in the definition: select its picture there.
                 let parent = ids.first().and_then(|&n| store.0.document().live(n)).and_then(|n| n.parent);
                 let shown = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(store.0.document(), m).is_some()).and_then(|m| iron_document::NodeId::expanded(m, empty));
-                ("wrap in empty".into(), ops, Some(shown.unwrap_or(empty)))
+                ("create control".into(), ops, Some(shown.unwrap_or(empty)))
             }
+            "place-pivot" => ("place control pivot".into(), author::relocate_pivot(&store.0, id("node")?, [a.get("x").and_then(|v| v.as_f64()).ok_or("Pivot x missing")?, a.get("y").and_then(|v| v.as_f64()).ok_or("Pivot y missing")?])?, None),
             "resizable" => {
                 let def = id("def")?;
                 let on = a.get("on").and_then(|v| v.as_bool()).unwrap_or(true);

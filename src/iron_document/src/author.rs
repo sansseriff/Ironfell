@@ -257,42 +257,115 @@ pub fn edit_port(doc: &Document, spec: NodeId, patch: &PortPatch) -> Result<Vec<
     Ok(ops)
 }
 
-/// Wrap `selection` (siblings) in a new empty at the centre of their extent
-/// (component-authoring.md §2): the empty is created beside them, they move
-/// into it, and their positions shift by the centre, so nothing moves on
-/// screen. `extent` gives a node's box in its parent's space. Inside a main,
-/// the ops name derived nodes and `expand::translate` sends them to the
-/// definition.
-pub fn wrap_in_empty(doc: &Document, extent: &dyn Fn(NodeId) -> Option<kurbo::Rect>, selection: &[NodeId]) -> Result<(Vec<Op>, NodeId), String> {
-    let mut roots: Vec<NodeId> = selection.iter().copied().filter(|&n| doc.is_live(n)).collect();
-    if roots.is_empty() {
-        return Err("nothing selected to wrap".into());
+/// Refuse coordinate changes whose meaning is observed or driven elsewhere.
+/// No binding or clip is baked, redirected or silently removed.
+fn static_coordinates(store: &crate::Store, nodes: &[NodeId]) -> Result<(), String> {
+    let doc = store.document();
+    for &id in nodes {
+        let n = doc.live(id).ok_or("The selection no longer exists")?;
+        if id.path().len() > 2 {
+            return Err("Open the nested component's own main to edit its controls".into());
+        }
+        if id.is_expanded() && id.path().first().is_none_or(|&m| crate::expand::main_definition(doc, m).is_none()) {
+            return Err("Edit the main component to change its controls; instance pivots cannot be relocated".into());
+        }
+        if doc.get::<crate::facet::Anchor>(id).is_some() {
+            return Err("Port anchors keep their interface origin; use the port tool to edit them".into());
+        }
+        if n.parent.is_some_and(|p| doc.facet(p, FacetKind::Layout).is_some()) || doc.facet(id, FacetKind::Layout).is_some() || doc.facet(id, FacetKind::Constraints).is_some() {
+            return Err("Remove auto layout before changing this control's coordinates".into());
+        }
+        for field in ["x", "y", "rot", "sx", "sy"] {
+            let path = LeafPath::new(FacetKind::Transform2d, field).expect("declared");
+            if doc.leaf(id, path).is_none_or(|s| s.constant().is_none()) {
+                return Err("Control coordinates must be static: remove transform bindings before placing the pivot".into());
+            }
+        }
+        // Include the authored source when editing a main's expanded picture.
+        let source = id.path().last().copied().unwrap_or(id);
+        let same = |n: NodeId| n == id || n == source || n.path().last() == Some(&source);
+        if doc.nodes_of_type(ty("override")).any(|n| {
+            doc.get::<crate::facet::Override>(n).is_some_and(|o| {
+                o.target.constant().and_then(|v| v.as_ref()).is_some_and(same)
+                    && o.leaf.constant().and_then(|v| v.as_str()).is_some_and(|p| p.starts_with("transform2d."))
+            })
+        }) {
+            return Err("An instance overrides these coordinates; remove its transform overrides before changing the main's pivot".into());
+        }
+        if crate::constraint::all(doc, &|l| store.resolved(l.node, l.path))?.iter().any(|c| c.enabled && c.nodes().any(same)) {
+            return Err("Remove constraints on these coordinates before changing the pivot".into());
+        }
+        if doc.bound_slots().any(|(_, e)| e.deps().iter().any(|d| same(d.node) && d.path.facet == FacetKind::Transform2d)) {
+            return Err("A binding reads these coordinates (including attached path points); detach it before placing the pivot".into());
+        }
+        if doc.nodes_of_type(n.ty).filter(|&n| same(n)).any(|n| doc.relations_to(n).any(|r| r.rel == crate::RelKind::Animates)) {
+            return Err("Animated controls cannot change pivot: remove their clips first. No animation has been changed".into());
+        }
     }
-    let parent = doc.live(roots[0]).and_then(|n| n.parent).ok_or("wrap shapes that sit in a composition")?;
-    if roots.iter().any(|&r| doc.live(r).and_then(|n| n.parent) != Some(parent)) {
-        return Err("the selection is in different groups; wrap siblings".into());
+    Ok(())
+}
+
+/// Create a control around siblings. `pivot` is in their parent's space;
+/// None uses the selection centre. Child linear transforms stay unchanged.
+pub fn create_control(store: &crate::Store, selection: &[NodeId], pivot: Option<[f64; 2]>) -> Result<(Vec<Op>, NodeId), String> {
+    let doc = store.document();
+    let mut roots = selection.to_vec();
+    if roots.is_empty() { return Err("Select objects to create a control".into()); }
+    roots.sort();
+    roots.dedup();
+    let parent = doc.live(roots[0]).and_then(|n| n.parent).ok_or("Select objects inside a composition")?;
+    if roots.iter().any(|&n| doc.live(n).and_then(|n| n.parent) != Some(parent)) {
+        return Err("Select siblings in the same editing scope".into());
     }
-    roots.sort_by(|a, b| doc.live(*a).map(|n| n.order.clone()).cmp(&doc.live(*b).map(|n| n.order.clone())));
-    let r = roots.iter().filter_map(|&n| extent(n)).reduce(|a, b| a.union(b)).ok_or("the selection has no extent")?;
-    let c = r.center();
+    static_coordinates(store, &roots)?;
+    roots.sort_by_key(|&n| doc.live(n).expect("checked").order.clone());
+    let c = match pivot {
+        Some(c) => c,
+        None => {
+            let r = roots.iter().filter_map(|&n| store.extent(n)).reduce(|a, b| a.union(b)).ok_or("The selection has no extent")?;
+            [r.center().x, r.center().y]
+        }
+    };
+    if !c.iter().all(|n| n.is_finite()) { return Err("Pivot must be finite".into()); }
     let id = doc.next_id();
     let mut t = Transform2d::default();
-    t.x = Slot::Const(Value::Number(c.x));
-    t.y = Slot::Const(Value::Number(c.y));
-    let order = doc.live(roots[0]).expect("live").order.clone();
-    let mut ops = vec![Op::Create { id, ty: ty("empty"), parent: Some(parent), order: OrderKey::before(&order), facets: vec![t.wrap(), named("empty")] }];
+    t.x = Slot::Const(Value::Number(c[0]));
+    t.y = Slot::Const(Value::Number(c[1]));
+    let mut ops = vec![Op::Create { id, ty: ty("empty"), parent: Some(parent), order: OrderKey::before(&doc.live(roots[0]).expect("live").order), facets: vec![t.wrap(), named(&if roots.len() == 1 { format!("{} pivot", name_of(doc, roots[0]).unwrap_or_else(|| "Object".into())) } else { "Control".into() })] }];
     let mut key = OrderKey::first();
-    for &n in &roots {
+    for n in roots {
         ops.push(Op::Reparent { id: n, parent: Some(id), order: key.clone() });
         key = OrderKey::after(&key);
-        for (field, d) in [("x", c.x), ("y", c.y)] {
+        for (field, d) in [("x", c[0]), ("y", c[1])] {
             let path = LeafPath::new(FacetKind::Transform2d, field).expect("declared");
-            if let Some(v) = doc.leaf(n, path).and_then(|s| s.constant()).and_then(|v| v.as_f64()) {
-                ops.push(Op::Set { id: n, path, slot: Slot::Const(Value::Number(v - d)) });
-            }
+            let v = store.resolved(n, path).and_then(|v| v.as_f64()).ok_or("Invalid position")?;
+            ops.push(Op::Set { id: n, path, slot: Slot::Const(Value::Number(v - d)) });
         }
     }
     Ok((ops, id))
+}
+
+/// Move a control's origin in parent coordinates, compensating every direct
+/// child's translation by the inverse linear transform. One atomic undo.
+pub fn relocate_pivot(store: &crate::Store, control: NodeId, pivot: [f64; 2]) -> Result<Vec<Op>, String> {
+    let doc = store.document();
+    if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err("Select one control to place its pivot".into()); }
+    let mut nodes = vec![control];
+    nodes.extend(doc.children(control));
+    static_coordinates(store, &nodes)?;
+    if !pivot.iter().all(|v| v.is_finite()) { return Err("Pivot must be finite".into()); }
+    let inv = store.local_affine(control).inverse().ok_or("A zero-scale control has no relocatable pivot")?;
+    let d = inv.apply(pivot);
+    let mut ops = Vec::new();
+    for (id, xy) in std::iter::once((control, pivot)).chain(doc.children(control).iter().map(|&n| {
+        let p = store.local_affine(n).translation();
+        (n, [p[0] - d[0], p[1] - d[1]])
+    })) {
+        for (field, v) in [("x", xy[0]), ("y", xy[1])] {
+            ops.push(Op::Set { id, path: LeafPath::new(FacetKind::Transform2d, field).expect("declared"), slot: Slot::Const(Value::Number(v)) });
+        }
+    }
+    Ok(ops)
 }
 
 /// Connect two ports by a line (component-authoring.md §3): settings and

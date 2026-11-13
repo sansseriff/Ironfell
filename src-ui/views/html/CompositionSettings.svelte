@@ -9,6 +9,7 @@
   import { DropdownMenu } from "bits-ui";
   import Check from "@lucide/svelte/icons/check";
   import Settings2 from "@lucide/svelte/icons/settings-2";
+  import { controlState } from "../../runtime/commands.svelte";
   import { onDestroy } from "svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { settings } from "../../runtime/settings.svelte";
@@ -85,6 +86,10 @@
           <DropdownMenu.Item class="ui-menu-item" onSelect={onShowFps} data-show-fps title="Frames this view renders per second">
             <span class="ui-menu-check">{#if showFps}<Check size={14} strokeWidth={1.75} />{/if}</span>
             <span>Show FPS</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item class="ui-menu-item" onSelect={() => doc.runCommand("show-controls")} data-show-controls title="Show controls in the current editing scope">
+            <span class="ui-menu-check">{#if controlState.visible}<Check size={14} strokeWidth={1.75} />{/if}</span>
+            <span>Show controls</span>
           </DropdownMenu.Item>
           {#if settings.developer}
             <div class="ui-menu-separator"></div>

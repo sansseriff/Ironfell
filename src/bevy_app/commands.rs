@@ -40,14 +40,6 @@ pub fn plan(id: &str, s: &Situation) -> Option<Result<Plan, String>> {
     let doc = s.store.document();
     let extent = |n: NodeId| s.store.extent(n);
     Some(match id {
-        // Wrap the selection in an empty (component-authoring.md §2).
-        "wrap" => needs(iron_document::author::wrap_in_empty(doc, &extent, s.selected).map(|(ops, empty)| {
-            // Inside a main the empty lands in the definition: select its
-            // picture there.
-            let parent = doc.live(s.selected[0]).and_then(|n| n.parent);
-            let main = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(doc, m).is_some());
-            Plan { input: transaction("wrap in empty", ops), select: vec![main.and_then(|m| NodeId::expanded(m, empty)).unwrap_or(empty)] }
-        })),
         // Add auto layout (layout-and-tables.md §2.4): a group gets a layout;
         // siblings are wrapped in a laid-out group.
         "layout" if !s.two_d => Err("Auto layout is for 2D views".into()),
@@ -77,6 +69,12 @@ pub fn availability(id: &str, s: &Situation) -> Result<(), String> {
         return Err("Select something first".into());
     }
     match id {
+        "create-control" if !s.two_d => Err("Controls need a 2D canvas".into()),
+        "create-control" => iron_document::author::create_control(s.store, s.selected, None).map(|_| ()),
+        "place-pivot" => match s.selected {
+            [id] if s.two_d => iron_document::author::relocate_pivot(s.store, *id, s.store.local_affine(*id).translation()).map(|_| ()),
+            _ => Err("Select one control in a 2D view".into()),
+        },
         "undo" if !s.store.history().can_undo() => Err("Nothing to undo".into()),
         "redo" if !s.store.history().can_redo() => Err("Nothing to redo".into()),
         _ => Ok(()),

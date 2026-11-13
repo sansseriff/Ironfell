@@ -971,6 +971,9 @@ enum AfterPress {
     /// (added to them unless `clear`); a click clears them, or leaves
     /// editing and applies `leave` to the selection.
     PathMarquee { leave: Option<Click>, clear: bool },
+    /// Cmd on a point of the path being edited: a drag pulls out its
+    /// handles, a click makes it a corner.
+    PathCorner { point: NodeId, at: Point, to_local: Affine },
 }
 
 /// What a press that did not become a drag does on release.
@@ -2670,25 +2673,29 @@ pub fn select_tool_system(
                 let to_screen = view.affine() * space * geo.world(path);
                 let points = geo.points(path);
                 let shift = mods(MOD_SHIFT);
-                let mut handle: Option<(NodeId, Point, bool)> = None;
+                let mut handle: Option<(NodeId, Point, bool, kurbo::Vec2, kurbo::Vec2)> = None;
                 for (pid, out) in geo.shown_handles(path, &edit.points) {
                     let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) else { continue };
                     if handle.is_none() && (to_screen * (p + if out { ho } else { hi })).distance(screen) <= POINT_HIT * k {
-                        handle = Some((pid, p, out));
+                        handle = Some(if out { (pid, p, out, ho, hi) } else { (pid, p, out, hi, ho) });
                     }
                 }
-                if let Some((point, at, out)) = handle {
+                // The other handle mirrors as it did before the press; Alt
+                // breaks them apart, and they stay broken after.
+                if let Some((point, at, out, mine, other)) = handle {
                     store.0.begin_gesture(&[point]);
-                    tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
+                    let mirror = manipulate::Mirror::of(mine, other);
+                    tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at, other, mirror });
                     break 'press;
                 }
                 let on_point = points.iter().find(|q| (to_screen * q.1).distance(screen) <= POINT_HIT * k).map(|q| (q.0, q.1));
                 match on_point {
-                    // Cmd on a point pulls out its handles.
+                    // Cmd (or Ctrl) on a point: a drag pulls out fresh
+                    // mirrored handles, a click takes its handles away,
+                    // making it a corner (Figma's).
                     Some((point, at)) if mods(MOD_META) => {
                         edit.only(EditPart::Point(point));
-                        store.0.begin_gesture(&[point]);
-                        tool.gesture = Gesture::Edit(Manip::PathHandle { point, out: true, to_local: to_screen.inverse(), at });
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::PathCorner { point, at, to_local: to_screen.inverse() } };
                         break 'press;
                     }
                     Some((point, _)) => {
@@ -3264,6 +3271,11 @@ pub fn select_tool_system(
                         }
                     }
                 }
+                AfterPress::PathCorner { point, at, to_local } => {
+                    let point = *point;
+                    store.0.begin_gesture(&[point]);
+                    tool.gesture = Gesture::Edit(Manip::PathHandle { point, out: true, to_local: *to_local, at: *at, other: kurbo::Vec2::ZERO, mirror: manipulate::Mirror::Full });
+                }
                 AfterPress::PathMarquee { clear, .. } => {
                     let base = if *clear { Vec::new() } else { edit.points.clone() };
                     if *clear {
@@ -3516,6 +3528,12 @@ pub fn select_tool_system(
                 }
             }
             Gesture::Press { then: AfterPress::PathParts { click }, .. } => edit.click(click),
+            Gesture::Press { then: AfterPress::PathCorner { point, .. }, .. } => {
+                let ops = corner_ops(&store.0, point);
+                if !ops.is_empty() {
+                    pending.0.push(TransactionInput { label: "make corner".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
+                }
+            }
             Gesture::Press { then: AfterPress::PathMarquee { leave, clear }, .. } => {
                 if clear {
                     edit.clear();
@@ -3535,7 +3553,7 @@ pub fn select_tool_system(
             Gesture::Press { then, .. } => {
                 let click = match then {
                     AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } | AfterPress::JointMove { click, .. } | AfterPress::Library { click, .. } => click,
-                    AfterPress::Activate { .. } | AfterPress::Fire { .. } | AfterPress::PathParts { .. } | AfterPress::PathMarquee { .. } => Click::Keep,
+                    AfterPress::Activate { .. } | AfterPress::Fire { .. } | AfterPress::PathParts { .. } | AfterPress::PathMarquee { .. } | AfterPress::PathCorner { .. } => Click::Keep,
                 };
                 match click {
                     Click::Keep => {}
@@ -3652,8 +3670,10 @@ pub fn select_tool_system(
                 on_grip = true;
             }
             // The path being edited: no hover light on it; the plain arrow
-            // over its points and shown handles, or with Cmd over a point (a
-            // drag pulls out its handles) the adjust cursor.
+            // over its points and shown handles, with Cmd over a point (a
+            // drag pulls out its handles, a click makes it a corner) the
+            // adjust cursor, with Alt over a handle (a drag breaks it from
+            // its pair) the break cursor.
             if !space
                 && *active == ActiveTool::Select
                 && let Some(r) = edit.path_in(&view.panel)
@@ -3665,7 +3685,14 @@ pub fn select_tool_system(
                 let near = |q: Point| (to_screen * q).distance(screen) <= POINT_HIT * k;
                 let points = geo.points(path);
                 on_grip = top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&path));
-                if points.iter().any(|&(_, p, ..)| near(p)) {
+                let on_handle = geo.shown_handles(path, &edit.points).into_iter().any(|(pid, out)| {
+                    points.iter().find(|q| q.0 == pid).is_some_and(|&(_, p, hi, ho)| near(p + if out { ho } else { hi }))
+                });
+                if on_handle {
+                    // Alt over a handle: a drag breaks it from its pair.
+                    cursor = if mods(MOD_ALT) { "break" } else { "default" }.into();
+                    on_grip = true;
+                } else if points.iter().any(|&(_, p, ..)| near(p)) {
                     cursor = if mods(MOD_META) { "point" } else { "default" }.into();
                     on_grip = true;
                 } else if mods(MOD_META) && geo.segment_at(path, to_screen, screen, POINT_HIT * k).is_some() {
@@ -3842,6 +3869,22 @@ pub(crate) fn begin_points_drag(store: &mut Store, spatial: &crate::document_bri
         .filter_map(|(id, at)| {
             let h = store.begin_drag(id, [at.x, at.y]);
             (!h.is_locked()).then_some((h, inv))
+        })
+        .collect()
+}
+
+/// A path point made a corner: its handles set to zero, or nothing when
+/// they are already.
+pub(crate) fn corner_ops(store: &Store, point: NodeId) -> Vec<Op> {
+    if store.document().live(point).is_none() {
+        return Vec::new();
+    }
+    ["handles.ix", "handles.iy", "handles.ox", "handles.oy"]
+        .into_iter()
+        .filter_map(|leaf| {
+            let path: LeafPath = leaf.parse().expect("declared leaf");
+            let now = store.resolved(point, path).and_then(|v| v.as_f64()).unwrap_or(0.0);
+            (now != 0.0).then(|| Op::Set { id: point, path, slot: iron_document::Slot::Const(Value::Number(0.0)) })
         })
         .collect()
 }
@@ -5030,5 +5073,35 @@ mod tests {
         let ops = delete_points_ops(store.document(), &points);
         assert_eq!(ops.len(), 2);
         assert!(matches!(ops[..], [Op::Delete { id: a }, Op::Delete { id: b }] if a == points[0] && b == points[1]));
+    }
+
+    #[test]
+    fn mirroring_follows_the_handles_at_the_press() {
+        use manipulate::Mirror;
+        let v = kurbo::Vec2::new;
+        assert_eq!(Mirror::of(v(0.0, 0.0), v(0.0, 0.0)), Mirror::Full, "a corner's handles pull out mirrored");
+        assert_eq!(Mirror::of(v(10.0, 5.0), v(-10.0, -5.0)), Mirror::Full);
+        assert_eq!(Mirror::of(v(10.0, 5.0), v(-20.0, -10.0)), Mirror::Angle);
+        assert_eq!(Mirror::of(v(10.0, 5.0), v(-10.0, 5.0)), Mirror::Free, "broken stays broken");
+        assert_eq!(Mirror::of(v(10.0, 5.0), v(0.0, 0.0)), Mirror::Free);
+        let (to, other) = (v(0.0, 30.0), v(-20.0, 0.0));
+        assert_eq!(Mirror::Full.follow(to, other, false), v(0.0, -30.0));
+        assert_eq!(Mirror::Angle.follow(to, other, false), v(0.0, -20.0));
+        assert_eq!(Mirror::Free.follow(to, other, false), other);
+        assert_eq!(Mirror::Full.follow(to, other, true), other, "Alt breaks them for the drag");
+    }
+
+    #[test]
+    fn a_corner_click_zeroes_the_handles_once() {
+        let (mut store, _, points) = square();
+        let p = points[1];
+        let set = |leaf: &str, v: f64| Op::Set { id: p, path: leaf.parse().unwrap(), slot: Slot::Const(Value::Number(v)) };
+        store.apply(TransactionInput { label: "curve".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![set("handles.ix", -4.0), set("handles.ox", 4.0), set("handles.oy", 2.0)], exact: false }).unwrap();
+        let ops = corner_ops(&store, p);
+        assert_eq!(ops.len(), 3, "only the handles' nonzero leaves");
+        store.apply(TransactionInput { label: "make corner".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
+        let h = |leaf: &str| store.resolved(p, leaf.parse().unwrap()).and_then(|v| v.as_f64());
+        assert!(["handles.ix", "handles.iy", "handles.ox", "handles.oy"].iter().all(|l| h(l).unwrap_or(0.0) == 0.0));
+        assert!(corner_ops(&store, p).is_empty(), "already a corner: nothing to do");
     }
 }

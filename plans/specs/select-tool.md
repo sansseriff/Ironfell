@@ -183,9 +183,15 @@ path and edited.
   points. A drag on the path's fill or on empty space (or an artboard's background)
   draws a marquee over the points, added to the selection with Shift; a click there
   clears the points, and on empty space leaves editing.
-- A handle drags its leaves ("move handle"), mirrored unless Alt.
-- Cmd-dragging a point pulls out fresh mirrored handles from it instead of moving it
-  (Figma's bend on a point; "move handle"); Cmd over a point shows the adjust cursor.
+- A handle drags its leaves ("move handle"). The other handle follows as the pair
+  stood at the press (`manipulate::Mirror`, Figma's mirroring, read from the handles
+  rather than stored): equal and opposite mirror angle and length, opposite but
+  unequal mirror the angle only, anything else stays put. Alt breaks them for the
+  drag, and the pair then stays broken; Alt over a shown handle shows the `break`
+  cursor.
+- Cmd (or Ctrl) over a point shows the adjust cursor. A click makes the point a
+  corner, its handles set to zero ("make corner"); a drag pulls out fresh mirrored
+  handles from it instead of moving it (Figma's bend on a point; "move handle").
 - Cmd-dragging a segment bends it ("bend segment"): both its inner handles move by
   one offset so the curve at the grabbed spot follows the pointer (the weight
   3t(1-t) clamped near the ends). The neighbours' other handles stay, so a smooth

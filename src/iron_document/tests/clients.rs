@@ -90,6 +90,9 @@ fn two_clients_create_at_once_and_the_server_keeps_both() {
         assert_eq!(s.document().children(root).len(), 2);
     }
 
+    assert_eq!(server.document().clients(), vec![0, 1, 2]);
+    assert!(server.document().counted(ia) && !server.document().counted(a.document().next_id()));
+
     // Each keeps counting in its own range past what it saw of the other's.
     assert_eq!(a.document().next_id().client(), Some(1));
     assert_ne!(a.document().next_id(), ia);

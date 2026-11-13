@@ -180,10 +180,25 @@ impl Document {
         (0..n as u64).map(|i| self.next_relation_id().offset(i)).collect()
     }
 
-    /// Whether an authored `id`'s client has already counted past it, so
-    /// it was handed out before and cannot be created fresh.
-    pub(crate) fn counted(&self, id: NodeId) -> bool {
+    /// Whether an authored `id`'s client has already counted past it: it
+    /// was handed out before (live, tombstoned, or created and undone), so
+    /// creating it restores a node rather than minting one. A sync server
+    /// checks only uncounted ids against the client that sent them.
+    pub fn counted(&self, id: NodeId) -> bool {
         id.minted().is_some_and(|(client, n)| n < counter(&self.next_ids, client))
+    }
+
+    /// [`Document::counted`], for a relation id.
+    pub fn counted_relation(&self, id: RelationId) -> bool {
+        id.minted().is_some_and(|(client, n)| n < counter(&self.next_rels, client))
+    }
+
+    /// Every client that has minted an id in this document, ascending.
+    pub fn clients(&self) -> Vec<u32> {
+        let mut all: Vec<u32> = self.next_ids.keys().chain(self.next_rels.keys()).copied().collect();
+        all.sort_unstable();
+        all.dedup();
+        all
     }
 
     /// The client this document mints new ids as.

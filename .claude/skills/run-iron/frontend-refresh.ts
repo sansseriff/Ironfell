@@ -51,12 +51,15 @@ try {
   await page.getByRole('tab', { name: 'Performance', exact: true }).click();
   await page.getByRole('button', { name: '2D renderer', exact: true }).waitFor();
   await page.getByLabel('Run in a worker', { exact: true }).waitFor();
+  await page.screenshot({ path: resolve(out, 'settings-performance.png') });
   await page.getByRole('tab', { name: 'Workspace', exact: true }).click();
   await page.getByRole('button', { name: 'Reset layout', exact: true }).waitFor();
+  await page.screenshot({ path: resolve(out, 'settings-workspace.png') });
   await page.getByRole('tab', { name: 'Developer', exact: true }).click();
   await page.getByLabel('Developer mode', { exact: true }).click();
   assert(await page.getByLabel('Developer mode', { exact: true }).getAttribute('data-state') === 'checked', 'developer toggle works');
   await page.getByLabel('Developer mode', { exact: true }).click();
+  await page.screenshot({ path: resolve(out, 'settings-developer.png') });
   await page.keyboard.press('Shift+K');
   await page.keyboard.press('Backspace');
   assert(await page.evaluate(() => (window as any).__iron.save()) === documentBefore, 'modal keys must not edit the document');

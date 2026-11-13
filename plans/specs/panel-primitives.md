@@ -159,3 +159,12 @@ pass; timeline rendering verification is recorded in `timeline.md`.
 The modal follow-up passes the refreshed DPR 1/2 fixture, fast smoke and frontend
 checking (zero errors, 11 existing warnings) after rebasing onto the 2D transform
 controls work. The WebGL2 build and all 15 timeline Rust tests pass on that base.
+
+Settings visual polish: the dialog is 800×480 CSS px at full size, with a softly
+tinted sidebar, a raised selected section and consistent 16px header/sidebar
+insets. Section titles, setting labels and descriptions use a clear 20/14/13px
+hierarchy in the shared UI font. Settings use label/description rows without
+horizontal rules, aligned 32px controls, larger switches and concise help copy.
+Build details use a structured definition list. Light/dark and narrow-window
+screenshots pass at DPR 1/2; modal focus, section navigation and document/shortcut
+isolation remain covered.

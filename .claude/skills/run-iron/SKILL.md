@@ -3561,3 +3561,8 @@ checks pass at DPR 1 and 2 after the refresh.
 Modal follow-up: `frontend-refresh.ts` also verifies that Backspace and Shift+K
 leave the selected document and auto-keyframe mode unchanged while settings is
 open. Both DPRs pass, with zero frontend errors and 11 existing warnings.
+
+Settings polish: the focused fixture additionally captures Performance, Workspace
+and Developer sections as `settings-{performance,workspace,developer}.png` under
+each DPR directory, alongside light/dark Appearance and narrow-window captures.
+The expected output and fast-smoke assertions are unchanged.

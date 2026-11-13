@@ -104,7 +104,7 @@
   <div class="previewing canvas-ui" class:scrub={!!pin.scrub} role="status">
     <span class="dot"></span>
     {#if pin.scrub}
-      <span>Previewing <strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%<span class="of"> · nothing records</span></span>
+      <span>Previewing <strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%<span class="of"> · to change the parts, edit {pin.scrub.from} or {pin.scrub.to}</span></span>
     {:else}
       <span>Editing <strong>{pin.state}</strong>{#if pin.name}<span class="of"> · {pin.name}</span>{/if}<span class="of"> · edits go into this state</span></span>
     {/if}

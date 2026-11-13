@@ -954,6 +954,22 @@ impl Store {
     /// previewed as is; a linearly bound leaf previews its source so the
     /// binding re-evaluates to `value`. `Err` with the reason when locked.
     pub fn preview_target(&mut self, id: NodeId, path: LeafPath, value: Value) -> Result<(), String> {
+        // A view that moves its subject rigidly: both leaves by the same
+        // amount, each held in range, so a slice pushed against the end of
+        // its transition shortens there rather than stopping (`handle::rigid`).
+        if let (Some((with, (lo, hi))), Handle::Linear { source, a, b }) = (handle::rigid(&self.doc, id), self.handle(id, path))
+            && let Some(y) = value.as_f64()
+        {
+            let authored = |l: Leaf| self.doc.leaf(l.node, l.path).and_then(|s| s.constant()).and_then(Value::as_f64);
+            if let Some(s0) = authored(source) {
+                let d = (y - b) / a - s0;
+                let moved: Vec<(Leaf, f64)> = std::iter::once(source).chain(with.into_iter().filter(|l| *l != source)).filter_map(|l| Some((l, authored(l)?))).collect();
+                for (l, v) in moved {
+                    self.preview(l.node, l.path, Value::Number((v + d).clamp(lo, hi)));
+                }
+                return Ok(());
+            }
+        }
         let (target, v) = handle::resolve_target(&self.doc, &self.reactive, Leaf { node: id, path }, value)?;
         self.preview(target.node, target.path, v);
         Ok(())
@@ -1884,6 +1900,20 @@ impl Store {
         self.machines.pinned.as_ref()
     }
 
+    /// The parts open inside a transition in the state editor (machines.md
+    /// §6): their properties have rows of their own.
+    pub fn inside_open(&self) -> &std::collections::BTreeSet<NodeId> {
+        &self.machines.open
+    }
+
+    pub fn set_inside_open(&mut self, part: NodeId, open: bool) {
+        if open {
+            self.machines.open.insert(part);
+        } else {
+            self.machines.open.remove(&part);
+        }
+    }
+
     /// What the machines were running at the last advance: each instance
     /// mid-transition, which transition, how far, between which states.
     pub fn running_machines(&self) -> &[machine::Running] {
@@ -2599,7 +2629,7 @@ impl Store {
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
         if let Some(pin) = self.machines.pinned.clone() {
-            input.ops = machine::record(&self.doc, &pin, std::mem::take(&mut input.ops));
+            input.ops = machine::record(&self.doc, &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
         }
         let mut work = self.doc.clone();
         let stamp = work.version().next();

@@ -47,6 +47,8 @@ pub enum Curve {
     Bezier([f64; 4]),
     /// 0 until the end, then 1.
     Hold,
+    /// A spring settling on 1: past it and back, smaller each time.
+    Spring,
 }
 
 /// The named curves, with what each is.
@@ -58,6 +60,8 @@ pub const CURVES: &[(&str, &str)] = &[
     ("ease", "CSS's ease, cubic-bezier(0.25, 0.1, 0.25, 1)"),
     ("easy_ease", "After Effects' Easy Ease, cubic-bezier(0.33, 0, 0.67, 1)"),
     ("hold", "jumps at the end"),
+    ("overshoot", "goes a little past the end and settles back, cubic-bezier(0.34, 1.56, 0.64, 1)"),
+    ("spring", "springs past the end and back, settling"),
 ];
 
 /// A curve by name, or `cubic-bezier(x1, y1, x2, y2)` with x1, x2 in 0..1.
@@ -71,6 +75,8 @@ pub fn curve(name: &str) -> Result<Curve, String> {
         "ease" => Curve::Bezier([0.25, 0.1, 0.25, 1.0]),
         "easy_ease" => Curve::Bezier([0.33, 0.0, 0.67, 1.0]),
         "hold" => Curve::Hold,
+        "overshoot" => Curve::Bezier([0.34, 1.56, 0.64, 1.0]),
+        "spring" => Curve::Spring,
         _ => {
             let inner = name.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')).ok_or_else(|| {
                 format!("unknown easing {name:?}; use one of {} or cubic-bezier(x1, y1, x2, y2)", CURVES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", "))
@@ -102,6 +108,10 @@ impl Curve {
             }
             Curve::Hold => {
                 if u >= 1.0 { 1.0 } else { 0.0 }
+            }
+            // A damped oscillation, held to 1 at the end.
+            Curve::Spring => {
+                if u >= 1.0 { 1.0 } else { 1.0 - (-6.0 * u).exp() * (2.5 * std::f64::consts::TAU * u).cos() }
             }
             Curve::Bezier([x1, y1, x2, y2]) => {
                 // x(s) = u for s by Newton's method, bisection when it

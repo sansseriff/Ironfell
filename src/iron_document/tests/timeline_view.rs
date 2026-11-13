@@ -437,3 +437,116 @@ fn scrolling_moves_the_rows_under_a_ruler_that_stays() {
     assert_eq!(y(&store, &summary), row, "back to the top, and no further");
     assert_eq!(store.history().past().len(), past, "scrolling is not an edit");
 }
+
+/// The node a generated piece is, by its name (its key).
+fn piece(store: &Store, comp: NodeId, key: &str) -> Option<NodeId> {
+    let doc = store.document();
+    let mut stack = doc.children(comp).to_vec();
+    while let Some(k) = stack.pop() {
+        if doc.get::<Name>(k).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(key) {
+            return Some(k);
+        }
+        stack.extend(doc.children(k).iter().copied());
+    }
+    None
+}
+
+/// Inside a transition (machines.md §6): previewing one in the state
+/// editor turns the timeline into that transition's, with the same
+/// grammar. A row per part and per property; a slice is a bar between two
+/// diamonds; the bar moves the slice whole, a diamond trims its end; the
+/// playhead is the preview. A pair on the default timing shows its bars,
+/// but they do not move until it has timing of its own.
+#[test]
+fn inside_a_transition_the_timeline_shows_and_moves_its_slices() {
+    use iron_document::facet::{Appearance, Template};
+    let mut store = Store::new();
+    let ids = store.document().next_ids(4);
+    let [library, def, template, dot] = ids[..] else { unreachable!() };
+    let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    let mut t = Template::default();
+    t.notation = Slot::Const(Value::Str("free".into()));
+    let mut nm = Name::default();
+    nm.text = Slot::Const(Value::Str("dot".into()));
+    store
+        .apply(tx(
+            "card",
+            vec![
+                Op::Create { id: library, ty: ty("library"), parent: None, order: k(0), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(library), order: k(0), facets: vec![{ let mut n = Name::default(); n.text = Slot::Const(Value::Str("card".into())); n.wrap() }] },
+                Op::Create { id: template, ty: ty("template"), parent: Some(def), order: k(0), facets: vec![t.wrap()] },
+                Op::Create { id: dot, ty: ty("rect"), parent: Some(template), order: k(0), facets: vec![Transform2d::default().wrap(), Size::default().wrap(), Appearance::default().wrap(), nm.wrap()] },
+            ],
+        ))
+        .unwrap();
+    let (ops, _) = machine::add_named_state_ops(store.document(), def, Some("off"), Some("on")).unwrap();
+    store.apply(tx("add", ops)).unwrap();
+    let m = machine::machines(store.document(), def)[0].0;
+    store.pin_state(Some(machine::Pinned::state(def, m, "on")));
+    store.apply(tx("pose", vec![Op::Set { id: dot, path: path("transform2d.x"), slot: num(100.0) }, Op::Set { id: dot, path: path("appearance.opacity"), slot: num(0.5) }])).unwrap();
+    // Previewing off → on, on the default timing (300 ms).
+    store.pin_state(Some(machine::Pinned { def, machine: m, state: "off".into(), scrub: Some(("off".into(), "on".into(), 0.0)) }));
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let plan = last.as_ref().unwrap().1.clone();
+    let inside = plan.inside.clone().expect("inside the transition");
+    assert!(!inside.own);
+    assert_eq!(inside.secs, 0.3);
+    // A part shows one row until it is opened.
+    let labels = |plan: &timeline_view::Plan| timeline_view::rows(plan).iter().map(|r| (r.kind, r.label.clone())).collect::<Vec<_>>();
+    assert_eq!(labels(&plan), vec![("object", "dot".to_owned())]);
+    store.set_inside_open(dot, true);
+    build(&mut store, &mut last);
+    assert_eq!(labels(&last.as_ref().unwrap().1), vec![("object", "dot".to_owned()), ("property", "X".to_owned()), ("property", "Opacity".to_owned())]);
+    assert!(!timeline_view::pieces(&store, comp).keys().any(|k| k.starts_with("slice ")), "the default's bars do not move");
+    assert!(piece(&store, comp, &format!("follow {dot} dot_x")).is_some());
+    // Its own timing: a slice for every channel, every bar movable.
+    let (ops, own) = {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        machine::edit_pair_ops(store.document(), &read, def, m, "off", "on", &machine::PairEdit { ms: Some(1000.0), ..Default::default() }).unwrap()
+    };
+    store.apply(tx("own", ops)).unwrap();
+    build(&mut store, &mut last);
+    let tween = store.document().children(own).iter().copied().find(|&w| store.document().get::<facet::Tween>(w).and_then(|t| t.channel.constant()).and_then(|v| v.as_str()) == Some("dot_x")).unwrap();
+    let bar = piece(&store, comp, &format!("slice {tween}")).expect("a bar for x");
+    let end = piece(&store, comp, &format!("end {tween}")).expect("its end diamond");
+    let leaf = |store: &Store, f: &str| store.resolved(tween, path(&format!("tween.{f}"))).and_then(|v| v.as_f64()).unwrap();
+    // The axis at 100 px per second from 0, after a 160 px column and the
+    // editor's navigator: 0.2 s further right is 20 px.
+    let x0 = x_of(&store, bar);
+    store.begin_gesture(&[bar]);
+    store.preview_target(bar, path("transform2d.x"), Value::Number(x0 + 20.0)).unwrap();
+    assert!(store.commit_gesture("move slice", Actor::Human, 0).unwrap().is_ok());
+    assert!((leaf(&store, "start") - 0.2).abs() < 1e-9 && (leaf(&store, "end") - 1.0).abs() < 1e-9, "pushed against the end, the slice shortens there");
+    // Trim the end to 0.6 s, then move the whole slice back 0.1 s.
+    let xe = x_of(&store, end);
+    store.begin_gesture(&[end]);
+    store.preview_target(end, path("transform2d.x"), Value::Number(xe - 40.0)).unwrap();
+    store.commit_gesture("trim", Actor::Human, 0).unwrap().unwrap();
+    assert!((leaf(&store, "end") - 0.6).abs() < 1e-9);
+    let x0 = x_of(&store, bar);
+    store.begin_gesture(&[bar]);
+    store.preview_target(bar, path("transform2d.x"), Value::Number(x0 - 10.0)).unwrap();
+    store.commit_gesture("move slice", Actor::Human, 0).unwrap().unwrap();
+    assert!((leaf(&store, "start") - 0.1).abs() < 1e-9 && (leaf(&store, "end") - 0.5).abs() < 1e-9, "moved whole: {} {}", leaf(&store, "start"), leaf(&store, "end"));
+    // The part's bar moves all of its slices: x's (0.1–0.5) and opacity's
+    // (0–1, pushed against the end) by 0.2 s.
+    let part = piece(&store, comp, &format!("part {dot}")).expect("the part's bar");
+    let px = x_of(&store, part);
+    store.begin_gesture(&[part]);
+    store.preview_target(part, path("transform2d.x"), Value::Number(px + 20.0)).unwrap();
+    store.commit_gesture("move part", Actor::Human, 0).unwrap().unwrap();
+    assert!((leaf(&store, "start") - 0.3).abs() < 1e-9 && (leaf(&store, "end") - 0.7).abs() < 1e-9, "the part moved x's slice: {} {}", leaf(&store, "start"), leaf(&store, "end"));
+    let other = store.document().children(own).iter().copied().find(|&w| w != tween && store.document().live(w).is_some_and(|n| n.ty.name() == "tween")).unwrap();
+    assert!((store.resolved(other, path("tween.start")).and_then(|v| v.as_f64()).unwrap() - 0.2).abs() < 1e-9, "and opacity's, pushed against the end");
+    assert_eq!(store.resolved(other, path("tween.end")), Some(Value::Number(1.0)));
+    // The playhead is the preview: half way in, the main shows half way.
+    store.apply_session(vec![Op::Set { id: comp, path: path("axis.cursor"), slot: num(0.5) }]).unwrap();
+    build(&mut store, &mut last);
+    assert_eq!(store.pinned_state().and_then(|p| p.scrub.clone()).map(|s| s.2), Some(0.5));
+    // Leaving the transition gives the document's timeline back.
+    store.pin_state(None);
+    build(&mut store, &mut last);
+    assert!(last.as_ref().unwrap().1.inside.is_none());
+    assert!(piece(&store, comp, &format!("slice {tween}")).is_none());
+}

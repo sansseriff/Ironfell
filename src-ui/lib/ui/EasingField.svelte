@@ -9,6 +9,8 @@
     { value: "ease", label: "Ease (CSS)", f: bezier(0.25, 0.1, 0.25, 1) },
     { value: "easy_ease", label: "Easy Ease", f: bezier(0.33, 0, 0.67, 1) },
     { value: "hold", label: "Hold", f: (t) => (t >= 1 ? 1 : 0) },
+    { value: "overshoot", label: "Overshoot", f: bezier(0.34, 1.56, 0.64, 1) },
+    { value: "spring", label: "Spring", f: (t) => (t >= 1 ? 1 : 1 - Math.exp(-6 * t) * Math.cos(2.5 * 2 * Math.PI * t)) },
   ];
   /** CSS cubic-bezier as y(t), solved for x by bisection. */
   export function bezier(x1: number, y1: number, x2: number, y2: number) {

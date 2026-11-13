@@ -57,6 +57,69 @@ pub struct Plan {
     pub errors: BTreeSet<NodeId>,
     /// Drawn in the light theme's colours (the shell's appearance).
     pub light: bool,
+    /// Inside one transition of a component (machines.md §6, the state
+    /// editor), or `None` for the document's clock.
+    pub inside: Option<Inside>,
+}
+
+/// A transition seen from inside (machines.md §6): the same timeline at a
+/// second level. Its rows are the component's parts and their properties,
+/// its bars the properties' slices of the transition, its ruler the
+/// transition's own time, and its playhead how far into it the main shows
+/// (`axis.cursor`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Inside {
+    pub def: NodeId,
+    pub machine: NodeId,
+    pub from: String,
+    pub to: String,
+    /// The transition the pair uses, and whether it is the pair's own (a
+    /// pair on the default timing shows it, but its bars do not move).
+    pub transition: Option<NodeId>,
+    pub own: bool,
+    /// Its length, seconds.
+    pub secs: f64,
+    /// The parts shown open (a row per property); the rest show one row.
+    pub open: BTreeSet<NodeId>,
+    /// The slices selected (their bars stand out; the others recede).
+    pub picked: BTreeSet<NodeId>,
+    /// Per part, the slice that starts first: its bar's start is the part
+    /// bar's, so dragging the part bar moves all of the part's slices.
+    pub earliest: BTreeMap<NodeId, NodeId>,
+    /// Each slice's easing as it plays (its own, or the transition's), for
+    /// the curve drawn in its bar.
+    pub curves: BTreeMap<NodeId, String>,
+}
+
+/// Inside a transition the editor's header and navigator sit over the
+/// view's top and left: the pieces start below and right of them, document
+/// px (the DOM reads these from `timeline_rows`).
+pub const INSIDE_TOP: f64 = 32.0;
+pub const INSIDE_INSET: f64 = 220.0;
+/// Inside, the ruler is a strip: its transport is in the editor's header.
+pub const INSIDE_RULER_H: f64 = 26.0;
+
+impl Plan {
+    /// Where the ruler starts, from the composition's top.
+    pub fn top(&self) -> f64 {
+        if self.inside.is_some() { INSIDE_TOP } else { 0.0 }
+    }
+    /// Where the label column starts, from the composition's left.
+    pub fn inset(&self) -> f64 {
+        if self.inside.is_some() { INSIDE_INSET } else { 0.0 }
+    }
+    pub fn ruler_h(&self) -> f64 {
+        if self.inside.is_some() { INSIDE_RULER_H } else { RULER_H }
+    }
+}
+
+/// A row inside a transition: one channel of the component, and its slice
+/// (the tween that gives it its own timing, or none: it follows the
+/// transition's curve over all of it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SliceRow {
+    pub channel: String,
+    pub tween: Option<NodeId>,
 }
 
 /// One animated node: a row naming it, then a row per property.
@@ -76,6 +139,11 @@ pub struct Prop {
     /// index among the machine's states.
     pub lane: bool,
     pub rest: Option<(String, usize)>,
+    /// What the row says, when not the leaf's own name (inside a
+    /// transition: the property, `X`, `Opacity`).
+    pub label: Option<String>,
+    /// Inside a transition: the channel and its slice.
+    pub slice: Option<SliceRow>,
 }
 
 /// A clip on one of its targets, shifted by the relation's stagger offset,
@@ -137,6 +205,12 @@ fn tick_for(pps: f64) -> f64 {
 /// What the timeline would show now. `comp` is the composition, whose axis
 /// decides the tick spacing.
 pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
+    // A transition previewed in the state editor: the timeline is inside it.
+    if let Some(pin) = store.pinned_state()
+        && let Some((from, to, _)) = &pin.scrub
+    {
+        return inside_plan(store, clock, comp, pin, from, to);
+    }
     let doc = store.document();
     let mut objects: Vec<Object> = Vec::new();
     let mut end: f64 = 0.0;
@@ -158,6 +232,10 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
             };
             let o = &mut objects[i];
             let bands = state_bands(store, r.to, &prop, &keys);
+            for (k, len, _) in &bands {
+                let t = keys.iter().find(|x| x.id == *k).map_or(0.0, |x| x.t);
+                end = end.max(start + offset + t + len);
+            }
             let names = machine_states(store, r.to, &prop);
             let states = match &names {
                 Some(n) => keys.iter().filter_map(|k| k.value.as_str().map(|v| (k.id, v.to_owned(), n.iter().position(|x| x == v).unwrap_or(0)))).collect(),
@@ -172,7 +250,7 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
             let segment = Segment { clip, offset, label: label.clone(), keys: keys.iter().map(|k| k.id).collect(), bands, states, before };
             match o.props.iter_mut().find(|p| p.prop == prop) {
                 Some(p) => p.segments.push(segment),
-                None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment], lane: names.is_some(), rest: None }),
+                None => o.props.push(Prop { prop: prop.clone(), segments: vec![segment], lane: names.is_some(), rest: None, label: None, slice: None }),
             }
         }
     }
@@ -196,7 +274,7 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
                     objects.len() - 1
                 }
             };
-            objects[i].props.push(Prop { prop, segments: Vec::new(), lane: true, rest: Some((state, index)) });
+            objects[i].props.push(Prop { prop, segments: Vec::new(), lane: true, rest: Some((state, index)), label: None, slice: None });
         }
     }
     let pps = comp.and_then(|c| number(store, c, FacetKind::Axis, "pps")).unwrap_or(100.0);
@@ -207,7 +285,107 @@ pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
     // leave the structure alone.
     let seen = t0 + 2400.0 / pps.max(1.0);
     let end = ((end.max(seen) / 5.0).ceil() * 5.0 + 5.0).max(10.0);
-    Plan { clock, objects, end, tick: tick_for(pps), errors, light: false }
+    Plan { clock, objects, end, tick: tick_for(pps), errors, light: false, inside: None }
+}
+
+/// A property's name in a row: `X`, `Opacity`, `Fill`.
+pub fn property_label(path: LeafPath) -> String {
+    let known = match (path.facet.name(), path.field) {
+        ("transform2d", "x") => "X",
+        ("transform2d", "y") => "Y",
+        ("transform2d", "rot") => "Rotation",
+        ("transform2d", "sx") => "Scale X",
+        ("transform2d", "sy") => "Scale Y",
+        ("size", "w") => "Width",
+        ("size", "h") => "Height",
+        ("ellipse", "rx") => "Radius X",
+        ("ellipse", "ry") => "Radius Y",
+        ("appearance", "opacity") => "Opacity",
+        ("fill", "color") => "Fill",
+        ("stroke", "color") => "Stroke",
+        ("stroke", "width") => "Stroke width",
+        ("text", "content") => "Text",
+        ("font", "size") => "Font size",
+        ("trim", "start") => "Trim start",
+        ("trim", "end") => "Trim end",
+        _ => "",
+    };
+    if known.is_empty() { format!("{} {}", path.facet.name(), path.field.replace('_', " ")) } else { known.to_owned() }
+}
+
+/// What the timeline shows inside the transition a pinned state previews
+/// (machines.md §6): a row per part of the component that reads a channel,
+/// a row per such property under it, each with its slice.
+fn inside_plan(store: &Store, clock: NodeId, comp: Option<NodeId>, pin: &crate::machine::Pinned, from: &str, to: &str) -> Plan {
+    use crate::machine;
+    let doc = store.document();
+    let read = |l: Leaf| store.resolved(l.node, l.path);
+    let p = machine::plan(doc, &read, pin.def, pin.machine, from, to);
+    let own = machine::own_transition(doc, &read, pin.def, pin.machine, from, to).is_some();
+    let secs = p.as_ref().map_or(0.0, |p| p.ms / 1000.0);
+    let tweens: BTreeMap<String, NodeId> = p
+        .as_ref()
+        .map(|p| doc.children(p.transition).iter().copied().filter(|&w| doc.live(w).is_some_and(|n| n.ty.name() == "tween")).filter_map(|w| Some((doc.get::<crate::facet::Tween>(w)?.channel.constant()?.as_str()?.to_owned(), w))).collect())
+        .unwrap_or_default();
+    // The parts as the main shows them, so a row names what the canvas
+    // selects and hovers.
+    let main = doc.nodes_of_type(ty("use")).find(|&u| !u.is_expanded() && doc.is_live(u) && crate::expand::main_definition(doc, u) == Some(pin.def));
+    let readers = machine::readers(doc, pin.def);
+    let mut objects: Vec<Object> = Vec::new();
+    for (c, name, _) in machine::channels(doc, pin.def) {
+        let (part, label) = match readers.get(&c).and_then(|v| v.first()) {
+            Some(&(part, path)) => (main.and_then(|m| NodeId::expanded(m, part)).unwrap_or(part), property_label(path)),
+            None => (pin.def, name.clone()),
+        };
+        let i = match objects.iter().position(|o| o.target == part) {
+            Some(i) => i,
+            None => {
+                let label = if part == pin.def { "Not drawn".to_owned() } else { readers.get(&c).and_then(|v| v.first()).map_or_else(|| label_of(store, part), |&(p, _)| label_of(store, p)) };
+                objects.push(Object { target: part, label, props: Vec::new() });
+                objects.len() - 1
+            }
+        };
+        objects[i].props.push(Prop { prop: name.clone(), segments: Vec::new(), lane: false, rest: None, label: Some(label), slice: Some(SliceRow { channel: name.clone(), tween: tweens.get(&name).copied() }) });
+    }
+    let pps = comp.and_then(|c| number(store, c, FacetKind::Axis, "pps")).unwrap_or(100.0);
+    let leaf_num = |w: NodeId, f: &str| store.resolved(w, LeafPath::new(FacetKind::Tween, f).expect("tween field")).and_then(|v| v.as_f64());
+    let mut earliest = BTreeMap::new();
+    for o in &objects {
+        let ws: Vec<NodeId> = o.props.iter().filter_map(|p| p.slice.as_ref()?.tween).collect();
+        if ws.len() == o.props.len()
+            && let Some(&w) = ws.iter().min_by(|a, b| leaf_num(**a, "start").unwrap_or(0.0).total_cmp(&leaf_num(**b, "start").unwrap_or(0.0)))
+        {
+            earliest.insert(o.target, w);
+        }
+    }
+    let whole = p.as_ref().and_then(|p| store.resolved(p.transition, LeafPath::new(FacetKind::Transition, "ease").expect("field"))).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_else(|| "easy_ease".into());
+    let curves = tweens.values().map(|&w| (w, store.resolved(w, LeafPath::new(FacetKind::Tween, "ease").expect("field")).and_then(|v| v.as_str().map(str::to_owned)).filter(|e| !e.trim().is_empty()).unwrap_or_else(|| whole.clone()))).collect();
+    let picked = store.selection().into_iter().flat_map(|(n, _)| projected_tweens(doc, n)).filter(|w| tweens.values().any(|x| x == w)).collect();
+    let inside = Inside { def: pin.def, machine: pin.machine, from: from.to_owned(), to: to.to_owned(), transition: p.as_ref().map(|p| p.transition), own, secs, open: store.inside_open().clone(), picked, earliest, curves };
+    Plan { clock, objects, end: secs, tick: tick_for(pps), errors: BTreeSet::new(), light: false, inside: Some(inside) }
+}
+
+/// Where the document's animation ends, seconds: each clip's last key, or
+/// a keyed state's transition after it, whichever is later (a state keyed
+/// late runs on past its key, machines.md §4.2).
+pub fn clips_end(store: &Store) -> f64 {
+    let doc = store.document();
+    let mut end: f64 = 0.0;
+    for clip in doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session() && !c.is_expanded()) {
+        let prop = doc.get::<crate::facet::Clip>(clip).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let start = crate::time::start(doc, clip);
+        let keys = crate::time::keys(doc, clip);
+        for r in doc.relations_from(clip).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)) {
+            let offset = r.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            end = end.max(start + offset + crate::time::length(&keys));
+            for (k, len, _) in state_bands(store, r.to, &prop, &keys) {
+                let t = keys.iter().find(|x| x.id == k).map_or(0.0, |x| x.t);
+                let span = doc.get::<crate::facet::Key>(k).and_then(|f| f.span.constant()).and_then(|v| v.as_f64()).filter(|s| s.is_finite() && *s > 0.0).unwrap_or(len);
+                end = end.max(start + offset + t + span);
+            }
+        }
+    }
+    end
 }
 
 /// The states of the machine an instance's `prop` (`args.<port>`) is the
@@ -262,17 +440,55 @@ pub struct Row {
 /// The rows, top to bottom, in document px from the composition's top.
 pub fn rows(plan: &Plan) -> Vec<Row> {
     let mut out = Vec::new();
-    let mut y = RULER_H + 4.0;
+    let mut y = plan.top() + plan.ruler_h() + 4.0;
     for o in &plan.objects {
         let error = o.props.iter().flat_map(|p| &p.segments).any(|s| plan.errors.contains(&s.clip));
         out.push(Row { kind: "object", label: o.label.clone(), y, target: o.target, prop: None, clip: None, error, lane: false });
         y += ROW_H;
+        // Inside a transition a part shows its properties when open.
+        if plan.inside.as_ref().is_some_and(|i| !i.open.contains(&o.target)) {
+            continue;
+        }
         for p in &o.props {
-            let short = p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned();
+            let short = p.label.clone().unwrap_or_else(|| p.prop.rsplit('.').next().unwrap_or(&p.prop).to_owned());
             let error = p.segments.iter().any(|s| plan.errors.contains(&s.clip));
             out.push(Row { kind: "property", label: short, y, target: o.target, prop: Some(p.prop.clone()), clip: p.segments.first().map(|s| s.clip), error, lane: p.lane });
             y += ROW_H;
         }
+    }
+    out
+}
+
+/// The tweens a piece inside a transition stands for: a slice's bar or
+/// diamond its own, a part's bar all of the part's (the leaves it moves).
+pub fn projected_tweens(doc: &crate::document::Document, piece: NodeId) -> Vec<NodeId> {
+    let is_tween = |n: NodeId| doc.live(n).is_some_and(|x| x.ty.name() == "tween");
+    let mut out: Vec<NodeId> = Vec::new();
+    for r in doc.relations_from(piece).filter(|r| r.rel == RelKind::Projects) {
+        if is_tween(r.to) && !out.contains(&r.to) {
+            out.push(r.to);
+        }
+        if let Some(with) = r.data.get("with").and_then(|v| v.as_str()) {
+            for w in with.split_whitespace().filter_map(|l| l.split_once('.')).filter_map(|(id, _)| id.parse::<NodeId>().ok()) {
+                if is_tween(w) && !out.contains(&w) {
+                    out.push(w);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The generated pieces by their key (`slice <part> <channel>`, …).
+pub fn pieces(store: &Store, comp: NodeId) -> BTreeMap<String, NodeId> {
+    let doc = store.document();
+    let mut out = BTreeMap::new();
+    let mut stack = doc.children(comp).to_vec();
+    while let Some(k) = stack.pop() {
+        if let Some(key) = name_of(store, k) {
+            out.insert(key, k);
+        }
+        stack.extend(doc.children(k).iter().copied());
     }
     out
 }
@@ -293,6 +509,9 @@ struct Want {
     facets: Vec<Facet>,
     /// A `projects` relation to what it stands for.
     projects: Option<NodeId>,
+    /// The relation's `with`: a second leaf of the subject a drag moves
+    /// by as much (`handle::rigid`; a slice's bar).
+    with: Option<String>,
     /// The role group it is in (a key), or the composition.
     parent: Option<String>,
 }
@@ -435,6 +654,9 @@ const KEY_PX: f64 = 10.0;
 /// Every node the plan draws: the role groups, bottom to top, each with its
 /// pieces in drawing order.
 fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
+    if let Some(inside) = &plan.inside {
+        return inside_wants(plan, comp, inside);
+    }
     let ax = |f: &str| format!("{comp}.axis.{f}");
     let (lw, t0, pps, y0) = (ax("label_w"), ax("t0"), ax("pps"), ax("y0"));
     // A row's y, `v` px from the top, scrolled by the axis's `y0`: the rows
@@ -451,7 +673,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>| {
         let mut facets = facets;
         facets.push(named(&key));
-        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, parent: Some(group.to_owned()) });
+        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, with: None, parent: Some(group.to_owned()) });
     };
     let width = at(&lit(plan.end));
 
@@ -529,7 +751,13 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 }
                 for (i, (k, name, index)) in s.states.iter().enumerate() {
                     let to = s.states.get(i + 1).map_or_else(|| lit(plan.end), |(n, ..)| key_x(s, *n));
-                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, name, *index, false, Some(*k));
+                    // A key that changes the state says through which
+                    // transition, and how long it takes (its band).
+                    let said = match s.bands.iter().find(|(b, ..)| b == k) {
+                        Some((_, len, t)) => format!("→ {name} · {t} {}s", (len * 100.0).round() / 100.0),
+                        None => name.clone(),
+                    };
+                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, &said, *index, false, Some(*k));
                 }
             }
             for s in &p.segments {
@@ -614,7 +842,198 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             track.max = Slot::Const(Value::Number(0.0));
             facets.push(track.wrap());
         }
-        out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, parent: None });
+        out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, with: None, parent: None });
+        out.extend(by.remove(group).unwrap_or_default());
+    }
+    out
+}
+
+/// The nodes inside a transition (machines.md §6): the same grammar as the
+/// document's timeline, in the transition's time. A slice is a bar between
+/// two diamonds: the bar moves the slice (its start and end together), a
+/// diamond trims that end. A pair on the default timing shows its curve
+/// but does not move until it has timing of its own.
+fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
+    let ax = |f: &str| format!("{comp}.axis.{f}");
+    let (lw, t0, pps, y0, cursor) = (ax("label_w"), ax("t0"), ax("pps"), ax("y0"), ax("cursor"));
+    let (top, inset, rh) = (plan.top(), plan.inset(), plan.ruler_h());
+    let left = format!("{} + {lw}", lit(inset));
+    let at = |e: &str| format!("{left} + ({e} - {t0}) * {pps}");
+    let ry = |v: f64| format!("{} - {y0}", lit(v));
+    // The transition's length, live: retiming it rescales the bars.
+    let secs = match inside.transition {
+        Some(t) => format!("({t}.transition.ms / 1000)"),
+        None => lit(inside.secs),
+    };
+    let h = lit(FAR);
+    let pal = if plan.light { &LIGHT } else { &DARK };
+    let mut by: BTreeMap<&'static str, Vec<Want>> = BTreeMap::new();
+    let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>, with: Option<String>| {
+        let mut facets = facets;
+        facets.push(named(&key));
+        by.entry(group).or_default().push(Want { key, ty: ty(ty_name), facets, projects, with, parent: Some(group.to_owned()) });
+    };
+    push("backdrop", "background".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &h), paint(pal.bg)], None, None);
+    let ticks = (plan.end / plan.tick).floor() as usize;
+    for k in 0..=ticks {
+        let x = at(&lit(k as f64 * plan.tick));
+        push("backdrop", format!("grid {k}"), "rect", vec![place(&x, &lit(top + rh)), sized("1", &lit(FAR)), paint(pal.grid)], None, None);
+    }
+    // The end of the transition: past it there is no time.
+    push("backdrop", "after".into(), "rect", vec![place(&at(&secs), &lit(top)), sized(&lit(FAR), &h), paint(pal.header)], None, None);
+
+    push("ruler", "ruler bar".into(), "rect", vec![place(&left, &lit(top)), sized(&format!("max(({}) - ({left}), 0)", at(&secs)), &lit(rh)), paint(pal.ruler)], None, None);
+    const MINOR: usize = 5;
+    let digits = if plan.tick >= 1.0 { 0 } else if plan.tick >= 0.1 { 1 } else { 2 };
+    for k in 0..=ticks * MINOR {
+        let t = k as f64 * plan.tick / MINOR as f64;
+        if t > plan.end + 1e-9 {
+            break;
+        }
+        let x = at(&lit(t));
+        let major = k % MINOR == 0;
+        let len = if major { 10.0 } else { 5.0 };
+        push("ruler", format!("tick {k}"), "rect", vec![place(&x, &lit(top + rh - len)), sized("1", &lit(len)), paint(if major { pal.tick } else { pal.dim })], None, None);
+        if major {
+            let mut f = vec![place(&format!("{x} + 4"), &lit(top + 3.0))];
+            f.extend(words(&format!("{t:.digits$}s"), 11.0, 500.0));
+            f.push(paint(pal.label));
+            push("ruler", format!("tick label {}", k / MINOR), "text", f, None, None);
+        }
+    }
+    let head = at(&cursor);
+    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 5"), &lit(top + rh - 12.0)), sized("10", "12"), rounded(3.0), paint(PLAYHEAD)], None, None);
+
+    let rows = rows(plan);
+    let mut ri = rows.iter();
+    let side = KEY_PX / std::f64::consts::SQRT_2;
+    for o in &plan.objects {
+        let row = ri.next().expect("an object row");
+        let (los, his): (Vec<String>, Vec<String>) = o.props.iter().filter_map(|p| p.slice.as_ref()).map(|s| match s.tween {
+            Some(w) => (format!("{w}.tween.start"), format!("{w}.tween.end")),
+            None => ("0".into(), "1".into()),
+        }).unzip();
+        let open = inside.open.contains(&o.target);
+        match inside.earliest.get(&o.target).filter(|_| inside.own) {
+            // The part's bar: from its first slice's start to its last's
+            // end. A drag moves all of the part's slices together (its x
+            // reads the first one's start; the rest move with it).
+            Some(&first) => {
+                let ws: Vec<NodeId> = o.props.iter().filter_map(|p| p.slice.as_ref()?.tween).collect();
+                let with = ws.iter().flat_map(|w| [format!("{w}.tween.start"), format!("{w}.tween.end")]).collect::<Vec<_>>().join(" ");
+                let all_picked = ws.iter().all(|w| inside.picked.contains(w));
+                let mut c = pal.segment;
+                c[3] = if open { 0.3 } else if inside.picked.is_empty() || all_picked { 0.85 } else { 0.35 };
+                let mut facets = vec![place(&at(&format!("{first}.tween.start * {secs}")), &ry(row.y + 4.0)), sized(&format!("max(({hi}) - {first}.tween.start, 0) * {secs} * {pps}", hi = fold("max", &his)), &lit(ROW_H - 8.0)), rounded(4.0), paint(c)];
+                if all_picked && !inside.picked.is_empty() {
+                    let mut st = Stroke::default();
+                    st.color = Slot::Const(Value::Color(pal.key));
+                    st.width = Slot::Const(Value::Number(1.5));
+                    facets.push(st.wrap());
+                }
+                push("tracks", format!("part {}", o.target), "rect", facets, Some(first), Some(with));
+            }
+            None if !los.is_empty() => {
+                let (lo, hi) = (fold("min", &los), fold("max", &his));
+                push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&format!("({lo}) * {secs}")), &ry(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {secs} * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(pal.summary)], None, None);
+            }
+            None => {}
+        }
+        if !open {
+            continue;
+        }
+        for p in &o.props {
+            let row = ri.next().expect("a property row");
+            let Some(slice) = &p.slice else { continue };
+            let key = format!("{} {}", o.target, slice.channel);
+            match slice.tween.filter(|_| inside.own) {
+                Some(w) => {
+                    // The bar moves the slice: its x reads the start, and the
+                    // drag carries the end with it (`with`).
+                    // Keyed by the slice itself: a kept piece keeps what it
+                    // projects, so another transition's bars are new ones.
+                    // Selected slices stand out, outlined; while some are,
+                    // the rest recede.
+                    let picked = inside.picked.contains(&w);
+                    let mut c = pal.segment;
+                    if !inside.picked.is_empty() && !picked {
+                        c[3] = 0.4;
+                    }
+                    let width = format!("max({w}.tween.end - {w}.tween.start, 0) * {secs} * {pps}");
+                    let mut facets = vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), sized(&width, &lit(SEG_H)), rounded(4.0), paint(c)];
+                    if picked {
+                        let mut st = Stroke::default();
+                        st.color = Slot::Const(Value::Color(pal.key));
+                        st.width = Slot::Const(Value::Number(1.5));
+                        facets.push(st.wrap());
+                    }
+                    push("tracks", format!("slice {w}"), "rect", facets, Some(w), Some("tween.end".to_owned()));
+                    // Its easing, drawn in the bar (over everything, inert).
+                    if let Some(curve) = inside.curves.get(&w).and_then(|e| crate::time::curve(e).ok()) {
+                        const N: usize = 16;
+                        let (top_y, h) = (2.5, SEG_H - 5.0);
+                        let mut d = format!("'M 0,{} ", lit(top_y + h));
+                        for i in 1..=N {
+                            let u = i as f64 / N as f64;
+                            let y = top_y + h * (1.0 - curve.at(u));
+                            d.push_str(&format!("L ' + str(({width}) * {u}) + ',{y:.2} "));
+                        }
+                        d.push('\'');
+                        let mut shape = crate::facet::PathShape::default();
+                        shape.d = Slot::Bound(Expr::parse(&d).expect("a curve's path"));
+                        let mut st = Stroke::default();
+                        st.color = Slot::Const(Value::Color([1.0, 1.0, 1.0, if c[3] < 1.0 { 0.4 } else { 0.85 }]));
+                        st.width = Slot::Const(Value::Number(1.25));
+                        push("overlay", format!("curve {w}"), "path", vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), shape.wrap(), st.wrap()], None, None);
+                    }
+                    for (end, field, cursor) in [("start", "start", "trim-start"), ("end", "end", "trim-end")] {
+                        let mut t = Transform2d::default();
+                        t.x = bound(&at(&format!("{w}.tween.{field} * {secs}")));
+                        t.y = bound(&ry(row.y + (ROW_H - KEY_PX * std::f64::consts::SQRT_2) / 2.0));
+                        t.rot = bound(&lit(std::f64::consts::FRAC_PI_4));
+                        let mut st = Stroke::default();
+                        st.color = Slot::Const(Value::Color(pal.key_edge));
+                        st.width = Slot::Const(Value::Number(1.0));
+                        let mut a = crate::facet::Affords::default();
+                        a.style = Slot::Const(Value::Str(format!("cursor: {cursor}")));
+                        push("keys", format!("{end} {w}"), "rect", vec![t.wrap(), sized(&lit(side * std::f64::consts::SQRT_2), &lit(side * std::f64::consts::SQRT_2)), paint(pal.key), st.wrap(), a.wrap()], Some(w), None);
+                    }
+                }
+                None => {
+                    // Following the transition's curve over all of it (or a
+                    // pair on the default timing): drawn, not a target.
+                    let (a, b) = match slice.tween {
+                        Some(w) => (format!("{w}.tween.start"), format!("{w}.tween.end")),
+                        None => ("0".into(), "1".into()),
+                    };
+                    let mut c = pal.segment;
+                    c[3] = 0.28;
+                    push("backdrop", format!("follow {key}"), "rect", vec![place(&at(&format!("({a}) * {secs}")), &ry(row.y + 3.0)), sized(&format!("max(({b}) - ({a}), 0) * {secs} * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], None, None);
+                }
+            }
+        }
+    }
+    // The column and the editor's header are DOM over these.
+    push("headers", "header".into(), "rect", vec![place("0", "0"), sized(&left, &h), paint(pal.header)], None, None);
+    push("headers", "top".into(), "rect", vec![place("0", "0"), sized(&lit(FAR), &lit(top)), paint(pal.header)], None, None);
+    push("overlay", "playhead".into(), "rect", vec![place(&format!("{head} - 1"), &lit(top)), sized("2", &h), paint(PLAYHEAD)], None, None);
+
+    let mut out = Vec::new();
+    for (group, context) in GROUPS {
+        let mut c = ContextOf::default();
+        c.name = Slot::Const(Value::Str(context.into()));
+        let mut facets = vec![named(group), c.wrap()];
+        if group == "ruler" {
+            // How far into the transition, along the ruler.
+            let mut track = Track::default();
+            track.value = bound(&cursor);
+            track.origin = bound(&format!("{t0} - ({left}) / {pps}"));
+            track.scale = bound(&format!("1 / {pps}"));
+            track.min = Slot::Const(Value::Number(0.0));
+            track.max = Slot::Const(Value::Number(inside.secs.max(1e-3)));
+            facets.push(track.wrap());
+        }
+        out.push(Want { key: group.into(), ty: ty("group"), facets, projects: None, with: None, parent: None });
         out.extend(by.remove(group).unwrap_or_default());
     }
     out
@@ -707,7 +1126,8 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
                 ops.push(Op::Create { id, ty: w.ty, parent: Some(parent), order: order.clone(), facets: w.facets });
                 if let Some(to) = w.projects {
                     let rel = rel_ids.next().expect("a relation id per link");
-                    ops.push(Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Projects, data: BTreeMap::new() } });
+                    let data = w.with.clone().map(|p| BTreeMap::from([("with".to_owned(), Value::Str(p))])).unwrap_or_default();
+                    ops.push(Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Projects, data } });
                 }
             }
         }
@@ -729,6 +1149,24 @@ pub fn sync_themed(store: &mut Store, last: &mut Option<(NodeId, Plan)>, light: 
     let comp = find(store);
     let mut plan = plan(store, clock, comp);
     plan.light = light;
+    // Inside a transition the playhead is the preview: the main shows the
+    // moment it is at. Entering one puts the playhead where the preview is.
+    if let (Some(c), Some(inside)) = (comp, &plan.inside)
+        && let Some(pin) = store.pinned_state().cloned()
+        && let Some((from, to, progress)) = pin.scrub.clone()
+    {
+        let entering = last.as_ref().and_then(|(_, lp)| lp.inside.as_ref()).is_none_or(|was| (was.def, was.machine, &was.from, &was.to) != (inside.def, inside.machine, &inside.from, &inside.to));
+        let secs = inside.secs.max(1e-6);
+        let cursor_path = LeafPath::new(FacetKind::Axis, "cursor").expect("axis field");
+        if entering {
+            store.apply_session(vec![Op::Set { id: c, path: cursor_path, slot: Slot::Const(Value::Number(progress * secs)) }]).map_err(|e| e.message)?;
+        } else {
+            let p = (number(store, c, FacetKind::Axis, "cursor").unwrap_or(0.0) / secs).clamp(0.0, 1.0);
+            if (p - progress).abs() > 1e-9 {
+                store.pin_state(Some(crate::machine::Pinned { scrub: Some((from, to, p)), ..pin }));
+            }
+        }
+    }
     if let (Some(c), Some((lc, lp))) = (comp, last.as_ref())
         && *lc == c
         && *lp == plan
@@ -767,7 +1205,8 @@ fn axis_ops(store: &Store, t0: f64, pps: f64) -> Result<(NodeId, Vec<Op>), Strin
 pub fn navigate(store: &mut Store, dx: f64, zoom: f64, at: f64) -> Result<(), String> {
     let Some(comp) = find(store) else { return Ok(()) };
     let read = |f: &str, d: f64| number(store, comp, FacetKind::Axis, f).unwrap_or(d);
-    let (t0, pps, lw) = (read("t0", 0.0), read("pps", 100.0), read("label_w", 160.0));
+    let inset = store.clock().map(|c| plan(store, c, Some(comp)).inset()).unwrap_or(0.0);
+    let (t0, pps, lw) = (read("t0", 0.0), read("pps", 100.0), read("label_w", 160.0) + inset);
     let under = t0 + (at - lw) / pps;
     let next = (pps * (-zoom).exp()).clamp(PPS.0, PPS.1);
     let t0 = under - (at - lw) / next + dx / next;
@@ -781,7 +1220,10 @@ pub fn navigate(store: &mut Store, dx: f64, zoom: f64, at: f64) -> Result<(), St
 pub fn scroll(store: &mut Store, dy: f64) -> Result<(), String> {
     let Some(comp) = find(store) else { return Ok(()) };
     let y0 = number(store, comp, FacetKind::Axis, "y0").unwrap_or(0.0);
-    let last = store.clock().map(|c| rows(&plan(store, c, Some(comp))).last().map_or(0.0, |r| r.y - RULER_H - 4.0)).unwrap_or(0.0);
+    let last = store.clock().map(|c| {
+        let p = plan(store, c, Some(comp));
+        rows(&p).last().map_or(0.0, |r| r.y - p.top() - p.ruler_h() - 4.0)
+    }).unwrap_or(0.0);
     let next = (y0 + dy).clamp(0.0, last.max(0.0));
     if next == y0 {
         return Ok(());
@@ -795,8 +1237,15 @@ pub fn scroll(store: &mut Store, dy: f64) -> Result<(), String> {
 pub fn fit(store: &mut Store, width: f64) -> Result<(), String> {
     let Some(comp) = find(store) else { return Ok(()) };
     let lw = number(store, comp, FacetKind::Axis, "label_w").unwrap_or(160.0);
-    let doc = store.document();
-    let end = doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session()).map(|c| crate::time::start(doc, c) + crate::time::length(&crate::time::keys(doc, c))).fold(0.0, f64::max);
+    // Inside a transition: all of it, from its start.
+    if let Some(p) = store.clock().map(|c| plan(store, c, Some(comp))).filter(|p| p.inside.is_some()) {
+        // Short of the edge by the view's settings button, so the last
+        // diamonds stay clear of it.
+        let pps = (width - lw - p.inset() - 56.0).max(40.0) / p.end.max(0.05);
+        let (_, ops) = axis_ops(store, 0.0, pps)?;
+        return store.apply_session(ops).map_err(|e| e.message);
+    }
+    let end = clips_end(store);
     let pps = (width - lw - 24.0).max(40.0) / end.max(1.0);
     let (_, ops) = axis_ops(store, 0.0, pps)?;
     store.apply_session(ops).map_err(|e| e.message)

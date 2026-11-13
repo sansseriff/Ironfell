@@ -573,3 +573,78 @@ legs given their own timing and slices):
   tween markup prints `shape="NaN"` with no shape; + Add state drops the selection;
   graph edge labels overlap; an edit equal to the value already shown records
   nothing.
+
+### The state editor, redesigned with a council (2026-11-13)
+
+A council review (Claude Opus 5.5, GPT-6.1 Sol) of the walkthrough above graded the
+authoring flows 5.5–6/10. This round answers its findings.
+
+- **One timeline at two levels.** The transition's tracks are no longer DOM: while
+  the editor previews a transition (the pin carries a scrub), the engine's
+  generated timeline composition is that transition's (`timeline_view::inside_plan`,
+  `inside_wants`). Its rows are the component's parts and, under each, the
+  properties that read a channel (`machine::readers`, `property_label`). Its ruler
+  is the transition's own time, and its playhead is `axis.cursor`, which drives the
+  preview each frame (`sync_themed`). A property's slice is a bar between two key
+  diamonds:
+  - the bar projects its tween with `with: tween.end`, so a drag moves start and end
+    together (`handle::rigid`, `Store::preview_target`); pushed against an end, it
+    shortens there;
+  - a diamond trims its end, held between 0 and the other end (`handle::bounds`).
+
+  Marquee, multi-select and dragging several bars are the canvas's own. A pair on
+  the default timing draws its bars but does not move them. The editor's header,
+  navigator and a state's look are DOM around it.
+- **Values other than numbers.** `channel.value` is `Any`: a state holds numbers,
+  colours (blended through a transition) and a text's words (switched half way
+  through their slice, so the slice places the switch) (`machine::mix`,
+  `recordable`). A part's leaf bound straight to a channel edits it whatever its
+  kind (`Handle::Alias`), and a channel the player publishes while a state is
+  pinned is still editable (`handle`: MACHINES-driven leaves are free).
+- **Timing is copy on write.** `edit_pair` gives a pair its own transition when it
+  used the default, with a slice for every channel, and applies the edit in the
+  same transaction. A slice with no easing of its own follows the transition's
+  (`tween.ease` empty). `copy_timing` copies another transition's timing, mirrored
+  for a reverse leg (`machine::copied_timing`, `mirror_ease`). `copy_pose` and
+  `reset_value` are the look table's menu and ↺.
+- **Previewing refuses part edits** (`record` errs): a moment between two states
+  belongs to neither.
+- **Named on the way in.** `add_state` takes `first` and `name`. The first Add state
+  opens the editor's form ("Its look now", "A new state").
+- **The editor** (`StateEditor.svelte`):
+  - a navigator tree: each state, its outgoing transitions under it (named, length,
+    or *default*), and a Default timing row; or the same as a graph;
+  - for a transition, a header with the transport, length, easing and a timing menu;
+  - a state's look as a table by part and property;
+  - selected slices in the Inspector (`SliceSection.svelte`): start, end, easing,
+    and Stagger;
+  - the document timeline's view is restored on Done.
+
+  The instance Inspector shows one State control. Document-timeline state lanes name
+  the transition into each keyed state ("→ water · melting 1.6s").
+- **Round 3** (after the council's second grades, Opus 7, GPT Sol 7.8):
+  - parts are folded by default: one row and one bar per part, and dragging the bar
+    moves all its slices (`timeline_view`, part bars); selected bars are emphasised
+    and each bar sketches its easing curve;
+  - easings `overshoot` and `spring` (`time.rs`);
+  - the navigator unfolds only the focused state's transitions and pins Default
+    timing; the graph is a large overlay with every edge labelled;
+  - the header names its mode ("State look", "Transition animation"), and Back names
+    where it returns;
+  - the look table has a Drawing column, folding parts, a "selected parts only"
+    filter, and explicit inherited cells (–); an Inspector field that a state
+    cannot hold is marked "all states" while a state is edited;
+  - the Slice section follows the transition's easing on request, and Stagger keeps
+    lengths (offering to lengthen the transition) or fits them in it;
+  - the timeline panel grows while the editor is open and is restored on Done, as
+    is the selection;
+  - the instance Inspector shows the State control with "ice → water · 56%" and
+    where the state is keyed; the document's length includes transition tails.
+
+  Not done: onion skin of another state, and keys in the middle of a slice.
+- Tests:
+  - `tests/machine_authoring.rs`
+    `states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit`;
+  - `tests/timeline_view.rs`
+    `inside_a_transition_the_timeline_shows_and_moves_its_slices`;
+  - the walkthrough's driver script, by screenshot (`screenshots/tri4/`).

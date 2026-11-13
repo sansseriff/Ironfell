@@ -7,6 +7,7 @@
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { machines, rootOf } from "../../lib/machines.svelte";
+  import SliceSection from "./SliceSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
   import { commandFailure } from "../../runtime/commands.svelte";
@@ -166,7 +167,11 @@
   // layout already places it (its position is locked by it).
   const placedByLayout = $derived(fields("transform2d").some(f => f.edit === "locked" && (f.why ?? "").includes("layout")));
   const addKinds = $derived(["arc", "group_clip", "layout", "rules", ...(placedByLayout ? ["layout_item"] : [])]);
-  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "trim", "constraints", "shadow", "text", "font", "args"].includes(c.kind)));
+  // A component's instance or main says what it is in its own section
+  // (Main component, the component's): the `instance` facet's definition id
+  // and the `use`'s notation are plumbing there, not properties to set.
+  const plumbing = $derived.by(() => { const i = inspected as Inspected | null; return i?.component || i?.main ? ["instance", "use"] : []; });
+  const otherComponents = $derived(components.filter(c => !["transform2d", "size", "radius", "appearance", "corners", "fill", "gradient", "stroke", "trim", "constraints", "shadow", "text", "font", "args", ...plumbing].includes(c.kind)));
   // A text node's box is its words' unless it is fixed (or wraps): only
   // then are W and H its own (plans/specs/text.md §2).
   const textSizing = $derived(fields("text").length ? (field("text", "sizing", "auto_width", "enum").text ?? "auto_width") : null);
@@ -253,14 +258,35 @@
     stateKey = null;
     if (node) void doc.command<{ ok: boolean; state: string | null; from: string | null }>({ op: "state_key", key: node }).then((r) => { if (r.ok && r.state && inspected?.node === node) stateKey = { state: r.state, from: r.from }; });
   });
-  // The first state: the machine, its new state recorded into, the editor open.
+  // The playhead, for the state control's note (choosing a state keys it
+  // there when the state is animated): polled while an instance is shown.
+  let clockT = $state(0);
+  const clockLabel = $derived(`${clockT.toFixed(2)} s`);
+  $effect(() => {
+    if (!inspected?.component) return;
+    const tick = () => void doc.command<{ ok: boolean; t: number }>({ op: "clock_read" }).then((r) => { if (r.ok) clockT = r.t; }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 300);
+    return () => clearInterval(id);
+  });
+  // Slices selected inside a transition (the state editor's tracks): the
+  // Inspector shows what a slice is, not the bar that draws it.
+  let sliceSel = $state<{ tween: string; channel: string }[]>([]);
+  $effect(() => {
+    const nodes = doc.selection;
+    if (!machines.pinned?.scrub || !nodes.length) {
+      sliceSel = [];
+      return;
+    }
+    void doc.command<{ ok: boolean; slices?: { tween: string; channel: string }[] }>({ op: "author", verb: "selected_slices", args: JSON.stringify({ nodes }) }).then((r) => {
+      sliceSel = r.ok && r.slices && r.slices.length ? r.slices : [];
+    });
+  });
+  // The first states: the editor opens on its naming form (the component's
+  // look now, and the new state), which makes them.
   async function addFirstState() {
     const def = inspected?.main?.def;
-    if (!def) return;
-    const r = await doc.command<{ ok: boolean; error?: string; state?: string }>({ op: "author", verb: "add_state", args: JSON.stringify({ def }) });
-    if (!r.ok) { setError = r.error ?? "Could not add a state"; return; }
-    await machines.open(def, { kind: "state", state: r.state ?? null });
-    await refresh();
+    if (def) await machines.open(def);
   }
   async function author(verb: string, args: Record<string, unknown>) {
     setError = "";
@@ -295,7 +321,9 @@
 
   <!-- The object: its name, its kind (the id in the tooltip), and what to
        do with the selection, one row of icon buttons. -->
-  {#if inspected}
+  {#if sliceSel.length}
+    <SliceSection slices={sliceSel} />
+  {:else if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
     <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={() => command("make-component")} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
@@ -325,10 +353,12 @@
     </div>
   {/if}
 
-  {#if inspected}
+  {#if sliceSel.length}
+    <!-- Slices: the section above. -->
+  {:else if inspected}
     <div class="sections">
       {#if machines.pinned && !machines.pinned.scrub && machines.view?.main_of && rootOf(inspected.node) === machines.view.main_of}
-        <div class="recording" role="status"><span class="dot"></span><span>Number edits go into <strong>{machines.pinned.state}</strong>; other edits (colour, text) change every state.</span></div>
+        <div class="recording" role="status"><span class="dot"></span><span>Edits go into <strong>{machines.pinned.state}</strong>: positions, sizes, colours, opacity and text. Other changes (a font, a new part) change every state.</span></div>
       {/if}
       {#if stateKey}
         <div class="state-key">
@@ -402,15 +432,22 @@
         {:else if section === "component" && (inspected.component)}
           <Section title={inspected.component.def ?? "Component"} aria-label="Component" class="property-section" headerClass="component" data-section="component" meta="{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? '' : ' · detached'}">
             {#snippet actions()}{#if inspected?.component?.linked}<IconButton icon={Unlink} label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach} />{/if}{/snippet}
-            {#if machines.view?.entity === inspected.component.entity && machines.view.machines.length}
-              <div class="states-door"><span class="door-label">States</span><span class="door-names">{machines.view.machines[0].states.map((s) => s.name).join(" · ")}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
-            {/if}
+            {@const hasStates = machines.view?.entity === inspected.component.entity && !!machines.view?.machines.length}
             {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
               <div class="inline-row"><Button small variant="outline" onclick={pasteData} title="Paste columns copied from a spreadsheet or CSV: the first into the first series input (xs), the next into ys, … A header like “λ (nm)” sets the unit and the axis label. Replaces their formulas."><ClipboardPaste size={14} strokeWidth={1.75} />Paste data</Button><span class="hint">columns from a spreadsheet or CSV</span></div>
             {/if}
             <!-- Inputs by their author's groups (types-and-units.md §6), in order. -->
             {#each inputGroups(inspected.component.inputs) as g (g.name)}
-              {#if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
+              {#if g.name === "States" && hasStates}
+                <!-- One heading for the states: the control sets this
+                     instance's (and plays the transition); the editor changes
+                     every instance's. -->
+                {@const run = machines.view?.machines[0]?.current}
+                {@const stateField = g.inputs.find((f) => f.group === "States")}
+                {@const keyed = !!stateField?.key && stateField.key !== "none"}
+                <div class="input-group states-head"><span class="hint">{keyed ? `Animated: choosing a state keys it at ${clockLabel}.` : "Choosing a state plays its transition."}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
+                {#if run?.transition && run.from && run.to}<div class="hint running" role="status">{run.from} → {run.to} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
+              {:else if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
               <div class="property-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
             {/each}
             <!-- What this picture reads from where it is placed (reactivity.md §6). -->
@@ -618,7 +655,7 @@
   {:else}
     <EmptyState icon={MousePointer2} title="Make a selection">Select an object to see its properties.</EmptyState>
   {/if}
-  {#if inspected}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
+  {#if inspected && !sliceSel.length}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
 </section>
 
 <style>
@@ -642,6 +679,8 @@
   .context-reads { display: flex; flex-direction: column; gap: 4px; }
   .context-read { display: flex; align-items: baseline; gap: 8px; min-height: 22px; }
   .context-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .states-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .running { color: var(--accent); font-variant-numeric: tabular-nums; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
   .door-label { color: var(--fg-muted); font-size: var(--text-sm); }
   .door-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

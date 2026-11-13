@@ -60,12 +60,65 @@ fn read_num(read: Read, node: NodeId, path: &str) -> Option<f64> {
     read(leaf(node, path)).and_then(|v| v.as_f64())
 }
 
+/// A channel's rest value: a number, a colour, or words (machines.md
+/// "Values other than numbers").
+fn rest_of(doc: &Document, c: NodeId) -> Value {
+    doc.get::<Channel>(c).and_then(|x| x.value.constant().cloned()).unwrap_or(Value::Number(0.0))
+}
+
 /// A definition's channels: (node, name, rest value).
-pub fn channels(doc: &Document, def: NodeId) -> Vec<(NodeId, String, f64)> {
-    children(doc, def, "channel")
-        .into_iter()
-        .filter_map(|c| Some((c, name_of(doc, c)?, doc.get::<Channel>(c).and_then(|x| number(&x.value)).unwrap_or(0.0))))
-        .collect()
+pub fn channels(doc: &Document, def: NodeId) -> Vec<(NodeId, String, Value)> {
+    children(doc, def, "channel").into_iter().filter_map(|c| Some((c, name_of(doc, c)?, rest_of(doc, c)))).collect()
+}
+
+/// Which parts read each channel (machines.md §6: the editor's rows are
+/// the parts, not the channels): per channel, each template part and leaf
+/// bound to its `channel.value`.
+pub fn readers(doc: &Document, def: NodeId) -> BTreeMap<NodeId, Vec<(NodeId, LeafPath)>> {
+    let chans = children(doc, def, "channel");
+    let mut out: BTreeMap<NodeId, Vec<(NodeId, LeafPath)>> = BTreeMap::new();
+    let Some(template) = children(doc, def, "template").first().copied() else { return out };
+    for n in doc.descendants(template).into_iter().filter(|n| !n.is_expanded()) {
+        for f in doc.facets_of(n) {
+            for field in f.field_names() {
+                if let Some(crate::expr::Expr::Ref(l)) = f.get(field).and_then(|s| s.expr())
+                    && chans.contains(&l.node)
+                {
+                    out.entry(l.node).or_default().push((n, LeafPath::new(f.kind(), field).expect("declared")));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A channel `k` of the way from `a` to `b`: numbers and colours blend;
+/// anything else (words) switches half way, so a slice places the switch.
+pub fn mix(a: &Value, b: &Value, k: f64) -> Value {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => Value::Number(x + (y - x) * k),
+        (Value::Color(x), Value::Color(y)) => Value::Color(std::array::from_fn(|i| x[i] + (y[i] - x[i]) * k as f32)),
+        _ => if k >= 0.5 { b.clone() } else { a.clone() },
+    }
+}
+
+/// Whether two channel values differ enough to publish or show.
+fn differs(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => (x - y).abs() > 1e-12,
+        (Value::Color(x), Value::Color(y)) => x.iter().zip(y).any(|(p, q)| (p - q).abs() > 1e-6),
+        _ => a != b,
+    }
+}
+
+/// What a state may hold for a part's leaf: numbers, colours, and a text's
+/// words.
+fn recordable(path: LeafPath, v: &Value) -> bool {
+    match v {
+        Value::Number(_) | Value::Color(_) => true,
+        Value::Str(_) => path.facet == crate::facet::FacetKind::Text && path.field == "content",
+        _ => false,
+    }
 }
 
 /// A definition's machines: (node, the port name they follow).
@@ -88,13 +141,13 @@ pub fn copy_source(n: NodeId) -> NodeId {
 /// The pose machine `machine` (a definition's or an instance's copy) gives
 /// `state`: a value per channel of `def`, the channel's rest value where
 /// the state says nothing.
-pub fn pose(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, f64>> {
+pub fn pose(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, Value>> {
     let s = children(doc, machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(state))?;
     let has = doc.get::<Args>(s).map(|a| a.slots.keys().map(|k| k.to_string()).collect::<Vec<_>>()).unwrap_or_default();
     Some(
         channels(doc, def)
             .into_iter()
-            .map(|(c, name, rest)| (c, if has.contains(&name) { read_num(read, s, &format!("args.{name}")).unwrap_or(rest) } else { rest }))
+            .map(|(c, name, rest)| (c, if has.contains(&name) { read(leaf(s, &format!("args.{name}"))).filter(|v| std::mem::discriminant(v) == std::mem::discriminant(&rest)).unwrap_or(rest) } else { rest }))
             .collect(),
     )
 }
@@ -140,6 +193,9 @@ pub fn plan(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str
     // One default with the facets' (Easy Ease), for an unknown name too.
     let easy = curve("easy_ease").expect("a named curve");
     let ease = |n: NodeId, p: &str| read_text(read, n, p).and_then(|e| curve(&e).ok()).unwrap_or(easy);
+    // A slice with no easing of its own takes the transition's.
+    let whole = ease(id, "transition.ease");
+    let slice_ease = |w: NodeId| read_text(read, w, "tween.ease").filter(|e| !e.trim().is_empty()).map_or(whole, |_| ease(w, "tween.ease"));
     let by_name: BTreeMap<String, NodeId> = channels(doc, def).into_iter().map(|(c, n, _)| (n, c)).collect();
     let mut tweens = BTreeMap::new();
     for w in children(doc, id, "tween") {
@@ -148,7 +204,7 @@ pub fn plan(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str
             Some(Value::Fn(f)) => Shape::Fn(f),
             _ => {
                 let (a, b) = (read_num(read, w, "tween.start").unwrap_or(0.0).clamp(0.0, 1.0), read_num(read, w, "tween.end").unwrap_or(1.0).clamp(0.0, 1.0));
-                Shape::Window(a, b, ease(w, "tween.ease"))
+                Shape::Window(a, b, slice_ease(w))
             }
         };
         tweens.insert(c, shape);
@@ -171,7 +227,7 @@ impl Plan {
 #[derive(Clone, Debug)]
 struct Known {
     state: String,
-    values: BTreeMap<NodeId, f64>,
+    values: BTreeMap<NodeId, Value>,
     run: Option<Run>,
     /// Where it was last driven to (`machine.at`), and whether it was
     /// going down the states then.
@@ -183,8 +239,8 @@ struct Known {
 struct Run {
     plan: Plan,
     start: f64,
-    from: BTreeMap<NodeId, f64>,
-    to: BTreeMap<NodeId, f64>,
+    from: BTreeMap<NodeId, Value>,
+    to: BTreeMap<NodeId, Value>,
     /// The states it goes between.
     states: (String, String),
 }
@@ -201,6 +257,9 @@ pub struct Player {
     pub pinned: Option<Pinned>,
     /// What was running at the last advance, for views.
     pub running: Vec<Running>,
+    /// The parts the state editor shows open inside a transition (their
+    /// properties' rows); the others show one row each (session only).
+    pub open: std::collections::BTreeSet<NodeId>,
 }
 
 /// What a running transition reports, for a probe or a view.
@@ -292,9 +351,8 @@ impl Player {
         {
             let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
             for (c, v) in p {
-                let rest = doc.get::<Channel>(c).and_then(|x| number(&x.value)).unwrap_or(0.0);
-                if (v - rest).abs() > 1e-12 {
-                    pinned_out.insert(Leaf { node: c, path: value_path }, Value::Number(v));
+                if differs(&v, &rest_of(doc, c)) {
+                    pinned_out.insert(Leaf { node: c, path: value_path }, v);
                 }
             }
         }
@@ -306,9 +364,9 @@ impl Player {
             }
             if let Some(run) = &k.run {
                 let p = ((now - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
-                for (&c, &to) in &run.to {
-                    let from = run.from.get(&c).copied().unwrap_or(to);
-                    k.values.insert(c, from + (to - from) * run.plan.shaped(c, p));
+                for (&c, to) in &run.to {
+                    let from = run.from.get(&c).unwrap_or(to);
+                    k.values.insert(c, mix(from, to, run.plan.shaped(c, p)));
                 }
                 if p >= 1.0 {
                     k.values = run.to.clone();
@@ -317,12 +375,11 @@ impl Player {
                     running.push(Running { entity: e, transition: run.plan.transition, progress: p, from: run.states.0.clone(), to: run.states.1.clone() });
                 }
             }
-            for (&c, &v) in &k.values {
-                let rest = doc.get::<Channel>(c).and_then(|x| number(&x.value)).unwrap_or(0.0);
-                if (v - rest).abs() > 1e-12
+            for (&c, v) in &k.values {
+                if differs(v, &rest_of(doc, c))
                     && let Some(copy) = NodeId::expanded(e, c)
                 {
-                    out.insert(Leaf { node: copy, path: value_path }, Value::Number(v));
+                    out.insert(Leaf { node: copy, path: value_path }, v.clone());
                 }
             }
         }
@@ -346,7 +403,7 @@ impl Player {
 /// own disappear), and eases plainly where there is none. A pure function
 /// of `at`: a parent keyed on the clock scrubs its children with it.
 #[allow(clippy::type_complexity)]
-fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, down: bool) -> Option<(BTreeMap<NodeId, f64>, String, Option<(NodeId, f64, String, String)>)> {
+fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, down: bool) -> Option<(BTreeMap<NodeId, Value>, String, Option<(NodeId, f64, String, String)>)> {
     let states = state_names(doc, machine);
     let last = states.len().checked_sub(1)?;
     let at = at.min(last as f64);
@@ -365,9 +422,9 @@ fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, dow
     let plan = plan(doc, read, def, machine, from_name, to_name);
     let values = to
         .iter()
-        .map(|(&c, &b)| {
-            let a = from.get(&c).copied().unwrap_or(b);
-            (c, a + (b - a) * plan.as_ref().map_or(p, |pl| pl.shaped(c, p)))
+        .map(|(&c, b)| {
+            let a = from.get(&c).unwrap_or(b);
+            (c, mix(a, b, plan.as_ref().map_or(p, |pl| pl.shaped(c, p))))
         })
         .collect();
     Some((values, nearest, plan.map(|pl| (pl.transition, p, from_name.clone(), to_name.clone()))))
@@ -379,7 +436,7 @@ fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, dow
 /// the key's `span`, one occurrence retimed), from the previous state's
 /// pose, so any time gives the same picture. `None` when no clip drives
 /// the state, or the playhead is before its first key.
-fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, f64>, Option<(NodeId, f64, String, String)>)> {
+fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, Value>, Option<(NodeId, f64, String, String)>)> {
     let (clip, offset) = crate::timeline_view::clip_of(doc, state)?;
     let keys = crate::time::keys(doc, clip);
     let u = clock - crate::time::start(doc, clip) - offset;
@@ -396,9 +453,9 @@ fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf
         return Some((to, None));
     }
     let from = pose(doc, read, def, machine, &from_state)?;
-    let values = to.iter().map(|(&c, &b)| {
-        let a = from.get(&c).copied().unwrap_or(b);
-        (c, a + (b - a) * plan.shaped(c, p))
+    let values = to.iter().map(|(&c, b)| {
+        let a = from.get(&c).unwrap_or(b);
+        (c, mix(a, b, plan.shaped(c, p)))
     }).collect();
     Some((values, Some((plan.transition, p, from_state, to_state))))
 }
@@ -456,6 +513,21 @@ fn choice_of(names: &[String]) -> String {
 /// and "state_2" and one transition between any two (300 ms, Easy Ease);
 /// each later one adds a state. Answers the ops and the new state's name.
 pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>, String), String> {
+    add_named_state_ops(doc, def, None, None)
+}
+
+/// A state's name as typed: spaces become `_`; letters, digits, - and _.
+fn state_name(name: &str) -> Result<String, String> {
+    let name = name.trim().replace(' ', "_");
+    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("a state's name is letters, digits, - and _".into());
+    }
+    Ok(name)
+}
+
+/// "Add state", named: `name` for the new state, and for the first,
+/// `first` for the state the component's look becomes.
+pub fn add_named_state_ops(doc: &Document, def: NodeId, first: Option<&str>, name: Option<&str>) -> Result<(Vec<crate::op::Op>, String), String> {
     use crate::facet::{Args, LeafStruct, Port, Transition};
     use crate::op::Op;
     use crate::value::Slot;
@@ -472,7 +544,10 @@ pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>,
     let text = |t: &str| Slot::Const(Value::Str(t.into()));
     match machines(doc, def).first() {
         None => {
-            let names = vec!["default".to_owned(), "state_2".to_owned()];
+            let names = vec![first.map(state_name).transpose()?.unwrap_or_else(|| "default".into()), name.map(state_name).transpose()?.unwrap_or_else(|| "state_2".into())];
+            if names[0] == names[1] {
+                return Err("two states need two names".into());
+            }
             let (spec, machine) = (take(), take());
             let mut p = Port::default();
             p.kind = text("value");
@@ -499,11 +574,17 @@ pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>,
         }
         Some(&(machine, _)) => {
             let mut names = state_names(doc, machine);
-            let mut i = names.len() + 1;
-            while names.contains(&format!("state_{i}")) {
-                i += 1;
-            }
-            let name = format!("state_{i}");
+            let name = match name.map(state_name).transpose()? {
+                Some(n) if names.contains(&n) => return Err(format!("there is already a state {n:?}")),
+                Some(n) => n,
+                None => {
+                    let mut i = names.len() + 1;
+                    while names.contains(&format!("state_{i}")) {
+                        i += 1;
+                    }
+                    format!("state_{i}")
+                }
+            };
             let order = children(doc, machine, "state").into_iter().filter_map(|s| doc.live(s)).map(|n| n.order.clone()).max().map_or_else(crate::order::OrderKey::first, |o| crate::order::OrderKey::after(&o));
             ops.push(Op::Create { id: take(), ty: ty("state"), parent: Some(machine), order, facets: vec![named(&name), Args::default().wrap()] });
             names.push(name.clone());
@@ -520,10 +601,7 @@ pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>,
 pub fn rename_state_ops(doc: &Document, state: NodeId, name: &str) -> Result<Vec<crate::op::Op>, String> {
     use crate::op::Op;
     use crate::value::Slot;
-    let name = name.trim().replace(' ', "_");
-    if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        return Err("a state's name is letters, digits, - and _".into());
-    }
+    let name = state_name(name)?;
     let old = name_of(doc, state).ok_or("not a state")?;
     let machine = doc.live(state).and_then(|n| n.parent).ok_or("a state belongs to a machine")?;
     let def = doc.live(machine).and_then(|n| n.parent).ok_or("a machine belongs to a definition")?;
@@ -611,15 +689,15 @@ impl Pinned {
 
 /// What a pin shows on its main: the state's pose, or a scrubbed
 /// transition's moment.
-fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<NodeId, f64>> {
+fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<NodeId, Value>> {
     let Some((from, to, p)) = &pin.scrub else { return pose(doc, read, pin.def, pin.machine, &pin.state) };
     let (a, b) = (pose(doc, read, pin.def, pin.machine, from)?, pose(doc, read, pin.def, pin.machine, to)?);
     let plan = plan(doc, read, pin.def, pin.machine, from, to);
     let p = p.clamp(0.0, 1.0);
-    Some(b.iter().map(|(&c, &y)| {
-        let x = a.get(&c).copied().unwrap_or(y);
+    Some(b.iter().map(|(&c, y)| {
+        let x = a.get(&c).unwrap_or(y);
         let k = plan.as_ref().map_or(if p >= 1.0 { 1.0 } else { 0.0 }, |pl| pl.shaped(c, p));
-        (c, x + (y - x) * k)
+        (c, mix(x, y, k))
     }).collect())
 }
 
@@ -751,9 +829,6 @@ pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Resul
     let id = fresh(doc, &[]);
     let mut w = Tween::default();
     w.channel = Slot::Const(Value::Str(channel.into()));
-    if let Some(e) = doc.leaf(transition, "transition.ease".parse().expect("declared")) {
-        w.ease = e.clone();
-    }
     Ok((vec![Op::Create { id, ty: ty("tween"), parent: Some(transition), order: order_after_last(doc, transition), facets: vec![w.wrap()] }], id))
 }
 
@@ -763,19 +838,28 @@ pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Resul
 /// channel's value in the state; any other gets a new channel, resting at
 /// the leaf's value now (what every other state keeps), the leaf bound to
 /// it. Other ops pass through.
-pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crate::op::Op> {
-    // A scrubbed transition shows a moment between two states, not one:
-    // edits then are plain edits (the panel says so), never a pose.
-    if pin.scrub.is_some() {
-        return ops;
-    }
+pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Result<Vec<crate::op::Op>, String> {
     use crate::expr::Expr;
     use crate::facet::{Args, Channel, FacetKind, LeafStruct};
     use crate::op::Op;
     use crate::value::Slot;
-    let Some(template) = children(doc, pin.def, "template").first().copied() else { return ops };
-    let Some(state) = children(doc, pin.machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(pin.state.as_str())) else { return ops };
-    let channels: Vec<(NodeId, String, f64)> = channels(doc, pin.def);
+    let Some(template) = children(doc, pin.def, "template").first().copied() else { return Ok(ops) };
+    // A previewed transition shows a moment between two states, not one:
+    // an edit to the component's parts then belongs to neither, so it is
+    // refused (the editor says to pick a state).
+    if let Some((from, to, _)) = &pin.scrub {
+        let touches = |id: &NodeId| !id.is_expanded() && doc.is_ancestor(template, *id);
+        if ops.iter().any(|op| match op {
+            Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } => touches(id),
+            Op::Create { parent: Some(p), .. } => touches(p) || *p == template,
+            _ => false,
+        }) {
+            return Err(format!("Previewing {from} → {to}: pick {from} or {to} to edit it"));
+        }
+        return Ok(ops);
+    }
+    let Some(state) = children(doc, pin.machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(pin.state.as_str())) else { return Ok(ops) };
+    let channels: Vec<(NodeId, String, Value)> = channels(doc, pin.def);
     let mut pose: Args = doc.get::<Args>(state).cloned().unwrap_or_default();
     let mut posed = false;
     let mut next = fresh(doc, &ops);
@@ -788,9 +872,9 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
         Some(Expr::Ref(l)) => channels.iter().find(|(c, ..)| *c == l.node).map(|(_, n, _)| n.clone()),
         _ => None,
     };
-    let mut record_one = |id: NodeId, path: LeafPath, v: f64, current: Option<f64>, out: &mut Vec<Op>, pose: &mut Args| -> Slot {
+    let mut record_one = |id: NodeId, path: LeafPath, v: Value, current: Option<Value>, out: &mut Vec<Op>, pose: &mut Args| -> Slot {
         if let Some(name) = bound_channel(doc.leaf(id, path)) {
-            pose.insert(&name, Slot::Const(Value::Number(v)));
+            pose.insert(&name, Slot::Const(v));
             return doc.leaf(id, path).cloned().expect("bound");
         }
         let base = format!("{}_{}", name_of(doc, id).unwrap_or_else(|| doc.live(id).map_or("part", |n| n.ty.name()).to_owned()), path.field).replace(' ', "_");
@@ -804,10 +888,10 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
         let ch = next;
         next = next.offset(1);
         let mut c = Channel::default();
-        c.value = Slot::Const(Value::Number(current.unwrap_or(v)));
+        c.value = Slot::Const(current.unwrap_or_else(|| v.clone()));
         out.push(Op::Create { id: ch, ty: ty("channel"), parent: Some(pin.def), order: order.clone(), facets: vec![named(&name), c.wrap()] });
         order = crate::order::OrderKey::after(&order);
-        pose.insert(&name, Slot::Const(Value::Number(v)));
+        pose.insert(&name, Slot::Const(v));
         Slot::Bound(Expr::Ref(Leaf { node: ch, path: "channel.value".parse().expect("declared") }))
     };
     let rest: LeafPath = "channel.value".parse().expect("declared");
@@ -816,13 +900,13 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
             // A part already bound to a channel: an edit to it inverts the
             // binding and lands on the channel's rest value, which every state
             // that does not set the channel shows. It is the pinned state's.
-            Op::Set { id, path, slot: Slot::Const(Value::Number(v)) } if path == rest && channels.iter().any(|(c, ..)| *c == id) => {
+            Op::Set { id, path, slot: Slot::Const(v) } if path == rest && channels.iter().any(|(c, ..)| *c == id) => {
                 let name = channels.iter().find(|(c, ..)| *c == id).map(|(_, n, _)| n.clone()).expect("found");
-                pose.insert(&name, Slot::Const(Value::Number(v)));
+                pose.insert(&name, Slot::Const(v));
                 posed = true;
             }
-            Op::Set { id, path, slot: Slot::Const(Value::Number(v)) } if part_of(id) && path.facet != FacetKind::Name => {
-                let current = doc.leaf(id, path).and_then(|s| s.constant()).and_then(Value::as_f64).or_else(|| path.facet.default_facet().get(path.field).and_then(|s| s.constant()).and_then(Value::as_f64));
+            Op::Set { id, path, slot: Slot::Const(v) } if part_of(id) && path.facet != FacetKind::Name && recordable(path, &v) => {
+                let current = doc.leaf(id, path).and_then(|s| s.constant()).cloned().or_else(|| path.facet.default_facet().get(path.field).and_then(|s| s.constant()).cloned());
                 let slot = record_one(id, path, v, current, &mut out, &mut pose);
                 posed = true;
                 out.push(Op::Set { id, path, slot });
@@ -830,11 +914,11 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
             Op::AddFacet { id, mut facet } if part_of(id) => {
                 let default = facet.kind().default_facet();
                 for field in facet.field_names() {
-                    let (Some(Value::Number(v)), d) = (facet.get(field).and_then(|s| s.constant()).cloned(), default.get(field).and_then(|s| s.constant()).and_then(Value::as_f64)) else { continue };
-                    if Some(v) == d {
+                    let path = LeafPath::new(facet.kind(), field).expect("declared");
+                    let (Some(v), d) = (facet.get(field).and_then(|s| s.constant()).cloned(), default.get(field).and_then(|s| s.constant()).cloned()) else { continue };
+                    if !recordable(path, &v) || Some(&v) == d.as_ref() {
                         continue;
                     }
-                    let path = LeafPath::new(facet.kind(), field).expect("declared");
                     let slot = record_one(id, path, v, d, &mut out, &mut pose);
                     posed = true;
                     let _ = facet.set(field, slot);
@@ -847,5 +931,243 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Vec<crat
     if posed {
         out.push(Op::AddFacet { id: state, facet: pose.wrap() });
     }
-    out
+    Ok(out)
+}
+
+// ── The state editor's edits (machines.md §6, "Timing") ───────────────
+
+/// One channel's slice in a pair edit: what to set; `None` keeps it (or,
+/// for a new slice, starts it at the whole transition with its easing).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Slice {
+    pub channel: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub ease: Option<String>,
+}
+
+/// An edit to one pair's timing: its length, easing and name, slices to
+/// set, and channels to give back to the transition's own curve.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PairEdit {
+    pub ms: Option<f64>,
+    pub ease: Option<String>,
+    pub name: Option<String>,
+    pub slices: Vec<Slice>,
+    pub follow: Vec<String>,
+    /// Drop every slice not in `slices` (a timing copied whole).
+    pub only: bool,
+}
+
+/// The transition a pair has of its own, if it has one.
+pub fn own_transition(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<NodeId> {
+    let p = plan(doc, read, def, machine, from, to)?;
+    (read_text(read, p.transition, "transition.from").as_deref() == Some(from) && read_text(read, p.transition, "transition.to").as_deref() == Some(to)).then_some(p.transition)
+}
+
+/// Edit one pair's timing. A pair that uses the default timing gets its
+/// own first, a copy of the default with the edit applied, in the same
+/// transaction (copy on write: editing one transition never changes
+/// another). Answers the ops and the pair's transition.
+pub fn edit_pair_ops(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str, edit: &PairEdit) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+    use crate::facet::{LeafStruct, Transition, Tween};
+    use crate::op::Op;
+    use crate::value::Slot;
+    let num = |v: f64| Slot::Const(Value::Number(v));
+    let text = |t: &str| Slot::Const(Value::Str(t.into()));
+    if let Some(e) = &edit.ease {
+        curve(e).map_err(|_| format!("{e:?} is not an easing"))?;
+    }
+    for s in &edit.slices {
+        if let Some(e) = s.ease.as_deref().filter(|e| !e.is_empty()) {
+            curve(e).map_err(|_| format!("{e:?} is not an easing"))?;
+        }
+    }
+    let clamp = |v: f64| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    let apply = |w: &mut Tween, s: &Slice| {
+        if let Some(a) = s.start {
+            w.start = num(clamp(a));
+        }
+        if let Some(b) = s.end {
+            w.end = num(clamp(b));
+        }
+        if let Some(e) = &s.ease {
+            w.ease = text(e);
+        }
+    };
+    let tween_channel = |w: &Tween| w.channel.constant().and_then(|v| v.as_str()).map(str::to_owned);
+    if let Some(t) = own_transition(doc, read, def, machine, from, to) {
+        let mut ops = Vec::new();
+        if let Some(ms) = edit.ms {
+            ops.push(Op::Set { id: t, path: "transition.ms".parse().expect("declared"), slot: num(ms.max(0.0)) });
+        }
+        if let Some(e) = &edit.ease {
+            ops.push(Op::Set { id: t, path: "transition.ease".parse().expect("declared"), slot: text(e) });
+        }
+        if let Some(n) = edit.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            ops.push(Op::Set { id: t, path: "name.text".parse().expect("declared"), slot: text(n) });
+        }
+        let existing: Vec<(NodeId, Tween)> = children(doc, t, "tween").into_iter().filter_map(|w| Some((w, doc.get::<Tween>(w)?.clone()))).collect();
+        let mut order = order_after_last(doc, t);
+        let mut next = fresh(doc, &[]);
+        for s in &edit.slices {
+            match existing.iter().find(|(_, w)| tween_channel(w).as_deref() == Some(s.channel.as_str())) {
+                Some((id, w)) => {
+                    let mut w2 = w.clone();
+                    apply(&mut w2, s);
+                    for (f, a, b) in [("start", &w.start, &w2.start), ("end", &w.end, &w2.end), ("ease", &w.ease, &w2.ease)] {
+                        if a != b {
+                            ops.push(Op::Set { id: *id, path: format!("tween.{f}").parse().expect("declared"), slot: b.clone() });
+                        }
+                    }
+                }
+                None => {
+                    let mut w = Tween::default();
+                    w.channel = text(&s.channel);
+                    apply(&mut w, s);
+                    ops.push(Op::Create { id: next, ty: ty("tween"), parent: Some(t), order: order.clone(), facets: vec![w.wrap()] });
+                    next = next.offset(1);
+                    order = crate::order::OrderKey::after(&order);
+                }
+            }
+        }
+        for (id, w) in &existing {
+            let c = tween_channel(w).unwrap_or_default();
+            if edit.follow.contains(&c) || (edit.only && !edit.slices.iter().any(|s| s.channel == c)) {
+                ops.push(Op::Delete { id: *id });
+            }
+        }
+        return Ok((ops, t));
+    }
+    // Its own, from the default it used, with the edit applied.
+    let names = state_names(doc, machine);
+    for s in [from, to] {
+        if !names.iter().any(|n| n == s) {
+            return Err(format!("{s:?} is not a state of this machine"));
+        }
+    }
+    if from == to {
+        return Err("a transition goes between two different states".into());
+    }
+    let was = plan(doc, read, def, machine, from, to);
+    let mut t = Transition::default();
+    t.from = text(from);
+    t.to = text(to);
+    let mut tweens: Vec<Tween> = Vec::new();
+    if let Some(p) = &was {
+        t.ms = num(p.ms);
+        if let Some(e) = doc.leaf(p.transition, "transition.ease".parse().expect("declared")) {
+            t.ease = e.clone();
+        }
+        tweens = children(doc, p.transition, "tween").into_iter().filter_map(|w| doc.get::<Tween>(w).cloned()).collect();
+    }
+    if let Some(ms) = edit.ms {
+        t.ms = num(ms.max(0.0));
+    }
+    if let Some(e) = &edit.ease {
+        t.ease = text(e);
+    }
+    for s in &edit.slices {
+        match tweens.iter_mut().find(|w| tween_channel(w).as_deref() == Some(s.channel.as_str())) {
+            Some(w) => apply(w, s),
+            None => {
+                let mut w = Tween::default();
+                w.channel = text(&s.channel);
+                apply(&mut w, s);
+                tweens.push(w);
+            }
+        }
+    }
+    // Its own timing has a slice for every channel, the whole of it with
+    // the transition's easing where nothing says otherwise, so every bar
+    // can be moved.
+    if !edit.only {
+        for (_, name, _) in channels(doc, def) {
+            if !tweens.iter().any(|w| tween_channel(w).as_deref() == Some(name.as_str())) && !edit.follow.contains(&name) {
+                let mut w = Tween::default();
+                w.channel = text(&name);
+                tweens.push(w);
+            }
+        }
+    }
+    tweens.retain(|w| {
+        let c = tween_channel(w).unwrap_or_default();
+        !edit.follow.contains(&c) && (!edit.only || edit.slices.iter().any(|s| s.channel == c))
+    });
+    let mut next = fresh(doc, &[]);
+    let id = next;
+    next = next.offset(1);
+    let name = edit.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| format!("{from} to {to}"), str::to_owned);
+    let mut ops = vec![Op::Create { id, ty: ty("transition"), parent: Some(machine), order: order_after_last(doc, machine), facets: vec![named(&name), t.wrap()] }];
+    let mut order = crate::order::OrderKey::first();
+    for w in tweens {
+        ops.push(Op::Create { id: next, ty: ty("tween"), parent: Some(id), order: order.clone(), facets: vec![w.wrap()] });
+        next = next.offset(1);
+        order = crate::order::OrderKey::after(&order);
+    }
+    Ok((ops, id))
+}
+
+/// An easing run backwards in time: ease in becomes ease out, and a
+/// cubic-bezier is turned about its centre.
+pub fn mirror_ease(e: &str) -> String {
+    match e {
+        "ease_in" => "ease_out".into(),
+        "ease_out" => "ease_in".into(),
+        _ => match e.strip_prefix("cubic-bezier(").and_then(|r| r.strip_suffix(')')).map(|r| r.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<Vec<_>, _>>()) {
+            Some(Ok(v)) if v.len() == 4 => {
+                let f = |x: f64| (x * 1000.0).round() / 1000.0;
+                format!("cubic-bezier({}, {}, {}, {})", f(1.0 - v[2]), f(1.0 - v[3]), f(1.0 - v[0]), f(1.0 - v[1]))
+            }
+            _ => e.into(),
+        },
+    }
+}
+
+/// The pair edit that copies transition `source`'s timing onto a pair, as
+/// it is or `mirrored` (played backwards: what ended last starts first,
+/// easings turned about), for a reverse leg.
+pub fn copied_timing(doc: &Document, read: Read, source: NodeId, mirrored: bool) -> Result<PairEdit, String> {
+    use crate::facet::Tween;
+    if ty_of(doc, source) != Some("transition") {
+        return Err(format!("{source} is not a transition"));
+    }
+    let ease = read_text(read, source, "transition.ease").unwrap_or_else(|| "easy_ease".into());
+    let slices = children(doc, source, "tween")
+        .into_iter()
+        .filter_map(|w| {
+            let t = doc.get::<Tween>(w)?;
+            let channel = t.channel.constant()?.as_str()?.to_owned();
+            let (a, b) = (read_num(read, w, "tween.start").unwrap_or(0.0), read_num(read, w, "tween.end").unwrap_or(1.0));
+            let e = read_text(read, w, "tween.ease").unwrap_or_default();
+            Some(if mirrored { Slice { channel, start: Some(1.0 - b), end: Some(1.0 - a), ease: Some(mirror_ease(&e)) } } else { Slice { channel, start: Some(a), end: Some(b), ease: Some(e) } })
+        })
+        .collect();
+    Ok(PairEdit { ms: read_num(read, source, "transition.ms"), ease: Some(if mirrored { mirror_ease(&ease) } else { ease }), name: None, slices, follow: Vec::new(), only: true })
+}
+
+/// Set a state's values to another's (the state menu's "Copy look from").
+pub fn copy_pose_ops(doc: &Document, state: NodeId, from: NodeId) -> Result<Vec<crate::op::Op>, String> {
+    use crate::facet::LeafStruct;
+    for s in [state, from] {
+        if ty_of(doc, s) != Some("state") {
+            return Err(format!("{s} is not a state"));
+        }
+    }
+    let args = doc.get::<Args>(from).cloned().unwrap_or_default();
+    Ok(vec![crate::op::Op::AddFacet { id: state, facet: args.wrap() }])
+}
+
+/// A state stops setting a channel, so it shows the channel's rest value
+/// (the drawing's own).
+pub fn reset_value_ops(doc: &Document, state: NodeId, channel: &str) -> Result<Vec<crate::op::Op>, String> {
+    use crate::facet::LeafStruct;
+    if ty_of(doc, state) != Some("state") {
+        return Err(format!("{state} is not a state"));
+    }
+    let mut args = doc.get::<Args>(state).cloned().unwrap_or_default();
+    if args.slots.remove(channel).is_none() {
+        return Err(format!("the state does not set {channel}"));
+    }
+    Ok(vec![crate::op::Op::AddFacet { id: state, facet: args.wrap() }])
 }

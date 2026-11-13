@@ -215,13 +215,15 @@
 
   <div class="ui-subheading content-heading">
     <span>Content</span>
-    {#if content.bind}
+    {#if content.bind && content.edit !== "via"}
       <IconButton icon={Unlink} label="Unbind content" title="Unbind: keep the current words" onclick={() => bind("")} />
     {:else}
       <IconButton icon={Link} label="Bind content" title="Bind to an expression" pressed={binding} onPressedChange={(on) => { binding = on; expr = ""; }} />
     {/if}
   </div>
-  {#if content.bind}
+  <!-- Words bound straight to another value (a state's channel) edit that
+       value: they show as words. -->
+  {#if content.bind && content.edit !== "via"}
     <div class="bound" title="Edit the binding to change it">
       <input class="ui-input mono" aria-label="Content binding" value={content.bind} onkeydown={onEnter} onchange={(e) => bind(e.currentTarget.value)} />
       <div class="reads">{content.text}</div>

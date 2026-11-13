@@ -23,6 +23,10 @@ pub enum Handle {
     /// Bound to `a·source + b` with `source` a constant leaf. A target value
     /// `y` previews `(y − b) / a` on the source.
     Linear { source: Leaf, a: f64, b: f64 },
+    /// Bound to exactly another constant leaf, of any kind (a part's colour
+    /// or words bound to a state machine's channel): a value is written to
+    /// the source as it is.
+    Alias { source: Leaf },
     /// No handle. The reason is for logs and the inspector.
     Locked(String),
 }
@@ -63,6 +67,19 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
     let Some(expr) = reactive.expr_of(leaf).or_else(|| slot.expr()) else {
         return Handle::Direct;
     };
+    // A plain reference to a constant leaf: whatever its kind (a colour,
+    // words), editing the one edits the other.
+    // A state's value on a part, while that state is edited: the machine
+    // player publishes it, but an edit to it is the state's (machine.rs
+    // `record`), so it is free like an authored one.
+    let posed = |l: Leaf| reactive.signal(l).is_some_and(|s| s.producer == ProducerId::MACHINES);
+    if let Expr::Ref(source) = expr
+        && (!reactive.is_driven(*source) || posed(*source))
+        && reactive.expr_of(*source).is_none()
+        && doc.leaf(source.node, source.path).and_then(|s| s.constant()).is_some_and(|v| !matches!(v.kind(), ValueKind::Number | ValueKind::Quantity))
+    {
+        return Handle::Alias { source: *source };
+    }
     let inlined = inline(doc, reactive, expr);
     // Words that show a number (`fmt(x, "mW", 2)`, `str(x)`) invert through
     // the number: typing in a readout edits what it reads.
@@ -79,8 +96,8 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
         .deps()
         .into_iter()
         .filter(|d| {
-            !reactive.is_driven(*d)
-                && d.path.facet != crate::facet::FacetKind::Axis
+            (!reactive.is_driven(*d) || posed(*d))
+                && (d.path.facet != crate::facet::FacetKind::Axis || d.path.field == "cursor")
                 && doc.leaf(d.node, d.path).and_then(|s| s.constant()).is_some_and(|v| matches!(v.kind(), ValueKind::Number | ValueKind::Quantity))
         })
         .collect();
@@ -241,8 +258,33 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
             };
             Ok((source, v))
         }
+        Handle::Alias { source } => Ok((source, value)),
         Handle::Locked(reason) => Err(reason),
     }
+}
+
+/// A view that moves its subject rigidly (timeline.md §12.3; a slice's
+/// bar, a part's bar inside a transition): its `projects` relation names,
+/// as `with`, other leaves that move by as much as the handle's source,
+/// so dragging the bar moves a tween's start and end together, or all of a
+/// part's slices. `with` is a path of the subject (`tween.end`), or several
+/// leaves by id (`#a.tween.start #a.tween.end #b.tween.start …`).
+/// Answers the leaves and the range they stay in.
+pub fn rigid(doc: &Document, node: crate::id::NodeId) -> Option<(Vec<Leaf>, (f64, f64))> {
+    let r = doc.relations_from(node).find(|r| r.rel == crate::document::RelKind::Projects && r.data.contains_key("with"))?;
+    let text = r.data.get("with")?.as_str()?;
+    let leaves: Vec<Leaf> = text
+        .split_whitespace()
+        .filter_map(|w| match w.strip_prefix('#') {
+            Some(_) => {
+                let (id, path) = w.split_once('.')?;
+                Some(Leaf { node: id.parse().ok()?, path: path.parse().ok()? })
+            }
+            None => Some(Leaf { node: r.to, path: w.parse().ok()? }),
+        })
+        .collect();
+    let tween = leaves.iter().all(|l| l.path.facet == crate::facet::FacetKind::Tween);
+    Some((leaves, if tween { (0.0, 1.0) } else { (f64::NEG_INFINITY, f64::INFINITY) }))
 }
 
 /// The number typed into words that show one: plain (`12.5`), or with a
@@ -269,6 +311,16 @@ fn typed_number(doc: &Document, reactive: &Reactive, leaf: Leaf, text: &str) -> 
 /// `max`. A drag or an edit that inverts onto a bounded leaf stops at the
 /// bound, and so does everything that reads it.
 pub fn bounds(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Option<(f64, f64)> {
+    // A tween's slice (machines.md): within its transition, its start
+    // before its end, so a trim stops at the other edge.
+    if leaf.path.facet == crate::facet::FacetKind::Tween {
+        let other = |f: &str| reactive.read(doc, Leaf { node: leaf.node, path: crate::facet::LeafPath::new(crate::facet::FacetKind::Tween, f).ok()? }).as_ref().and_then(magnitude);
+        return match leaf.path.field {
+            "start" => Some((0.0, other("end").unwrap_or(1.0).clamp(0.0, 1.0))),
+            "end" => Some((other("start").unwrap_or(0.0).clamp(0.0, 1.0), 1.0)),
+            _ => None,
+        };
+    }
     if leaf.path.facet != crate::facet::FacetKind::Slider || leaf.path.field != "value" {
         return None;
     }

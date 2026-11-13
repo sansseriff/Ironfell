@@ -17,6 +17,7 @@
   import EasingField from "./EasingField.svelte";
   import ColorPicker from "./ColorPicker.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
+  import { machines, rootOf } from "../machines.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, hideSwatch = false, colorDigits = 8, mixed = (channel === "alpha" ? f.mixedAlpha : f.kind === "color" && colorDigits === 6 ? f.mixedColor : f.mixed) ?? f.mixed ?? false, zeroLabel }: {
     field: Property; node: string;
     onSet: (field: Property, text: string) => void | Promise<void>;
@@ -39,6 +40,9 @@
   const options = $derived(f.options ?? undefined);
   const labels: Record<string, string> = { span: "Span (s)", t: "Time (s)", value: "Value", easing: "Easing", mode: "Pieces", x: "X", y: "Y", w: "W", h: "H", rot: "Rotation", sx: "Scale X", sy: "Scale Y", rx: "Radius X", ry: "Radius Y", opacity: "Opacity", kind: "Type", start: "Start", end: "End", enabled: "Clip content", radius: "Radius", color: "Colour", width: "Weight", fill_rule: "Fill rule", dash_offset: "Offset" };
   const displayLabel = $derived(label ?? labels[f.field] ?? f.field.replaceAll("_", " "));
+  // While a state is edited, a field a state cannot hold (a choice, a
+  // switch) changes the drawing in every state: it says so where it is.
+  const allStates = $derived(!compact && !!machines.pinned && !machines.pinned.scrub && !!machines.view?.main_of && rootOf(node) === machines.view.main_of && !(numeric || f.kind === "color" || f.kind === "quantity"));
   const numberValue = $derived(channel === "alpha" ? Math.round(parseInt((f.text ?? "#000000ff").slice(7, 9) || "ff", 16) / 255 * 100) / 100 : Number(f.text));
   // Formulas (plans/specs/wires-and-formulas.md §2): any field takes one,
   // typed after "=" as in a spreadsheet, or through the ƒx button. A bound
@@ -181,7 +185,7 @@
 <svelte:window onkeydown={(e: KeyboardEvent) => { alt = e.altKey; }} onkeyup={(e: KeyboardEvent) => alt = e.altKey} onblur={() => { alt = false; finish(true); }} />
 
 <label class="field" class:wide={!compact && !numeric && f.kind !== "bool"} class:compact class:locked data-leaf={f.leaf} title={f.why ?? (f.via ? `Edits ${f.via} through the binding` : numeric ? "Alt + drag to adjust · Shift for precision · Esc to cancel" : "")}>
-  {#if !compact}<span class="label" class:bound={f.bind}>{displayLabel}</span>{/if}
+  {#if !compact}<span class="label" class:bound={f.bind}>{displayLabel}{#if allStates}<span class="ui-badge all-states" title="Not part of a state: changing it changes every state">all states</span>{/if}</span>{/if}
   <!-- Keyboard editing belongs to the input. This wrapper only extends the
        Alt-drag hit area and cancels the label's synthetic click after a scrub. -->
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
@@ -206,7 +210,7 @@
       <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
       <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if options && segmented}
-      <Segmented label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      <Segmented label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: f.group === "States" ? v : v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if options}
       <Select placeholder={mixed ? "Mixed" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
@@ -230,6 +234,7 @@
 </label>
 
 <style>
+  .all-states { margin-left: 6px; }
   .field { display: flex; flex-direction: column; min-width: 0; gap: 4px; font-size: var(--text-sm); }
   .compact { gap: 0; }
   .compact .binding { display: none; }

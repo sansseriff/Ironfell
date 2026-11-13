@@ -9,7 +9,7 @@ use super::DocumentStore;
 use super::liveness::LiveSources;
 use bevy::prelude::*;
 use iron_document::facet::{FacetKind, LeafPath};
-use iron_document::{NodeId, Op, RelKind, Slot, Store, TypeId, Value};
+use iron_document::{NodeId, Op, RelKind, Slot, Store, Value};
 use std::collections::BTreeSet;
 
 /// A clock field as read (a gesture's preview counts).
@@ -29,9 +29,8 @@ pub fn playing(store: &Store) -> bool {
 
 /// Where the last clip ends: the default stop for a clock with no loop.
 pub fn end_of_clips(store: &Store) -> f64 {
-    let doc = store.document();
-    let Some(clip) = TypeId::lookup("clip") else { return 0.0 };
-    doc.nodes_of_type(clip).filter(|c| !c.is_session()).map(|c| iron_document::time::start(doc, c) + iron_document::time::length(&iron_document::time::keys(doc, c))).fold(0.0, f64::max)
+    // Keyed states run their transitions past their keys.
+    iron_document::timeline_view::clips_end(store)
 }
 
 /// Set clock fields as one session op batch (creating the clock if needed).

@@ -1002,7 +1002,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
         let leaf = Leaf { node: *id, path: *path };
         match crate::handle::handle(doc, reactive, leaf) {
             crate::handle::Handle::Locked(reason) => return Err(err(reason)),
-            crate::handle::Handle::Linear { .. } => {
+            crate::handle::Handle::Linear { .. } | crate::handle::Handle::Alias { .. } => {
                 let (source, v) = crate::handle::resolve_target(doc, reactive, leaf, value).map_err(err)?;
                 if source.node.is_expanded() {
                     return Err(err(format!("{leaf} resolves onto {source}, inside an instance")));

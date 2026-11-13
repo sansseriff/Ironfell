@@ -12,7 +12,11 @@ import { controllerManager } from "../controller-manager.svelte";
 export type Tween = { id: string; channel: string | null; start: number | null; end: number | null; ease: string | null; shaped: boolean };
 export type Transition = { id: string; name: string | null; from: string | null; to: string | null; ms: number | null; ease: string | null; tweens: Tween[]; ms_formula?: boolean };
 export type Pair = { from: string; to: string; transition: string | null; ms: number | null };
-export type State = { id: string; name: string | null; pose: Record<string, number | null>; own: string[] };
+/** A channel's value: a number, a colour (`#rrggbbaa`) or words. */
+export type ChannelValue = number | string | null;
+export type State = { id: string; name: string | null; pose: Record<string, ChannelValue>; own: string[] };
+/** A channel and the parts that read it (the editor's rows are parts). */
+export type Channel = { id: string; name: string; rest: ChannelValue; kind: "number" | "color" | "text"; parts: { node: string; shown: string | null; name: string; path: string }[] };
 export type Machine = {
   id: string;
   port: string;
@@ -34,13 +38,15 @@ export type MachineView = {
   /** The instance selected, when it is one. */
   entity: string | null;
   machines: Machine[];
-  channels: { id: string; name: string; rest: number }[];
+  channels: Channel[];
   /** The component's main. */
   main_of: string | null;
 };
 export type Pin = { def: string; name: string | null; machine: string; state: string; scrub: { from: string; to: string; progress: number } | null };
 /** What the editor shows: a state's look, or a transition's timing. */
-export type Focus = { kind: "state"; state: string | null } | { kind: "pair"; from: string; to: string };
+export type Focus = { kind: "state"; state: string | null } | { kind: "pair"; from: string; to: string } | { kind: "default" };
+/** One channel's slice in a pair edit (machine.rs `Slice`). */
+export type SliceEdit = { channel: string; start?: number; end?: number; ease?: string };
 
 type Reply = { ok: boolean; view: MachineView | null; pinned: Pin | null };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -59,6 +65,8 @@ class Machines {
   focus: Record<string, Focus> = $state({});
   /** A state whose recording paused when the selection left its main. */
   paused: { def: string; machine: string; state: string } | null = $state(null);
+  /** Where the editor was opened from (an instance's lane), for its way back. */
+  origin: string | null = $state(null);
   /** The graph pane: shown automatically for a branching machine, or chosen. */
   graph: "auto" | "on" | "off" = $state("auto");
   #users = 0;
@@ -86,7 +94,9 @@ class Machines {
         const main = r.view?.main_of;
         const inMain = !!main && rootOf(sel) === main;
         if (inMain) this.#pinnedWith = sel;
-        if (r.pinned && !r.pinned.scrub && r.pinned.def === this.editing.def && !inMain && sel !== this.#pinnedWith) {
+        // Nothing selected is not leaving: the selection empties when the
+        // timeline's pieces it held go (a transition closed).
+        if (r.pinned && !r.pinned.scrub && r.pinned.def === this.editing.def && sel && !inMain && sel !== this.#pinnedWith) {
           this.paused = { def: r.pinned.def, machine: r.pinned.machine, state: r.pinned.state };
           await this.pin(r.pinned.def, r.pinned.machine, null);
         }
@@ -113,8 +123,9 @@ class Machines {
   }
 
   /** Open the editor on a component, showing `focus` of its first machine. */
-  async open(def: string, focus?: Focus, machine?: string) {
+  async open(def: string, focus?: Focus, machine?: string, origin: string | null = null) {
     this.editing = { def };
+    this.origin = origin;
     this.paused = null;
     this.selected = null;
     await this.read();
@@ -151,6 +162,20 @@ class Machines {
     return r;
   }
 
+  /** Edit one pair's timing as one step; a pair on the default timing
+   *  gets its own first (machine.rs `edit_pair_ops`). */
+  editPair(def: string, machine: string, from: string, to: string, edit: { ms?: number; ease?: string; name?: string; slices?: SliceEdit[]; follow?: string[] }, label: string) {
+    return this.author("edit_pair", { def, machine, from, to, ...edit, label });
+  }
+
+  /** Select a part of the main on the canvas (the editor's rows). */
+  selectPart(shown: string | null, add = false) {
+    if (!shown) return;
+    const doc = controllerManager.docClient;
+    const nodes = add ? [...new Set([...doc.selection, shown])] : [shown];
+    void doc.call("select", [JSON.stringify(nodes.map((node) => ({ node }))), "replace"]).catch(() => {});
+  }
+
   async patch(node: string, values: Record<string, string>, label: string) {
     const r = await controllerManager.docClient.command<{ ok: boolean; error?: string }>({ op: "inspect_patch", node, patch: JSON.stringify({ values, remove: [], label, replace: false }) });
     await this.read();
@@ -166,10 +191,11 @@ class Machines {
   /** What a double-click on the timeline opened: a state key's band (its
    *  transition) or stretch (its state). */
   async openKey(key: string, part: "band" | "lane") {
-    const r = await controllerManager.docClient.command<{ ok: boolean; def: string; machine: string; state: string | null; from: string | null }>({ op: "state_key", key });
+    const r = await controllerManager.docClient.command<{ ok: boolean; def: string; machine: string; state: string | null; from: string | null; entity_name?: string | null }>({ op: "state_key", key });
     if (!r.ok || !r.state) return;
-    if (part === "band" && r.from) await this.open(r.def, { kind: "pair", from: r.from, to: r.state }, r.machine);
-    else await this.open(r.def, { kind: "state", state: r.state }, r.machine);
+    const origin = r.entity_name ?? null;
+    if (part === "band" && r.from) await this.open(r.def, { kind: "pair", from: r.from, to: r.state }, r.machine, origin);
+    else await this.open(r.def, { kind: "state", state: r.state }, r.machine, origin);
   }
 }
 

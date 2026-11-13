@@ -14,6 +14,8 @@
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import Diamond from "@lucide/svelte/icons/diamond";
+  import Plus from "@lucide/svelte/icons/plus";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import { controllerManager } from "../../controller-manager.svelte";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -24,9 +26,12 @@
   let { panel }: { panel: string } = $props();
   const doc = controllerManager.docClient;
 
-  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number; from?: string; to?: string } | null } | null };
-  type Rows = { ok: boolean; rows: Row[]; y0: number; zoom: number; label_w: number; ruler_h: number; row_h: number };
-  let layout: Rows = $state({ ok: false, rows: [], y0: 0, zoom: 1, label_w: 160, ruler_h: 56, row_h: 22 });
+  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number; from?: string; to?: string } | null } | null; tween?: string | null; bars?: string[]; open?: boolean | null };
+  /** Inside a transition (machines.md §6): the same timeline at a second
+   *  level, under the state editor's header and beside its navigator. */
+  type Inside = { from: string; to: string; own: boolean; secs: number; transition: string | null; cursor: number };
+  type Rows = { ok: boolean; rows: Row[]; y0: number; zoom: number; label_w: number; ruler_h: number; row_h: number; top: number; inset: number; inside: Inside | null };
+  let layout: Rows = $state({ ok: false, rows: [], y0: 0, zoom: 1, label_w: 160, ruler_h: 56, row_h: 22, top: 0, inset: 0, inside: null });
   let root: HTMLDivElement | undefined = $state();
 
   // Document px to this column's CSS px: the canvas view's zoom is CSS px
@@ -34,6 +39,29 @@
   // `devicePixelRatio` here.
   const css = (px: number) => px * layout.zoom;
   const top = (y: number) => (y - layout.y0) * layout.zoom;
+  // Inside a transition: a row's slice values and selection (its bars).
+  const inside = $derived(layout.inside);
+  const view = $derived(machines.view);
+  const channel = (name: string | null) => view?.channels.find((c) => c.name === name);
+  const machineOf = $derived(view?.machines.find((m) => m.id === machines.pinned?.machine) ?? view?.machines[0]);
+  const shown = (v: number | string | null | undefined) => (v === null || v === undefined ? "–" : typeof v === "number" ? String(Math.round(v * 100) / 100) : v.startsWith("#") ? v.slice(0, 7) : `“${v}”`);
+  const valueIn = (state: string, c: string | null) => machineOf?.states.find((s) => s.name === state)?.pose[c ?? ""];
+  const picked = $derived(new Set(doc.selection));
+  const rowPicked = (row: Row) => !!row.bars?.length && row.bars.every((b) => picked.has(b));
+  /** A row's name selects its bars (a part's: all of them), Shift adds. */
+  function pickBars(row: Row, e: MouseEvent) {
+    if (!row.bars?.length) return;
+    const add = e.shiftKey || e.metaKey;
+    const nodes = add ? [...new Set([...doc.selection, ...row.bars])] : row.bars;
+    void doc.call("select", [JSON.stringify(nodes.map((node) => ({ node }))), "replace"]).catch(() => {});
+  }
+  // A property that follows the transition (added after its timing was
+  // made) gets a slice of its own.
+  function giveSlice(row: Row) {
+    const pin = machines.pinned;
+    if (!inside || !pin || !view || !row.prop) return;
+    void machines.editPair(view.def, pin.machine, inside.from, inside.to, { slices: [{ channel: row.prop }] }, "slice");
+  }
 
   let pending = false;
   async function read() {
@@ -103,20 +131,32 @@
     if (part && o.standsFor) void machines.openKey(o.standsFor, part);
   });
   // A lane's readout opens its component's editor.
-  async function openLane(entity: string) {
+  async function openLane(entity: string, name: string) {
     const r = await doc.command<{ ok: boolean; view: { def: string } | null }>({ op: "machine_view", node: entity });
-    if (r.ok && r.view) void machines.open(r.view.def);
+    if (r.ok && r.view) void machines.open(r.view.def, undefined, undefined, name);
   }
   // A name selects its object, and hovering it lights the object in every view.
   const probe = (node: string, action: "hover" | "unhover" | "select") => doc.command({ op: "narrative_probe", node, action });
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="timeline-column canvas-ui" bind:this={root} style:width="{css(layout.label_w)}px" onwheel={wheel} data-timeline-column>
+<div class="timeline-column canvas-ui" class:inside={!!inside} bind:this={root} style:left="{css(layout.inset)}px" style:top="{css(layout.top)}px" style:width="{css(layout.label_w)}px" onwheel={wheel} data-timeline-column>
   <div class="rows" style:top="{css(layout.ruler_h)}px">
     {#each layout.rows as row (row.kind + row.target + (row.prop ?? ""))}
-      <div class="row {row.kind}" class:error={row.error} style:top="{top(row.y) - css(layout.ruler_h)}px" style:height="{css(layout.row_h)}px" data-row={row.kind} data-target={row.target} data-prop={row.prop}>
-        {#if row.kind === "object"}
+      <div class="row {row.kind}" class:error={row.error} class:picked={inside && rowPicked(row)} style:top="{top(row.y) - css(layout.top + layout.ruler_h)}px" style:height="{css(layout.row_h)}px" data-row={row.kind} data-target={row.target} data-prop={row.prop}>
+        {#if inside}
+          <!-- Inside a transition: a part, then its properties; a name
+               selects the bars, hovering lights the part on the canvas. -->
+          {#if row.kind === "object"}
+            <IconButton icon={row.open ? ChevronDown : ChevronRight} size={12} class="is-row disclose" label="{row.open ? 'Fold' : 'Unfold'} {row.label}" title={row.open ? "Fold: one row for the part (its bar moves all its slices)" : "Unfold: a row per property"} onclick={() => doc.command({ op: "timeline_axis", fields: JSON.stringify({ open: row.target, on: !row.open }) }).then(read)} />
+            <BitsButton.Root class="name" title={row.bars?.length ? `Select ${row.label}'s slices (Shift adds)` : row.label} onclick={(e: MouseEvent) => pickBars(row, e)} onpointerenter={() => probe(row.target, "hover")} onpointerleave={() => probe("", "unhover")}><span>{row.label}</span></BitsButton.Root>
+          {:else}
+            {@const c = channel(row.prop)}
+            <button class="prop pick" title={row.bars?.length ? `Select ${row.label}'s slice (Shift adds)` : row.label} onclick={(e) => pickBars(row, e)} onpointerenter={() => probe(row.target, "hover")} onpointerleave={() => probe("", "unhover")}>{row.label}</button>
+            <span class="vals" title="{inside.from} → {inside.to}">{#if c?.kind === "color"}<span class="sw" style:background={String(valueIn(inside.from, row.prop) ?? "")}></span>→<span class="sw" style:background={String(valueIn(inside.to, row.prop) ?? "")}></span>{:else}{shown(valueIn(inside.from, row.prop))} → {shown(valueIn(inside.to, row.prop))}{/if}</span>
+            {#if inside.own && !row.tween}<IconButton icon={Plus} size={12} class="is-row" label="Give {row.label} its own slice" title="It follows the transition's curve: give it a slice of its own to move" onclick={() => giveSlice(row)} />{/if}
+          {/if}
+        {:else if row.kind === "object"}
           <BitsButton.Root
             class="name"
             title="Select {row.label}"
@@ -128,9 +168,10 @@
             <span>{row.label}</span>
           </BitsButton.Root>
         {:else}
-          <span class="prop" title={row.prop}>{row.label}</span>
+          <!-- A state lane's pill names its state; the row's "state" label would only crowd it. -->
+          {#if !(row.lane && row.state)}<span class="prop" title={row.prop}>{row.label}</span>{/if}
           {#if row.lane && row.state}
-            <button class="now" title={row.state.running ? `At the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : "At the playhead. Click to edit this component's states"} onclick={() => openLane(row.target)}>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""} {Math.round(row.state.running.progress * 100)}%{:else}{row.state.state ?? ""}{/if}</button>
+            <button class="now" title={row.state.running ? `${row.label} at the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : `${row.label} at the playhead. Click to edit this component's states`} onclick={() => openLane(row.target, layout.rows.find((x) => x.kind === "object" && x.target === row.target)?.label ?? "")}>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""}{:else}{row.state.state ?? ""}{/if}</button>
           {/if}
           <span class="keys">
             <IconButton icon={ChevronLeft} size={12} class="is-row" label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
@@ -142,11 +183,12 @@
     {/each}
   </div>
   <div class="corner" style:height="{css(layout.ruler_h)}px">
-    <TimelineTransport {area} over={() => over} />
+    {#if inside}<span class="corner-label">Part · property</span><span class="corner-label">{inside.from} → {inside.to}</span>
+    {:else}<TimelineTransport {area} over={() => over} />{/if}
   </div>
 </div>
 {#if machines.editing}
-  <StateEditor />
+  <StateEditor zoom={layout.zoom} inside={layout.inside} {panel} />
 {/if}
 
 <style>
@@ -245,5 +287,61 @@
   .keys {
     display: flex;
     margin-left: auto;
+  }
+  /* Inside a transition (machines.md §6). */
+  .inside .corner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 0 8px;
+  }
+  .corner-label {
+    font-size: var(--text-xs);
+    color: var(--fg-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .inside .row.object {
+    padding-left: 2px;
+  }
+  .row.picked {
+    background: var(--accent-soft);
+  }
+  .pick {
+    flex: 1;
+    min-width: 0;
+    padding: 1px 4px;
+    margin-left: -4px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pick:hover {
+    background: var(--hover);
+  }
+  .vals {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .sw {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--border-strong);
   }
 </style>

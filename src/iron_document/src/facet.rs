@@ -398,13 +398,13 @@ facets! {
         path_length: Number = Value::Number(0.0),
     }
 
-    /// A number a component's state machine moves (plans/specs/machines.md):
-    /// a `channel` child of a definition, copied onto each instance like a
+    /// A value a component's state machine moves (plans/specs/machines.md): a
+    /// number, a colour, or a text's words. A `channel` child of a definition, copied onto each instance like a
     /// port. `value` is its rest value; while a state differs from it, or a
     /// transition runs, the machine player publishes the instance's value.
     /// Template parts bind to it (`{= #fade.channel.value}`).
     Channel / "channel" => Channel {
-        value: Number = Value::Number(0.0),
+        value: Any = Value::Number(0.0),
     }
 
     /// How a machine is driven from outside, and whether it is moving
@@ -593,7 +593,8 @@ facets! {
 
     /// One channel's motion inside a transition, as fractions of it: from
     /// `start` to `end` (0..1 of the transition's progress), shaped by
-    /// `ease`; so retiming the transition keeps its proportions. The same
+    /// `ease` (empty: the transition's own); so retiming the transition
+    /// keeps its proportions. The same
     /// as `ease(curve, window(progress, start, end))`. `shape`, when bound
     /// to a function of progress (`{= p => …}`), replaces all three: any
     /// motion, an overshoot or a pulse (machines.md §9 Q7).
@@ -601,7 +602,7 @@ facets! {
         channel: Str = Value::Str(String::new()),
         start: Number = Value::Number(0.0),
         end: Number = Value::Number(1.0),
-        ease: Str = Value::Str("easy_ease".to_owned()),
+        ease: Str = Value::Str(String::new()),
         shape: Any = Value::Number(f64::NAN),
     }
 
@@ -694,12 +695,15 @@ facets! {
     /// §4.2): `t0` at the left edge, `pps` units per second (pixels per
     /// unit), `label_w` the header column's width, `y0` how far its rows
     /// are scrolled up under the ruler (px). A drag holds these fixed: it
-    /// edits what a view shows, never how it is looked at.
+    /// edits what a view shows, never how it is looked at. `cursor` is the
+    /// playhead's time when the view has a time of its own (inside a
+    /// transition, how far into it, s): what the view shows, so it moves.
     Axis / "axis" => Axis {
         t0: Number = Value::Number(0.0),
         pps: Number = Value::Number(100.0),
         label_w: Number = Value::Number(160.0),
         y0: Number = Value::Number(0.0),
+        cursor: Number = Value::Number(0.0),
     }
 
     /// A value laid along a node (timeline.md §7): with `affords.drag=

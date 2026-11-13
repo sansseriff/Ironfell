@@ -151,19 +151,26 @@ add`" (`scripts/pool-create.sh` made them and re-creates any that are missing).
 Worktrees not named `pool-N` are T3's and can be deleted as usual; never delete a
 pool slot or its `target/`.
 
-- **Which slot is free:** `zsh scripts/pool-status.sh` lists each slot's branch,
-  uncommitted files and PR state. Free means idle (on its local parking branch,
-  `pool-N`) or its PR merged or closed, with nothing uncommitted.
-- **Starting a task in a slot** ("do X in pool-2"): start the thread with
+- **"Start work in an available worktree"** (or "in the pool"): run
+  `zsh scripts/pool-claim.sh <task>` from any checkout. Under a lock, so two agents
+  never take the same slot, it picks the first free slot, puts it on `t3/<task>` from
+  the latest `origin/master`, and prints its path. Then start the thread there with
   `t3_thread_launch`, `workspaceStrategy: { type: "existing_worktree", worktreePath:
-  "~/.t3/worktrees/iron/pool-2" }` (expanded). Its first step, in the slot, is
-  `zsh scripts/pool-start.sh <task>`: it refuses while the slot is in use
-  (uncommitted changes, unpushed commits, an open PR), fetches, puts the slot on
-  `t3/<task>` from the latest `origin/master`, deletes the previous branch's local
-  name (it is pushed), and runs `bun install` and the assets copy.
+  <that path> }`, telling it the branch is already set up. If the claim says no slot
+  is free, report that to the user (with its `pool-status.sh` table) instead of
+  falling back to a T3 worktree; the user decides.
+- **A named slot** ("do X in pool-2"): launch the thread there the same way; its
+  first step, in the slot, is `zsh scripts/pool-start.sh <task>`. It refuses while
+  the slot is in use (uncommitted changes, unpushed commits, an open PR).
+- **Free** means nothing uncommitted and either idle (on its local parking branch,
+  `pool-N`) or its PR merged or closed. `zsh scripts/pool-status.sh` lists each
+  slot's branch, uncommitted files and PR state. A pushed branch with no PR yet is
+  still in use.
+- **A task abandoned without a merged PR:** `zsh scripts/pool-release.sh` in the slot
+  returns it to idle (`--discard` drops unpushed work, so only when the user says).
 - **Then as any worktree thread:** commit, push, open a PR to `master`, merge when
-  the user asks. Nothing to clean up afterwards; the next `pool-start.sh` takes the
-  slot over.
+  the user asks. Nothing to clean up afterwards; once the PR is merged, the next
+  claim takes the slot over.
 - **T3's worktree cleanup** ("delete merged worktrees", inactive worktrees) must not
   remove the slots: keep those settings off, or check that they leave `pool-N` alone.
 

@@ -6,8 +6,9 @@ requests one; don't ask.
 If the user requests a worktree, T3 Code creates it: `t3_thread_launch` with a
 `worktree` workspaceStrategy for new work, or `t3_worktree_handoff` to move this
 thread. Never `git worktree add`, `EnterWorktree`, or `Agent` worktree isolation.
-The exception is the standing pool, `pool-1` … `pool-5`, reused with
-`scripts/pool-start.sh` (AGENTS.md, "Worktree pool").
+The exception is the standing pool, `pool-1` … `pool-5`: "start work in an
+available worktree" means `scripts/pool-claim.sh <task>`, then a thread launched
+into the slot it prints (AGENTS.md, "Worktree pool").
 
 Push every commit. In a worktree thread, open a PR to `master` when done; merge only
 when the user asks (AGENTS.md, "Branches, pushing and merging").

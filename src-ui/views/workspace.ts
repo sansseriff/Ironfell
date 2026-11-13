@@ -17,7 +17,7 @@ import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
 import { dockState } from './dock_state.svelte';
-import { LATENCY_VIEW, SETTINGS_VIEW, titleOf, type ViewSpec } from './views';
+import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import { lastActive, noteActive } from './active_view.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
@@ -505,13 +505,4 @@ export function showStripView(from: { group: { id: string } }, spec: ViewSpec, i
   } else {
     freshPanel({ referenceGroup: group, direction: 'within' });
   }
-}
-
-/** The app has one settings entry, independent of the dock's tab headers.
- * Open in the centre so the left selector and its settings button stay put. */
-export function showSettings() {
-  if (!current) return;
-  const existing = current.panels.find((p) => specOf(p)?.notation === 'settings');
-  if (existing) existing.api.setActive();
-  else current.addPanel({ id: freshId(current, 'settings'), component: 'view', title: 'Settings', params: { spec: SETTINGS_VIEW }, position: current.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined });
 }

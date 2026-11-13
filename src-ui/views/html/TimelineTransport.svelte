@@ -75,6 +75,7 @@
   const onKey = (e: KeyboardEvent) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target as HTMLElement | null;
+    if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
     if (t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
     if (e.key.toLowerCase() === "k" && e.shiftKey) {
       e.preventDefault();

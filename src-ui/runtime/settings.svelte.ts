@@ -1,7 +1,7 @@
 import { isNativeHost } from './native_host';
 /**
  * App settings: how this browser runs Iron, never document state. Kept in
- * browser storage. The Settings view (views/html/SettingsView.svelte)
+ * browser storage. The Settings dialog (views/SettingsDialog.svelte)
  * changes them; the renderer and runtime restart the app, the render scale
  * does not.
  *

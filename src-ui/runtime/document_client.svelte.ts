@@ -176,7 +176,7 @@ export class DocumentClient {
   private counterpartGeneration = 0;
   private stopCounterparts: (() => void) | null = null;
   /** A document to load into the next engine: what a restart (the
-   *  Settings view) carries over on an unsaved page. */
+   *  Settings dialog) carries over on an unsaved page. */
   private carried: string | null = null;
   /** Whether the page has made its first document (the boot: a scope, or
    *  the demo with `?stress=`, `?meters=` and the showcase). */

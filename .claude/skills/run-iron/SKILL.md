@@ -3540,11 +3540,13 @@ DPR=2 bun .claude/skills/run-iron/frontend-refresh.ts
 ```
 
 `URL` overrides the demo URL. Expected per DPR:
-`PASS frontend refresh DPR <n>: global settings, theme, singleton view, default headers and grab recovery; no page errors`.
+`PASS frontend refresh DPR <n>: global settings, theme, sectioned modal, keyboard dismissal, default headers and grab recovery; no page errors`.
 Light/dark screenshots are under `.agents/frontend-refresh/dpr<n>/`. Fresh layouts
 hide Inspector and Timeline headers; use their grab menus or `__dock` to focus a
 view instead of clicking a hidden tab. App Settings now opens from the one lower-left
-Settings menu, not a gear per tab group. Existing saved layouts retain header choices.
+Settings menu, not a gear per tab group. Settings opens a modal with sidebar
+sections; it never adds or changes a dock tab. The fixture also checks section
+controls, keyboard navigation, Escape/focus restoration and a narrow-window layout. Existing saved layouts retain header choices.
 
 The fast smoke expected output is unchanged: six `assertion passed` lines and
 `(no page errors)`. `timeline.txt` retains its expected retiming, key trim, auto-key,
@@ -3555,3 +3557,7 @@ Rust tests and frontend check pass (zero errors, 12 pre-existing warnings).
 `composition-settings.ts` now focuses the hidden Timeline through the dock instead
 of clicking its tab; its controls, grid/background pixels, theme, undo and reload
 checks pass at DPR 1 and 2 after the refresh.
+
+Modal follow-up: `frontend-refresh.ts` also verifies that Backspace and Shift+K
+leave the selected document and auto-keyframe mode unchanged while settings is
+open. Both DPRs pass, with zero frontend errors and 11 existing warnings.

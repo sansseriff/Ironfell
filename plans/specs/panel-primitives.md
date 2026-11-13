@@ -1,6 +1,6 @@
 # Panel primitives: panels from the same parts as everything else
 
-**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10; global settings and quieter default panel chrome built 2026-11-13.**
+**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10; global settings modal and quieter default panel chrome built 2026-11-13.**
 
 Iron's long-term rule for panels: a panel is not special shell code. It is a view (a
 source drawn in a notation, `views.ts`), and the parts that make it up are the parts the
@@ -133,7 +133,15 @@ arrangement (Settings → Reset layout gives the new one).
 The selector uses a white rail in light mode, distinct from the gray composition
 tab background. One workspace-level Settings menu sits at its lower-left foot,
 remaining reachable when left views switch or close. It offers System/Light/Dark
-appearance and opens or focuses one Settings view in the centre. Tab groups no
+appearance and opens a Settings modal above the workspace. Its sidebar selects
+Appearance, Performance, Workspace or Developer, with controls on the right and
+independent content scrolling. Bits UI Dialog manages modal focus and dismissal;
+vertical Tabs provide keyboard section navigation. Close and Escape return focus
+to the lower-left settings button without changing the dock layout. Canvas and
+timeline shortcuts stay idle while the modal is open, including when focus is
+in a portalled select menu. At narrow
+widths, controls stack within the content column. The settings dock notation and
+its tab-opening path were removed. Tab groups no
 longer repeat the app-settings gear or offer duplicate Settings views in their
 add-view menus. Composition run/FPS/render-inspector menus and agent settings
 retain their contextual access.
@@ -143,7 +151,11 @@ Existing saved layouts retain the person's choice; grab menus still switch views
 drag panels and restore tab bars. Layout and app preferences remain session/browser
 state, without authored document edits.
 
-`frontend-refresh.ts` checks the menu, theme shortcuts, singleton settings view,
-left-view switching and hidden-header recovery at DPR 1 and 2. Light/dark screenshots
+`frontend-refresh.ts` checks the menu, theme shortcuts, sectioned settings modal, keyboard dismissal, unchanged dock layout,
+narrow-window sizing, left-view switching and hidden-header recovery at DPR 1 and 2. Light/dark screenshots
 are saved under `.agents/frontend-refresh/dpr<N>/`. Frontend checking and fast smoke
 pass; timeline rendering verification is recorded in `timeline.md`.
+
+The modal follow-up passes the refreshed DPR 1/2 fixture, fast smoke and frontend
+checking (zero errors, 11 existing warnings) after rebasing onto the 2D transform
+controls work. The WebGL2 build and all 15 timeline Rust tests pass on that base.

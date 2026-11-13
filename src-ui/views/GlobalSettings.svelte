@@ -2,7 +2,8 @@
   import { DropdownMenu } from "bits-ui";
   import Settings from "@lucide/svelte/icons/settings";
   import Check from "@lucide/svelte/icons/check";
-  import { showSettings } from "./workspace";
+  import SettingsDialog from "./SettingsDialog.svelte";
+  let settingsOpen = $state(false);
   import { settings, type Appearance } from "../runtime/settings.svelte";
   import { setAppearance } from "../runtime/theme.svelte";
 
@@ -20,7 +21,7 @@
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content class="ui-menu" side="right" align="end" sideOffset={8}>
-        <DropdownMenu.Item class="ui-menu-item" onSelect={showSettings}>App settings…</DropdownMenu.Item>
+        <DropdownMenu.Item class="ui-menu-item" onSelect={() => { settingsOpen = true; }}>App settings…</DropdownMenu.Item>
         <DropdownMenu.Separator class="ui-menu-separator" />
         <DropdownMenu.Group>
           <DropdownMenu.GroupHeading class="ui-menu-heading">Appearance</DropdownMenu.GroupHeading>
@@ -35,6 +36,7 @@
     </DropdownMenu.Portal>
   </DropdownMenu.Root>
 </div>
+<SettingsDialog bind:open={settingsOpen} />
 
 <style>
   /* A single workspace action at the foot of the left view selector. It

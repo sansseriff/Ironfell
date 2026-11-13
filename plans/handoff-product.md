@@ -22,7 +22,8 @@ Rendering performance (stage H) has its own handoff, [`handoff-render.md`](hando
 
 Done (details in the roadmap's Status table):
 
-- **Frontend UI refresh, 2026-11-13:** one lower-left global Settings menu, white
+- **Frontend UI refresh, 2026-11-13:** one lower-left global Settings menu opening a
+  modal with a section sidebar and controls on the right, white
   light-mode selector rail, hidden Inspector/Timeline headers by default, and
   a lighter timeline with object bars and property timing lines/key diamonds.
   Settings/navigation and light/dark screenshots pass at DPR 1/2; fast smoke,

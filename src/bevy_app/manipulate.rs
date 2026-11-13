@@ -294,14 +294,62 @@ pub(crate) struct PlugDrag {
     pub at: Point,
 }
 
+/// How a point's other handle follows the one dragged (Figma's mirroring).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Mirror {
+    /// Opposite, the same length.
+    Full,
+    /// Opposite, keeping its own length.
+    Angle,
+    /// Left where it is: the handles are broken apart.
+    Free,
+}
+
+impl Mirror {
+    /// What a point's handles at the press say: both zero (a corner, its
+    /// handles pulled out) or equal and opposite mirror fully; opposite but
+    /// unequal mirror the angle; anything else, one of them zero included,
+    /// is broken.
+    pub(crate) fn of(mine: kurbo::Vec2, other: kurbo::Vec2) -> Mirror {
+        let (a, b) = (mine.hypot(), other.hypot());
+        let eps = 1e-6 * a.max(b).max(1.0);
+        if a <= eps && b <= eps {
+            Mirror::Full
+        } else if a <= eps || b <= eps {
+            Mirror::Free
+        } else if (mine + other).hypot() <= 1e-3 * a.max(b) {
+            Mirror::Full
+        } else if mine.cross(other).abs() <= 1e-3 * a * b && mine.dot(other) < 0.0 {
+            Mirror::Angle
+        } else {
+            Mirror::Free
+        }
+    }
+
+    /// Where the other handle goes when the dragged one is at `v`, from
+    /// `other` at the press; `alt` breaks them for this drag.
+    pub(crate) fn follow(self, v: kurbo::Vec2, other: kurbo::Vec2, alt: bool) -> kurbo::Vec2 {
+        match (self, alt) {
+            (_, true) | (Mirror::Free, _) => other,
+            (Mirror::Full, _) => -v,
+            (Mirror::Angle, _) => {
+                let len = v.hypot();
+                if len > 1e-9 { -v * (other.hypot() / len) } else { other }
+            }
+        }
+    }
+}
+
 /// Every document edit a pointer can make.
 pub(crate) enum Manip {
     Drag(Drag),
     Plug(PlugDrag),
     Transform(Transform2),
-    /// A path point's Bézier handle, `out` or in, mirrored unless Alt;
-    /// `to_local` maps window px into the path's space.
-    PathHandle { point: NodeId, out: bool, to_local: Affine, at: Point },
+    /// A path point's Bézier handle, `out` or in; `to_local` maps window
+    /// px into the path's space. The other handle follows as `mirror` says
+    /// (read from the handles at the press), or stays at `other`, its value
+    /// then, while Alt is held.
+    PathHandle { point: NodeId, out: bool, to_local: Affine, at: Point, other: kurbo::Vec2, mirror: Mirror },
     /// A path's segment bent (Figma's Cmd-drag on a segment): the curve
     /// at `t` follows the pointer by moving both its inner handles, from
     /// point `a`'s out-handle to `b`'s in-handle; `curve` is the segment at
@@ -533,15 +581,11 @@ impl Manip {
                 }
                 preview_writes(cx.store, writes);
             }
-            Manip::PathHandle { point, out, to_local, at } => {
+            Manip::PathHandle { point, out, to_local, at, other: o0, mirror } => {
                 let v = *to_local * screen - *at;
                 let (mine, other) = if *out { (("handles.ox", "handles.oy"), ("handles.ix", "handles.iy")) } else { (("handles.ix", "handles.iy"), ("handles.ox", "handles.oy")) };
-                let mut writes = vec![(*point, mine.0, v.x), (*point, mine.1, v.y)];
-                // Smooth unless Alt breaks the handles apart.
-                if !mods.alt {
-                    writes.extend([(*point, other.0, -v.x), (*point, other.1, -v.y)]);
-                }
-                preview_writes(cx.store, writes);
+                let o = mirror.follow(v, *o0, mods.alt);
+                preview_writes(cx.store, vec![(*point, mine.0, v.x), (*point, mine.1, v.y), (*point, other.0, o.x), (*point, other.1, o.y)]);
             }
             Manip::Bend { a, b, curve, t, to_local } => {
                 use kurbo::ParamCurve as _;

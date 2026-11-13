@@ -297,9 +297,7 @@ pub fn pen_tool_system(
     // On a point: remove it.
     if let Some(point) = removable(&geo, view, start) {
         pending.0.push(transaction("delete point", vec![Op::Delete { id: point }]));
-        if edit.point == Some(point) {
-            edit.point = None;
-        }
+        edit.remove(crate::bevy_app::select::EditPart::Point(point));
         return;
     }
 
@@ -309,7 +307,7 @@ pub fn pen_tool_system(
         if let Some(ops) = insert_point(&geo, path, i, j, t, id) {
             pending.0.push(transaction("add point", ops));
             if edit.path_in(&panel).is_some_and(|r| r.node() == path) {
-                edit.point = Some(id);
+                edit.only(crate::bevy_app::select::EditPart::Point(id));
             }
         }
         return;

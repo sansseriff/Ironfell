@@ -168,22 +168,38 @@ composition tab bar shows which is active.
 
 **Editing** (Figma's two states, 2026-10-15). A click on a path selects it with its
 transform box, as any node. A double-click on it, or Enter, edits its points
-(`PathEdit`): the box goes, the path is outlined in grey and its points show, and a
-clicked point is selected (filled) with its handles and its neighbours' facing ones.
-Esc leaves editing with the path still selected; so does selecting anything else, or a
-press off the path. A double-click counts by time and place alone, so it edits even
+(`PathEdit`): the box goes, the path is outlined in grey and its points show. Selected
+points are filled and show their handles and their neighbours' facing ones; a selected
+segment (an edge) is drawn over in blue. Esc leaves editing with the path still
+selected; so does selecting anything else, or a click on empty space. A double-click counts by time and place alone, so it edits even
 where the path's ends sit on its box's grips. A rect or ellipse double-clicked is made a
 path and edited.
-- A point drags through `Store::begin_drag` like any node ("move point").
-- A handle drags its leaves ("move handle"), mirrored unless Alt.
-- Cmd-dragging a point pulls out fresh mirrored handles from it instead of moving it
-  (Figma's bend on a point; "move handle"); Cmd over a point shows the adjust cursor.
+- **Several parts at once (2026-11-13).** A click on a point or a segment selects it
+  alone; Shift-click adds it, or takes it out if it was selected. A press on a selected
+  part keeps the selection, so a drag moves all of it; a click there narrows to it.
+  Dragging moves every selected point and both ends of every selected edge through
+  `Store::begin_drag`, one store gesture and so one transaction ("move point", "move
+  points", "move edge", "move edges"), snapping level or plumb with the path's other
+  points. A drag on the path's fill or on empty space (or an artboard's background)
+  draws a marquee over the points, added to the selection with Shift; a click there
+  clears the points, and on empty space leaves editing.
+- A handle drags its leaves ("move handle"). The other handle follows as the pair
+  stood at the press (`manipulate::Mirror`, Figma's mirroring, read from the handles
+  rather than stored): equal and opposite mirror angle and length, opposite but
+  unequal mirror the angle only, anything else stays put. Alt breaks them for the
+  drag, and the pair then stays broken; Alt over a shown handle shows the `break`
+  cursor.
+- Cmd (or Ctrl) over a point shows the adjust cursor. A click makes the point a
+  corner, its handles set to zero ("make corner"); a drag pulls out fresh mirrored
+  handles from it instead of moving it (Figma's bend on a point; "move handle").
 - Cmd-dragging a segment bends it ("bend segment"): both its inner handles move by
   one offset so the curve at the grabbed spot follows the pointer (the weight
   3t(1-t) clamped near the ends). The neighbours' other handles stay, so a smooth
   point there may kink. Cmd over a segment shows the bend cursor.
-- Delete or Backspace removes the selected point ("delete point"); the path stays
-  joined across the gap, and keeps two points at least.
+- Delete or Backspace removes the selected points in one transaction ("delete point",
+  "delete points"); the path stays joined across each gap, and each contour keeps two
+  points at least. Selected edges are left alone: deleting an edge (opening the contour
+  there) is not built yet.
 - Resizing a path moves its points and scales its handles (`Kind::Points`), so the
   stroke keeps its width.
 

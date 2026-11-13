@@ -134,6 +134,73 @@ sleep 400
 eval (async () => ((await penPath()).match(/<point /g) || []).length)()
 key Meta+z
 sleep 400
+# Several parts at once (Figma's vector edit): Shift-click adds a point, and a
+# drag of either moves both as one transaction; a click on a segment selects
+# it as an edge, whose drag moves its two ends; a marquee on empty space picks
+# points, and Backspace takes out the ones it can. Each undoes.
+key v
+eval window.penPoints = async () => (await penPath()).match(/<point[^>]*>/g).map(p => p.match(/ x="[^"]*" y="[^"]*"/)[0].trim())
+dclick 200 200
+keydown Shift
+dclick 330 420
+keyup Shift
+ddrag 200 200 210 190
+sleep 400
+eval penPoints()
+shot path-multi
+key Meta+z
+dclick 287 178
+ddrag 287 178 297 188
+sleep 400
+eval penPoints()
+shot path-edge
+key Meta+z
+ddrag 160 150 470 450
+sleep 300
+key Backspace
+sleep 400
+eval (async () => ((await penPath()).match(/<point /g) || []).length)()
+key Meta+z
+sleep 400
+# Cmd (or Ctrl) on a smooth point: a click makes it a corner, a drag pulls
+# fresh mirrored handles out of it. Alt on a shown handle (the break cursor)
+# moves it without its pair, and the pair stays broken for the next drag.
+# Each undoes.
+key v
+eval window.penHandles = async i => ((await penPath()).match(/<point[^>]*>/g)[i].match(/ [io][xy]="[^"]*"/g) || []).join('').trim().replace(/(\d+\.\d)\d+/g, '$1') || 'corner'
+dclick 420 200
+keydown Meta
+dmove 420 200
+sleep 300
+eval document.querySelector('canvas').dataset.cursor
+dclick 420 200
+keyup Meta
+sleep 400
+eval penHandles(1)
+keydown Meta
+ddrag 420 200 460 210
+keyup Meta
+sleep 400
+eval penHandles(1)
+key Meta+z
+key Meta+z
+sleep 400
+eval penHandles(1)
+dmove 480 260
+keydown Alt
+sleep 300
+eval document.querySelector('canvas').dataset.cursor
+ddrag 480 260 480 300
+keyup Alt
+sleep 400
+eval penHandles(1)
+ddrag 360 140 340 140
+sleep 400
+eval penHandles(1)
+shot path-break
+key Meta+z
+key Meta+z
+sleep 400
 key Escape
 key Escape
 shot pen-path

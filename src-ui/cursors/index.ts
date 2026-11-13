@@ -5,8 +5,9 @@
  *
  * Names: `default`, `grab`, `grabbing`, `pen`, `pen-add` (on a segment, to
  * add a point), `pen-close` (on the first point, to close), `pen-remove` (on
- * a point, to remove it), `point` (Cmd over a path's point: a drag pulls out
- * its handles), `bend` (Cmd over a segment: a drag bends it), `radius` (a
+ * a point, to remove it), `point` (Cmd or Ctrl over a path's point: a drag
+ * pulls out its handles, a click makes it a corner), `break` (Alt over a
+ * shown handle: a drag moves it without its pair), `bend` (Cmd over a segment: a drag bends it), `radius` (a
  * shape's corner or arc handle), `trim-start` and `trim-end` (a timeline span's start
  * or end: an `ends` grip, a clip's first or last key), `crosshair`, `resize:<axis degrees>` and `rotate:<degrees
  * toward the grabbed corner>`. The last two turn with the shape, as Figma's
@@ -19,6 +20,7 @@ import grabUrl from './grab.png';
 import grabbingUrl from './grabbing.png';
 import penUrl from './pen.png';
 import bendUrl from './bend.png';
+import breakUrl from './break.png';
 import penAddUrl from './pen-add.png';
 import penCloseUrl from './pen-close.png';
 import penRemoveUrl from './pen-remove.png';
@@ -52,6 +54,7 @@ const fixed: Record<string, [string, number, number, string]> = {
   'pen-close': [penCloseUrl, 4, 4, 'crosshair'],
   'pen-remove': [penRemoveUrl, 4, 4, 'crosshair'],
   bend: [bendUrl, 4, 4, 'pointer'],
+  break: [breakUrl, 4, 4, 'pointer'],
   point: [pointUrl, 4, 4, 'move'],
   radius: [radiusUrl, 4, 4, 'pointer'],
 };

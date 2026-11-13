@@ -464,10 +464,17 @@
                 {@const run = machines.view?.machines[0]?.current}
                 {@const stateField = g.inputs.find((f) => f.group === "States")}
                 {@const keyed = !!stateField?.key && stateField.key !== "none"}
-                <div class="input-group states-head"><span class="ui-subheading">State</span><span class="grow"></span>{#if stateField?.key}<Button small variant="outline" class="key-state {stateField.key}" data-key={stateField.key} onclick={() => keyState(inspected!.component!.entity, stateField!.leaf)} title={stateField.key === "on" ? "Remove this key" : keyed ? "Choosing another state here adds a key" : "Start animating the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{stateField.key === "on" ? `Key at ${clockLabel}` : keyed ? `Add key at ${clockLabel}` : "Key state"}</Button>{/if}<Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
+                <div class="input-group states-head"><span class="ui-subheading">State</span><span class="grow"></span><Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
                 {#if run?.transition && run.from && run.to}{@const tn = machines.view?.machines[0]?.transitions.find((x) => x.id === run.transition)}<div class="hint running" role="status">{tn?.name && tn.from === run.from && tn.to === run.to && tn.name !== `${tn.from} to ${tn.to}` && tn.name !== "change" ? tn.name : `${run.from} → ${run.to}`} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
               {:else if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
               <div class="property-grid" class:state-only={g.name === "States" && hasStates}>{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+              {#if g.name === "States" && hasStates}
+                {@const sf = g.inputs.find((f) => f.group === "States")}
+                {@const anim = !!sf?.key && sf.key !== "none"}
+                <!-- Whether choosing a state records: not animated, animated
+                     (a choice adds a key at the playhead), or a key here. -->
+                {#if sf?.key}<div class="key-row" data-key={sf.key}><Button small variant="outline" class="key-state {sf.key}" onclick={() => keyState(inspected!.component!.entity, sf.leaf)} title={sf.key === "on" ? "Remove this key" : anim ? "Add a key for this state at the playhead" : "Animate the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{sf.key === "on" ? `Key at ${clockLabel}` : anim ? `Add key at ${clockLabel}` : "Key state"}</Button>{#if anim}<span class="ui-badge animated" title="Choosing a state adds a key at the playhead"><Diamond size={10} strokeWidth={1.75} />Animated</span>{/if}</div>{/if}
+              {/if}
             {/each}
             <!-- What this picture reads from where it is placed (reactivity.md §6). -->
             {#if inspected.component.context.length}
@@ -704,8 +711,11 @@
   .state-only :global(.field > .label) { display: none; }
   .states-head { display: flex; align-items: center; gap: 6px; }
   .states-head .grow { flex: 1; }
-  .states-head :global(.key-state.on), .states-head :global(.key-state.animated) { color: var(--accent); }
-  .states-head :global(.key-state.on svg) { fill: currentColor; }
+  .key-row { display: flex; align-items: center; gap: 8px; }
+  .key-row :global(.key-state.on) { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .key-row :global(.key-state.on svg) { fill: currentColor; }
+  .key-row .animated { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
+  .key-row .animated :global(svg) { fill: currentColor; }
   .running { color: var(--accent); font-variant-numeric: tabular-nums; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
   .door-label { color: var(--fg-muted); font-size: var(--text-sm); }

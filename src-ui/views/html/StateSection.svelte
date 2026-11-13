@@ -36,7 +36,7 @@
 {:else if view && m && pair}
   <Section title="{pair.from} → {pair.to}" class="property-section" data-section="transition" meta={t ? (own ? "own timing" : "default timing") : "snaps"}>
     {#if t}
-      <label class="ui-field name"><span>Name</span><input aria-label="Transition name" placeholder="Name" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
+      <label class="ui-field name"><span>Name</span><input aria-label="Transition name" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>

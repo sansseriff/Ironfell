@@ -21,6 +21,7 @@
   import { DropdownMenu } from "bits-ui";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import ArrowRight from "@lucide/svelte/icons/arrow-right";
   import Flag from "@lucide/svelte/icons/flag";
   import Network from "@lucide/svelte/icons/network";
   import Table2 from "@lucide/svelte/icons/table-2";
@@ -277,7 +278,9 @@
         const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
         // The label is level, beside its own line on the side away from
         // the pair's other arrow, a third of the way from its start.
-        const w = label.length * 6.2 + 16;
+        // With the two states' swatches before it, so it says which way
+        // it goes without tracing its arrow.
+        const w = label.length * 6.2 + 16 + 30;
         // Beside a sloping line it moves sideways only (far enough for
         // its corner to clear); above or below a level one.
         const px = x1 + (x2 - x1) * u, py = y1 + (y2 - y1) * u;
@@ -320,8 +323,8 @@
         <IconButton icon={SkipForward} label="To the end ({focus.to})" onclick={() => { stopPlay(); void cursorTo(inside?.secs ?? 0); }} />
         <span class="readout">{(inside?.cursor ?? 0).toFixed(2)} / {(inside?.secs ?? (p?.ms ?? 0) / 1000).toFixed(2)} s</span>
         <span class="tsep"></span>
-        <label class="ui-field len" title={t.ms_formula ? "Set by a formula" : "Length"}>
-          <input aria-label="Length of {focus.from} to {focus.to}" disabled={t.ms_formula} value={(p?.ms ?? t.ms ?? 0) / 1000} onchange={(e) => { const ms = lengthFrom(e.currentTarget.value); if (ms !== null) void editFocused({ ms }, "transition length"); }} /><span>s</span>
+        <label class="ui-field len long" title={t.ms_formula ? "Set by a formula" : "Length"}>
+          <span>Length</span><input aria-label="Length of {focus.from} to {focus.to}" disabled={t.ms_formula} value={(p?.ms ?? t.ms ?? 0) / 1000} onchange={(e) => { const ms = lengthFrom(e.currentTarget.value); if (ms !== null) void editFocused({ ms }, "transition length"); }} /><span>s</span>
         </label>
         <div class="ease"><EasingField label="Easing of {focus.from} to {focus.to}" value={t.ease} onChange={(v) => editFocused({ ease: v }, "transition easing")} /></div>
         <DropdownMenu.Root>
@@ -379,7 +382,10 @@
               <path d={e.d} class="hit" />
               <path d={e.d} class="line" marker-end="url(#se-arrow-{m.id})" />
               <rect class="pill" x={e.lx - e.w / 2} y={e.ly - 9} width={e.w} height="18" rx="9" />
-              <text class="elabel" x={e.lx} y={e.ly + 4} text-anchor="middle">{e.label}</text>
+              <rect class="hue" x={e.lx - e.w / 2 + 8} y={e.ly - 4} width="8" height="8" rx="2" style:fill={hueOf(m, e.from)} />
+              <ArrowRight class="to" x={e.lx - e.w / 2 + 16.5} y={e.ly - 4.5} size={9} strokeWidth={2} />
+              <rect class="hue" x={e.lx - e.w / 2 + 26} y={e.ly - 4} width="8" height="8" rx="2" style:fill={hueOf(m, e.to)} />
+              <text class="elabel" x={e.lx + 15} y={e.ly + 4} text-anchor="middle">{e.label}</text>
             </g>
           {/each}
           {#each nodes(m) as n (n.name)}
@@ -483,6 +489,7 @@
   .readout { font-size: var(--text-sm); color: var(--fg-muted); font-variant-numeric: tabular-nums; min-width: 82px; }
   .len { flex: none; gap: 4px; padding: 0 8px; width: 64px; color: var(--fg-muted); font-size: var(--text-sm); }
   .len input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }
+  .len.long { width: 104px; }
   .ease { width: 128px; flex: none; }
   .head :global(.timing) { flex: none; width: auto; border-color: var(--border); background: transparent; }
   .head :global(.timing.default) { color: var(--fg-muted); }
@@ -514,6 +521,7 @@
   .node.rec > rect:first-of-type { fill: color-mix(in srgb, var(--hue) 18%, var(--bg)); stroke: var(--hue); stroke-width: 2; }
   .edge { cursor: pointer; }
   .edge path { fill: none; }
+  .edge :global(.to) { color: var(--fg-muted); }
   .edge .hit { stroke: transparent; stroke-width: 12; }
   .edge .line { stroke: var(--fg-muted); stroke-width: 1.25; stroke-dasharray: 4 4; opacity: 0.7; }
   .edge.own .line { stroke-dasharray: none; opacity: 1; }
@@ -540,7 +548,7 @@
   .poses .col { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: var(--radius); }
   .poses .col:hover { background: var(--hover); }
   .poses .col-on { background: color-mix(in srgb, var(--col-hue, var(--accent)) 10%, transparent); }
-  .poses td.rest .val { color: var(--fg-faint); }
+  .poses td.rest .val { color: var(--fg-faint); font-style: italic; }
   .poses td.rest .sw { opacity: 0.45; }
   .cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
   .cell input { width: 64px; min-height: 22px; height: 22px; padding: 0 6px; text-align: right; }

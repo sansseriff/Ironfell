@@ -749,6 +749,16 @@ After the fifth round's second review (7.9):
 - Graph labels are level, beside their own arrow. A state lane's stretch fills
   its row. The timeline's options button sits at the bottom, clear of the rows.
   The Inspector's "Alt + drag" footer is gone.
+
+After the sixth round's first review (8.5):
+
+- An instance's State block ends with its key row: "Key state", or once the state
+  is animated "Add key at 1.9 s" / "Key at 1.9 s" beside an **Animated** badge
+  (choosing a state then adds a key).
+- A graph label starts with its two states' swatches (from → to), so it says
+  which way it goes without tracing its arrow.
+- A slice's easing that follows the transition's is flat and grey, with no
+  chevron. The header's length field is labelled.
 - Known gaps: converting a shape whose corners are bound shows a dialog naming
   channel ids; the Inspector is empty on entry until a part is clicked; a
   component's `state` input still draws as a port on the main.

@@ -100,7 +100,7 @@
   <Popover.Trigger class="ui-select-trigger easing-trigger" aria-label="{label}: {title}" title="{label}: {title}" {disabled}>
     <svg width="28" height="18" viewBox="0 0 28 18" aria-hidden="true"><path d={curvePath(shown, 28, 18)} /></svg>
     <span class="easing-name">{title}</span>
-    <ChevronDown size={12} strokeWidth={1.75} />
+    {#if !disabled}<ChevronDown size={12} strokeWidth={1.75} />{/if}
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content class="ui-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
@@ -139,6 +139,9 @@
 <style>
   /* The trigger is a select's field (`.ui-select-trigger`, ui.css). */
   :global(.easing-trigger svg path), .easing-list svg path { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+  /* Read-only (a slice following its transition's easing): flat, greyed, no chevron. */
+  :global(.easing-trigger:disabled) { background: transparent; border-color: var(--border); color: var(--fg-muted); cursor: default; opacity: 1; }
+  :global(.easing-trigger:disabled svg path) { stroke: var(--fg-faint); }
   .easing-name { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   :global(.easing-popover) { width: 216px; padding: 4px; }
   /* Menu items (ui.css), 32 px tall for the curve's preview. */

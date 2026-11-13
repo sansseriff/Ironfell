@@ -2778,13 +2778,20 @@ pub fn narrative_probe(app: &mut WorkerApp, node: String, action: String) -> Str
                 sel.hovered = None;
             }
             "select" => sel.selected = live.into_iter().collect(),
+            // `node` is a list here, separated by spaces; empty clears it.
+            "mark" => {
+                let marked: Vec<iron_document::NodeId> = node.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+                if sel.marked != marked {
+                    sel.marked = marked;
+                }
+            }
             _ => return serde_json::json!({"ok": false, "error": format!("unknown probe action {action:?}")}).to_string(),
         }
     }
     if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() {
         activity.remaining_frames = 10;
     }
-    serde_json::json!({"ok": live.is_some() || action == "unhover"}).to_string()
+    serde_json::json!({"ok": live.is_some() || action == "unhover" || action == "mark"}).to_string()
 }
 
 /// The playhead (timeline.md §4.1): `{"ok", "id", "t", "playing", "rate",

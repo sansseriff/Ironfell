@@ -22,6 +22,7 @@
   import MousePointer2 from "@lucide/svelte/icons/mouse-pointer-2";
   import Link from "@lucide/svelte/icons/link";
   import ComponentIcon from "@lucide/svelte/icons/component";
+  import Diamond from "@lucide/svelte/icons/diamond";
   import SquareDashed from "@lucide/svelte/icons/square-dashed";
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import { Popover, DropdownMenu } from "bits-ui";
@@ -263,7 +264,13 @@
   // The playhead, for the state control's note (choosing a state keys it
   // there when the state is animated): polled while an instance is shown.
   let clockT = $state(0);
-  const clockLabel = $derived(`${clockT.toFixed(2)} s`);
+  const clockLabel = $derived(`${Math.round(clockT * 100) / 100} s`);
+  async function keyState(node: string, leaf: string) {
+    setError = "";
+    const r = await doc.command<{ ok: boolean; error?: string }>({ op: "inspect_animate", node, leaf, action: "key" });
+    if (!r.ok) setError = r.error ?? "";
+    refresh();
+  }
   $effect(() => {
     if (!inspected?.component) return;
     const tick = () => void doc.command<{ ok: boolean; t: number }>({ op: "clock_read" }).then((r) => { if (r.ok) clockT = r.t; }).catch(() => {});
@@ -455,7 +462,7 @@
                 {@const run = machines.view?.machines[0]?.current}
                 {@const stateField = g.inputs.find((f) => f.group === "States")}
                 {@const keyed = !!stateField?.key && stateField.key !== "none"}
-                <div class="input-group states-head"><span class="ui-subheading">States{#if keyed}{" "}<span class="ui-badge" title="Choosing a state adds a key at {clockLabel}">keyed</span>{/if}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
+                <div class="input-group states-head"><span class="ui-subheading">States</span><span class="grow"></span>{#if stateField?.key}<Button small variant="outline" class="key-state {stateField.key}" data-key={stateField.key} onclick={() => keyState(inspected!.component!.entity, stateField!.leaf)} title={stateField.key === "on" ? "Remove this key" : keyed ? "Choosing another state here adds a key" : "Start animating the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{stateField.key === "on" ? `Key at ${clockLabel}` : keyed ? `Add key at ${clockLabel}` : "Key state"}</Button>{/if}<Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
                 {#if run?.transition && run.from && run.to}<div class="hint running" role="status">{run.from} → {run.to} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
               {:else if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
               <div class="property-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
@@ -693,7 +700,10 @@
   .editing .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--record); }
   .editing.preview { background: var(--accent-soft); }
   .editing.preview .dot { background: var(--accent); }
-  .states-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .states-head { display: flex; align-items: center; gap: 6px; }
+  .states-head .grow { flex: 1; }
+  .states-head :global(.key-state.on), .states-head :global(.key-state.animated) { color: var(--accent); }
+  .states-head :global(.key-state.on svg) { fill: currentColor; }
   .running { color: var(--accent); font-variant-numeric: tabular-nums; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
   .door-label { color: var(--fg-muted); font-size: var(--text-sm); }

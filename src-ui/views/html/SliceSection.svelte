@@ -68,6 +68,7 @@
   let order = $state<"down" | "up">("down");
   let mode = $state<"keep" | "fit">("keep");
   const partOf = (channel: string | null) => view?.channels.find((c) => c.name === channel)?.parts[0]?.node ?? channel ?? "";
+  const partName = $derived(view?.channels.find((c) => c.name === tweens[0]?.channel)?.parts[0]?.name ?? "Part");
   const partCount = $derived(new Set(tweens.map((w) => partOf(w.channel))).size);
   type Plan = { slices: { channel: string; start: number; end: number }[]; endMs: number };
   /** The staggered slices in ms from the transition's start. */
@@ -112,17 +113,17 @@
   }
 </script>
 
-<Section title={slices.length === 1 ? nameOf(slices[0].channel) : partCount > 1 ? `${partCount} parts · ${slices.length} properties` : `${slices.length} properties`} class="property-section" data-section="slices" meta={t ? `${t.from} → ${t.to}` : undefined}>
+<Section title={slices.length === 1 ? nameOf(slices[0].channel) : partCount > 1 ? `${partCount} parts · ${slices.length} properties` : `${partName} · ${slices.length} properties`} class="property-section" data-section="slices" meta={t ? `${t.from} → ${t.to}` : undefined}>
   <div class="property-grid">
     <label class="ui-field"><span>Starts</span><input inputmode="decimal" aria-label="Slice start, seconds" placeholder={startMs === null ? "Mixed" : undefined} value={startMs === null ? "" : sec(startMs)} onchange={(e) => setStart(e.currentTarget.value)} />{#if startMs !== null}<span>s</span>{/if}</label>
     <label class="ui-field"><span>Ends</span><input inputmode="decimal" aria-label="Slice end, seconds" placeholder={endMs === null ? "Mixed" : undefined} value={endMs === null ? "" : sec(endMs)} onchange={(e) => setEnd(e.currentTarget.value)} />{#if endMs !== null}<span>s</span>{/if}</label>
   </div>
-  <EasingField label="Slice easing" mixed={ease === null} value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
+  <EasingField label="Slice easing" disabled={ease === ""} mixed={ease === null} value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
   <Checkbox label="Follow the transition's easing" checked={ease === ""} indeterminate={ease === null} onChange={(on) => edit(() => ({ ease: on ? "" : t?.ease || "easy_ease" }), on ? "follow the transition's easing" : "slice easing")} />
   {#if partCount > 1 && staggered}
     <div class="ui-subheading">Stagger</div>
     <label class="ui-field"><span>Each part</span><input inputmode="decimal" aria-label="Stagger, seconds" bind:value={staggerS} /><span>s later</span></label>
-    <Segmented label="Order" value={order} items={[{ value: "down", label: "Top first" }, { value: "up", label: "Bottom first" }]} onChange={(v) => (order = v)} />
+    <Segmented label="Order" value={order} items={[{ value: "down", label: "First row first" }, { value: "up", label: "Last row first" }]} onChange={(v) => (order = v)} />
     <Segmented label="Lengths" value={mode} items={[{ value: "keep", label: "Keep lengths", title: "Each part moves whole" }, { value: "fit", label: "Fit in transition", title: "Parts are shortened so the last ends with the transition" }]} onChange={(v) => (mode = v)} />
     {#if applied}
       <Button small variant="outline" disabled data-stagger="done"><Check size={14} strokeWidth={1.75} />Staggered</Button>

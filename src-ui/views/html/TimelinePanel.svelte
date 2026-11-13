@@ -48,6 +48,13 @@
   const valueIn = (state: string, c: string | null) => machineOf?.states.find((s) => s.name === state)?.pose[c ?? ""];
   const picked = $derived(new Set(doc.selection));
   const rowPicked = (row: Row) => !!row.bars?.length && row.bars.every((b) => picked.has(b));
+  // The parts whose slices are selected are lit on the canvas, so a row
+  // can be told from the picture.
+  const marked = $derived(inside ? [...new Set(layout.rows.filter((r) => r.bars?.some((b) => picked.has(b))).map((r) => r.target))].join(" ") : "");
+  $effect(() => {
+    void doc.command({ op: "narrative_probe", node: marked, action: "mark" }).catch(() => {});
+  });
+  onDestroy(() => void doc.command({ op: "narrative_probe", node: "", action: "mark" }).catch(() => {}));
   /** A row's name selects its bars (a part's: all of them), Shift adds. */
   function pickBars(row: Row, e: MouseEvent) {
     if (!row.bars?.length) return;

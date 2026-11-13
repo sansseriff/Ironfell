@@ -741,7 +741,10 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             let stretch = |push: &mut dyn FnMut(&'static str, String, &str, Vec<Facet>, Option<NodeId>), key: String, from: String, to: String, name: &str, index: usize, faint: bool, of: Option<NodeId>| {
                 let group = if of.is_some() { "tracks" } else { "backdrop" };
                 push(group, format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(over(index, if faint { 0.4 } else { 0.75 }))], of);
-                let mut f = vec![place(&format!("{} + 8", at(&from)), &ry(row.y + 4.0))];
+                // A name that does not fit its stretch is left out.
+                let need = name.chars().count() as f64 * 6.6 + 16.0;
+                let fits = format!("((({to}) - ({from})) * {pps} >= {} ? 0 : {})", lit(need), lit(FAR * 2.0));
+                let mut f = vec![place(&format!("{} + 8 - {fits}", at(&from)), &ry(row.y + 4.0))];
                 f.extend(words(name, 11.0, 600.0));
                 f.push(paint(ink));
                 push(group, format!("lane label {key}"), "text", f, None);
@@ -778,10 +781,14 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                             let mut fill = Fill::default();
                             fill.color = Slot::Const(Value::Color(over(*index, 0.75)));
                             push("tracks", format!("band ramp {k} {}", o.target), "path", vec![place(&at(&from), &ry(row.y + 3.0)), shape.wrap(), fill.wrap()], Some(*k));
-                            let mut f = vec![place(&format!("{} + 12", at(&from)), &ry(row.y + 4.0))];
-                            f.extend(words(&format!("{t} · {} s", (len * 100.0).round() / 100.0), 11.0, 500.0));
+                            let said = format!("{t} · {} s", (len * 100.0).round() / 100.0);
+                            let need = said.chars().count() as f64 * 6.2 + 18.0;
+                            let mut f = vec![place(&format!("{} + 12 - ({w} >= {} ? 0 : {})", at(&from), lit(need), lit(FAR * 2.0)), &ry(row.y + 4.0))];
+                            f.extend(words(&said, 11.0, 500.0));
                             f.push(paint(ink));
                             push("tracks", format!("band label {k} {}", o.target), "text", f, None);
+                            // Where the transition ends and the hold begins.
+                            push("tracks", format!("band end {k} {}", o.target), "rect", vec![place(&format!("{} + {w} - 1", at(&from)), &ry(row.y + 3.0)), sized("1", &lit(SEG_H)), paint([ink[0], ink[1], ink[2], 0.45])], None);
                             format!("{from} + {secs}")
                         }
                         None => from,
@@ -949,6 +956,17 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                     facets.push(st.wrap());
                 }
                 push("tracks", format!("part {}", o.target), "rect", facets, Some(first), Some(with));
+                // A grip at each end: the ends trim (inert marks; the bar
+                // takes the press).
+                if !open {
+                    let (x0, x1) = (at(&format!("{first}.tween.start * {secs}")), at(&format!("({}) * {secs}", fold("max", &his))));
+                    let wide = format!("(({x1}) - ({x0}) > 24 ? 1 : 0)");
+                    for (end, x) in [("start", format!("{x0} + 4")), ("end", format!("{x1} - 6"))] {
+                        let mut c = [1.0, 1.0, 1.0, 0.75];
+                        let _ = &mut c;
+                        push("overlay", format!("grip {end} {}", o.target), "rect", vec![place(&x, &ry(row.y + 8.0)), sized(&format!("2 * {wide}"), &lit(ROW_H - 16.0)), rounded(1.0), paint(c)], None, None);
+                    }
+                }
             }
             None if !los.is_empty() => {
                 let (lo, hi) = (fold("min", &los), fold("max", &his));

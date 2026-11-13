@@ -81,7 +81,9 @@ pub fn update_highlights(
     *seen = Some(version);
     let doc = store.0.document();
     let next = Highlights {
-        selected: lit(doc, selection.selected.iter().copied().filter(|&n| doc.is_live(n))),
+        // Marked nodes are outlined as the selection is (they are what the
+        // selected slices move), without its box or handles.
+        selected: lit(doc, selection.selected.iter().chain(selection.marked.iter()).copied().filter(|&n| doc.is_live(n))),
         hovered: lit(doc, selection.hovered.filter(|&n| doc.is_live(n))),
     };
     if *highlights != next {

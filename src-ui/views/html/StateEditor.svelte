@@ -21,6 +21,7 @@
   import { DropdownMenu } from "bits-ui";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Flag from "@lucide/svelte/icons/flag";
   import Network from "@lucide/svelte/icons/network";
   import Table2 from "@lucide/svelte/icons/table-2";
   import Play from "@lucide/svelte/icons/play";
@@ -386,7 +387,7 @@
               <rect x={n.x - 48} y={n.y - 15} width="96" height="30" rx="15" />
               <rect class="hue" x={n.x - 38} y={n.y - 4} width="8" height="8" rx="2" style:fill={hueOf(m, n.name)} />
               <text x={n.x + 6} y={n.y + 4.5} text-anchor="middle">{n.name.length > 10 ? n.name.slice(0, 9) + "…" : n.name}</text>
-              {#if m.default === n.name}<text class="initial" x={n.x} y={n.y + 29} text-anchor="middle">initial</text>{/if}
+              {#if m.default === n.name}<Flag class="initial" x={n.x + 28} y={n.y - 6} size={11} strokeWidth={2} />{/if}
             </g>
           {/each}
         </svg>
@@ -491,9 +492,9 @@
 
   .graph { flex: 1; width: 100%; min-height: 0; }
   .graph-view { background: var(--bg); }
-  .pill { fill: var(--bg); stroke: var(--border); }
-  .edge.own .pill { stroke: var(--border-strong); }
-  .node .initial { fill: var(--fg-muted); font-size: 10.5px; font-weight: 500; }
+  /* A transition's label is its button: raised, as buttons are. */
+  .pill { fill: var(--raised, var(--bg)); stroke: var(--border-strong); filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.12)); }
+  .node :global(.initial) { color: var(--fg-muted); }
   .default { position: absolute; left: 10px; bottom: 8px; display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
   .dash { width: 22px; height: 6px; }
   .dash path { stroke: var(--fg-muted); stroke-width: 1.25; stroke-dasharray: 4 4; fill: none; }
@@ -519,7 +520,7 @@
   .edge:hover .pill, .edge:focus-visible .pill { fill: var(--accent-soft); stroke: var(--accent); }
   .edge:hover .elabel { fill: var(--accent); }
   .edge:hover .line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
-  .elabel { fill: var(--fg-muted); font-size: 10.5px; }
+  .elabel { fill: var(--fg); font-size: 10.5px; font-weight: 500; }
   .node:focus, .edge:focus { outline: none; }
   .arrowhead { fill: var(--fg-muted); }
 

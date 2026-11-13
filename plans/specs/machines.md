@@ -715,6 +715,20 @@ After the council's fourth round (7.6 and 7.5), the same day:
   step a link; the timing menu has a chevron. Graph labels lie along their own
   arrows. Times read in seconds everywhere. **Stagger** is one button whose label
   is the outcome ("Stagger", "Stagger and lengthen to 2.4 s", "Staggered").
+
+After the fifth round's first review (8.1), the same day:
+
+- **The parts whose slices are selected are outlined on the canvas**
+  (`SelectionState.marked`, set by `narrative_probe` `mark` from the timeline's
+  column), so a row can be told from the picture. A part's folded bar has a grip
+  at each end (the ends trim).
+- **An instance's States heading has a labelled key button**: "Key state", then
+  "Add key at 3.5 s" or "Key at 3.5 s" once the state is animated.
+- A slice's easing is locked while it follows the transition's. Stagger's order
+  is by row ("First row first"). The initial state carries a flag on its chip and
+  its graph node. A transition's label on the graph is drawn as a button.
+- A lane's label that does not fit its piece is left out, and a line marks where
+  a transition ends.
 - Known gaps: converting a shape whose corners are bound shows a dialog naming
   channel ids; the Inspector is empty on entry until a part is clicked; a
   component's `state` input still draws as a port on the main.

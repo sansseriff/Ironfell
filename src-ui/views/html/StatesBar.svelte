@@ -8,6 +8,7 @@
   import { DropdownMenu } from "bits-ui";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import ComponentIcon from "@lucide/svelte/icons/component";
+  import Flag from "@lucide/svelte/icons/flag";
   import Plus from "@lucide/svelte/icons/plus";
   import X from "@lucide/svelte/icons/x";
   import IconButton from "../../lib/ui/IconButton.svelte";
@@ -64,7 +65,7 @@
       {:else}
         <div class="chip" class:on class:end data-state={s}>
           <button class="name" aria-pressed={on} onclick={() => run(machines.editState(s))} ondblclick={() => (renaming = st.id)} title={on ? `Editing ${s}` : `Edit ${s}`}>
-            <span class="sw" style:background={hueOf(m, s)}></span><span class="nm">{s}</span>{#if st.own.length}<span class="count" title="{st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'} set in {s}">{st.own.length}</span>{/if}
+            <span class="sw" style:background={hueOf(m, s)}></span><span class="nm">{s}</span>{#if m.default === s}<span class="initial" title="Initial state: instances start in {s}"><Flag size={10} strokeWidth={2} /></span>{/if}{#if st.own.length}<span class="count" title="{s} changes {st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'}">{st.own.length}</span>{/if}
           </button>
           {#if on}
             <DropdownMenu.Root>
@@ -113,6 +114,7 @@
   .name { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
   .chip.on .name { padding-right: 4px; font-weight: 600; }
   .nm { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+  .initial { display: inline-flex; color: var(--fg-muted); }
   .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
   .count { min-width: 16px; padding: 0 4px; border-radius: var(--radius-full); background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--text-xs); font-weight: 500; font-variant-numeric: tabular-nums; text-align: center; box-sizing: border-box; }
   .chip :global(.more) { display: inline-grid; place-items: center; width: 20px; height: 100%; padding: 0 4px 0 0; border: 0; background: transparent; color: var(--fg-muted); cursor: pointer; }

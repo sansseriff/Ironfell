@@ -333,6 +333,10 @@ pub struct SelectionState {
     /// `engine_api::narrative_probe`): lit while the pointer hovers nothing
     /// on the canvas.
     pub probe: Option<iron_document::NodeId>,
+    /// Nodes lit from outside the canvas for as long as the caller says
+    /// (`narrative_probe` `mark`): the parts whose slices are selected in a
+    /// transition's tracks, so a row can be told on the canvas.
+    pub marked: Vec<iron_document::NodeId>,
 }
 
 // Marker for a composite vector group (single VelloScene acting as many shapes)

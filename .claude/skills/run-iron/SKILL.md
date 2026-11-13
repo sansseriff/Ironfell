@@ -3552,3 +3552,6 @@ delete and undo outputs; property clip pictures are now thin lines with diamonds
 object rows remain duration bars. Both checks pass on WebGL2. 15 native timeline
 Rust tests and frontend check pass (zero errors, 12 pre-existing warnings).
 
+`composition-settings.ts` now focuses the hidden Timeline through the dock instead
+of clicking its tab; its controls, grid/background pixels, theme, undo and reload
+checks pass at DPR 1 and 2 after the refresh.

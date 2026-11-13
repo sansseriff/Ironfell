@@ -81,7 +81,7 @@ pub struct Inside {
     pub secs: f64,
     /// The parts shown open (a row per property); the rest show one row.
     pub open: BTreeSet<NodeId>,
-    /// The slices selected (their bars stand out; the others recede).
+    /// The slices selected (their bars are outlined).
     pub picked: BTreeSet<NodeId>,
     /// Per part, the slice that starts first: its bar's start is the part
     /// bar's, so dragging the part bar moves all of the part's slices.
@@ -716,7 +716,8 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     let key_x = |s: &Segment, k: NodeId| format!("{}.timing.start + {} + {k}.key.t", s.clip, lit(s.offset));
     for o in &plan.objects {
         let row = ri.next().expect("an object row");
-        let all: Vec<String> = o.props.iter().flat_map(|p| &p.segments).flat_map(|s| s.keys.iter().map(move |&k| key_x(s, k))).collect();
+        // A state lane says everything its keys do, so it has no summary.
+        let all: Vec<String> = o.props.iter().filter(|p| !p.lane).flat_map(|p| &p.segments).flat_map(|s| s.keys.iter().map(move |&k| key_x(s, k))).collect();
         if !all.is_empty() {
             let (lo, hi) = (fold("min", &all), fold("max", &all));
             push("backdrop", format!("summary {}", o.target), "rect", vec![place(&at(&lo), &ry(row.y + 5.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(ROW_H - 10.0)), rounded(3.0), paint(pal.summary)], None);
@@ -730,16 +731,19 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
             // selects that occurrence, a drag moves it, a double-click opens
             // the state); one before the first key, or an unkeyed lane's, is
             // static.
+            // A stretch is opaque (its hue over the rows' colour), so it
+            // covers a label that ran past the piece before it.
+            let over = |index: usize, a: f32| {
+                let c = LANE[index % LANE.len()];
+                [pal.bg[0] + (c[0] - pal.bg[0]) * a, pal.bg[1] + (c[1] - pal.bg[1]) * a, pal.bg[2] + (c[2] - pal.bg[2]) * a, 1.0]
+            };
+            let ink = if plan.light { [0.12, 0.12, 0.14, 0.92] } else { [1.0, 1.0, 1.0, 0.92] };
             let stretch = |push: &mut dyn FnMut(&'static str, String, &str, Vec<Facet>, Option<NodeId>), key: String, from: String, to: String, name: &str, index: usize, faint: bool, of: Option<NodeId>| {
-                let mut c = LANE[index % LANE.len()];
-                if faint {
-                    c[3] *= 0.55;
-                }
                 let group = if of.is_some() { "tracks" } else { "backdrop" };
-                push(group, format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], of);
-                let mut f = vec![place(&format!("{} + 7", at(&from)), &ry(row.y + 4.0))];
+                push(group, format!("lane {key}"), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&format!("max(({to}) - ({from}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(over(index, if faint { 0.4 } else { 0.75 }))], of);
+                let mut f = vec![place(&format!("{} + 8", at(&from)), &ry(row.y + 4.0))];
                 f.extend(words(name, 11.0, 600.0));
-                f.push(paint(if plan.light { [0.12, 0.12, 0.14, 0.92] } else { [1.0, 1.0, 1.0, 0.92] }));
+                f.push(paint(ink));
                 push(group, format!("lane label {key}"), "text", f, None);
             };
             if let Some((state, index)) = &p.rest {
@@ -750,14 +754,39 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                     stretch(&mut push, format!("before {} {}", s.clip, o.target), "0".into(), key_x(s, *first), name, *index, true, None);
                 }
                 for (i, (k, name, index)) in s.states.iter().enumerate() {
-                    let to = s.states.get(i + 1).map_or_else(|| lit(plan.end), |(n, ..)| key_x(s, *n));
-                    // A key that changes the state says through which
-                    // transition, and how long it takes (its band).
-                    let said = match s.bands.iter().find(|(b, ..)| b == k) {
-                        Some((_, len, t)) => format!("→ {name} · {t} {}s", (len * 100.0).round() / 100.0),
-                        None => name.clone(),
+                    let next = s.states.get(i + 1).map(|(n, ..)| key_x(s, *n));
+                    let to = next.clone().unwrap_or_else(|| lit(plan.end));
+                    let from = key_x(s, *k);
+                    // A key that changes the state has two pieces: the
+                    // transition (its hue, pale, rising to full over the
+                    // transition's length, or the key's own span; named
+                    // for the transition) and then the hold (the hue,
+                    // named for the state). A key that comes before the
+                    // transition ends cuts it short.
+                    let hold = match s.bands.iter().find(|(b, ..)| b == k) {
+                        Some((_, len, t)) => {
+                            let own = format!("(isnan({k}.key.span) || {k}.key.span <= 0 ? {} : {k}.key.span)", lit(*len));
+                            let secs = match &next {
+                                Some(n) => format!("max(min({own}, ({n}) - ({from})), 0)"),
+                                None => own,
+                            };
+                            let w = format!("({secs}) * {pps}");
+                            push("tracks", format!("band {k} {}", o.target), "rect", vec![place(&at(&from), &ry(row.y + 3.0)), sized(&w, &lit(SEG_H)), rounded(4.0), paint(over(*index, 0.3))], Some(*k));
+                            let h = SEG_H;
+                            let mut shape = crate::facet::PathShape::default();
+                            shape.d = Slot::Bound(Expr::parse(&format!("'M 0,{h} L ' + str({w}) + ',0 L ' + str({w}) + ',{h} Z'")).expect("a band's path"));
+                            let mut fill = Fill::default();
+                            fill.color = Slot::Const(Value::Color(over(*index, 0.75)));
+                            push("tracks", format!("band ramp {k} {}", o.target), "path", vec![place(&at(&from), &ry(row.y + 3.0)), shape.wrap(), fill.wrap()], Some(*k));
+                            let mut f = vec![place(&format!("{} + 12", at(&from)), &ry(row.y + 4.0))];
+                            f.extend(words(&format!("{t} · {} s", (len * 100.0).round() / 100.0), 11.0, 500.0));
+                            f.push(paint(ink));
+                            push("tracks", format!("band label {k} {}", o.target), "text", f, None);
+                            format!("{from} + {secs}")
+                        }
+                        None => from,
                     };
-                    stretch(&mut push, format!("{k} {}", o.target), key_x(s, *k), to, &said, *index, false, Some(*k));
+                    stretch(&mut push, format!("{k} {}", o.target), hold, to, name, *index, false, Some(*k));
                 }
             }
             for s in &p.segments {
@@ -780,20 +809,6 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                     f.extend(words(&s.label, 11.0, 500.0));
                     f.push(paint([1.0, 1.0, 1.0, 0.9]));
                     push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
-                }
-                // A keyed state's transitions (machines.md §4.2): a band rising
-                // from each key that changes the state over the transition's
-                // length, or the key's own span (one occurrence retimed).
-                for (k, len, name) in &s.bands {
-                    let x = at(&key_x(s, *k));
-                    let w = format!("(isnan({k}.key.span) || {k}.key.span <= 0 ? {} : {k}.key.span) * {pps}", lit(*len));
-                    let h = SEG_H;
-                    let mut shape = crate::facet::PathShape::default();
-                    shape.d = Slot::Bound(Expr::parse(&format!("'M 0,{h} L ' + str({w}) + ',0 L ' + str({w}) + ',{h} Z'")).expect("a band's path"));
-                    let mut fill = Fill::default();
-                    fill.color = Slot::Const(Value::Color([PLAYHEAD[0], PLAYHEAD[1], PLAYHEAD[2], 0.35]));
-                    let _ = name;
-                    push("tracks", format!("band {k} {}", o.target), "path", vec![place(&x, &ry(row.y + 3.0)), shape.wrap(), fill.wrap()], Some(*k));
                 }
                 // A diamond per key: a drag moves the key in time (it
                 // projects the key), Delete deletes it.
@@ -867,6 +882,8 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
     };
     let h = lit(FAR);
     let pal = if plan.light { &LIGHT } else { &DARK };
+    // A selected bar's outline: `--fg`.
+    let pick = if plan.light { hex(0x1f1f1f) } else { hex(0xffffff) };
     let mut by: BTreeMap<&'static str, Vec<Want>> = BTreeMap::new();
     let mut push = |group: &'static str, key: String, ty_name: &str, facets: Vec<Facet>, projects: Option<NodeId>, with: Option<String>| {
         let mut facets = facets;
@@ -921,14 +938,14 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
             Some(&first) => {
                 let ws: Vec<NodeId> = o.props.iter().filter_map(|p| p.slice.as_ref()?.tween).collect();
                 let with = ws.iter().flat_map(|w| [format!("{w}.tween.start"), format!("{w}.tween.end")]).collect::<Vec<_>>().join(" ");
-                let all_picked = ws.iter().all(|w| inside.picked.contains(w));
+                let all_picked = !ws.is_empty() && ws.iter().all(|w| inside.picked.contains(w));
                 let mut c = pal.segment;
-                c[3] = if open { 0.3 } else if inside.picked.is_empty() || all_picked { 0.85 } else { 0.35 };
+                c[3] = if open { 0.3 } else { 0.85 };
                 let mut facets = vec![place(&at(&format!("{first}.tween.start * {secs}")), &ry(row.y + 4.0)), sized(&format!("max(({hi}) - {first}.tween.start, 0) * {secs} * {pps}", hi = fold("max", &his)), &lit(ROW_H - 8.0)), rounded(4.0), paint(c)];
                 if all_picked && !inside.picked.is_empty() {
                     let mut st = Stroke::default();
-                    st.color = Slot::Const(Value::Color(pal.key));
-                    st.width = Slot::Const(Value::Number(1.5));
+                    st.color = Slot::Const(Value::Color(pick));
+                    st.width = Slot::Const(Value::Number(2.0));
                     facets.push(st.wrap());
                 }
                 push("tracks", format!("part {}", o.target), "rect", facets, Some(first), Some(with));
@@ -952,19 +969,16 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                     // drag carries the end with it (`with`).
                     // Keyed by the slice itself: a kept piece keeps what it
                     // projects, so another transition's bars are new ones.
-                    // Selected slices stand out, outlined; while some are,
-                    // the rest recede.
+                    // A selected slice is outlined; the others stay as
+                    // they are.
                     let picked = inside.picked.contains(&w);
-                    let mut c = pal.segment;
-                    if !inside.picked.is_empty() && !picked {
-                        c[3] = 0.4;
-                    }
+                    let c = pal.segment;
                     let width = format!("max({w}.tween.end - {w}.tween.start, 0) * {secs} * {pps}");
                     let mut facets = vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), sized(&width, &lit(SEG_H)), rounded(4.0), paint(c)];
                     if picked {
                         let mut st = Stroke::default();
-                        st.color = Slot::Const(Value::Color(pal.key));
-                        st.width = Slot::Const(Value::Number(1.5));
+                        st.color = Slot::Const(Value::Color(pick));
+                        st.width = Slot::Const(Value::Number(2.0));
                         facets.push(st.wrap());
                     }
                     push("tracks", format!("slice {w}"), "rect", facets, Some(w), Some("tween.end".to_owned()));
@@ -982,7 +996,7 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                         let mut shape = crate::facet::PathShape::default();
                         shape.d = Slot::Bound(Expr::parse(&d).expect("a curve's path"));
                         let mut st = Stroke::default();
-                        st.color = Slot::Const(Value::Color([1.0, 1.0, 1.0, if c[3] < 1.0 { 0.4 } else { 0.85 }]));
+                        st.color = Slot::Const(Value::Color([1.0, 1.0, 1.0, 0.85]));
                         st.width = Slot::Const(Value::Number(1.25));
                         push("overlay", format!("curve {w}"), "path", vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), shape.wrap(), st.wrap()], None, None);
                     }

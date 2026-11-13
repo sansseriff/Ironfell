@@ -11,7 +11,7 @@
   import Plus from "@lucide/svelte/icons/plus";
   import X from "@lucide/svelte/icons/x";
   import IconButton from "../../lib/ui/IconButton.svelte";
-  import { machines } from "../../lib/machines.svelte";
+  import { hueOf, machines } from "../../lib/machines.svelte";
 
   const view = $derived(machines.view);
   const m = $derived(view?.machines[0] ?? null);
@@ -64,7 +64,7 @@
       {:else}
         <div class="chip" class:on class:end data-state={s}>
           <button class="name" aria-pressed={on} onclick={() => run(machines.editState(s))} ondblclick={() => (renaming = st.id)} title={on ? `Editing ${s}` : `Edit ${s}`}>
-            {#if on}<span class="dot"></span>{/if}<span class="nm">{s}</span>{#if st.own.length}<span class="count" title="{st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'} set in {s}">{st.own.length}</span>{/if}
+            <span class="sw" style:background={hueOf(m, s)}></span><span class="nm">{s}</span>{#if st.own.length}<span class="count" title="{st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'} set in {s}">{st.own.length}</span>{/if}
           </button>
           {#if on}
             <DropdownMenu.Root>
@@ -113,7 +113,7 @@
   .name { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
   .chip.on .name { padding-right: 4px; font-weight: 600; }
   .nm { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--record); flex: none; }
+  .sw { width: 8px; height: 8px; border-radius: 2px; flex: none; }
   .count { min-width: 16px; padding: 0 4px; border-radius: var(--radius-full); background: color-mix(in srgb, currentColor 12%, transparent); font-size: var(--text-xs); font-weight: 500; font-variant-numeric: tabular-nums; text-align: center; box-sizing: border-box; }
   .chip :global(.more) { display: inline-grid; place-items: center; width: 20px; height: 100%; padding: 0 4px 0 0; border: 0; background: transparent; color: var(--fg-muted); cursor: pointer; }
   .chip :global(.more:hover) { color: var(--fg); }

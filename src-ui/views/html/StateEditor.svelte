@@ -19,7 +19,6 @@
   // (default or its own).
   import { onDestroy, onMount, tick } from "svelte";
   import { DropdownMenu } from "bits-ui";
-  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Network from "@lucide/svelte/icons/network";
@@ -36,7 +35,7 @@
   import EasingField from "../../lib/ui/EasingField.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { dockApi } from "../workspace";
-  import { machines, type Channel, type ChannelValue, type Focus, type Machine, type Transition } from "../../lib/machines.svelte";
+  import { hueOf, machines, type Channel, type ChannelValue, type Focus, type Machine, type Transition } from "../../lib/machines.svelte";
 
   type Inside = { from: string; to: string; own: boolean; secs: number; transition: string | null; cursor: number };
   let { zoom = 1, inside = null, panel = "" }: { zoom?: number; inside?: Inside | null; panel?: string } = $props();
@@ -122,8 +121,9 @@
     // Selected bars belong to the transition they were picked in: the
     // tracks' pieces keep their ids across transitions, so a selection
     // carried over would name the old leg's slices.
-    const was = focus;
-    if (was?.kind === "pair" && (was.from !== from || was.to !== to) && doc.selection.length) void doc.call("select", ["[]", "replace"]).catch(() => {});
+    // And a part selected while shaping a state gives way, so the
+    // Inspector shows the transition.
+    if (doc.selection.length) void doc.call("select", ["[]", "replace"]).catch(() => {});
     setFocus(mm, { kind: "pair", from, to });
     // The main shows the transition from its start, and the timeline is
     // inside it; fitted to the panel once the engine has built it.
@@ -186,7 +186,8 @@
     folded = next;
   };
   const shownParts = $derived(onlySelected ? parts.filter((g) => !!g.shown && selectedPart.has(g.shown)) : parts);
-  const fmt = (v: ChannelValue) => (v === null || v === undefined ? "–" : typeof v === "number" ? (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : "–") : v);
+  // A colour is six digits unless it is see-through.
+  const fmt = (v: ChannelValue) => (v === null || v === undefined ? "–" : typeof v === "number" ? (Number.isFinite(v) ? String(Math.round(v * 1000) / 1000) : "–") : /^#[0-9a-f]{6}ff$/i.test(v) ? v.slice(0, 7) : v);
   const selectedPart = $derived(new Set(doc.selection));
   function setValue(mm: Machine, stateId: string, s: string, c: Channel, text: string) {
     const v = text.trim();
@@ -267,16 +268,18 @@
         // Each direction is a straight line on its own side of the pair's
         // axis, so no two arrows cross; its label sits a third of the way
         // along, outside it.
-        const x1 = a.x + (dx / len) * 50 + nx * 8, y1 = a.y + (dy / len) * 22 + ny * 8;
-        const x2 = b.x - (dx / len) * 50 + nx * 8, y2 = b.y - (dy / len) * 22 + ny * 8;
+        const x1 = a.x + (dx / len) * 50 + nx * 12, y1 = a.y + (dy / len) * 22 + ny * 12;
+        const x2 = b.x - (dx / len) * 50 + nx * 12, y2 = b.y - (dy / len) * 22 + ny * 12;
         const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
         const u = 0.36;
         const mine = own(t, q.from, q.to);
         const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
-        // Clear of its line by the pill's own extent across it.
-        const off = 5 + (Math.abs(nx) * (label.length * 6.2 + 14)) / 2 + Math.abs(ny) * 9;
-        const lx = x1 + (x2 - x1) * u + nx * off, ly = y1 + (y2 - y1) * u + ny * off;
-        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly };
+        // The label lies along its own line, a third of the way from
+        // its start, and reads left to right.
+        const lx = x1 + (x2 - x1) * u, ly = y1 + (y2 - y1) * u;
+        let turn = (Math.atan2(dy, dx) * 180) / Math.PI;
+        if (turn > 90 || turn < -90) turn += 180;
+        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, turn };
       });
   }
   const keyActivate = (e: KeyboardEvent, f: () => void) => {
@@ -292,13 +295,13 @@
 <div class="state-editor" data-state-editor bind:this={root} style:--top="{32 * zoom}px">
   <!-- The header: where you are, then what the focus offers. -->
   <div class="head canvas-ui">
-    <button class="ui-quiet-trigger crumb" onclick={() => machines.close()} title="Back to the document's timeline"><ChevronLeft size={14} strokeWidth={1.75} /><span>{machines.origin ? `${machines.origin}'s timeline` : "Timeline"}</span></button>
+    <button class="ui-quiet-trigger crumb" onclick={() => machines.close()} title="Back to the document's timeline"><span>{machines.origin ? `${machines.origin}'s timeline` : "Timeline"}</span></button>
     <ChevronRight class="sep" size={12} strokeWidth={1.75} />
     {#if m && focus?.kind === "pair"}
       {@const p = pairOf(m, focus.from, focus.to)}
       {@const t = transitionOf(m, p?.transition)}
       {@const mine = own(t, focus.from, focus.to)}
-      <button class="ui-quiet-trigger comp" onclick={() => { machines.page = "graph"; editState(m, focus.from); }} title="All of {view?.name ?? 'the component'}'s states">{view?.name ?? "component"}</button>
+      <button class="ui-quiet-trigger crumb" data-crumb="component" onclick={() => { machines.page = "graph"; editState(m, focus.from); }} title="All of {view?.name ?? 'the component'}'s states">{view?.name ?? "component"}</button>
       <ChevronRight class="sep" size={12} strokeWidth={1.75} />
       <span class="where pair">
         <button class="state-link" onclick={() => editState(m, focus.from)} title="Edit {focus.from}">{focus.from}</button>→<button class="state-link" onclick={() => editState(m, focus.to)} title="Edit {focus.to}">{focus.to}</button>
@@ -317,7 +320,7 @@
         </label>
         <div class="ease"><EasingField label="Easing of {focus.from} to {focus.to}" value={t.ease} onChange={(v) => editFocused({ ease: v }, "transition easing")} /></div>
         <DropdownMenu.Root>
-          <DropdownMenu.Trigger class="ui-select-trigger timing {mine ? 'own' : 'default'}" title={mine ? "This transition has its own timing" : "Shared with every transition that has no timing of its own"}>{mine ? "Own timing" : "Default timing"}</DropdownMenu.Trigger>
+          <DropdownMenu.Trigger class="ui-select-trigger timing {mine ? 'own' : 'default'}" title={mine ? "This transition has its own timing" : "Shared with every transition that has no timing of its own"}><span class="ui-select-label">{mine ? "Own timing" : "Default timing"}</span><ChevronDown size={12} strokeWidth={1.75} /></DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content class="ui-menu" side="bottom" sideOffset={4} align="start">
               {#if !mine}
@@ -371,16 +374,19 @@
               <title>{e.from} → {e.to}</title>
               <path d={e.d} class="hit" />
               <path d={e.d} class="line" marker-end="url(#se-arrow-{m.id})" />
-              <rect class="pill" x={e.lx - w / 2} y={e.ly - 9} width={w} height="18" rx="9" />
-              <text class="elabel" x={e.lx} y={e.ly + 4} text-anchor="middle">{e.label}</text>
+              <g transform="rotate({e.turn.toFixed(1)} {e.lx.toFixed(1)} {e.ly.toFixed(1)})">
+                <rect class="pill" x={e.lx - w / 2} y={e.ly - 9} width={w} height="18" rx="9" />
+                <text class="elabel" x={e.lx} y={e.ly + 4} text-anchor="middle">{e.label}</text>
+              </g>
             </g>
           {/each}
           {#each nodes(m) as n (n.name)}
             <g class="node" class:rec={recording(m, n.name)} role="button" tabindex="0" aria-label="Edit {n.name}" data-node={n.name} onclick={() => editState(m, n.name)} onkeydown={(ev) => keyActivate(ev, () => editState(m, n.name))}>
               <title>{n.name}{m.default === n.name ? " (initial)" : ""}</title>
-              <rect x={n.x - 44} y={n.y - 15} width="88" height="30" rx="15" />
-              <text x={n.x} y={n.y + 5} text-anchor="middle">{n.name.length > 12 ? n.name.slice(0, 11) + "…" : n.name}</text>
-              {#if m.default === n.name}<text class="initial" x={n.x} y={n.y + 28} text-anchor="middle">initial</text>{/if}
+              <rect x={n.x - 48} y={n.y - 15} width="96" height="30" rx="15" />
+              <rect class="hue" x={n.x - 38} y={n.y - 4} width="8" height="8" rx="2" style:fill={hueOf(m, n.name)} />
+              <text x={n.x + 6} y={n.y + 4.5} text-anchor="middle">{n.name.length > 10 ? n.name.slice(0, 9) + "…" : n.name}</text>
+              {#if m.default === n.name}<text class="initial" x={n.x} y={n.y + 29} text-anchor="middle">initial</text>{/if}
             </g>
           {/each}
         </svg>
@@ -405,7 +411,7 @@
                 <th class="base" title="The drawing's own values: what a state that does not set a property shows">Drawing</th>
                 {#each m.states as st (st.id)}
                   {@const s = st.name ?? ""}
-                  <th class:col-on={recording(m, s)}><button class="col" onclick={() => editState(m, s)} title="Edit {s}">{#if recording(m, s)}<span class="dot"></span>{/if}{s}</button></th>
+                  <th class:col-on={recording(m, s)}><button class="col" onclick={() => editState(m, s)} title="Edit {s}"><span class="hue" style:background={hueOf(m, s)}></span>{s}</button></th>
                 {/each}
               </tr>
             </thead>
@@ -461,10 +467,10 @@
   .head, .body { pointer-events: auto; position: absolute; background: var(--bg); }
   .head { top: 0; left: 0; right: 0; height: var(--top); display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; box-sizing: border-box; }
   .body { top: var(--top); left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
-  .crumb { flex: none; gap: 2px; padding-left: 2px; color: var(--fg-muted); }
+  .crumb { flex: none; padding: 0 4px; color: var(--fg-muted); }
+  .crumb:hover { color: var(--fg); }
   .head :global(.sep) { flex: none; color: var(--fg-faint); }
   .comp { flex: none; font-weight: 600; }
-  button.comp { color: var(--fg); padding: 0 4px; }
   .where { flex: none; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
   .where.pair { gap: 2px; }
   .state-link { border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; padding: 1px 4px; border-radius: var(--radius-sm); cursor: pointer; }
@@ -476,18 +482,18 @@
   .len { flex: none; gap: 4px; padding: 0 8px; width: 64px; color: var(--fg-muted); font-size: var(--text-sm); }
   .len input { width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }
   .ease { width: 128px; flex: none; }
-  .head :global(.timing) { flex: none; width: auto; padding: 0 8px; }
+  .head :global(.timing) { flex: none; width: auto; border-color: var(--border); background: transparent; }
   .head :global(.timing.default) { color: var(--fg-muted); }
   .error { color: var(--danger); font-size: var(--text-sm); max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
   .head :global(.ui-segmented) { flex: none; }
   .muted { color: var(--fg-muted); }
-  .dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--record); margin-right: 5px; }
+  .poses .hue { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
 
   .graph { flex: 1; width: 100%; min-height: 0; }
   .graph-view { background: var(--bg); }
   .pill { fill: var(--bg); stroke: var(--border); }
   .edge.own .pill { stroke: var(--border-strong); }
-  .initial { fill: var(--fg-muted); font-size: 10px; }
+  .node .initial { fill: var(--fg-muted); font-size: 10.5px; font-weight: 500; }
   .default { position: absolute; left: 10px; bottom: 8px; display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
   .dash { width: 22px; height: 6px; }
   .dash path { stroke: var(--fg-muted); stroke-width: 1.25; stroke-dasharray: 4 4; fill: none; }
@@ -510,6 +516,8 @@
   .edge .line { stroke: var(--fg-muted); stroke-width: 1.25; stroke-dasharray: 4 4; opacity: 0.7; }
   .edge.own .line { stroke-dasharray: none; opacity: 1; }
   .edge.none .line { opacity: 0.25; }
+  .edge:hover .pill, .edge:focus-visible .pill { fill: var(--accent-soft); stroke: var(--accent); }
+  .edge:hover .elabel { fill: var(--accent); }
   .edge:hover .line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
   .elabel { fill: var(--fg-muted); font-size: 10.5px; }
   .node:focus, .edge:focus { outline: none; }
@@ -517,7 +525,7 @@
 
   /* What each state sets. */
   .table-wrap { flex: 1; min-height: 0; overflow: auto; }
-  .poses { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .poses { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   .poses th, .poses td { height: 24px; padding: 0 10px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; min-width: 72px; }
   .poses thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); font-weight: 600; }
   .poses .name-col { text-align: left; width: 180px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }

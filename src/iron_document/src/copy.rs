@@ -486,6 +486,7 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
         .max(doc.next_relation_id().raw());
     let mut entity_order = doc.children(model).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
     let mut extra = Vec::new();
+    let mut made: Vec<NodeId> = Vec::new();
     for op in ops.iter_mut() {
         let Op::Create { id, ty, facets, .. } = op else { continue };
         if ty.name() != "use" {
@@ -497,8 +498,18 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
         });
         let Some(def) = def else { continue };
         facets.retain(|f| !matches!(f, Facet::Instance(_)));
-        let name = facets.iter().find_map(|f| match f {
-            Facet::Name(n) => n.text.constant().and_then(|v| v.as_str()).map(str::to_owned),
+        // An instance is numbered after the main and the instances there
+        // are (the main "card", then "card 2", "card 3"), so the two can be told apart by
+        // name wherever they are listed.
+        let count = doc.nodes_of_type(TypeId::lookup("entity").expect("registered")).filter(|&e| doc.is_live(e) && !e.is_session() && !e.is_expanded() && crate::expand::linked_definition(doc, e) == Some(def)).count() + made.iter().filter(|&&d| d == def).count();
+        made.push(def);
+        let name = facets.iter_mut().find_map(|f| match f {
+            Facet::Name(n) => {
+                let base = n.text.constant().and_then(|v| v.as_str()).map(str::to_owned)?;
+                let numbered = format!("{base} {}", count + 2);
+                n.text = Slot::Const(Value::Str(numbered.clone()));
+                Some(numbered)
+            }
             _ => None,
         });
         let entity = NodeId::from_raw(next);

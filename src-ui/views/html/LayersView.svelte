@@ -457,7 +457,7 @@
           {/each}
         </div>
       </div>
-      <footer>{rows.length.toLocaleString()} rows</footer>
+      <footer>{rows.length.toLocaleString()} row{rows.length === 1 ? "" : "s"}</footer>
     {/if}
     {#if error}<p class="error">{error}</p>{/if}
   </section>

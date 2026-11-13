@@ -179,7 +179,7 @@
 </script>
 
 {#snippet keyButton()}
-  {#if animatable && !compact}<IconButton icon={Diamond} size={12} class="key {f.key === 'none' ? 'reveal' : 'animated'}" data-key={f.key} label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere} />{/if}
+  {#if animatable && !compact}<IconButton icon={Diamond} size={12} class="key {f.key === 'none' ? (f.group === 'States' ? '' : 'reveal') : 'animated'}" data-key={f.key} label={f.key === "on" ? `Remove the key on ${displayLabel}` : `Key ${displayLabel} at the playhead`} title={f.key === "on" ? "Remove the key at the playhead" : f.key === "animated" ? "Add a key at the playhead" : "Animate: key this value at the playhead"} onclick={keyHere} />{/if}
 {/snippet}
 
 <svelte:window onkeydown={(e: KeyboardEvent) => { alt = e.altKey; }} onkeyup={(e: KeyboardEvent) => alt = e.altKey} onblur={() => { alt = false; finish(true); }} />
@@ -210,7 +210,7 @@
       <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
       <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if options && segmented}
-      <Segmented label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: f.group === "States" ? v : v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      <Segmented class={f.group === "States" ? "is-strong" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: f.group === "States" ? v : v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if options}
       <Select placeholder={mixed ? "Mixed" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />

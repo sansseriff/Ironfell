@@ -7,6 +7,7 @@
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
   import { machines } from "../../lib/machines.svelte";
+  import CopyPlus from "@lucide/svelte/icons/copy-plus";
   import SliceSection from "./SliceSection.svelte";
   import StateSection from "./StateSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
@@ -332,7 +333,7 @@
     <SliceSection slices={sliceSel} />
   {:else if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
-    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}{#if inspected.main || inspected.component}<IconButton icon={ComponentIcon} label="Make component" title="Make a component holding this one" onclick={() => command("make-component")} />{:else}<Button small variant="outline" onclick={() => command("make-component")} title="Make a component of the selection"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>{/if}<IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name && !inspected.main && !inspected.component}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}{#if inspected.main || inspected.component}<IconButton icon={ComponentIcon} label="Make component" title="Make a component holding this one" onclick={() => command("make-component")} />{:else}<Button small variant="outline" onclick={() => command("make-component")} title="Make a component of the selection"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>{/if}<IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
   <AttachmentTask bind:this={attach} />
   {#if showIn.length}
@@ -364,6 +365,11 @@
     <!-- Slices: the section above. -->
   {:else if inspected}
     <div class="sections">
+      {#if machines.editing && machines.pinned && machines.view?.main_of && inspected.node.split("/")[0] === machines.view.main_of}
+        <!-- Inside a component whose states are edited: which state (or
+             transition) the canvas shows, whatever is selected. -->
+        <div class="editing" class:preview={!!machines.pinned.scrub} data-section="editing"><span class="dot"></span><span>{#if machines.pinned.scrub}Previewing <strong>{machines.pinned.scrub.from} → {machines.pinned.scrub.to}</strong>{:else}Editing <strong>{machines.pinned.state}</strong>{/if}</span></div>
+      {/if}
       {#if stateKey}
         <div class="state-key">
           {#if stateKey.from}<Button small variant="outline" onclick={() => machines.openKey(inspected!.node, "band")} title="Its length, easing and slices are the component's: every instance's {stateKey.from} → {stateKey.state} changes">Edit transition {stateKey.from} → {stateKey.state}…</Button>{/if}
@@ -401,22 +407,23 @@
           <Section title="Main component" class="property-section" headerClass="component" data-section="main" meta="{inspected.main.instances} instance{inspected.main.instances === 1 ? '' : 's'}">
             {#snippet heading()}<h3 class="main-chip"><ComponentIcon size={14} strokeWidth={1.75} />Main component</h3>{/snippet}
             <label class="port-field">Name<TextInput value={inspected.main.name ?? ""} onchange={(e: Event) => author("rename", { node: inspected!.main!.def, name: (e.currentTarget as HTMLInputElement).value })} /></label>
+            <div class="inline-row"><Button small variant="outline" onclick={() => command("duplicate")} title="Place an instance of this component beside it (⌘D)"><CopyPlus size={14} strokeWidth={1.75} />Create instance</Button></div>
             <div class="ports" data-section="ports">
-              {#each inspected.main.ports as p (p.spec)}
+              {#each inspected.main.ports.filter((p) => !inspected!.main!.machines?.some((x) => x.port === p.name)) as p (p.spec)}
                 <button class="port-row" class:open={openSpec === p.spec} onclick={() => (openSpec = openSpec === p.spec ? null : p.spec)} title={p.placed ? "A port placed on the picture" : "A setting: no place on the picture"}>
                   <span class="dir {p.dir}">{p.dir}</span><span>{p.name}</span><span class="mono">{p.port?.kind}</span>{#if !p.placed}<span class="setting">setting</span>{/if}
                 </button>
                 {#if openSpec === p.spec && p.port}{@render portEditor(p.port, true)}{/if}
               {/each}
             </div>
-            <div class="inline-row"><Button small variant="outline" onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture"><Plus size={14} strokeWidth={1.75} />Input</Button><span class="hint">Ports: the port tool, on the main</span></div>
+            <div class="inline-row"><Button small variant="outline" onclick={() => author("add_input", { def: inspected!.main!.def, name: "input", default: "0" })} title="Add a setting: an input with no place on the picture"><Plus size={14} strokeWidth={1.75} />Input</Button></div>
             <!-- States (machines.md §6): a doorway into the state editor, which
                  opens in the timeline panel; the inspector stays for values. -->
             <div class="states-door" data-section="states">
               {#if inspected.main.machines?.length}
                 {@const m0 = inspected.main.machines[0]}
                 <span class="door-label">States</span><span class="door-names" title={m0.states.map((s) => s.name).join(", ")}>{m0.states.map((s) => s.name).join(" · ")}</span>
-                <Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)} >Edit states…</Button>
+                {#if machines.editing?.def !== inspected.main.def}<Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)}>Edit states…</Button>{/if}
               {:else}
                 <span class="door-label">States</span><span class="door-names hint">none</span>
                 <Button small variant="outline" onclick={addFirstState}><Plus size={14} strokeWidth={1.75} />Add state</Button>
@@ -426,7 +433,6 @@
                  of its parts' bounds; each part says how it follows the box. -->
             <div class="inline-row resizable" title="Each picture of this component gets its own size; drag a corner to resize it. Set how each part follows in its Constraints.">
               <Checkbox label="Resizable" checked={!!inspected.main.resizable} onChange={(on) => author("resizable", { def: inspected!.main!.def, on })} />
-              <span class="hint">{inspected.main.resizable ? "parts follow their constraints" : "pictures keep the main's size"}</span>
             </div>
           </Section>
         {:else if section === "port" && (inspected.port)}
@@ -683,6 +689,10 @@
   .context-reads { display: flex; flex-direction: column; gap: 4px; }
   .context-read { display: flex; align-items: baseline; gap: 8px; min-height: 22px; }
   .context-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .editing { display: flex; align-items: center; gap: 6px; margin: 8px var(--panel-pad) 0; padding: 3px 8px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--record) 18%, transparent); font-size: var(--text-sm); width: fit-content; }
+  .editing .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--record); }
+  .editing.preview { background: var(--accent-soft); }
+  .editing.preview .dot { background: var(--accent); }
   .states-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .running { color: var(--accent); font-variant-numeric: tabular-nums; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }

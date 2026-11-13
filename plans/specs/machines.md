@@ -690,6 +690,31 @@ most a name and a tooltip.
   mode chip, the "every instance" note, the recording banners in the Inspector and
   the panel, the canvas's "Editing … edits go into this state" pill, and the
   toast about own timing.
+
+After the council's fourth round (7.6 and 7.5), the same day:
+
+- **A state has one colour**, by its place among the machine's states
+  (`timeline_view.rs` `LANE`, `machines.svelte.ts` `STATE_HUES`: change them
+  together): its swatch on the bar's chip, the graph's node and the table's
+  column, and its stretch on the document's timeline.
+- **A state lane has two pieces per change**: the transition (the new state's
+  hue, pale, rising to full over the transition's length; named for the
+  transition, "melting · 1.6 s") and then the hold (the hue, named for the
+  state). A key that comes before the transition ends cuts it short. Stretches
+  are opaque, so a label never runs into the next piece. A lane has no grey
+  summary bar on its object row.
+- **A selected slice is outlined; the others stay as they are** (they used to
+  fade).
+- **Opening a transition clears the selection**, so the Inspector shows the
+  transition. With a part of the edited main selected, the Inspector says which
+  state is edited ("Editing water"). The main's Inspector has **Create
+  instance**; it does not list the machine's own port.
+- **An instance is numbered** after its main ("card 2", `copy.rs`), and placed
+  beside it. Its State control always shows its key diamond.
+- The transition's header is a breadcrumb (Timeline › component › a → b), each
+  step a link; the timing menu has a chevron. Graph labels lie along their own
+  arrows. Times read in seconds everywhere. **Stagger** is one button whose label
+  is the outcome ("Stagger", "Stagger and lengthen to 2.4 s", "Staggered").
 - Known gaps: converting a shape whose corners are bound shows a dialog naming
   channel ids; the Inspector is empty on entry until a part is clicked; a
   component's `state` input still draws as a port on the main.

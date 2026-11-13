@@ -31,7 +31,7 @@
 {#if view && m && st}
   <Section title={st.name ?? "State"} class="property-section" data-section="state" meta="state of {view.name ?? 'component'}">
     <label class="ui-field name"><span>Name</span><input aria-label="State name" value={st.name ?? ""} onchange={(e: Event) => { const v = text(e); if (v && v !== st.name) void run(machines.author("rename_state", { state: st.id, name: v })); }} /></label>
-    <div class="line"><Checkbox label="Initial state" checked={m.default === st.name} disabled={m.default === st.name} onChange={() => run(machines.author("set_default_state", { state: st.id }))} /><span class="ui-badge" title="Properties this state sets">{st.own.length} set</span></div>
+    <div class="line"><Checkbox label="Initial state" checked={m.default === st.name} disabled={m.default === st.name} onChange={() => run(machines.author("set_default_state", { state: st.id }))} /><span class="ui-badge">{st.own.length} propert{st.own.length === 1 ? "y" : "ies"} set</span></div>
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>
 {:else if view && m && pair}
@@ -40,8 +40,8 @@
       <label class="ui-field name"><span>Name</span><input aria-label="Transition name" placeholder="None" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
       <div class="property-grid">
         <label class="ui-field"><span>Length</span><input inputmode="decimal" aria-label="Transition length, seconds" value={(pair.ms ?? t.ms ?? 0) / 1000} onchange={(e) => { const v = parseFloat(e.currentTarget.value); if (Number.isFinite(v) && v >= 0) editPair({ ms: v * 1000 }, "transition length"); }} /><span>s</span></label>
-        <EasingField label="Transition easing" value={t.ease} onChange={(v) => editPair({ ease: v }, "transition easing")} />
       </div>
+      <EasingField label="Transition easing" value={t.ease} onChange={(v) => editPair({ ease: v }, "transition easing")} />
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>

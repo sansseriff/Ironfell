@@ -306,6 +306,9 @@ textarea.ui-input { display: block; padding: 6px 8px; line-height: 1.4; resize: 
 .ui-segment:hover:not([data-disabled]) { color: var(--fg); }
 .ui-segment[data-state="on"] { background: var(--raised); color: var(--fg); box-shadow: 0 0 0 1px var(--border-strong); }
 .ui-segment[data-disabled] { opacity: 0.4; cursor: default; }
+/* Choices that are the content itself (a component's states), not a mode. */
+.ui-segmented.is-strong .ui-segment { color: var(--fg); }
+.ui-segmented.is-strong .ui-segment[data-state="on"] { font-weight: 600; }
 .ui-segmented.is-inline { display: inline-flex; width: auto; }
 .ui-segmented.is-inline .ui-segment { flex: 0 0 auto; padding: 0 8px; }
 

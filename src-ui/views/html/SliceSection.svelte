@@ -9,6 +9,7 @@
   import Button from "../../lib/ui/Button.svelte";
   import Checkbox from "../../lib/ui/Checkbox.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
+  import Check from "@lucide/svelte/icons/check";
   import { machines, type Transition } from "../../lib/machines.svelte";
 
   type Picked = { tween: string; channel: string };
@@ -42,8 +43,10 @@
   }
   const clamp = (v: number) => Math.max(0, Math.min(1, v));
 
+  // Times read in seconds, as the transition's header and ruler do.
+  const sec = (v: number) => String(Math.round(v / 10) / 100);
   function setStart(text: string) {
-    const v = parseFloat(text);
+    const v = parseFloat(text) * 1000;
     if (!Number.isFinite(v)) return;
     // Each keeps its length, as moving the bars does.
     void edit((w) => {
@@ -52,7 +55,7 @@
     }, "slice start");
   }
   function setEnd(text: string) {
-    const v = parseFloat(text);
+    const v = parseFloat(text) * 1000;
     if (Number.isFinite(v)) void edit((w) => ({ end: Math.max(clamp(v / ms), w.start ?? 0) }), "slice end");
   }
 
@@ -61,7 +64,7 @@
   // moves each part whole (and can lengthen the transition to fit); Fit
   // shortens them so the last ends with the transition. Times are worked in
   // ms, so lengthening keeps every slice where it is in time.
-  let staggerMs = $state(100);
+  let staggerS = $state(0.1);
   let order = $state<"down" | "up">("down");
   let mode = $state<"keep" | "fit">("keep");
   const partOf = (channel: string | null) => view?.channels.find((c) => c.name === channel)?.parts[0]?.node ?? channel ?? "";
@@ -78,7 +81,7 @@
       else groups.push([w]);
     }
     if (order === "up") groups.reverse();
-    const step = Math.max(0, Number(staggerMs) || 0);
+    const step = Math.max(0, Number(staggerS) * 1000 || 0);
     const first = Math.min(...groups[0].map((w) => (w.start ?? 0) * ms));
     const room = Math.max(20, ms - first - (groups.length - 1) * step);
     const slices = groups.flatMap((g, i) => {
@@ -91,6 +94,11 @@
     return { slices, endMs: Math.max(...slices.map((x) => x.end)) };
   });
   const over = $derived(!!staggered && staggered.endMs > ms + 0.5);
+  // Already as the settings say: nothing to apply.
+  const applied = $derived(!!staggered && !over && staggered.slices.every((x) => {
+    const w = tweens.find((q) => q.channel === x.channel);
+    return !!w && Math.abs((w.start ?? 0) * ms - x.start) < 1 && Math.abs((w.end ?? 1) * ms - x.end) < 1;
+  }));
   function applyStagger(lengthen: boolean) {
     const p = staggered;
     if (!view || !m || !t?.from || !t.to || !p) return;
@@ -104,38 +112,30 @@
   }
 </script>
 
-<Section title={slices.length === 1 ? nameOf(slices[0].channel) : `${slices.length} slices`} class="property-section" data-section="slices" meta={t ? `${t.from} → ${t.to}` : undefined}>
+<Section title={slices.length === 1 ? nameOf(slices[0].channel) : partCount > 1 ? `${partCount} parts · ${slices.length} properties` : `${slices.length} properties`} class="property-section" data-section="slices" meta={t ? `${t.from} → ${t.to}` : undefined}>
   <div class="property-grid">
-    <label class="ui-field"><span>Starts</span><input inputmode="decimal" aria-label="Slice start, ms" placeholder={startMs === null ? "Mixed" : undefined} value={startMs ?? ""} onchange={(e) => setStart(e.currentTarget.value)} /><span>ms</span></label>
-    <label class="ui-field"><span>Ends</span><input inputmode="decimal" aria-label="Slice end, ms" placeholder={endMs === null ? "Mixed" : undefined} value={endMs ?? ""} onchange={(e) => setEnd(e.currentTarget.value)} /><span>ms</span></label>
+    <label class="ui-field"><span>Starts</span><input inputmode="decimal" aria-label="Slice start, seconds" placeholder={startMs === null ? "Mixed" : undefined} value={startMs === null ? "" : sec(startMs)} onchange={(e) => setStart(e.currentTarget.value)} />{#if startMs !== null}<span>s</span>{/if}</label>
+    <label class="ui-field"><span>Ends</span><input inputmode="decimal" aria-label="Slice end, seconds" placeholder={endMs === null ? "Mixed" : undefined} value={endMs === null ? "" : sec(endMs)} onchange={(e) => setEnd(e.currentTarget.value)} />{#if endMs !== null}<span>s</span>{/if}</label>
   </div>
   <EasingField label="Slice easing" mixed={ease === null} value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
   <Checkbox label="Follow the transition's easing" checked={ease === ""} indeterminate={ease === null} onChange={(on) => edit(() => ({ ease: on ? "" : t?.ease || "easy_ease" }), on ? "follow the transition's easing" : "slice easing")} />
   {#if partCount > 1 && staggered}
-    <div class="ui-subheading">Stagger {partCount} parts</div>
-    <div class="stagger">
-      <label class="ui-field"><span>Each</span><input inputmode="decimal" aria-label="Stagger, ms" bind:value={staggerMs} /><span>ms later</span></label>
-      <Segmented label="Order" value={order} items={[{ value: "down", label: "Top first" }, { value: "up", label: "Bottom first" }]} onChange={(v) => (order = v)} />
-    </div>
-    <Segmented label="Lengths" value={mode} items={[{ value: "keep", label: "Keep lengths", title: "Each part moves whole; its movement keeps its speed" }, { value: "fit", label: "Fit in transition", title: "Parts are shortened so the last ends with the transition" }]} onChange={(v) => (mode = v)} />
-    <p class="hint" class:warn={over}>Last ends {Math.round(staggered.endMs)} / {Math.round(ms)} ms</p>
-    {#if over}
-      <div class="row">
-        <Button small variant="primary" onclick={() => applyStagger(true)} title="Make the transition {Math.ceil(staggered.endMs)} ms long; every slice keeps its time">Lengthen to {(Math.ceil(staggered.endMs) / 1000).toFixed(2)} s and stagger</Button>
-        <Button small variant="outline" onclick={() => (mode = "fit")}>Fit instead</Button>
-      </div>
+    <div class="ui-subheading">Stagger</div>
+    <label class="ui-field"><span>Each part</span><input inputmode="decimal" aria-label="Stagger, seconds" bind:value={staggerS} /><span>s later</span></label>
+    <Segmented label="Order" value={order} items={[{ value: "down", label: "Top first" }, { value: "up", label: "Bottom first" }]} onChange={(v) => (order = v)} />
+    <Segmented label="Lengths" value={mode} items={[{ value: "keep", label: "Keep lengths", title: "Each part moves whole" }, { value: "fit", label: "Fit in transition", title: "Parts are shortened so the last ends with the transition" }]} onChange={(v) => (mode = v)} />
+    {#if applied}
+      <Button small variant="outline" disabled data-stagger="done"><Check size={14} strokeWidth={1.75} />Staggered</Button>
+    {:else if over}
+      <Button small variant="primary" data-stagger="lengthen" onclick={() => applyStagger(true)} title="The transition becomes {sec(Math.ceil(staggered.endMs))} s long; every slice keeps its time">Stagger and lengthen to {sec(Math.ceil(staggered.endMs))} s</Button>
     {:else}
-      <Button small variant="outline" onclick={() => applyStagger(false)} title="Start the selected parts one after another">Stagger</Button>
+      <Button small variant="primary" data-stagger="apply" onclick={() => applyStagger(false)}>Stagger</Button>
     {/if}
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
 </Section>
 
 <style>
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .warn { color: var(--danger); }
-  .stagger { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-  .hint { margin: 0; font-size: var(--text-sm); color: var(--fg-muted); }
   .error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
   .ui-field { gap: 6px; padding: 0 8px; color: var(--fg-muted); font-size: var(--text-sm); }
   .ui-field input { flex: 1; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }

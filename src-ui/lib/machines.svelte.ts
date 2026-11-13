@@ -52,6 +52,14 @@ export type SliceEdit = { channel: string; start?: number; end?: number; ease?: 
 
 type Reply = { ok: boolean; view: MachineView | null; pinned: Pin | null; shared?: number };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** A state's hue, by its place among the machine's states: the colour of
+ *  its stretch on the document's timeline (timeline_view.rs `LANE`), and
+ *  of its swatch wherever the state is named. Change them together. */
+export const STATE_HUES = ["#5c85cc", "#4da88a", "#b880d1", "#d6994d", "#cc6b85", "#809466"];
+export const hueOf = (m: Pick<Machine, "states"> | null | undefined, state: string | null | undefined) => {
+  const i = m?.states.findIndex((s) => s.name === state) ?? -1;
+  return STATE_HUES[(i < 0 ? 0 : i) % STATE_HUES.length];
+};
 /** The main a node is in (a main's part is `#main/local`). */
 export const rootOf = (id: string | undefined) => (id ?? "").split("/")[0];
 

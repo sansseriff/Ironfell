@@ -20,7 +20,8 @@ pub fn target(r: &Resolver, chain: &[NodeId], open: &dyn Fn(usize) -> bool, deep
         if v.is(Field::SELECT, "through") && i + 1 < chain.len() {
             continue;
         }
-        if !((i == 0 && v.is(Field::SELECT, "window")) || open(i)) {
+        let edited = r.editing.is_some() && crate::expand::main_definition(r.doc, chain[i]) == r.editing;
+        if !((i == 0 && v.is(Field::SELECT, "window")) || open(i) || edited) {
             return i;
         }
     }

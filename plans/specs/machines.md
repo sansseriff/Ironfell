@@ -648,3 +648,51 @@ authoring flows 5.5–6/10. This round answers its findings.
   - `tests/timeline_view.rs`
     `inside_a_transition_the_timeline_shows_and_moves_its_slices`;
   - the walkthrough's driver script, by screenshot (`screenshots/tri4/`).
+
+### The editor as a place (2026-11-13)
+
+A person walking the flow by hand could not tell whether states existed, which one
+was being edited, or how to reach a transition; the two-step form, the navigator
+tree and the sentences explaining each screen were the problem. This replaces the
+navigator and the first-state form of the redesign above. The rule for this
+editor: a screen that needs a sentence to explain it is wrong; controls carry at
+most a name and a tooltip.
+
+- **Add state acts at once.** On a component with no states it makes two
+  (`state_1`, the look now, and `state_2`), opens the editor and edits `state_2`.
+  There is no form and no Done (`machines.svelte.ts` `open`).
+- **The states bar is on the canvas** (`StatesBar.svelte`): a chip per state, the
+  edited one in the record colour, each with the number of properties it sets; a
+  click edits that state, a double-click renames, the edited chip's menu has
+  Rename, Make initial, Copy the look of, Delete; "+" adds a state at once; Close
+  leaves. While a transition is previewed its two ends are marked. The bar also
+  shows when a main with states is selected, as the way in.
+- **Inside means inside.** While a state is pinned, its main is open: a press
+  selects the part under it (`contexts::Resolver.editing`, `interaction::target`).
+  Opening the editor with the main selected clears the selection, so a drag moves
+  a part and not the component. Selecting something else on the canvas leaves the
+  editor (it used to pause recording and offer "Return to main").
+- **The panel is the machine.** It opens on the graph: a node per state, an arrow
+  per transition labelled with its length (dashed on the default timing, solid
+  with its own), and the default timing's length and easing beside it. A click on
+  a node edits that state; on an arrow, opens that transition's tracks, full
+  width (`INSIDE_INSET` is 0), with its name, transport, length, easing and timing
+  in the header. The table of what each state sets is the panel's second page;
+  values a state does not set show the drawing's, greyed.
+- **An edit a state cannot hold says so when it happens.** A part made, deleted or
+  re-parented, or a value that is not a number, colour or text's words (a path's
+  points, a font), changes every state: the store counts these while a state is
+  pinned (`machine::shared_edit`, `Store::shared_edits`), `machine_view` reports
+  the count, and the bar shows "Changed in every state" for a few seconds.
+- **Make component** is a labelled button in the Inspector's title for plain
+  shapes.
+- Removed: the first-state form, the navigator tree, the Default timing page, the
+  mode chip, the "every instance" note, the recording banners in the Inspector and
+  the panel, the canvas's "Editing … edits go into this state" pill, and the
+  toast about own timing.
+- Known gaps: converting a shape whose corners are bound shows a dialog naming
+  channel ids; the Inspector is empty on entry until a part is clicked; a
+  component's `state` input still draws as a port on the main.
+- Tests: `tests/authoring.rs`
+  `a_pinned_state_opens_its_main_and_counts_edits_it_cannot_hold`; the flow by
+  hand through the driver, by screenshot (`screenshots/tri5/`).

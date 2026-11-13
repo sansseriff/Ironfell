@@ -255,6 +255,9 @@ pub struct Player {
     pub snap: std::collections::BTreeSet<NodeId>,
     /// A state pinned for editing on its main (session only).
     pub pinned: Option<Pinned>,
+    /// How many edits made while a state was pinned changed the drawing
+    /// itself (every state), not the state: the editor says so each time.
+    pub shared: u64,
     /// What was running at the last advance, for views.
     pub running: Vec<Running>,
     /// The parts the state editor shows open inside a transition (their
@@ -932,6 +935,27 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Result<V
         out.push(Op::AddFacet { id: state, facet: pose.wrap() });
     }
     Ok(out)
+}
+
+/// Whether `ops`, made while `pin` is pinned, change the component's
+/// drawing for every state: a part made, deleted or moved in the tree, or
+/// a value no state can hold (a path's points, a font). Names are not
+/// looks, and a previewed transition refuses such edits.
+pub fn shared_edit(doc: &Document, pin: &Pinned, ops: &[crate::op::Op]) -> bool {
+    use crate::facet::FacetKind;
+    use crate::op::Op;
+    use crate::value::Slot;
+    if pin.scrub.is_some() {
+        return false;
+    }
+    let Some(template) = children(doc, pin.def, "template").first().copied() else { return false };
+    let part = |id: &NodeId| !id.is_expanded() && doc.is_ancestor(template, *id);
+    ops.iter().any(|op| match op {
+        Op::Set { id, path, slot } => part(id) && path.facet != FacetKind::Name && !matches!(slot, Slot::Const(v) if recordable(*path, v)),
+        Op::RemoveFacet { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } => part(id),
+        Op::Create { parent: Some(p), .. } => part(p) || *p == template,
+        _ => false,
+    })
 }
 
 // ── The state editor's edits (machines.md §6, "Timing") ───────────────

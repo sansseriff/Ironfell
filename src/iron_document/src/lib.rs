@@ -1855,7 +1855,7 @@ impl Store {
     /// A resolver over this document's contexts that sees nodes'
     /// interaction states.
     pub fn resolver(&self) -> contexts::Resolver<'_> {
-        contexts::Resolver { doc: &self.doc, lib: self.contexts(), states: Some(&self.interaction) }
+        contexts::Resolver { doc: &self.doc, lib: self.contexts(), states: Some(&self.interaction), editing: self.machines.pinned.as_ref().map(|p| p.def) }
     }
 
     /// The nodes that are hovered, selected, pressed or dragged now, as the
@@ -1898,6 +1898,12 @@ impl Store {
 
     pub fn pinned_state(&self) -> Option<&machine::Pinned> {
         self.machines.pinned.as_ref()
+    }
+
+    /// How many edits under a pinned state changed every state instead
+    /// (machine.rs `shared_edit`): session only.
+    pub fn shared_edits(&self) -> u64 {
+        self.machines.shared
     }
 
     /// The parts open inside a transition in the state editor (machines.md
@@ -2629,6 +2635,9 @@ impl Store {
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
         if let Some(pin) = self.machines.pinned.clone() {
+            if machine::shared_edit(&self.doc, &pin, &input.ops) {
+                self.machines.shared += 1;
+            }
             input.ops = machine::record(&self.doc, &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
         }
         let mut work = self.doc.clone();

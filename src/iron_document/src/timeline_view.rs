@@ -91,11 +91,11 @@ pub struct Inside {
     pub curves: BTreeMap<NodeId, String>,
 }
 
-/// Inside a transition the editor's header and navigator sit over the
-/// view's top and left: the pieces start below and right of them, document
-/// px (the DOM reads these from `timeline_rows`).
+/// Inside a transition the editor's header sits over the view's top: the
+/// pieces start below it, document px (the DOM reads these from
+/// `timeline_rows`).
 pub const INSIDE_TOP: f64 = 32.0;
-pub const INSIDE_INSET: f64 = 220.0;
+pub const INSIDE_INSET: f64 = 0.0;
 /// Inside, the ruler is a strip: its transport is in the editor's header.
 pub const INSIDE_RULER_H: f64 = 26.0;
 

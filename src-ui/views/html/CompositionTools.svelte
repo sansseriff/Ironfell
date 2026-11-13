@@ -33,8 +33,7 @@
   import type { Tool } from "../../runtime/document_client.svelte";
   import type { ViewSpec } from "../views";
   import TimelinePanel from "./TimelinePanel.svelte";
-  import X from "@lucide/svelte/icons/x";
-  import IconButton from "../../lib/ui/IconButton.svelte";
+  import StatesBar from "./StatesBar.svelte";
   import { onDestroy } from "svelte";
   import { machines } from "../../lib/machines.svelte";
 
@@ -82,11 +81,9 @@
   const current = (slot: string[]) => (slot.includes(last[slot.join("|")]) ? last[slot.join("|")] : slot[0]);
   let menu: Record<string, boolean> = $state({});
 
-  // A state previewed on a main says so on the canvas, loudly, with a way
-  // out (machines.md §6): what you see is not the component's resting look.
+  // A component's states show on the canvas (StatesBar; machines.md §6).
   const stopMachines = machines.use();
   onDestroy(stopMachines);
-  const pin = $derived(machines.pinned);
 
   function pick(tool: string, slot?: string[]) {
     if (slot) menu[slot.join("|")] = false;
@@ -98,18 +95,8 @@
   <TimelinePanel {panel} />
 {/if}
 
-{#if shown && pin}
-  <!-- Recording into a state (orange) and previewing a transition, which
-       records nothing (blue), never look alike. -->
-  <div class="previewing canvas-ui" class:scrub={!!pin.scrub} role="status">
-    <span class="dot"></span>
-    {#if pin.scrub}
-      <span>Previewing <strong>{pin.scrub.from} → {pin.scrub.to}</strong> at {Math.round(pin.scrub.progress * 100)}%<span class="of"> · to change the parts, edit {pin.scrub.from} or {pin.scrub.to}</span></span>
-    {:else}
-      <span>Editing <strong>{pin.state}</strong>{#if pin.name}<span class="of"> · {pin.name}</span>{/if}<span class="of"> · edits go into this state</span></span>
-    {/if}
-    <IconButton icon={X} class="stop" onclick={() => machines.pin(pin.def, pin.machine, null)} title={pin.scrub ? "Stop previewing" : "Stop editing this state: the component shows at rest"} label={pin.scrub ? "Stop previewing" : "Stop editing this state"} />
-  </div>
+{#if shown}
+  <StatesBar />
 {/if}
 
 {#if shown}
@@ -152,15 +139,6 @@
 {/if}
 
 <style>
-  /* Recording into a state is the record colour; previewing a transition,
-     which records nothing, the accent. Text and the dot are a dark shade of
-     the pill's own colour. */
-  .previewing { --pill: var(--record); --pill-fg: color-mix(in srgb, var(--pill) 18%, black); position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; height: var(--control-h); padding: 0 2px 0 12px; border-radius: calc(var(--control-h) / 2); background: var(--pill); color: var(--pill-fg); font-size: var(--text-md); box-shadow: var(--menu-shadow); pointer-events: auto; z-index: 4; white-space: nowrap; }
-  .previewing.scrub { --pill: var(--accent); --pill-fg: var(--accent-fg); }
-  .previewing .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .previewing .of { opacity: 0.75; }
-  .previewing :global(.stop) { border-radius: 50%; color: inherit; background: color-mix(in srgb, currentColor 12%, transparent); }
-  .previewing :global(.stop:hover:not(:disabled)) { color: inherit; background: color-mix(in srgb, currentColor 22%, transparent); }
   /* The floating tool palette: the tool buttons (`.ui-icon-button.is-tool`,
      36 px, larger than a panel's) on a raised bar with the composer's radius. */
   .toolbar {

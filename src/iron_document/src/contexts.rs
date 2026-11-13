@@ -520,11 +520,14 @@ pub struct Resolver<'a> {
     /// Nodes' interaction states (`hovered`, `selected`, …), for rules that
     /// match `state:`; none without a host.
     pub states: Option<&'a std::collections::BTreeMap<NodeId, Vec<&'static str>>>,
+    /// The component whose states are being edited: its main is open (a
+    /// click selects a part), as a container holding the selection is.
+    pub editing: Option<NodeId>,
 }
 
 impl<'a> Resolver<'a> {
     pub fn new(doc: &'a Document, lib: &'a Library) -> Self {
-        Resolver { doc, lib, states: None }
+        Resolver { doc, lib, states: None, editing: None }
     }
 
     /// The values of `chain[i]`, where `chain` is the path of containers a

@@ -345,3 +345,31 @@ fn attaching_under_transformed_paths_preserves_world_positions() {
     let moved = store.world_affine(points[1]).translation();
     assert!((moved[0]-after[0]-(60.0-control_x)).abs()<1e-8 && (moved[1]-after[1]).abs()<1e-8);
 }
+
+/// Editing a component's states is being inside it (machines.md §6): with
+/// a state pinned, a press on the main selects the part under it, as if
+/// the main held the selection. An edit a state cannot hold (a part
+/// deleted) is counted, so the editor can say it changed every state; a
+/// move, which the state records, is not.
+#[test]
+fn a_pinned_state_opens_its_main_and_counts_edits_it_cannot_hold() {
+    let Desk { mut store, body, beam, .. } = desk();
+    let (made, input) = store.make_component(&[body, beam], "laser", Actor::Human).unwrap();
+    apply(&mut store, "make", input.ops);
+    let (main, def) = (made.picture, made.definition);
+    let shown = NodeId::expanded(main, body).unwrap();
+    let chain = [main, shown];
+    assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 0, "at rest a press selects the component");
+    let (ops, state) = machine::add_state_ops(store.document(), def).unwrap();
+    apply(&mut store, "add state", ops);
+    let m = machine::machines(store.document(), def)[0].0;
+    store.pin_state(Some(machine::Pinned::state(def, m, state)));
+    assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 1, "editing its states, a press selects the part");
+    assert_eq!(store.shared_edits(), 0);
+    apply(&mut store, "move", vec![Op::Set { id: body, path: path("transform2d.x"), slot: Slot::Const(Value::Number(12.0)) }]);
+    assert_eq!(store.shared_edits(), 0, "a move goes into the state");
+    apply(&mut store, "delete", vec![Op::Delete { id: beam }]);
+    assert_eq!(store.shared_edits(), 1, "a deleted part is gone from every state");
+    store.pin_state(None);
+    assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 0);
+}

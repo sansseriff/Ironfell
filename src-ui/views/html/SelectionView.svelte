@@ -6,7 +6,7 @@
   import CompositionSection from "./CompositionSection.svelte";
   import AttachmentTask from "../../lib/AttachmentTask.svelte";
   import { getContext } from "svelte";
-  import { machines, rootOf } from "../../lib/machines.svelte";
+  import { machines } from "../../lib/machines.svelte";
   import SliceSection from "./SliceSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
@@ -290,7 +290,9 @@
   // look now, and the new state), which makes them.
   async function addFirstState() {
     const def = inspected?.main?.def;
-    if (def) await machines.open(def);
+    if (!def) return;
+    const r = await machines.open(def);
+    if (r && !r.ok) setError = (r as { error?: string }).error ?? "That did not work";
   }
   async function author(verb: string, args: Record<string, unknown>) {
     setError = "";
@@ -329,7 +331,7 @@
     <SliceSection slices={sliceSel} />
   {:else if inspected}
     <!-- One line: scripts read the title's text ("name kind"). -->
-    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}<IconButton icon={ComponentIcon} label="Make component" title="Make a component: shapes become a new definition shown by its main; instances become one component holding them" onclick={() => command("make-component")} /><IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
+    <header class="ui-section-header title"><span class="title-name">{inspected.name ?? inspected.type}</span>{#if inspected.name}{" "}<span class="ui-section-meta" title="{inspected.type} {inspected.node}">{inspected.type}</span>{/if}{#if !TIMED.includes(inspected.type)}<span class="ui-section-actions">{#if doc.selection.length === 2}<IconButton icon={Link} label="Link" title="Link the two pictures: one entity with both as figures" onclick={() => link()} />{/if}{#if inspected.main || inspected.component}<IconButton icon={ComponentIcon} label="Make component" title="Make a component holding this one" onclick={() => command("make-component")} />{:else}<Button small variant="outline" onclick={() => command("make-component")} title="Make a component of the selection"><ComponentIcon size={14} strokeWidth={1.75} />Make component</Button>{/if}<IconButton icon={SquareDashed} label="Wrap in empty" title="Wrap the selection in an empty at its centre (⌘⌥G)" onclick={() => command("wrap")} />{#if !attach?.isOpen()}<span class="attach" data-attachment-task><IconButton icon={Waypoints} label="Attach points to control" title="Attach points to control: select a main component or an empty in its main" onclick={() => attach?.begin()} /></span>{/if}</span>{/if}</header>
   {/if}
   <AttachmentTask bind:this={attach} />
   {#if showIn.length}
@@ -361,9 +363,6 @@
     <!-- Slices: the section above. -->
   {:else if inspected}
     <div class="sections">
-      {#if machines.pinned && !machines.pinned.scrub && machines.view?.main_of && rootOf(inspected.node) === machines.view.main_of}
-        <div class="recording" role="status"><span class="dot"></span><span>Edits go into <strong>{machines.pinned.state}</strong>: positions, sizes, colours, opacity and text. Other changes (a font, a new part) change every state.</span></div>
-      {/if}
       {#if stateKey}
         <div class="state-key">
           {#if stateKey.from}<Button small variant="outline" onclick={() => machines.openKey(inspected!.node, "band")} title="Its length, easing and slices are the component's: every instance's {stateKey.from} → {stateKey.state} changes">Edit transition {stateKey.from} → {stateKey.state}…</Button>{/if}
@@ -416,10 +415,10 @@
               {#if inspected.main.machines?.length}
                 {@const m0 = inspected.main.machines[0]}
                 <span class="door-label">States</span><span class="door-names" title={m0.states.map((s) => s.name).join(", ")}>{m0.states.map((s) => s.name).join(" · ")}</span>
-                <Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)} title="Edit this component's states and their timing (opens in the timeline panel)">Edit states…</Button>
+                <Button small variant="outline" onclick={() => machines.open(inspected!.main!.def)} >Edit states…</Button>
               {:else}
                 <span class="door-label">States</span><span class="door-names hint">none</span>
-                <Button small variant="outline" onclick={addFirstState} title="A state is a look the component can be in; instances move between them"><Plus size={14} strokeWidth={1.75} />Add state</Button>
+                <Button small variant="outline" onclick={addFirstState}><Plus size={14} strokeWidth={1.75} />Add state</Button>
               {/if}
             </div>
             <!-- Figma's "Resizing" (frame-constraints.md §4): the picture gets a box
@@ -449,7 +448,7 @@
                 {@const run = machines.view?.machines[0]?.current}
                 {@const stateField = g.inputs.find((f) => f.group === "States")}
                 {@const keyed = !!stateField?.key && stateField.key !== "none"}
-                <div class="input-group states-head"><span class="hint">{keyed ? `Animated: choosing a state keys it at ${clockLabel}.` : "Choosing a state plays its transition."}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)} title="Edit the component's states and timing: every instance changes">Edit states…</Button></div>
+                <div class="input-group states-head"><span class="ui-subheading">States{#if keyed}{" "}<span class="ui-badge" title="Choosing a state adds a key at {clockLabel}">keyed</span>{/if}</span><Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
                 {#if run?.transition && run.from && run.to}<div class="hint running" role="status">{run.from} → {run.to} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
               {:else if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
               <div class="property-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
@@ -676,8 +675,6 @@
   .error { padding: 8px var(--panel-pad) 0; overflow-wrap: anywhere; }
   .selection-note { padding: 8px var(--panel-pad) 0; color: var(--fg-muted); font-size: var(--text-sm); }
   footer { display: flex; justify-content: space-between; padding: 12px var(--panel-pad); font-size: var(--text-sm); color: var(--fg-muted); }
-  .recording { display: flex; align-items: flex-start; gap: 6px; margin: 8px var(--panel-pad) 0; padding: 6px 8px; border-radius: var(--radius); background: color-mix(in srgb, var(--record) 16%, transparent); font-size: var(--text-sm); line-height: 1.35; }
-  .recording .dot { flex: none; width: 7px; height: 7px; margin-top: 4px; border-radius: 50%; background: var(--record); }
   .state-key { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px var(--panel-pad) 0; }
   .question { display: flex; flex-direction: column; gap: 8px; margin: 8px var(--panel-pad); padding: 12px; border: 1px solid var(--danger); border-radius: var(--radius-lg); }
   .context-reads { display: flex; flex-direction: column; gap: 4px; }

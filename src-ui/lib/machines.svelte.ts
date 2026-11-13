@@ -2,9 +2,11 @@
 // and its mode, shared by the timeline panel (where the editor opens, as a
 // drill-in), the inspector (its doorway) and the canvas chip.
 //
-// The editor is a mode entered on purpose (Edit states…, a double-click on
-// a lane or a transition band) and left on purpose (Done, the breadcrumb).
-// It is bound to one component; selection never switches it. The engine's
+// The editor is a mode entered on purpose (Add state, Edit states…, a chip
+// of the canvas's states bar, a double-click on a lane or a transition band)
+// and left by its Close, the breadcrumb, or selecting something else on the
+// canvas. While it is open a state is always the one edits go into (or a
+// transition is previewed); the canvas's states bar says which. The engine's
 // `machine_view` answers without asking for frames, so polling it costs no
 // rendering.
 import { controllerManager } from "../controller-manager.svelte";
@@ -44,11 +46,11 @@ export type MachineView = {
 };
 export type Pin = { def: string; name: string | null; machine: string; state: string; scrub: { from: string; to: string; progress: number } | null };
 /** What the editor shows: a state's look, or a transition's timing. */
-export type Focus = { kind: "state"; state: string | null } | { kind: "pair"; from: string; to: string } | { kind: "default" };
+export type Focus = { kind: "state"; state: string | null } | { kind: "pair"; from: string; to: string };
 /** One channel's slice in a pair edit (machine.rs `Slice`). */
 export type SliceEdit = { channel: string; start?: number; end?: number; ease?: string };
 
-type Reply = { ok: boolean; view: MachineView | null; pinned: Pin | null };
+type Reply = { ok: boolean; view: MachineView | null; pinned: Pin | null; shared?: number };
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 /** The main a node is in (a main's part is `#main/local`). */
 export const rootOf = (id: string | undefined) => (id ?? "").split("/")[0];
@@ -63,8 +65,13 @@ class Machines {
   pinned: Pin | null = $state(null);
   /** Per machine: what the editor shows. */
   focus: Record<string, Focus> = $state({});
-  /** A state whose recording paused when the selection left its main. */
-  paused: { def: string; machine: string; state: string } | null = $state(null);
+  /** The panel's page for a state: the machine's graph, or the table of
+   *  what the states set. */
+  page: "graph" | "table" = $state("graph");
+  /** When an edit last changed every state instead of the edited one
+   *  (a part added, a path's points): the states bar says so briefly. */
+  sharedAt = $state(0);
+  #shared: number | null = null;
   /** Where the editor was opened from (an instance's lane), for its way back. */
   origin: string | null = $state(null);
   /** The graph pane: shown automatically for a branching machine, or chosen. */
@@ -85,20 +92,25 @@ class Machines {
       if (!r.ok) return;
       if (!same(r.view, this.view)) this.view = r.view;
       if (!same(r.pinned, this.pinned)) this.pinned = r.pinned;
+      if (r.shared !== undefined) {
+        if (this.#shared !== null && r.shared > this.#shared && this.editing) this.sharedAt = Date.now();
+        this.#shared = r.shared;
+      }
       if (this.editing) {
         const s = sel ? await doc.command<Reply>({ op: "machine_view", node: sel }) : null;
         const other = s?.ok && s.view && s.view.def !== this.editing.def ? s.view : null;
         if (!same(other, this.selected)) this.selected = other;
-        // Recording follows the main: selecting outside it pauses a
-        // recording state (said in the editor; resuming is explicit).
+        // The editor is a place: selecting something else on the canvas
+        // leaves it.
         const main = r.view?.main_of;
         const inMain = !!main && rootOf(sel) === main;
         if (inMain) this.#pinnedWith = sel;
         // Nothing selected is not leaving: the selection empties when the
         // timeline's pieces it held go (a transition closed).
         if (r.pinned && !r.pinned.scrub && r.pinned.def === this.editing.def && sel && !inMain && sel !== this.#pinnedWith) {
-          this.paused = { def: r.pinned.def, machine: r.pinned.machine, state: r.pinned.state };
-          await this.pin(r.pinned.def, r.pinned.machine, null);
+          this.#pending = false;
+          await this.close();
+          return;
         }
       }
     } catch {
@@ -122,38 +134,68 @@ class Machines {
     };
   }
 
-  /** Open the editor on a component, showing `focus` of its first machine. */
+  /** Open the editor on a component, showing `focus` of its first machine
+   *  (by default its initial state). A component with no states gets its
+   *  first two: its look now, and a new one to shape. */
   async open(def: string, focus?: Focus, machine?: string, origin: string | null = null) {
     this.editing = { def };
     this.origin = origin;
-    this.paused = null;
     this.selected = null;
+    this.page = "graph";
     await this.read();
-    const m = machine ?? this.view?.machines[0]?.id;
-    if (m && focus) {
-      this.focus = { ...this.focus, [m]: focus };
-      if (focus.kind === "state" && focus.state) await this.pin(def, m, focus.state);
+    if (this.view && !this.view.machines.length) {
+      const r = await this.author("add_state", { def, first: "state_1" });
+      if (!r.ok) {
+        this.editing = null;
+        return r;
+      }
+      focus = r.state ? { kind: "state", state: r.state } : undefined;
     }
+    const mm = this.view?.machines.find((x) => x.id === machine) ?? this.view?.machines[0];
+    if (!mm) return { ok: true };
+    const f: Focus = focus ?? { kind: "state", state: mm.default ?? mm.states[0]?.name ?? null };
+    this.focus = { ...this.focus, [mm.id]: f };
+    if (f.kind === "state" && f.state) await this.pin(def, mm.id, f.state);
+    else if (f.kind === "pair") await this.pin(def, mm.id, f.from, { from: f.from, to: f.to, progress: 0 });
+    // Inside the component a click selects a part; the component itself
+    // selected would be dragged whole instead.
+    const doc = controllerManager.docClient;
+    if (this.view?.main_of && doc.selection.length === 1 && doc.selection[0] === this.view.main_of) await doc.call("select", ["[]", "replace"]).catch(() => {});
+    return { ok: true };
+  }
+
+  /** The machine the editor shows. */
+  get machine(): Machine | null {
+    return this.view?.machines[0] ?? null;
+  }
+
+  /** Edit a state's look: the main shows it, and edits go into it. */
+  async editState(state: string) {
+    const m = this.machine;
+    if (!this.view || !m) return { ok: false };
+    if (!this.editing) return this.open(this.view.def, { kind: "state", state });
+    this.focus = { ...this.focus, [m.id]: { kind: "state", state } };
+    return this.pin(this.view.def, m.id, state);
+  }
+
+  /** Add a state (named by the engine) and edit its look. */
+  async addState() {
+    if (!this.view) return { ok: false };
+    const def = this.view.def;
+    if (!this.editing) this.editing = { def };
+    const r = await this.author("add_state", { def });
+    const m = this.machine;
+    if (r.ok && m && r.state) this.focus = { ...this.focus, [m.id]: { kind: "state", state: r.state } };
+    return r;
   }
 
   /** Leave the editor: preview off, the clock back. */
   async close() {
     const p = this.pinned;
     this.editing = null;
-    this.paused = null;
     this.selected = null;
     if (p) await this.pin(p.def, p.machine, null);
     await this.read();
-  }
-
-  /** Back to the paused state: select its main and record into it again. */
-  async resume() {
-    const p = this.paused;
-    const main = this.view?.main_of;
-    if (!p) return;
-    if (main) await controllerManager.docClient.command({ op: "narrative_probe", node: main, action: "select" });
-    this.paused = null;
-    await this.pin(p.def, p.machine, p.state);
   }
 
   async author(verb: string, args: Record<string, unknown>) {

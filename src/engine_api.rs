@@ -3100,7 +3100,7 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
         let named_def = node.filter(|&n| doc.live(n).is_some_and(|x| x.ty.name() == "definition"));
         let entity = if named_def.is_some() { None } else { entity };
         let def = named_def.or_else(|| main.and_then(|m| expand::main_definition(doc, m))).or_else(|| entity.and_then(|e| expand::linked_definition(doc, e)));
-        let Some(def) = def else { return Ok(serde_json::json!({"ok": true, "view": null, "pinned": pinned})) };
+        let Some(def) = def else { return Ok(serde_json::json!({"ok": true, "view": null, "pinned": pinned, "shared": store.shared_edits()})) };
         let now = store.time();
         let machines: Vec<serde_json::Value> = machine::machines(doc, def)
             .into_iter()
@@ -3159,7 +3159,7 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
             })).collect();
             serde_json::json!({"id": c.to_string(), "name": n, "rest": shown_value(&rest), "kind": kind, "parts": parts})
         }).collect();
-        Ok(serde_json::json!({"ok": true, "pinned": pinned, "view": {
+        Ok(serde_json::json!({"ok": true, "pinned": pinned, "shared": store.shared_edits(), "view": {
             "def": def.to_string(), "name": name_of(def), "main": main.map(|m| m.to_string()), "entity": entity.map(|e| e.to_string()), "machines": machines, "channels": channels, "main_of": main_of.map(|u| u.to_string()),
         }}))
     };

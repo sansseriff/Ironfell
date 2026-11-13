@@ -183,7 +183,7 @@
     {/each}
   </div>
   <div class="corner" style:height="{css(layout.ruler_h)}px">
-    {#if inside}<span class="corner-label">Part · property</span><span class="corner-label">{inside.from} → {inside.to}</span>
+    {#if inside}<span class="corner-label">Part · property</span>
     {:else}<TimelineTransport {area} over={() => over} />{/if}
   </div>
 </div>

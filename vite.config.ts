@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
@@ -15,12 +15,33 @@ function frontendVersion(): string {
   }
 }
 
+// Cross-origin isolation, for SharedArrayBuffer and so the worker frame hold
+// (plans/rendering/worker-frame-hold.md §5). On in dev unless IRON_COI=0;
+// GitHub Pages cannot send these headers. Set on every response, not through
+// `server.headers`: Vite leaves those off its 304s, and the browser keeps the
+// headers of the copy it cached, so a page first cached from a server without
+// isolation (IRON_COI=0, an older checkout on the same port) stayed
+// unisolated on every reload, though each fresh 200 carried the headers.
+function crossOriginIsolation(): Plugin {
+  return {
+    name: 'iron-cross-origin-isolation',
+    configureServer(server) {
+      if (process.env.IRON_COI === '0') return
+      server.middlewares.use((_req, res, next) => {
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+        res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
+        next()
+      })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   // No preload plugin: it put every chunk (the app, the engine's glue) in
   // index.html, so the scopes page fetched the engine it exists to avoid
   // (scopes.md §10.2). The app's dynamic import preloads its own chunks.
-  plugins: [svelte()],
+  plugins: [svelte(), crossOriginIsolation()],
   define: { __IRON_FRONTEND_VERSION__: JSON.stringify(frontendVersion()) },
   base: mode === 'native' ? './' : '/Ironfell/', // Updated to match the actual repository name
   root: '.',
@@ -49,10 +70,6 @@ export default defineConfig(({ mode }) => ({
   // agent's edits there (a tsconfig, an html) made Vite reload this app
   // mid-smoke. Nothing the app serves is in it, nor in plans/.
   server: {
-    // Cross-origin isolation, for SharedArrayBuffer and so the worker frame
-    // hold (plans/rendering/worker-frame-hold.md §5). On in dev unless
-    // IRON_COI=0; GitHub Pages cannot send these headers.
-    headers: process.env.IRON_COI === '0' ? undefined : { 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' },
     watch: { ignored: ['**/.agents/**', '**/plans/**', '**/target/**'] },
   },
   // Ensure WASM files are treated as assets

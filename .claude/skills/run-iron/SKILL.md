@@ -46,6 +46,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
 | ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10): the document crate rebuilds everything above it |
+| ⏱ `BACKENDS=webgl2 build.sh`, first build in a worktree seeded from the main checkout's `target/` (`setup-worktree.sh`) | ~2–2.5 min (2m 18s: only the 7 workspace crates compile, 2026-11-13). A different `RUSTFLAGS` from the main checkout's build recompiles everything |
 | ⏱ `build.sh` cold | ~3–5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06; 3m 00s in a fresh T3 worktree, 2026-11-12) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4–5 min (cargo 4m 38s plus binding generation in composition-settings, 2026-11-10; cargo 3m 25s, 2026-11-03) |
 | `smoke.txt` (`GPU=1`), fast default | ~5 s warm (4.72 s, 2026-11-04); startup-dependent |

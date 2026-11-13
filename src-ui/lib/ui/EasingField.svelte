@@ -43,14 +43,14 @@
   import { Popover } from "bits-ui";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Check from "@lucide/svelte/icons/check";
-  let { value, label, custom = true, disabled = false, onChange }: {
-    value: string | null; label: string; custom?: boolean; disabled?: boolean; onChange: (v: string) => void;
+  let { value, label, custom = true, disabled = false, mixed = false, onChange }: {
+    value: string | null; label: string; custom?: boolean; disabled?: boolean; mixed?: boolean; onChange: (v: string) => void;
   } = $props();
   let open = $state(false);
   const bez = $derived(parseBezier(value));
   const named = $derived(CURVES.find((c) => c.value === value));
   const shown = $derived(named?.f ?? (bez ? bezier(...bez) : (t: number) => t));
-  const title = $derived(named?.label ?? (bez ? `cubic-bezier(${bez.join(", ")})` : value ?? "Linear"));
+  const title = $derived(mixed ? "Mixed" : named?.label ?? (bez ? `cubic-bezier(${bez.join(", ")})` : value ?? "Linear"));
   // The custom editor's handles, in its 0..1 × −0.5..1.5 space.
   let draft = $state<[number, number, number, number]>([0.33, 0, 0.67, 1]);
   $effect(() => { if (bez) draft = bez; });

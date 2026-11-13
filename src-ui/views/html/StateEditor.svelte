@@ -135,6 +135,11 @@
   async function timePair(mm: Machine, from: string, to: string) {
     if (!view) return;
     stopPlay();
+    // Selected bars belong to the transition they were picked in: the
+    // tracks' pieces keep their ids across transitions, so a selection
+    // carried over would name the old leg's slices.
+    const was = focus;
+    if (was?.kind === "pair" && (was.from !== from || was.to !== to) && doc.selection.length) void doc.call("select", ["[]", "replace"]).catch(() => {});
     setFocus(mm, { kind: "pair", from, to });
     // The main shows the transition from its start, and the timeline is
     // inside it; fitted to the panel once the engine has built it.

@@ -544,6 +544,19 @@ fn inside_a_transition_the_timeline_shows_and_moves_its_slices() {
     store.apply_session(vec![Op::Set { id: comp, path: path("axis.cursor"), slot: num(0.5) }]).unwrap();
     build(&mut store, &mut last);
     assert_eq!(store.pinned_state().and_then(|p| p.scrub.clone()).map(|s| s.2), Some(0.5));
+    assert_eq!(timeline_view::projected_tweens(store.document(), part).len(), 2);
+    // Another leg: the part's bar is the same piece, and it stands for that
+    // leg's slices, not the last one's (a selection of it is edited there).
+    let (ops, back) = {
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        machine::edit_pair_ops(store.document(), &read, def, m, "on", "off", &machine::PairEdit { ms: Some(500.0), ..Default::default() }).unwrap()
+    };
+    store.apply(tx("own back", ops)).unwrap();
+    store.pin_state(Some(machine::Pinned { def, machine: m, state: "on".into(), scrub: Some(("on".into(), "off".into(), 0.0)) }));
+    build(&mut store, &mut last);
+    assert_eq!(piece(&store, comp, &format!("part {dot}")), Some(part), "the same piece");
+    let stands = timeline_view::projected_tweens(store.document(), part);
+    assert!(!stands.is_empty() && stands.iter().all(|w| store.document().live(*w).and_then(|n| n.parent) == Some(back)), "the part's bar stands for on → off's slices: {stands:?}");
     // Leaving the transition gives the document's timeline back.
     store.pin_state(None);
     build(&mut store, &mut last);

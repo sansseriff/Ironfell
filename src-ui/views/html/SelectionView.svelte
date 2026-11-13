@@ -272,14 +272,18 @@
   // Slices selected inside a transition (the state editor's tracks): the
   // Inspector shows what a slice is, not the bar that draws it.
   let sliceSel = $state<{ tween: string; channel: string }[]>([]);
+  // Replies can come back out of order (a pick right after switching
+  // transitions): only the latest request's answer is shown.
+  let sliceAsk = 0;
   $effect(() => {
     const nodes = doc.selection;
+    const ask = ++sliceAsk;
     if (!machines.pinned?.scrub || !nodes.length) {
       sliceSel = [];
       return;
     }
     void doc.command<{ ok: boolean; slices?: { tween: string; channel: string }[] }>({ op: "author", verb: "selected_slices", args: JSON.stringify({ nodes }) }).then((r) => {
-      sliceSel = r.ok && r.slices && r.slices.length ? r.slices : [];
+      if (ask === sliceAsk) sliceSel = r.ok && r.slices && r.slices.length ? r.slices : [];
     });
   });
   // The first states: the editor opens on its naming form (the component's

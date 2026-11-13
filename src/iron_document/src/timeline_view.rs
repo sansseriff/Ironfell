@@ -1119,6 +1119,20 @@ pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
                         Some(_) => {}
                     }
                 }
+                // A kept piece can stand for something else now: inside
+                // another transition `slice m1 …` or m1's part bar is the
+                // same piece over that transition's tweens. Its projection
+                // follows, or a selection of it names the old leg's slices.
+                let data = w.with.clone().map(|p| BTreeMap::from([("with".to_owned(), Value::Str(p))])).unwrap_or_default();
+                let had: Vec<(crate::id::RelationId, NodeId, bool)> = doc.relations_from(id).filter(|r| r.rel == RelKind::Projects).map(|r| (r.id, r.to, r.data == data)).collect();
+                let current = matches!((w.projects, had.as_slice()), (Some(to), [(_, t, true)]) if *t == to) || (w.projects.is_none() && had.is_empty());
+                if !current {
+                    ops.extend(had.iter().map(|&(rel, _, _)| Op::Unlink { id: rel }));
+                    if let Some(to) = w.projects {
+                        let rel = rel_ids.next().expect("a relation id per link");
+                        ops.push(Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Projects, data } });
+                    }
+                }
             }
             None => {
                 let id = ids.next().expect("an id per new node");

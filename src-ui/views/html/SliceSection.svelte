@@ -16,7 +16,9 @@
   const view = $derived(machines.view);
   const pin = $derived(machines.pinned);
   const m = $derived(view?.machines.find((x) => x.id === pin?.machine) ?? view?.machines[0]);
-  const t = $derived<Transition | undefined>(m?.transitions.find((x) => x.tweens.some((w) => slices.some((s) => s.tween === w.id))));
+  // The transition being previewed is the one these slices belong to; a
+  // slice of another leg still selected is not shown or edited here.
+  const t = $derived<Transition | undefined>(m?.transitions.find((x) => (!pin?.scrub || x.id === m?.pairs.find((q) => q.from === pin.scrub!.from && q.to === pin.scrub!.to)?.transition) && x.tweens.some((w) => slices.some((s) => s.tween === w.id))));
   const ms = $derived(m && t ? m.pairs.find((q) => q.from === t.from && q.to === t.to)?.ms ?? t.ms ?? 300 : 300);
   const tweens = $derived(t ? slices.map((s) => t.tweens.find((w) => w.id === s.tween)).filter((w) => !!w) : []);
   // A row's name: the part and the property, from the channels' readers.
@@ -107,7 +109,7 @@
     <label class="ui-field"><span>Starts</span><input inputmode="decimal" aria-label="Slice start, ms" placeholder={startMs === null ? "Mixed" : undefined} value={startMs ?? ""} onchange={(e) => setStart(e.currentTarget.value)} /><span>ms</span></label>
     <label class="ui-field"><span>Ends</span><input inputmode="decimal" aria-label="Slice end, ms" placeholder={endMs === null ? "Mixed" : undefined} value={endMs ?? ""} onchange={(e) => setEnd(e.currentTarget.value)} /><span>ms</span></label>
   </div>
-  <EasingField label="Slice easing" value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
+  <EasingField label="Slice easing" mixed={ease === null} value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
   {#if ease === ""}<p class="hint">Following the transition's easing ({t?.ease ?? "Easy Ease"}).</p>
   {:else}<div class="row"><p class="hint">{ease === null ? "Mixed easings." : "Its own easing."}</p><Button small variant="outline" onclick={() => edit(() => ({ ease: "" }), "follow the transition's easing")} title="Ease as the transition does, and change when it changes">Follow the transition</Button></div>{/if}
   {#if partCount > 1 && staggered}

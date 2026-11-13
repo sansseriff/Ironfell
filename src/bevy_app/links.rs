@@ -81,6 +81,7 @@ pub fn pin_layout(geo: &Geo, view: &PanelView, reach: &Reach, k: f64, all: bool)
     let Some(frame) = geo.frame(&reach.chain) else { return (Vec::new(), 0) };
     let r: Rect = (view.affine() * frame).transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
     let ports = iron_document::author::ports_of(doc, def);
+    let machines = iron_document::machine::machines(doc, def);
     let mut out = Vec::new();
     let (mut ins, mut outs, mut folded) = (0, 0, 0);
     for (spec, name, dir, placed) in ports {
@@ -92,6 +93,11 @@ pub fn pin_layout(geo: &Geo, view: &PanelView, reach: &Reach, k: f64, all: bool)
             {
                 out.push(Pin { owner, port: spec, name, dir, main, at: view.affine() * geo.world(a) * Point::ORIGIN });
             }
+            continue;
+        }
+        // A state input drives its machine, not a part: on the main there
+        // is nothing to link it to, so it shows no pin there.
+        if main && machines.iter().any(|(_, port)| *port == name) {
             continue;
         }
         let port = match entity {

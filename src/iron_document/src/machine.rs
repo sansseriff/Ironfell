@@ -557,7 +557,7 @@ pub fn add_named_state_ops(doc: &Document, def: NodeId, first: Option<&str>, nam
             p.dir = Slot::Const(Value::Enum("in".into()));
             p.signal = Slot::Const(Value::Enum(names[0].clone()));
             p.datatype = text(&choice_of(&names));
-            p.show = Slot::Const(Value::Enum("pin".into()));
+            p.show = Slot::Const(Value::Enum("settings".into()));
             p.group = text("States");
             let port_name = if children(doc, def, "port_spec").iter().any(|&s| name_of(doc, s).as_deref() == Some("state")) { "state_".to_owned() + &machines(doc, def).len().to_string() } else { "state".to_owned() };
             let mut order = order_after_last(doc, def);

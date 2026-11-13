@@ -524,11 +524,17 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
     ops.extend(links);
 }
 
-/// Duplicate `roots` in place, each right above its original: Cmd+D.
+/// Duplicate `roots` in place, each right above its original: Cmd+D. A
+/// main's duplicate is an instance, which looks the same: it goes to the
+/// main's right instead, so the two can be told apart.
 pub fn duplicate(store: &Store, roots: &[NodeId]) -> Result<Pasted, String> {
     const HERE: &str = "duplicate";
     let frag = fragment(store, roots, HERE)?;
-    let mut pasted = paste(store, &frag, &Placement { beside: true, ..Default::default() }, HERE)?;
+    let doc = store.document();
+    let mains = roots.iter().filter(|&&r| crate::expand::main_definition(doc, r).is_some());
+    let width = mains.filter_map(|&r| store.extent(r)).map(|e| e.width()).fold(0.0, f64::max);
+    let offset = if width > 0.0 { [width + 24.0, 0.0] } else { [0.0, 0.0] };
+    let mut pasted = paste(store, &frag, &Placement { beside: true, offset, ..Default::default() }, HERE)?;
     pasted.notes.extend(frag.dropped);
     Ok(pasted)
 }

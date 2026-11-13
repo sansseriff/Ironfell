@@ -28,6 +28,8 @@
 
   let renaming = $state<string | null>(null);
   function rename(id: string, from: string, to: string) {
+    // Enter renames and removes the field, whose blur would rename again.
+    if (renaming !== id) return;
     renaming = null;
     const v = to.trim();
     if (v && v !== from) void run(machines.author("rename_state", { state: id, name: v }));

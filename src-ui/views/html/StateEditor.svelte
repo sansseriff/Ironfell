@@ -244,13 +244,13 @@
   }
 
   // ── The graph: the whole machine at a glance ──────────────────────────
-  const GW = 560, GH = 300;
+  const GW = 640, GH = 340;
   function nodes(mm: Machine) {
     const ns = names(mm);
     const n = ns.length;
     return ns.map((name, i) => {
       const a = n === 2 ? (i === 0 ? Math.PI : 0) : -Math.PI / 2 + (i * 2 * Math.PI) / n;
-      return { name, x: GW / 2 + Math.cos(a) * (GW / 2 - 90), y: GH / 2 + Math.sin(a) * (GH / 2 - 36) };
+      return { name, x: GW / 2 + Math.cos(a) * (GW / 2 - 90), y: GH / 2 + Math.sin(a) * (GH / 2 - 60) };
     });
   }
   function edges(mm: Machine) {
@@ -264,13 +264,19 @@
         // start, on that side, so a pair's two never meet.
         const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
         const nx = -dy / len, ny = dx / len;
-        const x1 = a.x + (dx / len) * 46 + nx * 8, y1 = a.y + (dy / len) * 18 + ny * 8;
-        const x2 = b.x - (dx / len) * 46 + nx * 8, y2 = b.y - (dy / len) * 18 + ny * 8;
-        const cx = (x1 + x2) / 2 + nx * 30, cy = (y1 + y2) / 2 + ny * 30;
-        // The label on its own curve's bulge, so a pair's two never meet.
-        const lx = (x1 + x2) / 4 + cx / 2, ly = (y1 + y2) / 4 + cy / 2;
+        // Each direction is a straight line on its own side of the pair's
+        // axis, so no two arrows cross; its label sits a third of the way
+        // along, outside it.
+        const x1 = a.x + (dx / len) * 50 + nx * 8, y1 = a.y + (dy / len) * 22 + ny * 8;
+        const x2 = b.x - (dx / len) * 50 + nx * 8, y2 = b.y - (dy / len) * 22 + ny * 8;
+        const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+        const u = 0.36;
         const mine = own(t, q.from, q.to);
-        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label: !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly };
+        const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
+        // Clear of its line by the pill's own extent across it.
+        const off = 5 + (Math.abs(nx) * (label.length * 6.2 + 14)) / 2 + Math.abs(ny) * 9;
+        const lx = x1 + (x2 - x1) * u + nx * off, ly = y1 + (y2 - y1) * u + ny * off;
+        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly };
       });
   }
   const keyActivate = (e: KeyboardEvent, f: () => void) => {

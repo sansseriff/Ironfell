@@ -4588,9 +4588,13 @@ pub fn sync_session_selection(
     mut sel: ResMut<crate::SelectionState>,
     mut tool: ResMut<SelectTool>,
     mut seen: Local<Option<u64>>,
+    mut synced: Local<Vec<(NodeId, std::collections::BTreeMap<String, Value>)>>,
 ) {
     let version = store.0.session_version();
-    if seen.is_some_and(|v| v != version) {
+    // The session changes for other reasons too (a duplicated instance
+    // gets a timeline lane in the frame it is selected): only a selection
+    // that differs from the one last synced was changed elsewhere.
+    if seen.is_some_and(|v| v != version) && store.0.selection() != *synced {
         let doc = store.0.document();
         let mut reach = HashMap::default();
         let ids: Vec<NodeId> = store
@@ -4631,5 +4635,6 @@ pub fn sync_session_selection(
         }
     }
     *seen = Some(store.0.session_version());
+    *synced = store.0.selection();
 }
 

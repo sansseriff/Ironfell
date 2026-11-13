@@ -7,6 +7,7 @@
   import Section from "../../lib/ui/Section.svelte";
   import EasingField from "../../lib/ui/EasingField.svelte";
   import Button from "../../lib/ui/Button.svelte";
+  import Checkbox from "../../lib/ui/Checkbox.svelte";
   import Segmented from "../../lib/ui/Segmented.svelte";
   import { machines, type Transition } from "../../lib/machines.svelte";
 
@@ -104,14 +105,12 @@
 </script>
 
 <Section title={slices.length === 1 ? nameOf(slices[0].channel) : `${slices.length} slices`} class="property-section" data-section="slices" meta={t ? `${t.from} → ${t.to}` : undefined}>
-  <p class="hint">{slices.length === 1 ? "When it changes during the transition, and how it eases." : "When they change, and how they ease. Moving their bars together keeps their offsets."}</p>
   <div class="property-grid">
     <label class="ui-field"><span>Starts</span><input inputmode="decimal" aria-label="Slice start, ms" placeholder={startMs === null ? "Mixed" : undefined} value={startMs ?? ""} onchange={(e) => setStart(e.currentTarget.value)} /><span>ms</span></label>
     <label class="ui-field"><span>Ends</span><input inputmode="decimal" aria-label="Slice end, ms" placeholder={endMs === null ? "Mixed" : undefined} value={endMs ?? ""} onchange={(e) => setEnd(e.currentTarget.value)} /><span>ms</span></label>
   </div>
   <EasingField label="Slice easing" mixed={ease === null} value={ease === "" ? t?.ease ?? null : ease} onChange={(v) => edit(() => ({ ease: v }), "slice easing")} />
-  {#if ease === ""}<p class="hint">Following the transition's easing ({t?.ease ?? "Easy Ease"}).</p>
-  {:else}<div class="row"><p class="hint">{ease === null ? "Mixed easings." : "Its own easing."}</p><Button small variant="outline" onclick={() => edit(() => ({ ease: "" }), "follow the transition's easing")} title="Ease as the transition does, and change when it changes">Follow the transition</Button></div>{/if}
+  <Checkbox label="Follow the transition's easing" checked={ease === ""} indeterminate={ease === null} onChange={(on) => edit(() => ({ ease: on ? "" : t?.ease || "easy_ease" }), on ? "follow the transition's easing" : "slice easing")} />
   {#if partCount > 1 && staggered}
     <div class="ui-subheading">Stagger {partCount} parts</div>
     <div class="stagger">
@@ -119,7 +118,7 @@
       <Segmented label="Order" value={order} items={[{ value: "down", label: "Top first" }, { value: "up", label: "Bottom first" }]} onChange={(v) => (order = v)} />
     </div>
     <Segmented label="Lengths" value={mode} items={[{ value: "keep", label: "Keep lengths", title: "Each part moves whole; its movement keeps its speed" }, { value: "fit", label: "Fit in transition", title: "Parts are shortened so the last ends with the transition" }]} onChange={(v) => (mode = v)} />
-    <p class="hint" class:warn={over}>The last part ends at {Math.round(staggered.endMs)} ms{over ? `, ${Math.round(staggered.endMs - ms)} ms after the transition (${Math.round(ms)} ms).` : ` of ${Math.round(ms)} ms.`}</p>
+    <p class="hint" class:warn={over}>Last ends {Math.round(staggered.endMs)} / {Math.round(ms)} ms</p>
     {#if over}
       <div class="row">
         <Button small variant="primary" onclick={() => applyStagger(true)} title="Make the transition {Math.ceil(staggered.endMs)} ms long; every slice keeps its time">Lengthen to {(Math.ceil(staggered.endMs) / 1000).toFixed(2)} s and stagger</Button>

@@ -8,6 +8,7 @@
   import { getContext } from "svelte";
   import { machines } from "../../lib/machines.svelte";
   import SliceSection from "./SliceSection.svelte";
+  import StateSection from "./StateSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
   import { commandFailure } from "../../runtime/commands.svelte";
@@ -323,7 +324,7 @@
 <section class="html-view properties inspector" data-selection={inspections.map(i => i.node).join(" ")}>
   <!-- The composition's settings while nothing is selected, as Figma shows
        the page's: a selection gets the whole panel. -->
-  {#if !doc.selection.length}<CompositionSection />{/if}
+  {#if !doc.selection.length && !(machines.editing && machines.pinned)}<CompositionSection />{/if}
 
   <!-- The object: its name, its kind (the id in the tooltip), and what to
        do with the selection, one row of icon buttons. -->
@@ -655,8 +656,10 @@
         </Section>
       {/if}
     </div>
+  {:else if machines.editing && machines.pinned}
+    <StateSection />
   {:else}
-    <EmptyState icon={MousePointer2} title="Make a selection">Select an object to see its properties.</EmptyState>
+    <EmptyState icon={MousePointer2} title="Make a selection" />
   {/if}
   {#if inspected && !sliceSel.length}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
 </section>

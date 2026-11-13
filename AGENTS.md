@@ -128,7 +128,7 @@ so T3's diff view, PR links and cleanup all work. A worktree an agent makes with
 - **New work in a worktree:** the user starts a worktree thread in T3, or you start
   one with `t3_thread_launch` and `workspaceStrategy: { type: "worktree" }`.
 - **Move this thread's work into a worktree:** `t3_worktree_handoff`.
-- **Never** create one with `git worktree add`, Claude Code's `EnterWorktree`, or
+- **Never** create one with `git worktree add` (except the pool, below), Claude Code's `EnterWorktree`, or
   `Agent` with `isolation: "worktree"`. The last two put it in `.claude/worktrees/`
   or a `/tmp` scratchpad.
 
@@ -141,6 +141,31 @@ wasm, native and host build scripts; ~30 s, almost no disk until files change). 
 builds nothing; run the build your task needs (run-iron skill). The first build
 recompiles only the workspace's own crates, as long as the main checkout has built
 that profile with the same flags; otherwise it is cold (see "Typical durations").
+
+### Worktree pool
+
+Five standing worktrees, `~/.t3/worktrees/iron/pool-1` … `pool-5`, are reused task
+after task so their `target/` stays warm: a task in one recompiles only what changed
+since that slot's last build. They are the one exception to "never `git worktree
+add`" (`scripts/pool-create.sh` made them and re-creates any that are missing).
+Worktrees not named `pool-N` are T3's and can be deleted as usual; never delete a
+pool slot or its `target/`.
+
+- **Which slot is free:** `zsh scripts/pool-status.sh` lists each slot's branch,
+  uncommitted files and PR state. Free means idle (on its local parking branch,
+  `pool-N`) or its PR merged or closed, with nothing uncommitted.
+- **Starting a task in a slot** ("do X in pool-2"): start the thread with
+  `t3_thread_launch`, `workspaceStrategy: { type: "existing_worktree", worktreePath:
+  "~/.t3/worktrees/iron/pool-2" }` (expanded). Its first step, in the slot, is
+  `zsh scripts/pool-start.sh <task>`: it refuses while the slot is in use
+  (uncommitted changes, unpushed commits, an open PR), fetches, puts the slot on
+  `t3/<task>` from the latest `origin/master`, deletes the previous branch's local
+  name (it is pushed), and runs `bun install` and the assets copy.
+- **Then as any worktree thread:** commit, push, open a PR to `master`, merge when
+  the user asks. Nothing to clean up afterwards; the next `pool-start.sh` takes the
+  slot over.
+- **T3's worktree cleanup** ("delete merged worktrees", inactive worktrees) must not
+  remove the slots: keep those settings off, or check that they leave `pool-N` alone.
 
 ### Cleaning up
 

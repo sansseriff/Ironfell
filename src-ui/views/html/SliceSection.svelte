@@ -71,22 +71,44 @@
   const partName = $derived(view?.channels.find((c) => c.name === tweens[0]?.channel)?.parts[0]?.name ?? "Part");
   const partCount = $derived(new Set(tweens.map((w) => partOf(w.channel))).size);
   type Plan = { slices: { channel: string; start: number; end: number }[]; endMs: number };
+  /** The selected slices by part, in row order. */
+  const groups = $derived.by(() => {
+    if (!view) return [];
+    const rank = (c: string | null) => view!.channels.findIndex((x) => x.name === c);
+    const out: (typeof tweens)[] = [];
+    for (const w of [...tweens].sort((a, b) => rank(a.channel) - rank(b.channel))) {
+      const g = out.find((x) => partOf(x[0].channel) === partOf(w.channel));
+      if (g) g.push(w);
+      else out.push([w]);
+    }
+    return out;
+  });
+  const startOf = (g: typeof tweens) => Math.min(...g.map((w) => (w.start ?? 0) * ms));
+  // The settings start as the bars are: parts already one after another
+  // read as that stagger, so it is shown as applied and not offered again.
+  let readFor = "";
+  $effect(() => {
+    const key = groups.map((g) => g[0].id).join(" ");
+    if (key === readFor) return;
+    readFor = key;
+    if (groups.length < 2) return;
+    const starts = groups.map(startOf);
+    const steps = starts.slice(1).map((v, i) => v - starts[i]);
+    const even = steps.every((d) => Math.abs(d - steps[0]) < 1.5);
+    if (!even || Math.abs(steps[0]) < 1.5) return;
+    order = steps[0] > 0 ? "down" : "up";
+    staggerS = Math.round(Math.abs(steps[0]) / 10) / 100;
+    mode = "keep";
+  });
   /** The staggered slices in ms from the transition's start. */
   const staggered = $derived.by((): Plan | null => {
     if (!view || partCount < 2) return null;
-    const rank = (c: string | null) => view!.channels.findIndex((x) => x.name === c);
-    const groups: (typeof tweens)[] = [];
-    for (const w of [...tweens].sort((a, b) => rank(a.channel) - rank(b.channel))) {
-      const g = groups.find((x) => partOf(x[0].channel) === partOf(w.channel));
-      if (g) g.push(w);
-      else groups.push([w]);
-    }
-    if (order === "up") groups.reverse();
+    const gs = order === "up" ? [...groups].reverse() : groups;
     const step = Math.max(0, Number(staggerS) * 1000 || 0);
-    const first = Math.min(...groups[0].map((w) => (w.start ?? 0) * ms));
-    const room = Math.max(20, ms - first - (groups.length - 1) * step);
-    const slices = groups.flatMap((g, i) => {
-      const lo = Math.min(...g.map((w) => (w.start ?? 0) * ms));
+    const first = Math.min(...gs.map(startOf));
+    const room = Math.max(20, ms - first - (gs.length - 1) * step);
+    const slices = gs.flatMap((g, i) => {
+      const lo = startOf(g);
       const hi = Math.max(...g.map((w) => (w.end ?? 1) * ms));
       const k = mode === "fit" ? Math.min(1, room / Math.max(hi - lo, 1e-6)) : 1;
       const at = first + i * step;
@@ -126,7 +148,7 @@
     <Segmented label="Order" value={order} items={[{ value: "down", label: "First row first" }, { value: "up", label: "Last row first" }]} onChange={(v) => (order = v)} />
     <Segmented label="Lengths" value={mode} items={[{ value: "keep", label: "Keep lengths", title: "Each part moves whole" }, { value: "fit", label: "Fit in transition", title: "Parts are shortened so the last ends with the transition" }]} onChange={(v) => (mode = v)} />
     {#if applied}
-      <Button small variant="outline" disabled data-stagger="done"><Check size={14} strokeWidth={1.75} />Staggered</Button>
+      <div class="done" role="status" data-stagger="done"><Check size={14} strokeWidth={2} />Staggered</div>
     {:else if over}
       <Button small variant="primary" data-stagger="lengthen" onclick={() => applyStagger(true)} title="The transition becomes {sec(Math.ceil(staggered.endMs))} s long; every slice keeps its time">Stagger and lengthen to {sec(Math.ceil(staggered.endMs))} s</Button>
     {:else}
@@ -137,6 +159,7 @@
 </Section>
 
 <style>
+  .done { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--control-h); color: var(--accent); font-size: var(--text-md); font-weight: 500; }
   .error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
   .ui-field { gap: 6px; padding: 0 8px; color: var(--fg-muted); font-size: var(--text-sm); }
   .ui-field input { flex: 1; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }

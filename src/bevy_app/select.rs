@@ -171,7 +171,8 @@ fn component_of(doc: &iron_document::Document, id: NodeId) -> Option<(bool, Stri
     }
     let entity = iron_document::expand::use_entity(doc, id)?;
     let def = iron_document::expand::linked_definition(doc, entity)?;
-    Some((false, name(def).unwrap_or_else(|| "component".into())))
+    // An instance is tagged with its own name ("card 2"), as Layers lists it.
+    Some((false, name(entity).or_else(|| name(id)).or_else(|| name(def)).unwrap_or_else(|| "component".into())))
 }
 
 fn component_tint(doc: &iron_document::Document, id: NodeId) -> Option<peniko::Color> {

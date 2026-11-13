@@ -275,12 +275,16 @@
         const u = 0.36;
         const mine = own(t, q.from, q.to);
         const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
-        // The label lies along its own line, a third of the way from
-        // its start, and reads left to right.
-        const lx = x1 + (x2 - x1) * u, ly = y1 + (y2 - y1) * u;
-        let turn = (Math.atan2(dy, dx) * 180) / Math.PI;
-        if (turn > 90 || turn < -90) turn += 180;
-        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, turn };
+        // The label is level, beside its own line on the side away from
+        // the pair's other arrow, a third of the way from its start.
+        const w = label.length * 6.2 + 16;
+        // Beside a sloping line it moves sideways only (far enough for
+        // its corner to clear); above or below a level one.
+        const px = x1 + (x2 - x1) * u, py = y1 + (y2 - y1) * u;
+        const steep = Math.abs(nx) > 0.35;
+        const lx = steep ? px + Math.sign(nx) * (w / 2 + 6 + (9 * Math.abs(ny)) / Math.abs(nx)) : px;
+        const ly = steep ? py : py + Math.sign(ny) * 15;
+        return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, w };
       });
   }
   const keyActivate = (e: KeyboardEvent, f: () => void) => {
@@ -370,19 +374,16 @@
         <svg class="graph" viewBox="0 0 {GW} {GH}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="States and transitions">
           <defs><marker id="se-arrow-{m.id}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="arrowhead" /></marker></defs>
           {#each edges(m) as e (e.key)}
-            {@const w = e.label.length * 6.2 + 14}
             <g class="edge" class:own={e.own} class:none={e.none} role="button" tabindex="0" aria-label="{e.from} to {e.to}: {e.label}" data-edge="{e.from}>{e.to}" onclick={() => timePair(m, e.from, e.to)} onkeydown={(ev) => keyActivate(ev, () => timePair(m, e.from, e.to))}>
               <title>{e.from} → {e.to}</title>
               <path d={e.d} class="hit" />
               <path d={e.d} class="line" marker-end="url(#se-arrow-{m.id})" />
-              <g transform="rotate({e.turn.toFixed(1)} {e.lx.toFixed(1)} {e.ly.toFixed(1)})">
-                <rect class="pill" x={e.lx - w / 2} y={e.ly - 9} width={w} height="18" rx="9" />
-                <text class="elabel" x={e.lx} y={e.ly + 4} text-anchor="middle">{e.label}</text>
-              </g>
+              <rect class="pill" x={e.lx - e.w / 2} y={e.ly - 9} width={e.w} height="18" rx="9" />
+              <text class="elabel" x={e.lx} y={e.ly + 4} text-anchor="middle">{e.label}</text>
             </g>
           {/each}
           {#each nodes(m) as n (n.name)}
-            <g class="node" class:rec={recording(m, n.name)} role="button" tabindex="0" aria-label="Edit {n.name}" data-node={n.name} onclick={() => editState(m, n.name)} onkeydown={(ev) => keyActivate(ev, () => editState(m, n.name))}>
+            <g class="node" class:rec={recording(m, n.name)} style:--hue={hueOf(m, n.name)} role="button" tabindex="0" aria-label="Edit {n.name}" data-node={n.name} onclick={() => editState(m, n.name)} onkeydown={(ev) => keyActivate(ev, () => editState(m, n.name))}>
               <title>{n.name}{m.default === n.name ? " (initial)" : ""}</title>
               <rect x={n.x - 48} y={n.y - 15} width="96" height="30" rx="15" />
               <rect class="hue" x={n.x - 38} y={n.y - 4} width="8" height="8" rx="2" style:fill={hueOf(m, n.name)} />
@@ -391,7 +392,7 @@
             </g>
           {/each}
         </svg>
-        {#if defaultOf(m)}
+        {#if defaultOf(m) && edges(m).some((e) => !e.own && !e.none)}
           {@const d = defaultOf(m)!}
           <div class="default" title="The timing of every transition without its own (the dashed arrows)">
             <svg class="dash" viewBox="0 0 22 6" aria-hidden="true"><path d="M1,3 H21" /></svg><span class="muted">Default</span>
@@ -405,14 +406,14 @@
       <section class="body canvas-ui" aria-label="What each state sets">
         {#if view.channels.length}<div class="table-tools"><Checkbox label="Selected parts only" checked={onlySelected} onChange={(on) => (onlySelected = on)} /></div>{/if}
         <div class="table-wrap">
-          <table class="poses">
+          <table class="poses" style:--col-hue={hueOf(m, machines.pinned?.state)}>
             <thead>
               <tr>
                 <th class="name-col">Part · property</th>
                 <th class="base" title="The drawing's own values: what a state that does not set a property shows">Drawing</th>
                 {#each m.states as st (st.id)}
                   {@const s = st.name ?? ""}
-                  <th class:col-on={recording(m, s)}><button class="col" onclick={() => editState(m, s)} title="Edit {s}"><span class="hue" style:background={hueOf(m, s)}></span>{s}</button></th>
+                  <th class:col-on={recording(m, s)} style:--hue={hueOf(m, s)}><button class="col" onclick={() => editState(m, s)} title="Edit {s}"><span class="hue" style:background={hueOf(m, s)}></span>{s}</button></th>
                 {/each}
               </tr>
             </thead>
@@ -510,7 +511,7 @@
   .node text { fill: var(--fg); font-size: 12px; font-weight: 600; }
   .node { cursor: pointer; }
   .node:hover rect { stroke: var(--accent); }
-  .node.rec rect { fill: color-mix(in srgb, var(--record) 16%, transparent); stroke: var(--record); }
+  .node.rec > rect:first-of-type { fill: color-mix(in srgb, var(--hue) 18%, var(--bg)); stroke: var(--hue); stroke-width: 2; }
   .edge { cursor: pointer; }
   .edge path { fill: none; }
   .edge .hit { stroke: transparent; stroke-width: 12; }
@@ -538,8 +539,9 @@
   .poses tr.sel td.name-col { color: var(--accent); }
   .poses .col { display: inline-flex; align-items: center; border: 0; background: transparent; color: var(--fg); font: inherit; font-weight: 600; cursor: pointer; padding: 2px 4px; border-radius: var(--radius); }
   .poses .col:hover { background: var(--hover); }
-  .poses .col-on { background: color-mix(in srgb, var(--record) 10%, transparent); }
-  .poses td.rest .val { color: var(--fg-muted); }
+  .poses .col-on { background: color-mix(in srgb, var(--col-hue, var(--accent)) 10%, transparent); }
+  .poses td.rest .val { color: var(--fg-faint); }
+  .poses td.rest .sw { opacity: 0.45; }
   .cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
   .cell input { width: 64px; min-height: 22px; height: 22px; padding: 0 6px; text-align: right; }
   .cell input.wide { width: 96px; text-align: left; }

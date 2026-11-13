@@ -17,8 +17,8 @@
   const view = $derived(machines.view);
   const m = $derived(view?.machines[0] ?? null);
   const pin = $derived(machines.pinned && view && machines.pinned.def === view.def ? machines.pinned : null);
-  // Shown while editing, and as a doorway when a main with states is selected.
-  const shown = $derived(!!view && !!m && (machines.editing?.def === view.def || !!view.main));
+  // Shown only while editing: the bar on the canvas is what says so.
+  const shown = $derived(!!view && !!m && machines.editing?.def === view.def);
 
   let error = $state("");
   async function run(p: Promise<{ ok: boolean; error?: string }>) {
@@ -63,7 +63,7 @@
       {#if renaming === st.id}
         <input class="ui-input rename" aria-label="Rename {s}" value={s} use:focusInput onkeydown={(e) => { e.stopPropagation(); if (e.key === "Escape") renaming = null; else if (e.key === "Enter") rename(st.id, s, e.currentTarget.value); }} onblur={(e) => rename(st.id, s, e.currentTarget.value)} />
       {:else}
-        <div class="chip" class:on class:end data-state={s}>
+        <div class="chip" class:on class:end data-state={s} style:--hue={hueOf(m, s)}>
           <button class="name" aria-pressed={on} onclick={() => run(machines.editState(s))} ondblclick={() => (renaming = st.id)} title={on ? `Editing ${s}` : `Edit ${s}`}>
             <span class="sw" style:background={hueOf(m, s)}></span><span class="nm">{s}</span>{#if m.default === s}<span class="initial" title="Initial state: instances start in {s}"><Flag size={10} strokeWidth={2} /></span>{/if}{#if st.own.length}<span class="count" title="{s} changes {st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'}">{st.own.length}</span>{/if}
           </button>
@@ -109,7 +109,7 @@
   .rule { width: 1px; height: 18px; margin: 0 2px; background: var(--border); flex: none; }
   .chip { display: inline-flex; align-items: center; height: var(--control-h); border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--bg); overflow: hidden; }
   .chip:hover { border-color: var(--border-strong); }
-  .chip.on { border-color: var(--record); background: color-mix(in srgb, var(--record) 20%, var(--bg)); }
+  .chip.on { border-color: var(--hue); background: color-mix(in srgb, var(--hue) 22%, var(--bg)); box-shadow: 0 0 0 1px var(--hue); }
   .chip.end { border-color: var(--accent); background: var(--accent-soft); }
   .name { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
   .chip.on .name { padding-right: 4px; font-weight: 600; }

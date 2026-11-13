@@ -729,6 +729,26 @@ After the fifth round's first review (8.1), the same day:
   its graph node. A transition's label on the graph is drawn as a button.
 - A lane's label that does not fit its piece is left out, and a line marks where
   a transition ends.
+
+After the fifth round's second review (7.9):
+
+- **The states bar shows only while editing**; its presence is what says so. The
+  way in is the Inspector's Add state or Edit states….
+- **The edited state is marked in its own colour** (chip, node, table column),
+  not the record orange.
+- While a component's states are edited, the Inspector for the whole main is the
+  state's (never Create instance, Input or Resizable).
+- A transition's length, easing and timing live in the panel's header only; the
+  Inspector has its name.
+- **An instance's Inspector** is "Instance of card" with one State row (key
+  button, Edit states…, the choice); its progress line names the transition
+  ("melting · 56%"). Its canvas tag is its own name. A state input is not counted
+  among an instance's folded inputs ("+1 more").
+- **Stagger reads the bars**: parts already one after another show that order and
+  step, and "Staggered" instead of an offer to stagger again.
+- Graph labels are level, beside their own arrow. A state lane's stretch fills
+  its row. The timeline's options button sits at the bottom, clear of the rows.
+  The Inspector's "Alt + drag" footer is gone.
 - Known gaps: converting a shape whose corners are bound shows a dialog naming
   channel ids; the Inspector is empty on entry until a part is clicked; a
   component's `state` input still draws as a port on the main.

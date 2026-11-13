@@ -4,7 +4,6 @@
   // instances start in it, how much it sets), or the transition previewed
   // (its name, length and easing).
   import Section from "../../lib/ui/Section.svelte";
-  import EasingField from "../../lib/ui/EasingField.svelte";
   import Checkbox from "../../lib/ui/Checkbox.svelte";
   import { machines } from "../../lib/machines.svelte";
 
@@ -29,19 +28,15 @@
 </script>
 
 {#if view && m && st}
-  <Section title={st.name ?? "State"} class="property-section" data-section="state" meta="state of {view.name ?? 'component'}">
+  <Section title={st.name ?? "State"} class="property-section" data-section="state" meta="{st.own.length} propert{st.own.length === 1 ? 'y' : 'ies'} set">
     <label class="ui-field name"><span>Name</span><input aria-label="State name" value={st.name ?? ""} onchange={(e: Event) => { const v = text(e); if (v && v !== st.name) void run(machines.author("rename_state", { state: st.id, name: v })); }} /></label>
-    <div class="line"><Checkbox label="Initial state" checked={m.default === st.name} disabled={m.default === st.name} onChange={() => run(machines.author("set_default_state", { state: st.id }))} /><span class="ui-badge">{st.own.length} propert{st.own.length === 1 ? "y" : "ies"} set</span></div>
+    <Checkbox label="Initial state" checked={m.default === st.name} disabled={m.default === st.name} onChange={() => run(machines.author("set_default_state", { state: st.id }))} />
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>
 {:else if view && m && pair}
   <Section title="{pair.from} → {pair.to}" class="property-section" data-section="transition" meta={t ? (own ? "own timing" : "default timing") : "snaps"}>
     {#if t}
-      <label class="ui-field name"><span>Name</span><input aria-label="Transition name" placeholder="None" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
-      <div class="property-grid">
-        <label class="ui-field"><span>Length</span><input inputmode="decimal" aria-label="Transition length, seconds" value={(pair.ms ?? t.ms ?? 0) / 1000} onchange={(e) => { const v = parseFloat(e.currentTarget.value); if (Number.isFinite(v) && v >= 0) editPair({ ms: v * 1000 }, "transition length"); }} /><span>s</span></label>
-      </div>
-      <EasingField label="Transition easing" value={t.ease} onChange={(v) => editPair({ ease: v }, "transition easing")} />
+      <label class="ui-field name"><span>Name</span><input aria-label="Transition name" placeholder="Name" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
     {/if}
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>
@@ -51,6 +46,5 @@
   .ui-field { gap: 6px; padding: 0 8px; color: var(--fg-muted); font-size: var(--text-sm); }
   .ui-field input { flex: 1; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }
   .name { width: 100%; box-sizing: border-box; }
-  .line { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: var(--control-h); }
   .error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
 </style>

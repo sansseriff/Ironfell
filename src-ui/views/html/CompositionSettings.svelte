@@ -106,10 +106,11 @@
     top: 8px;
     right: 8px;
   }
-  /* The timeline's ruler runs the full width at the top, labels and all:
-     its button sits just under the ruler (TimelinePanel's 56 px). */
+  /* The timeline's ruler and first rows are at the top: its button sits
+     at the bottom, clear of them. */
   .settings.below-ruler {
-    top: 64px;
+    top: auto;
+    bottom: 8px;
   }
   /* A 28 px icon button (`.ui-icon-button.large`) floating over the canvas:
      raised, with the menus' border and shadow so it reads on any picture. */

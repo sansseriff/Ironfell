@@ -370,6 +370,8 @@
 
   {#if sliceSel.length}
     <!-- Slices: the section above. -->
+  {:else if inspected && machines.editing && machines.pinned && inspected.main?.def === machines.editing.def}
+    <StateSection />
   {:else if inspected}
     <div class="sections">
       {#if machines.editing && machines.pinned && machines.view?.main_of && inspected.node.split("/")[0] === machines.view.main_of}
@@ -447,7 +449,7 @@
             {@render portEditor(inspected.port, !!inspected.port.editable)}
           </Section>
         {:else if section === "component" && (inspected.component)}
-          <Section title={inspected.component.def ?? "Component"} aria-label="Component" class="property-section" headerClass="component" data-section="component" meta="{inspected.component.name ?? inspected.component.entity}{inspected.component.linked ? '' : ' · detached'}">
+          <Section title="Instance of {inspected.component.def ?? 'a component'}" aria-label="Component" class="property-section" headerClass="component" data-section="component" meta={inspected.component.linked ? undefined : "detached"}>
             {#snippet actions()}{#if inspected?.component?.linked}<IconButton icon={Unlink} label="Detach instance" title="Detach: make this instance's picture and ports plain shapes that no longer follow the definition" onclick={detach} />{/if}{/snippet}
             {@const hasStates = machines.view?.entity === inspected.component.entity && !!machines.view?.machines.length}
             {#if inspected.component.inputs.some((f: Field) => f.kind === "series")}
@@ -462,10 +464,10 @@
                 {@const run = machines.view?.machines[0]?.current}
                 {@const stateField = g.inputs.find((f) => f.group === "States")}
                 {@const keyed = !!stateField?.key && stateField.key !== "none"}
-                <div class="input-group states-head"><span class="ui-subheading">States</span><span class="grow"></span>{#if stateField?.key}<Button small variant="outline" class="key-state {stateField.key}" data-key={stateField.key} onclick={() => keyState(inspected!.component!.entity, stateField!.leaf)} title={stateField.key === "on" ? "Remove this key" : keyed ? "Choosing another state here adds a key" : "Start animating the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{stateField.key === "on" ? `Key at ${clockLabel}` : keyed ? `Add key at ${clockLabel}` : "Key state"}</Button>{/if}<Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
-                {#if run?.transition && run.from && run.to}<div class="hint running" role="status">{run.from} → {run.to} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
+                <div class="input-group states-head"><span class="ui-subheading">State</span><span class="grow"></span>{#if stateField?.key}<Button small variant="outline" class="key-state {stateField.key}" data-key={stateField.key} onclick={() => keyState(inspected!.component!.entity, stateField!.leaf)} title={stateField.key === "on" ? "Remove this key" : keyed ? "Choosing another state here adds a key" : "Start animating the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{stateField.key === "on" ? `Key at ${clockLabel}` : keyed ? `Add key at ${clockLabel}` : "Key state"}</Button>{/if}<Button small variant="outline" onclick={() => machines.open(machines.view!.def, undefined, undefined, inspected?.component?.name ?? null)}>Edit states…</Button></div>
+                {#if run?.transition && run.from && run.to}{@const tn = machines.view?.machines[0]?.transitions.find((x) => x.id === run.transition)}<div class="hint running" role="status">{tn?.name && tn.from === run.from && tn.to === run.to && tn.name !== `${tn.from} to ${tn.to}` && tn.name !== "change" ? tn.name : `${run.from} → ${run.to}`} · {Math.round((run.progress ?? 0) * 100)}%</div>{/if}
               {:else if g.name}<div class="ui-subheading input-group">{g.name}</div>{/if}
-              <div class="property-grid">{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
+              <div class="property-grid" class:state-only={g.name === "States" && hasStates}>{#each g.inputs as f (f.leaf)}<PropertyField field={f} node={inspected.component.entity} onSet={setInput} onRefresh={refresh} onError={(e) => setError = e} />{/each}</div>
             {/each}
             <!-- What this picture reads from where it is placed (reactivity.md §6). -->
             {#if inspected.component.context.length}
@@ -674,7 +676,7 @@
   {:else}
     <EmptyState icon={MousePointer2} title="Make a selection" />
   {/if}
-  {#if inspected && !sliceSel.length}<footer>Alt + drag a number to adjust <span>⇧ Precision</span></footer>{/if}
+
 </section>
 
 <style>
@@ -690,7 +692,6 @@
   .hint { font-size: var(--text-sm); color: var(--fg-muted); }
   .error { padding: 8px var(--panel-pad) 0; overflow-wrap: anywhere; }
   .selection-note { padding: 8px var(--panel-pad) 0; color: var(--fg-muted); font-size: var(--text-sm); }
-  footer { display: flex; justify-content: space-between; padding: 12px var(--panel-pad); font-size: var(--text-sm); color: var(--fg-muted); }
   .state-key { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px var(--panel-pad) 0; }
   .question { display: flex; flex-direction: column; gap: 8px; margin: 8px var(--panel-pad); padding: 12px; border: 1px solid var(--danger); border-radius: var(--radius-lg); }
   .context-reads { display: flex; flex-direction: column; gap: 4px; }
@@ -700,6 +701,7 @@
   .editing .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--record); }
   .editing.preview { background: var(--accent-soft); }
   .editing.preview .dot { background: var(--accent); }
+  .state-only :global(.field > .label) { display: none; }
   .states-head { display: flex; align-items: center; gap: 6px; }
   .states-head .grow { flex: 1; }
   .states-head :global(.key-state.on), .states-head :global(.key-state.animated) { color: var(--accent); }

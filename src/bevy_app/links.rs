@@ -112,7 +112,11 @@ pub fn pin_layout(geo: &Geo, view: &PanelView, reach: &Reach, k: f64, all: bool)
             && let Some(e) = entity
             && !shows(doc, spec, e, port, &name)
         {
-            folded += 1;
+            // A state input is the Inspector's State control, not one of
+            // the inputs folded away.
+            if !machines.iter().any(|(_, port)| *port == name) {
+                folded += 1;
+            }
             continue;
         }
         let (x, i) = if dir == "out" {

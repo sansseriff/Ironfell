@@ -135,9 +135,12 @@ so T3's diff view, PR links and cleanup all work. A worktree an agent makes with
 T3 puts worktrees in the folder set under Settings → Worktrees → Worktree location
 (default `~/.t3/worktrees/<project>/<name>`), branching from `origin/master`. On
 creation it runs `t3.json`'s setup script, `scripts/setup-worktree.sh`: `bun install`
-and the gitignored `assets/` copied from the main checkout. It builds nothing; run
-the build your task needs (run-iron skill), and expect a cold Rust/wasm build there
-(see "Typical durations").
+the gitignored `assets/` copied from the main checkout, and `target/` seeded from the
+main checkout's build cache as APFS copy-on-write clones (its `dev-opt` outputs for
+wasm, native and host build scripts; ~30 s, almost no disk until files change). It
+builds nothing; run the build your task needs (run-iron skill). The first build
+recompiles only the workspace's own crates, as long as the main checkout has built
+that profile with the same flags; otherwise it is cold (see "Typical durations").
 
 ### Cleaning up
 

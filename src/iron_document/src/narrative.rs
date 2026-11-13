@@ -611,7 +611,7 @@ fn strip_id(line: &str) -> &str {
     let t = line.trim_start();
     if let Some(rest) = t.strip_prefix("[#")
         && let Some(end) = rest.find("] ")
-        && rest[..end].chars().all(|c| c.is_ascii_alphanumeric() || c == '/')
+        && rest[..end].chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_')
     {
         return &rest[end + 2..];
     }

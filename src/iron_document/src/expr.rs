@@ -1192,7 +1192,8 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 // #<id>.<facet>.<field>; an expanded id is `#<owner>/<local>`.
                 let start = i + 1;
                 i += 1;
-                while i < b.len() && b[i].is_ascii_alphanumeric() {
+                // `_` joins a client and a counter (`#4_a3`, id.rs).
+                while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
                     i += 1;
                 }
                 // Each further step: a definition-local id, or `~key`, an
@@ -1200,7 +1201,7 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                 while i + 1 < b.len() && b[i] == b'/' && (b[i + 1].is_ascii_alphanumeric() || b[i + 1] == b'~') {
                     let item = b[i + 1] == b'~';
                     i += 2;
-                    while i < b.len() && (b[i].is_ascii_alphanumeric() || (item && matches!(b[i], b'_' | b'-'))) {
+                    while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || (item && b[i] == b'-')) {
                         i += 1;
                     }
                 }

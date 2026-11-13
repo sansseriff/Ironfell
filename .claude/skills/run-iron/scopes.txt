@@ -5,7 +5,7 @@
 # same. The scopes page lists it and opens it. Then `&demo` opens the unsaved
 # demo. Each run starts with empty OPFS (a fresh browser context).
 nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog
-eval (async()=>{for(let i=0;i<100&&!document.querySelector('[data-scopes-page] .empty');i++)await new Promise(r=>setTimeout(r,50));return 'scopes page: '+document.querySelector('[data-scopes-page] .empty p').textContent+'; engine loaded '+(typeof __iron!=='undefined'||!!document.querySelector('canvas'))})()
+eval (async()=>{for(let i=0;i<100&&!document.querySelector('[data-scopes-page] .empty');i++)await new Promise(r=>setTimeout(r,50));return 'scopes page: '+document.querySelector('[data-scopes-page] .empty strong').textContent+'; engine loaded '+(typeof __iron!=='undefined'||!!document.querySelector('canvas'))})()
 # While the page is idle it fetches the engine's wasm in the background, and
 # opening a scope swaps to the app in place, which uses those bytes: the
 # wasm is fetched once.

@@ -2714,6 +2714,19 @@ impl Store {
         self.doc.set_scope(scope);
     }
 
+    /// The client this store mints new ids as (`id.rs`): 0 for a scope
+    /// edited locally; the number a server handed out, while syncing.
+    pub fn client(&self) -> u32 {
+        self.doc.client()
+    }
+
+    /// Mint new ids as `client` from now on. Like the scope, who is editing
+    /// is not content: not an op, not in history, never saved. Panics if
+    /// `client` is not below [`id::CLIENT_LIMIT`].
+    pub fn set_client(&mut self, client: u32) {
+        self.doc.set_client(client);
+    }
+
     /// Forget undo, redo and the log, keeping the document (scopes.md §4.3).
     /// Opening a scope replays its log onto the snapshot, which pushes every
     /// replayed transaction onto the undo stack; a reopened scope starts

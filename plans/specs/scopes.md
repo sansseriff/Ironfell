@@ -37,7 +37,7 @@ otherwise nothing is built for them.
 | # | Question | Decision | Why |
 |---|---|---|---|
 | D1 | Scope id | a random 128-bit id, written as 26-character Crockford base32 (ULID-style, so ids created later sort later), with a short prefix in views | Random ids need no coordination, so a future server or another device can mint them. Time-ordered text makes directory listings readable |
-| D2 | Node ids | unchanged. The per-scope `u64` counter stays; a global reference is the pair (scope id, node id) | `id.rs` already keeps the integer private and leaves room for an `(actor, counter)` form if collaboration arrives. Nothing in existing files changes meaning |
+| D2 | Node ids | a node id is a **client** and a **counter**, both per scope (schema 12, 2026-11-12); a global reference is the pair (scope id, node id) | Clients editing one scope at once mint ids without asking anyone, as in Figma. Client 0 is local, for a scope no server has handed client numbers out for, and its ids print as before (`#a3`); another client's print as `#4_a3`. The server hands a number to each client it syncs with (§3.4) |
 | D3 | Cross-scope references | representable in v1, resolved later. A relation endpoint may name another scope; an unresolved endpoint is a normal state, drawn as a placeholder | Libraries (component-model phase 5) and the narrative layer both need references across scopes. Making "not loaded" ordinary now is the same mechanism streaming needs later (§8) |
 | D4 | File format | schema 9 adds `"scope": "<id>"` and `"name"` to the header. An imported file is given a fresh scope id. **Only schema 9 loads** (2026-11-02: no saved files from earlier versions exist, so the migrations for 1–8 were removed) | One field; no migration code to keep |
 | D5 | Storage API | OPFS (the Origin Private File System), through the async `navigator.storage.getDirectory()` API, behind a small `ScopeStorage` interface | `localStorage` holds about 5 MB of strings and blocks the main thread; OPFS is files, large, and works in both the worker and the main thread. IndexedDB would also work; files map directly onto snapshot plus log |
@@ -77,16 +77,28 @@ Resolution in v1: if the target scope is the open one, resolve normally; otherwi
 endpoint is **unresolved** and the bridge draws a placeholder. No v1 feature creates
 cross-scope references except import tests; libraries and narratives will.
 
-### 3.3 Schema 9
+### 3.3 Schema 12
 
 ```json
-{"schema": 9, "scope": "01JC8Z3V5Q4M7W2N6R0T9X1K8E", "name": "Fiber coupling",
- "next_id": 41, "next_rel": 7, "version": 812,
+{"schema": 12, "scope": "01JC8Z3V5Q4M7W2N6R0T9X1K8E", "name": "Fiber coupling",
+ "next_ids": {"0": 41, "4": 3}, "next_rels": {"0": 7}, "version": 812,
  "nodes": { … }, "facets": { … }, "relations": [ … ]}
 ```
 
+`next_ids` and `next_rels` hold each client's next counter (base62 client, as ids
+print it); a client with no entry is at 1. They outlive deleted relations, so an id is
+never handed out twice. Which client this copy mints as is not saved: the store starts
+at 0 and the sync client sets it with `Store::set_client`.
+
+### 3.4 Client numbers
+
+The server hands each sync connection a client number that is unique in the scope and
+never 0 (iron-platform). A client number is up to 21 bits and a counter up to 40
+(`id.rs`). The creates a client sends are checked against that client's own counter, so
+two clients' creates never collide.
+
 Loading a file is an import: the caller supplies a fresh scope id and a name (the file
-name). Only schema 9 loads; the readers and migrations for schemas 1–8 were removed
+name). Only the current schema loads; the readers and migrations for schemas 1–8 were removed
 (2026-11-02), since no saved files from earlier versions exist. A later format change
 bumps the schema and drops the old reader the same way, until there are files worth
 keeping.

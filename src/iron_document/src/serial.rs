@@ -6,7 +6,7 @@
 //! so that a git diff of a saved file reads as an op log.
 
 use crate::facet::{Facet, FacetKind};
-use crate::document::{Document, Node, Relation};
+use crate::document::{Counters, Document, Node, Relation};
 use crate::id::{NodeId, RelationId, ScopeId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
@@ -16,12 +16,13 @@ use std::fmt;
 
 /// The format's version. Only this one loads: there are no saved files
 /// from earlier versions to keep (decided 2026-11-02), so a format change
-/// bumps it and drops the old reader rather than migrating. Schema 11 added
+/// bumps it and drops the old reader rather than migrating. Schema 12 made
+/// ids `client_counter` and the header's counters one per client; 11 added
 /// `composition.grid_snap`; 10 the composition canvas settings
 /// (background, grid); 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
-pub const SCHEMA: u64 = 11;
+pub const SCHEMA: u64 = 12;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);
@@ -49,14 +50,15 @@ fn node_json(n: &Node) -> J {
 
 /// Serialise to the canonical text form.
 pub fn save(doc: &Document) -> String {
-    let (next_id, next_rel) = doc.raw_next();
+    let next = doc.counters();
+    let (next_ids, next_rels) = (counters_json(&next.nodes), counters_json(&next.relations));
     let mut out = String::new();
     let scope = doc
         .scope()
         .map(|s| format!(" \"scope\": \"{s}\","))
         .unwrap_or_default();
     out.push_str(&format!(
-        "{{\"schema\": {SCHEMA},{scope} \"next_id\": {next_id}, \"next_rel\": {next_rel}, \"version\": {},\n",
+        "{{\"schema\": {SCHEMA},{scope} \"next_ids\": {next_ids}, \"next_rels\": {next_rels}, \"version\": {},\n",
         doc.version().0
     ));
 
@@ -106,6 +108,31 @@ pub fn save(doc: &Document) -> String {
     out
 }
 
+/// A header's counters, `{"<client>": <next counter>}` with the client in
+/// base62 as ids print it, in client order.
+fn counters_json(next: &BTreeMap<u32, u64>) -> String {
+    let entries: Vec<String> = next.iter().map(|(c, n)| format!("\"{}\": {n}", crate::id::base62(u64::from(*c)))).collect();
+    format!("{{{}}}", entries.join(", "))
+}
+
+fn parse_counters(v: &J, what: &str) -> Result<BTreeMap<u32, u64>, LoadError> {
+    let bad = || LoadError(format!("{what} must map clients to counters"));
+    v.as_object()
+        .ok_or_else(bad)?
+        .iter()
+        .map(|(k, n)| {
+            let client = crate::id::parse_base62(k).filter(|&c| c < u64::from(crate::id::CLIENT_LIMIT)).ok_or_else(bad)?;
+            Ok((client as u32, n.as_u64().ok_or_else(bad)?))
+        })
+        .collect()
+}
+
+/// Whether `minted` (an id's client and counter) is one `next` has not yet
+/// counted past.
+fn uncounted(minted: Option<(u32, u64)>, next: &BTreeMap<u32, u64>) -> bool {
+    minted.is_some_and(|(c, n)| n >= next.get(&c).copied().unwrap_or(1))
+}
+
 /// serde_json's compact form has sorted keys because the maps are BTreeMaps.
 fn n_compact(v: &J) -> String {
     serde_json::to_string(v).expect("json serialises")
@@ -129,12 +156,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
             "schema {schema} is not supported (this build reads only {SCHEMA})"
         )));
     }
-    let next_id = field("next_id")?
-        .as_u64()
-        .ok_or_else(|| LoadError("next_id must be an integer".into()))?;
-    let next_rel = field("next_rel")?
-        .as_u64()
-        .ok_or_else(|| LoadError("next_rel must be an integer".into()))?;
+    let next = Counters { nodes: parse_counters(field("next_ids")?, "next_ids")?, relations: parse_counters(field("next_rels")?, "next_rels")? };
     let version = Version(
         field("version")?
             .as_u64()
@@ -192,10 +214,8 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
                 })?))
             }
         };
-        if id.raw() >= next_id {
-            return Err(LoadError(format!(
-                "node {id} is at or past next_id {next_id}"
-            )));
+        if uncounted(id.minted(), &next.nodes) {
+            return Err(LoadError(format!("node {id} is at or past its client's next_ids")));
         }
         nodes.insert(
             id,
@@ -298,18 +318,15 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
                 r.id
             )));
         }
-        if r.id.raw() >= next_rel {
-            return Err(LoadError(format!(
-                "relation {} is at or past next_rel {next_rel}",
-                r.id
-            )));
+        if uncounted(r.id.minted(), &next.relations) {
+            return Err(LoadError(format!("relation {} is at or past its client's next_rels", r.id)));
         }
         if relations.insert(r.id, r.clone()).is_some() {
             return Err(LoadError(format!("duplicate relation {}", r.id)));
         }
     }
 
-    let mut doc = Document::from_parts(nodes, facets, relations, next_id, next_rel, version);
+    let mut doc = Document::from_parts(nodes, facets, relations, next, version);
     doc.set_scope(scope);
     doc.check_invariants().map_err(LoadError)?;
     Ok(doc)

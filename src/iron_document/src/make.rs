@@ -312,8 +312,8 @@ pub fn make(doc: &Document, resolved: &dyn Fn(Leaf) -> Option<Value>, selection:
     let mut order: Vec<NodeId> = Vec::new();
     for op in &all {
         if let Op::Create { id, .. } = op
+            && id.client() == Some(doc.client())
             && id.raw() >= first_fresh
-            && !id.is_expanded()
         {
             order.push(*id);
         }

@@ -896,7 +896,8 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
     let mut fresh = doc.next_id().raw().max(
         ops.iter()
             .filter_map(|op| match op {
-                Op::Create { id, .. } if !id.is_expanded() && !id.is_session() => Some(id.raw() + 1),
+                // This client's own: another's ids count in their own range.
+                Op::Create { id, .. } if id.client() == Some(doc.client()) => Some(id.raw() + 1),
                 _ => None,
             })
             .max()

@@ -314,11 +314,13 @@ fn create(
         }
         Some(_) => true,
         None => {
-            let next = if id.is_session() { doc.next_session_ids(1)[0] } else { doc.next_id() };
-            if id < next {
+            // Against the counter of the client that minted it: each
+            // client counts in its own range (id.rs).
+            let below = if id.is_session() { id < doc.next_session_ids(1)[0] } else { doc.counted(id) };
+            if below {
                 return Err(cx.err(
                     ErrorKind::BadId,
-                    format!("{id} is below the allocation counter {next}; reserve ids from next_id"),
+                    format!("{id} is below its client's allocation counter; reserve ids from next_id"),
                 ));
             }
             false

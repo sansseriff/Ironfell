@@ -91,13 +91,38 @@ impl RelKind {
     }
 }
 
+/// Each client's next node and relation counter, as a file's header holds
+/// them. A client missing from a map is at 1.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Counters {
+    pub nodes: BTreeMap<u32, u64>,
+    pub relations: BTreeMap<u32, u64>,
+}
+
+fn counter(next: &BTreeMap<u32, u64>, client: u32) -> u64 {
+    next.get(&client).copied().unwrap_or(1)
+}
+
+/// Move `client`'s counter past `n`.
+fn advance(next: &mut BTreeMap<u32, u64>, client: u32, n: u64) {
+    let c = next.entry(client).or_insert(1);
+    *c = (*c).max(n + 1);
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Document {
     nodes: BTreeMap<NodeId, Node>,
     facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>>,
     relations: BTreeMap<RelationId, Relation>,
-    next_id: u64,
-    next_rel: u64,
+    /// Each client's next counter for nodes and for relations (a client
+    /// missing here is at 1): ids are never reused, so these outlive the
+    /// nodes and relations they counted past.
+    next_ids: BTreeMap<u32, u64>,
+    next_rels: BTreeMap<u32, u64>,
+    /// The client new ids are minted as (`id.rs`): 0 unless a server has
+    /// handed this client one for the scope. Who is editing, not content:
+    /// never saved.
+    client: u32,
     /// The session tier's own counters (`id::SESSION_BASE` and up).
     next_session_id: u64,
     next_session_rel: u64,
@@ -118,11 +143,7 @@ pub struct Document {
 
 impl Document {
     pub fn new() -> Document {
-        Document {
-            next_id: 1,
-            next_rel: 1,
-            ..Default::default()
-        }
+        Document::default()
     }
 
     // ---- reads --------------------------------------------------------
@@ -144,21 +165,35 @@ impl Document {
     /// until an op is applied. A batch creating several nodes uses
     /// consecutive ids from here, see [`Document::next_ids`].
     pub fn next_id(&self) -> NodeId {
-        NodeId::from_raw(self.next_id)
+        NodeId::authored(self.client, counter(&self.next_ids, self.client))
     }
 
     pub fn next_ids(&self, n: usize) -> Vec<NodeId> {
-        (0..n as u64)
-            .map(|i| NodeId::from_raw(self.next_id + i))
-            .collect()
+        (0..n as u64).map(|i| self.next_id().offset(i)).collect()
     }
 
     pub fn next_relation_id(&self) -> RelationId {
-        RelationId::from_raw(self.next_rel)
+        RelationId::authored(self.client, counter(&self.next_rels, self.client))
     }
 
     pub fn next_relation_ids(&self, n: usize) -> Vec<RelationId> {
-        (0..n as u64).map(|i| RelationId::from_raw(self.next_rel + i)).collect()
+        (0..n as u64).map(|i| self.next_relation_id().offset(i)).collect()
+    }
+
+    /// Whether an authored `id`'s client has already counted past it, so
+    /// it was handed out before and cannot be created fresh.
+    pub(crate) fn counted(&self, id: NodeId) -> bool {
+        id.minted().is_some_and(|(client, n)| n < counter(&self.next_ids, client))
+    }
+
+    /// The client this document mints new ids as.
+    pub fn client(&self) -> u32 {
+        self.client
+    }
+
+    pub(crate) fn set_client(&mut self, client: u32) {
+        assert!(client < crate::id::CLIENT_LIMIT, "client {client} is out of range");
+        self.client = client;
     }
 
     /// Ids for session-tier nodes, from their own range.
@@ -390,8 +425,8 @@ impl Document {
             // Derived ids are computed, never allocated.
         } else if past.is_session() {
             self.next_session_id = self.next_session_id.max(past.raw() + 1);
-        } else {
-            self.next_id = self.next_id.max(past.raw() + 1);
+        } else if let Some((client, n)) = past.minted() {
+            advance(&mut self.next_ids, client, n);
         }
     }
 
@@ -400,8 +435,8 @@ impl Document {
             // Derived relations' ids are computed, never allocated.
         } else if past.is_session() {
             self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
-        } else {
-            self.next_rel = self.next_rel.max(past.raw() + 1);
+        } else if let Some((client, n)) = past.minted() {
+            advance(&mut self.next_rels, client, n);
         }
     }
 
@@ -561,24 +596,30 @@ impl Document {
     // ---- bulk construction (used by load) -----------------------------
 
     /// Build from raw tables without validation beyond what `reindex` checks.
-    /// Used by deserialisation; ops never go through here.
+    /// Used by deserialisation; ops never go through here. Each client's
+    /// counters are `next`'s, moved past any id the tables hold.
     pub(crate) fn from_parts(
         nodes: BTreeMap<NodeId, Node>,
         facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>>,
         relations: BTreeMap<RelationId, Relation>,
-        next_id: u64,
-        next_rel: u64,
+        next: Counters,
         version: Version,
     ) -> Document {
         let mut d = Document {
             nodes,
             facets,
             relations,
-            next_id,
-            next_rel,
+            next_ids: next.nodes,
+            next_rels: next.relations,
             version,
             ..Default::default()
         };
+        for (client, n) in d.nodes.keys().filter_map(|id| id.minted()).collect::<Vec<_>>() {
+            advance(&mut d.next_ids, client, n);
+        }
+        for (client, n) in d.relations.keys().filter_map(|id| id.minted()).collect::<Vec<_>>() {
+            advance(&mut d.next_rels, client, n);
+        }
         d.reindex();
         d
     }
@@ -591,8 +632,8 @@ impl Document {
         &self.facets
     }
 
-    pub(crate) fn raw_next(&self) -> (u64, u64) {
-        (self.next_id, self.next_rel)
+    pub(crate) fn counters(&self) -> Counters {
+        Counters { nodes: self.next_ids.clone(), relations: self.next_rels.clone() }
     }
 
     fn reindex(&mut self) {

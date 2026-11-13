@@ -2,8 +2,14 @@
 //!
 //! IDs are opaque integers rendered as short base62 (`#a3`, `r7`). They never
 //! encode position and are never reused: deletion tombstones. The integer is
-//! private so nothing outside this crate can depend on it, which is what leaves
-//! room for an `(actor, counter)` form if collaboration ever arrives.
+//! private so nothing outside this crate can depend on it.
+//!
+//! An authored id is a **client** and a **counter**, as Figma's object ids hold
+//! the client that made them: clients editing one scope at once each mint ids
+//! from their own counter without asking anyone. Client 0 is local, for a
+//! scope that no server has handed out client numbers for. Its ids print bare
+//! (`#a3`); any other client's print as `client_counter` (`#4_a3`). `_` is in
+//! no id alphabet and is no expression operator.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -11,10 +17,16 @@ use std::str::FromStr;
 
 const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
+/// An authored id's counter is its low 40 bits; its client the 21 above.
+const COUNTER_BITS: u32 = 40;
+const COUNTER_MASK: u64 = (1 << COUNTER_BITS) - 1;
+/// Clients run from 0 to this, exclusive.
+pub const CLIENT_LIMIT: u32 = 1 << 21;
+
 /// Session-tier ids (plans/specs/panels-and-session.md) start here: session nodes
 /// and relations are allocated from their own range, so they never shift
 /// the ids of content, and nothing at or above it is ever saved.
-pub const SESSION_BASE: u64 = 1 << 40;
+pub const SESSION_BASE: u64 = 1 << 62;
 
 /// Expanded nodes (component-model.md §6): the nodes an instance derives
 /// from its definition. A derived node is named by its **path**: the
@@ -87,7 +99,8 @@ fn expanded_raw(path: &[u64]) -> u64 {
 /// index, or what its `repeat.key` gives, so everything attached to the id
 /// follows the item when the list is reordered. Keys are interned, as
 /// paths are: step `ITEM_BASE + slot`. No authored id reaches this range.
-const ITEM_BASE: u64 = SESSION_BASE - (1 << 32);
+const ITEM_BASE: u64 = 1 << 61;
+const ITEM_END: u64 = ITEM_BASE + (1 << 32);
 
 mod keys {
     use std::collections::HashMap;
@@ -127,7 +140,38 @@ mod keys {
 }
 
 fn is_item_step(n: u64) -> bool {
-    (ITEM_BASE..SESSION_BASE).contains(&n)
+    (ITEM_BASE..ITEM_END).contains(&n)
+}
+
+/// An authored id: below every derived, item and session range.
+fn is_authored(n: u64) -> bool {
+    n < ITEM_BASE
+}
+
+fn authored_raw(client: u32, counter: u64) -> u64 {
+    debug_assert!(client < CLIENT_LIMIT && counter <= COUNTER_MASK);
+    (u64::from(client) << COUNTER_BITS) | counter
+}
+
+/// One raw id as text: `actor_counter` for an authored id of a non-zero
+/// client, else base62.
+fn render(n: u64) -> String {
+    match n >> COUNTER_BITS {
+        client if client != 0 && is_authored(n) => format!("{}_{}", base62(client), base62(n & COUNTER_MASK)),
+        _ => base62(n),
+    }
+}
+
+/// [`render`]'s inverse. A bare number in a non-zero client's range is not an
+/// id's canonical text, so it does not parse.
+fn parse_plain(s: &str) -> Option<u64> {
+    match s.split_once('_') {
+        Some((a, c)) => {
+            let (client, counter) = (parse_base62(a)?, parse_base62(c)?);
+            (client != 0 && client < u64::from(CLIENT_LIMIT) && counter <= COUNTER_MASK).then(|| authored_raw(client as u32, counter))
+        }
+        None => parse_base62(s).filter(|&n| n <= COUNTER_MASK || !is_authored(n)),
+    }
 }
 
 fn is_key(s: &str) -> bool {
@@ -159,14 +203,14 @@ pub fn item_key(text: &str) -> String {
 fn step(n: u64) -> String {
     match step_key(n) {
         Some(k) => format!("~{k}"),
-        None => base62(n),
+        None => render(n),
     }
 }
 
 fn parse_step(s: &str) -> Option<u64> {
     match s.strip_prefix('~') {
         Some(k) => item_step(k),
-        None => parse_base62(s),
+        None => parse_plain(s),
     }
 }
 
@@ -228,6 +272,21 @@ macro_rules! id_type {
             pub fn is_session(self) -> bool {
                 self.0 >= SESSION_BASE && self.0 & EXPANDED == 0
             }
+
+            /// The `counter`th id of `client`.
+            pub(crate) fn authored(client: u32, counter: u64) -> Self {
+                Self(authored_raw(client, counter))
+            }
+            /// The client that minted this id, and its counter; `None`
+            /// for a derived or session id.
+            pub fn minted(self) -> Option<(u32, u64)> {
+                is_authored(self.0).then(|| ((self.0 >> COUNTER_BITS) as u32, self.0 & COUNTER_MASK))
+            }
+            /// The client that minted this id; `None` for a derived or
+            /// session id.
+            pub fn client(self) -> Option<u32> {
+                self.minted().map(|(a, _)| a)
+            }
         }
 
         impl fmt::Display for $name {
@@ -237,7 +296,7 @@ macro_rules! id_type {
                         let parts: Vec<String> = path.iter().map(|&n| step(n)).collect();
                         write!(f, "{}{}", $prefix, parts.join("/"))
                     }
-                    None => write!(f, "{}{}", $prefix, base62(self.0)),
+                    None => write!(f, "{}{}", $prefix, render(self.0)),
                 }
             }
         }
@@ -259,7 +318,7 @@ macro_rules! id_type {
                         .filter(|p| p.len() >= 2 && p.iter().all(|&n| n & EXPANDED == 0 && n < SESSION_BASE))
                         .map(|p| expanded_raw(&p))
                 } else {
-                    parse_base62(body)
+                    parse_plain(body)
                 };
                 raw.map(Self).ok_or_else(|| IdParseError(s.to_owned()))
             }

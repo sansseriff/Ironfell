@@ -128,7 +128,7 @@ Shape suggested in the conversation (§8 Q6–Q8 decide it):
 
 | Need | Already in place |
 |---|---|
-| Stable identity | `NodeId`, never reused; the newtype leaves room for `(actor, counter)` (spine §5.1) |
+| Stable identity | `NodeId`, never reused; `(client, counter)` since schema 12 (scopes.md D2, §3.4) |
 | Sync and history | Every mutation is an op in a transaction; an append-only op log (spine §6–7) |
 | Branching and diffing | Flat, canonical JSON; a reparent is a two-line diff (spine §7) |
 | Small stored state | Authored versus derived: signals, solutions and obligations are never serialised |

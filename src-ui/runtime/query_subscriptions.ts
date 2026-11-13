@@ -126,7 +126,7 @@ export class QuerySubscriptions {
 export const SETTLE_MS = 250;
 
 function references(text: string): Set<string> {
-  return new Set(text.match(/#[A-Za-z0-9]+(?:\/[A-Za-z0-9]+)*/g) ?? []);
+  return new Set(text.match(/#[A-Za-z0-9_]+(?:\/[A-Za-z0-9_~-]+)*/g) ?? []);
 }
 function dependencies(command: DocumentCommand): Set<string> {
   if ('node' in command) return new Set([command.node]);

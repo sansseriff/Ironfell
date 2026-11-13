@@ -399,7 +399,7 @@
       }
       leaf = `${hit.id}.${m[2]}`;
     }
-    if (!/^#[0-9A-Za-z/]+\.[a-z0-9_]+\.[a-z0-9_]+$/i.test(leaf)) {
+    if (!/^#[0-9A-Za-z_/]+\.[a-z0-9_]+\.[a-z0-9_]+$/i.test(leaf)) {
       valueError = "a leaf: #4.size.w or square.transform2d.x";
       return;
     }

@@ -223,9 +223,7 @@ pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragmen
             }
         }
     }
-    let next_id = set.iter().map(|n| n.raw() + 1).max().unwrap_or(1);
-    let next_rel = relations.keys().map(|r| r.raw() + 1).max().unwrap_or(1);
-    let fragment_doc = Document::from_parts(nodes, facets, relations, next_id, next_rel, doc.version());
+    let fragment_doc = Document::from_parts(nodes, facets, relations, Default::default(), doc.version());
 
     let mut homes = BTreeMap::new();
     let mut parent_world = BTreeMap::new();
@@ -470,7 +468,8 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
     let mut next = ops
         .iter()
         .filter_map(|op| match op {
-            Op::Create { id, .. } if !id.is_session() && !id.is_expanded() => Some(id.raw() + 1),
+            // This client's own: another's ids count in their own range.
+            Op::Create { id, .. } if id.client() == Some(doc.client()) => Some(id.raw() + 1),
             _ => None,
         })
         .max()
@@ -479,7 +478,7 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
     let mut next_rel = ops
         .iter()
         .filter_map(|op| match op {
-            Op::Link { rel } if !rel.id.is_session() => Some(rel.id.raw() + 1),
+            Op::Link { rel } if rel.id.client() == Some(doc.client()) => Some(rel.id.raw() + 1),
             _ => None,
         })
         .max()

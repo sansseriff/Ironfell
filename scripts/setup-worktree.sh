@@ -8,6 +8,8 @@ root="${T3CODE_PROJECT_ROOT:-}"
 here="$(git rev-parse --show-toplevel)"
 
 bun install --frozen-lockfile
+# The run-iron skill's driver has its own dependencies (playwright-core).
+(cd .claude/skills/run-iron && bun install --frozen-lockfile)
 
 # assets/ is gitignored (large .glb models); copy them from the main checkout.
 if [[ -n "$root" && "$root" != "$here" && -d "$root/assets" ]]; then

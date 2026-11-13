@@ -134,6 +134,34 @@ sleep 400
 eval (async () => ((await penPath()).match(/<point /g) || []).length)()
 key Meta+z
 sleep 400
+# Several parts at once (Figma's vector edit): Shift-click adds a point, and a
+# drag of either moves both as one transaction; a click on a segment selects
+# it as an edge, whose drag moves its two ends; a marquee on empty space picks
+# points, and Backspace takes out the ones it can. Each undoes.
+key v
+eval window.penPoints = async () => (await penPath()).match(/<point[^>]*>/g).map(p => p.match(/ x="[^"]*" y="[^"]*"/)[0].trim())
+dclick 200 200
+keydown Shift
+dclick 330 420
+keyup Shift
+ddrag 200 200 210 190
+sleep 400
+eval penPoints()
+shot path-multi
+key Meta+z
+dclick 287 178
+ddrag 287 178 297 188
+sleep 400
+eval penPoints()
+shot path-edge
+key Meta+z
+ddrag 160 150 470 450
+sleep 300
+key Backspace
+sleep 400
+eval (async () => ((await penPath()).match(/<point /g) || []).length)()
+key Meta+z
+sleep 400
 key Escape
 key Escape
 shot pen-path

@@ -616,7 +616,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         let a: serde_json::Value = serde_json::from_str(&args).map_err(|e| e.to_string())?;
         let id = |k: &str| -> Result<iron_document::NodeId, String> { a.get(k).and_then(|v| v.as_str()).ok_or_else(|| format!("{k} missing"))?.parse().map_err(|e| format!("{k}: {e}")) };
         let num = |k: &str| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.point).map(|p| p.to_string());
+        let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.lone_point()).map(|p| p.to_string());
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         let doc = store.0.document();
         if verb == "attachment_info" {

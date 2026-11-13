@@ -25,7 +25,7 @@ use iron_document::composition::{self, Dims};
 use iron_document::contexts::{Field, Resolver};
 use iron_document::copy::{self, Fragment};
 use iron_document::interaction;
-use iron_document::{Actor, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
+use iron_document::{Actor, DragHandle, DragMode, GestureId, GestureStatus, Handle, LeafPath, NodeId, Op, Store, TransactionInput, Value};
 use bevy::ecs::system::SystemParam;
 use kurbo::{Affine, ParamCurve as _, Point, Rect, Shape as _};
 
@@ -138,6 +138,8 @@ const POINT: f64 = 7.0;
 const HANDLE_END: f64 = 7.0;
 /// How near (CSS px) a press must land to a path's point or handle end.
 const POINT_HIT: f64 = 7.0;
+/// A selected edge's stroke while editing a path's points, CSS px.
+const EDGE_WIDTH: f64 = 2.0;
 /// CSS px from an empty within which its marker shows, fading out.
 const EMPTY_NEAR: f64 = 30.0;
 
@@ -431,20 +433,141 @@ impl SelectionGeometryCache {
 
 /// Figma's vector edit mode. A click selects a path and shows its box; a
 /// double-click (or Enter) edits its points instead: the box goes, the path
-/// is outlined and its points show, with the selected point's handles and
-/// its neighbours' facing ones. Esc or selecting anything else leaves. The
-/// pen adds points to the path being edited.
+/// is outlined and its points show, with each selected point's handles and
+/// its neighbours' facing ones. Points and segments (edges) are selected
+/// and moved together: a click picks one, Shift-click adds or removes one,
+/// a drag on empty space draws a marquee over points, and dragging any
+/// selected part moves every selected point and both ends of every
+/// selected edge. Esc or selecting anything else leaves. The pen adds
+/// points to the path being edited.
 #[derive(Resource, Default)]
 pub struct PathEdit {
     pub reach: Option<Reach>,
-    /// The selected point.
-    pub point: Option<NodeId>,
+    /// The selected points, in the order picked.
+    pub points: Vec<NodeId>,
+    /// The selected segments, each as its two end points in path order.
+    pub edges: Vec<(NodeId, NodeId)>,
+}
+
+/// A part of the path being edited that can be selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditPart {
+    Point(NodeId),
+    Edge(NodeId, NodeId),
+}
+
+/// What a press on a part does to the selection if it is released without
+/// a drag (a drag keeps the selection the press left, to move it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EditClick {
+    Keep,
+    /// Select only this part (a plain click on a selected part).
+    Only(EditPart),
+    /// Take this part out (a Shift-click on a selected part).
+    Remove(EditPart),
 }
 
 impl PathEdit {
+    /// Editing `reach`'s points, nothing selected.
+    pub(crate) fn of(reach: Reach) -> Self {
+        Self { reach: Some(reach), ..Self::default() }
+    }
+
     /// The path being edited in `panel`.
     pub(crate) fn path_in(&self, panel: &str) -> Option<&Reach> {
         self.reach.as_ref().filter(|r| r.panel == panel)
+    }
+
+    pub(crate) fn has(&self, part: EditPart) -> bool {
+        match part {
+            EditPart::Point(p) => self.points.contains(&p),
+            EditPart::Edge(a, b) => self.edges.iter().any(|&e| e == (a, b) || e == (b, a)),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.points.is_empty() && self.edges.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.points.clear();
+        self.edges.clear();
+    }
+
+    pub(crate) fn add(&mut self, part: EditPart) {
+        if self.has(part) {
+            return;
+        }
+        match part {
+            EditPart::Point(p) => self.points.push(p),
+            EditPart::Edge(a, b) => self.edges.push((a, b)),
+        }
+    }
+
+    pub(crate) fn remove(&mut self, part: EditPart) {
+        match part {
+            EditPart::Point(p) => self.points.retain(|&q| q != p),
+            EditPart::Edge(a, b) => self.edges.retain(|&e| e != (a, b) && e != (b, a)),
+        }
+    }
+
+    pub(crate) fn only(&mut self, part: EditPart) {
+        self.clear();
+        self.add(part);
+    }
+
+    /// A press on `part`, Shift held or not (Figma's): an unselected part
+    /// becomes the selection, or with Shift joins it; a selected one keeps
+    /// the selection so a drag moves all of it, and a click then narrows to
+    /// it, or with Shift takes it out.
+    pub(crate) fn press(&mut self, part: EditPart, shift: bool) -> EditClick {
+        match (self.has(part), shift) {
+            (false, false) => {
+                self.only(part);
+                EditClick::Keep
+            }
+            (false, true) => {
+                self.add(part);
+                EditClick::Keep
+            }
+            (true, false) => EditClick::Only(part),
+            (true, true) => EditClick::Remove(part),
+        }
+    }
+
+    pub(crate) fn click(&mut self, click: EditClick) {
+        match click {
+            EditClick::Keep => {}
+            EditClick::Only(part) => self.only(part),
+            EditClick::Remove(part) => self.remove(part),
+        }
+    }
+
+    /// The points a drag of the selection moves: the selected points and
+    /// both ends of each selected edge, each once.
+    pub(crate) fn moving(&self) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = Vec::new();
+        for p in self.points.iter().copied().chain(self.edges.iter().flat_map(|&(a, b)| [a, b])) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// The one selected point, when that is the whole selection.
+    pub(crate) fn lone_point(&self) -> Option<NodeId> {
+        match (&self.points[..], self.edges.is_empty()) {
+            ([p], true) => Some(*p),
+            _ => None,
+        }
+    }
+
+    /// Forget points that are gone (deleted, undone) and edges that are no
+    /// longer segments of the path (an end gone, a point added between).
+    pub(crate) fn retain(&mut self, live: impl Fn(NodeId) -> bool, segment: impl Fn(NodeId, NodeId) -> bool) {
+        self.points.retain(|&p| live(p));
+        self.edges.retain(|&(a, b)| segment(a, b));
     }
 }
 
@@ -531,6 +654,9 @@ enum Gesture {
     /// store's gesture (`manipulate`).
     Edit(Manip),
     Marquee { view: PanelView, start: Point, prefix: Vec<NodeId>, roots: Vec<NodeId>, base: Vec<Reach> },
+    /// A marquee over the points of the path being edited: those inside it
+    /// join `base`, the selection it began with.
+    PathMarquee { view: PanelView, start: Point, base: Vec<NodeId> },
     /// Space-drag: the view's pan follows the pointer.
     Pan { panel: String, start: Vec2, pan: Vec2 },
     /// A line drawn from a component's pin (component-authoring.md §3).
@@ -838,6 +964,13 @@ enum AfterPress {
     Activate { id: NodeId, leaf: LeafPath, kind: String, step: f64 },
     /// A click runs the document's `on` actions for the pressed node.
     Fire { node: NodeId },
+    /// On a part of the path being edited (its selection already updated):
+    /// a drag moves the selected points, a click then applies `click`.
+    PathParts { click: EditClick },
+    /// On the path's fill or off it: a drag draws a marquee over its points
+    /// (added to them unless `clear`); a click clears them, or leaves
+    /// editing and applies `leave` to the selection.
+    PathMarquee { leave: Option<Click>, clear: bool },
 }
 
 /// What a press that did not become a drag does on release.
@@ -1011,23 +1144,42 @@ impl Geo<'_> {
             .map(|(i, j, n)| (i, j, n.t))
     }
 
-    /// The handles shown while editing `path` with `selected` chosen, as
-    /// (point, out): the selected point's both, and the facing one of each
-    /// neighbour in its contour. Zero handles are left out.
-    pub(crate) fn shown_handles(&self, path: NodeId, selected: Option<NodeId>) -> Vec<(NodeId, bool)> {
+    /// `path`'s segments as their two end points' ids and their cubic.
+    pub(crate) fn edges(&self, path: NodeId) -> Vec<(NodeId, NodeId, kurbo::CubicBez)> {
         let points = self.points(path);
-        let Some(i) = selected.and_then(|s| points.iter().position(|p| p.0 == s)) else { return Vec::new() };
-        let Some((_, closed, r)) = self.run_of(path, i) else { return Vec::new() };
-        let mut out = vec![(i, true), (i, false)];
-        if i > r.start {
-            out.push((i - 1, true));
-        } else if closed {
-            out.push((r.end - 1, true));
+        self.segments(path).into_iter().map(|(i, j, c)| (points[i].0, points[j].0, c)).collect()
+    }
+
+    /// The handles shown while editing `path` with `selected` points chosen,
+    /// as (point, out): each selected point's both, and the facing one of
+    /// each of its neighbours in its contour, each once. Zero handles are
+    /// left out.
+    pub(crate) fn shown_handles(&self, path: NodeId, selected: &[NodeId]) -> Vec<(NodeId, bool)> {
+        if selected.is_empty() {
+            return Vec::new();
         }
-        if i + 1 < r.end {
-            out.push((i + 1, false));
-        } else if closed {
-            out.push((r.start, false));
+        let points = self.points(path);
+        let runs = self.runs(path);
+        let mut out: Vec<(usize, bool)> = Vec::new();
+        let mut push = |x: (usize, bool)| {
+            if !out.contains(&x) {
+                out.push(x);
+            }
+        };
+        for i in selected.iter().filter_map(|s| points.iter().position(|p| p.0 == *s)) {
+            let Some((_, closed, r)) = runs.iter().find(|r| r.2.contains(&i)).cloned() else { continue };
+            push((i, true));
+            push((i, false));
+            if i > r.start {
+                push((i - 1, true));
+            } else if closed {
+                push((r.end - 1, true));
+            }
+            if i + 1 < r.end {
+                push((i + 1, false));
+            } else if closed {
+                push((r.start, false));
+            }
         }
         out.into_iter()
             .filter(|&(j, o)| if o { points[j].3 } else { points[j].2 } != kurbo::Vec2::ZERO)
@@ -1996,6 +2148,11 @@ pub fn select_tool_system(
             let editable = doc.facet(id, iron_document::FacetKind::PathShape).is_some() && iron_document::contour::packed(doc, id).is_none() && !iron_document::contour::bound(doc, id);
             if sel.selected != [id] || !(editable || converting) {
                 *edit = PathEdit::default();
+            } else if !edit.is_empty() && !matches!(tool.gesture, Gesture::Edit(_)) {
+                // Points deleted or undone, edges no longer segments.
+                let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+                let edges: Vec<(NodeId, NodeId)> = if edit.edges.is_empty() { Vec::new() } else { geo.edges(id).into_iter().map(|e| (e.0, e.1)).collect() };
+                edit.retain(|p| doc.live(p).is_some(), |a, b| edges.contains(&(a, b)));
             }
         }
     }
@@ -2090,7 +2247,7 @@ pub fn select_tool_system(
             // it is a path.
             "enter" if !shift && edit.reach.is_none() && reaches.len() == 1 && doc.facet(reaches[0].node(), iron_document::FacetKind::PathShape).is_some() && store.0.resolver().get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 expand_points(&store.0, &mut pending, reaches[0].node());
-                *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
+                *edit = PathEdit::of(reaches[0].clone());
             }
             "escape" | "enter" if key == "escape" || shift => {
                 // Up a level: each node's container, or nothing at the top.
@@ -2109,7 +2266,7 @@ pub fn select_tool_system(
             }
             "enter" if reaches.len() == 1 && iron_document::shape::convertible(&store.0, reaches[0].node()) && store.0.resolver().get(&reaches[0].chain, reaches[0].chain.len() - 1, Field::EDIT) == "points" => {
                 if edit_as_path(&store.0, &mut pending, reaches[0].node(), &events) {
-                    *edit = PathEdit { reach: Some(reaches[0].clone()), point: None };
+                    *edit = PathEdit::of(reaches[0].clone());
                 }
             }
             "enter" => {
@@ -2206,14 +2363,18 @@ pub fn select_tool_system(
                 };
                 events.clipboard(text);
             }
-            // Delete takes the selected point out of the path being edited,
-            // which stays joined across the gap (two points at least stay).
-            "delete" | "backspace" if let Some(point) = edit.point && edit.reach.is_some() => {
-                // Two points at least stay in the point's contour.
-                if doc.live(point).and_then(|n| n.parent).is_some_and(|c| doc.children(c).iter().filter(|&&p| doc.live(p).is_some_and(|n| n.ty.name() == "point")).count() > 2) {
-                    pending.0.push(TransactionInput { label: "delete point".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Delete { id: point }], exact: false });
+            // Delete takes the selected points out of the path being edited,
+            // which stays joined across each gap, as one transaction. Two
+            // points at least stay in each contour: the first ones picked go
+            // while more than two are left. Selected edges stay (opening a
+            // contour at an edge is not built); the path is never deleted.
+            "delete" | "backspace" if edit.reach.is_some() && !edit.is_empty() => {
+                let ops = delete_points_ops(doc, &edit.points);
+                if !ops.is_empty() {
+                    let label = if ops.len() == 1 { "delete point" } else { "delete points" };
+                    pending.0.push(TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false });
                 }
-                edit.point = None;
+                edit.clear();
             }
             "delete" | "backspace" => {
                 // What deleting removes is the context's (`affords.delete`):
@@ -2489,12 +2650,17 @@ pub fn select_tool_system(
                 tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::Link { pin, click: Click::Keep } };
                 break 'press;
             }
-            // The path being edited: its points and shown handles come first.
-            // A point is selected and drags through the store like any node,
-            // a handle writes the point's `handles` leaves, and a point
-            // Cmd-dragged pulls out fresh mirrored handles (Figma's). A press
-            // on the path elsewhere clears the point; one off it leaves
-            // editing and goes on as a plain press.
+            // The path being edited: its shown handles, points and segments
+            // come first. A handle writes its point's `handles` leaves, and a
+            // point Cmd-dragged pulls out fresh mirrored handles (Figma's).
+            // A point or a segment (an edge) is picked, Shift adding it to
+            // or taking it from the selection, and a drag moves every
+            // selected point and both ends of every selected edge through
+            // the store, as one transaction. A drag on the path's fill or on
+            // empty space draws a marquee over its points; a click there
+            // clears them (on empty space it also leaves editing), and a
+            // press on anything else leaves editing and goes on as a plain
+            // press.
             if view.dims == Dims::Two
                 && let Some(r) = edit.path_in(&view.panel).cloned()
                 && geo.is_points(r.node())
@@ -2503,65 +2669,64 @@ pub fn select_tool_system(
                 let path = r.node();
                 let to_screen = view.affine() * space * geo.world(path);
                 let points = geo.points(path);
-                let mut hit: Option<(NodeId, Point, Option<bool>)> = None;
-                for (pid, out) in geo.shown_handles(path, edit.point) {
+                let shift = mods(MOD_SHIFT);
+                let mut handle: Option<(NodeId, Point, bool)> = None;
+                for (pid, out) in geo.shown_handles(path, &edit.points) {
                     let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) else { continue };
-                    if hit.is_none() && (to_screen * (p + if out { ho } else { hi })).distance(screen) <= POINT_HIT * k {
-                        hit = Some((pid, p, Some(out)));
+                    if handle.is_none() && (to_screen * (p + if out { ho } else { hi })).distance(screen) <= POINT_HIT * k {
+                        handle = Some((pid, p, out));
                     }
                 }
-                for &(pid, p, ..) in &points {
-                    if hit.is_none() && (to_screen * p).distance(screen) <= POINT_HIT * k {
-                        hit = Some((pid, p, None));
-                    }
+                if let Some((point, at, out)) = handle {
+                    store.0.begin_gesture(&[point]);
+                    tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
+                    break 'press;
                 }
-                if let Some((point, ..)) = hit {
-                    edit.point = Some(point);
-                }
-                match hit {
-                    Some((point, at, None)) if mods(MOD_META) => {
+                let on_point = points.iter().find(|q| (to_screen * q.1).distance(screen) <= POINT_HIT * k).map(|q| (q.0, q.1));
+                match on_point {
+                    // Cmd on a point pulls out its handles.
+                    Some((point, at)) if mods(MOD_META) => {
+                        edit.only(EditPart::Point(point));
                         store.0.begin_gesture(&[point]);
                         tool.gesture = Gesture::Edit(Manip::PathHandle { point, out: true, to_local: to_screen.inverse(), at });
                         break 'press;
                     }
-                    Some((point, at, Some(out))) => {
-                        store.0.begin_gesture(&[point]);
-                        tool.gesture = Gesture::Edit(Manip::PathHandle { point, out, to_local: to_screen.inverse(), at });
+                    Some((point, _)) => {
+                        let click = edit.press(EditPart::Point(point), shift);
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::PathParts { click } };
                         break 'press;
                     }
-                    Some((point, at, None)) => {
-                        let start = doc_point(&view);
-                        let inv = space.inverse();
-                        let anchor = geo.world(point).inverse() * (inv * start);
-                        // The point snaps level or plumb with the path's other
-                        // anchors (Figma's).
-                        let to_panel = space * geo.world(path);
-                        let snap = (!tool.snap_off).then(|| {
-                            let others = points.iter().filter(|q| q.0 != point).map(|q| Rect::from_points(to_panel * q.1, to_panel * q.1)).collect();
-                            manipulate::SnapSession::new(Rect::from_points(to_panel * at, to_panel * at), others, Vec::new(), SNAP_REACH * k)
-                        });
-                        store.0.begin_gesture(&[point]);
-                        let h = store.0.begin_drag(point, [anchor.x, anchor.y]);
-                        tool.gesture = if h.is_locked() {
-                            Gesture::Idle
-                        } else {
-                            Gesture::Edit(Manip::Drag(manipulate::Drag { label: "move point".into(), view: view.clone(), start, drags: vec![(h, inv)], duplicable: false, duplicate: None, snap }))
-                        };
-                        break 'press;
-                    }
+                    None => {}
+                }
+                if let Some((i, j, t)) = geo.segment_at(path, to_screen, screen, POINT_HIT * k) {
+                    let (a, b) = (points[i].0, points[j].0);
                     // Cmd on a segment bends it.
-                    None if mods(MOD_META)
-                        && let Some((i, j, t)) = geo.segment_at(path, to_screen, screen, POINT_HIT * k)
-                        && let Some((.., curve)) = geo.segments(path).into_iter().find(|s| (s.0, s.1) == (i, j)) =>
+                    if mods(MOD_META)
+                        && let Some((.., curve)) = geo.segments(path).into_iter().find(|s| (s.0, s.1) == (i, j))
                     {
-                        let (a, b) = (points[i].0, points[j].0);
-                        edit.point = None;
+                        edit.clear();
                         store.0.begin_gesture(&[a, b]);
                         tool.gesture = Gesture::Edit(Manip::Bend { a, b, curve, t, to_local: to_screen.inverse() });
                         break 'press;
                     }
-                    None if top_hit(&hits).is_some_and(|(chain, _)| chain.contains(&path)) => {
-                        edit.point = None;
+                    let click = edit.press(EditPart::Edge(a, b), shift);
+                    tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::PathParts { click } };
+                    break 'press;
+                }
+                // The fill, empty space or an artboard's background: a
+                // marquee over the points; elsewhere editing ends.
+                let leave = match top_hit(&hits) {
+                    Some((chain, _)) if chain.contains(&path) => Some(None),
+                    None => Some(Some(Click::Clear)),
+                    Some((chain, source)) if !matches!(source, Source::Embed3d) && chain.len() == 1 && nest::is_embed(geo.doc(), chain[0]) => {
+                        Some(Some(Click::Only(Reach { panel: view.panel.clone(), chain })))
+                    }
+                    Some(_) => None,
+                };
+                match leave {
+                    Some(leave) => {
+                        let leave = if shift { None } else { leave };
+                        tool.gesture = Gesture::Press { panel: view.panel.clone(), start: pointer.screen, then: AfterPress::PathMarquee { leave, clear: !shift } };
                         break 'press;
                     }
                     None => *edit = PathEdit::default(),
@@ -2598,7 +2763,7 @@ pub fn select_tool_system(
                 if geo.is_points(r.node()) {
                     expand_points(&store.0, &mut pending, r.node());
                 }
-                *edit = PathEdit { reach: Some(r.clone()), point: None };
+                *edit = PathEdit::of(r.clone());
                 tool.last_click = None;
                 tool.last_press = None;
                 break 'press;
@@ -2839,14 +3004,14 @@ pub fn select_tool_system(
                 // A double-click on a lone path edits its points.
                 tool.last_click = None;
                 expand_points(&store.0, &mut pending, chain[k]);
-                *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
+                *edit = PathEdit::of(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() });
                 break 'press;
             } else if dbl && sel.selected == [chain[k]] && geo.edits(&chain[..=k]) == "points" && iron_document::shape::convertible(&store.0, chain[k]) {
                 // A double-click on a lone rect or ellipse makes it a path
                 // and edits its points.
                 tool.last_click = None;
                 if edit_as_path(&store.0, &mut pending, chain[k], &events) {
-                    *edit = PathEdit { reach: Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() }), point: None };
+                    *edit = PathEdit::of(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() });
                 }
                 break 'press;
             }
@@ -3070,6 +3235,42 @@ pub fn select_tool_system(
                     let snap = snap.filter(|_| !drags.iter().any(|(h, _)| matches!(h.mode, DragMode::Cluster(_))));
                     tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label, view, start: p0, drags, duplicable: true, duplicate: None, snap }));
                 }
+                // The selected points and edges of the path being edited
+                // move together, snapping level or plumb with its other
+                // points (Figma's).
+                AfterPress::PathParts { .. } => {
+                    tool.gesture = Gesture::Idle;
+                    let moving = edit.moving();
+                    if let Some(r) = edit.path_in(&view.panel).cloned()
+                        && !moving.is_empty()
+                        && let Some(space) = geo.space(&r.chain)
+                    {
+                        let to_panel = space * geo.world(r.node());
+                        let (mine, others): (Vec<_>, Vec<_>) = geo.points(r.node()).into_iter().partition(|q| moving.contains(&q.0));
+                        let dot = |q: &(NodeId, Point, kurbo::Vec2, kurbo::Vec2)| Rect::from_points(to_panel * q.1, to_panel * q.1);
+                        let snap = (!tool.snap_off).then(|| {
+                            let start = mine.iter().map(dot).reduce(|a, b| a.union(b)).unwrap_or(Rect::ZERO);
+                            manipulate::SnapSession::new(start, others.iter().map(dot).collect(), Vec::new(), SNAP_REACH * k)
+                        });
+                        let label = match (edit.points.len(), edit.edges.len()) {
+                            (1, 0) => "move point",
+                            (0, 1) => "move edge",
+                            (0, _) => "move edges",
+                            _ => "move points",
+                        };
+                        let drags = begin_points_drag(&mut store.0, &spatial, &moving, space, p0);
+                        if !drags.is_empty() {
+                            tool.gesture = Gesture::Edit(Manip::Drag(manipulate::Drag { label: label.into(), view, start: p0, drags, duplicable: false, duplicate: None, snap }));
+                        }
+                    }
+                }
+                AfterPress::PathMarquee { clear, .. } => {
+                    let base = if *clear { Vec::new() } else { edit.points.clone() };
+                    if *clear {
+                        edit.clear();
+                    }
+                    tool.gesture = Gesture::PathMarquee { view, start: p0, base };
+                }
                 AfterPress::Marquee { prefix, roots, click } => {
                     let base = if matches!(click, Click::Keep) { reaches.clone() } else { Vec::new() };
                     tool.gesture = Gesture::Marquee { view, start: p0, prefix: prefix.clone(), roots: roots.clone(), base };
@@ -3236,6 +3437,19 @@ pub fn select_tool_system(
                 let mut cx = manipulate::Cx { store: &mut store.0, pointer: &pointer, views: &views, drawables: &drawables, spatial: &spatial, cameras: &cameras, planes: &planes, gizmo: tool.gizmo.as_mut() };
                 m.update(&mut cx);
             }
+            Gesture::PathMarquee { view, start, base } => {
+                let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
+                let rect = Rect::from_points(*start, doc_point(view));
+                tool.marquee = Some((view.panel.clone(), rect));
+                if let Some(r) = edit.path_in(&view.panel).cloned()
+                    && let Some(space) = geo.space(&r.chain)
+                {
+                    let to_panel = space * geo.world(r.node());
+                    let inside: Vec<NodeId> = geo.points(r.node()).into_iter().filter(|q| rect.contains(to_panel * q.1)).map(|q| q.0).collect();
+                    edit.points = marquee_points(base, &inside);
+                    edit.edges.clear();
+                }
+            }
             Gesture::Marquee { view, start, prefix, roots, base } => {
                 let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
                 // A marquee changes the selection, never the document.
@@ -3301,10 +3515,27 @@ pub fn select_tool_system(
                     }
                 }
             }
+            Gesture::Press { then: AfterPress::PathParts { click }, .. } => edit.click(click),
+            Gesture::Press { then: AfterPress::PathMarquee { leave, clear }, .. } => {
+                if clear {
+                    edit.clear();
+                }
+                match leave {
+                    Some(Click::Only(r)) => {
+                        *edit = PathEdit::default();
+                        set_selection(&mut sel, tool, vec![r]);
+                    }
+                    Some(_) => {
+                        *edit = PathEdit::default();
+                        set_selection(&mut sel, tool, Vec::new());
+                    }
+                    None => {}
+                }
+            }
             Gesture::Press { then, .. } => {
                 let click = match then {
                     AfterPress::Move { click } | AfterPress::Marquee { click, .. } | AfterPress::Plug { click, .. } | AfterPress::Link { click, .. } | AfterPress::JointMove { click, .. } | AfterPress::Library { click, .. } => click,
-                    AfterPress::Activate { .. } | AfterPress::Fire { .. } => Click::Keep,
+                    AfterPress::Activate { .. } | AfterPress::Fire { .. } | AfterPress::PathParts { .. } | AfterPress::PathMarquee { .. } => Click::Keep,
                 };
                 match click {
                     Click::Keep => {}
@@ -3357,7 +3588,7 @@ pub fn select_tool_system(
                     None => GestureRequest::Commit(label),
                 });
             }
-            Gesture::Marquee { .. } => tool.marquee = None,
+            Gesture::Marquee { .. } | Gesture::PathMarquee { .. } => tool.marquee = None,
             Gesture::Drive(d) => gestures.0.push(GestureRequest::Commit(d.label)),
             Gesture::Action { label, .. } => gestures.0.push(GestureRequest::Commit(if label.is_empty() { "drag".into() } else { label })),
             Gesture::Ends(e) => gestures.0.push(GestureRequest::Commit(e.label)),
@@ -3598,6 +3829,50 @@ pub fn select_tool_system(
 /// end or start by the pointer's angle (Shift: 15° steps) and its inner
 /// ratio by the pointer's distance. Every arc leaf is written, so a commit
 /// that adds the `arc` component carries all three.
+/// Start dragging `points` of a path together from `p0`, the press in the
+/// panel's document px, `space` mapping the path's composition space there.
+/// One store gesture holds them all, so the release commits one
+/// transaction; a point that cannot move stays.
+pub(crate) fn begin_points_drag(store: &mut Store, spatial: &crate::document_bridge::SpatialScene, points: &[NodeId], space: Affine, p0: Point) -> Vec<(DragHandle, Affine)> {
+    let inv = space.inverse();
+    let grabs: Vec<(NodeId, Point)> = points.iter().map(|&id| (id, nest::world_2d(store, spatial, id).inverse() * (inv * p0))).collect();
+    store.begin_gesture(points);
+    grabs
+        .into_iter()
+        .filter_map(|(id, at)| {
+            let h = store.begin_drag(id, [at.x, at.y]);
+            (!h.is_locked()).then_some((h, inv))
+        })
+        .collect()
+}
+
+/// Deleting `points` from their contours, keeping two at least in each.
+pub(crate) fn delete_points_ops(doc: &iron_document::Document, points: &[NodeId]) -> Vec<Op> {
+    let mut left: HashMap<NodeId, usize> = HashMap::default();
+    let mut ops = Vec::new();
+    for &point in points {
+        let Some(contour) = doc.live(point).and_then(|n| n.parent) else { continue };
+        let n = left.entry(contour).or_insert_with(|| doc.children(contour).iter().filter(|&&p| doc.live(p).is_some_and(|n| n.ty.name() == "point")).count());
+        if *n > 2 {
+            *n -= 1;
+            ops.push(Op::Delete { id: point });
+        }
+    }
+    ops
+}
+
+/// A point marquee's selection: what it began with, then the points inside
+/// it, each once.
+pub(crate) fn marquee_points(base: &[NodeId], inside: &[NodeId]) -> Vec<NodeId> {
+    let mut out = base.to_vec();
+    for &p in inside {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 pub(crate) fn shape_grip_writes(geo: &Geo, id: NodeId, grip: ShapeGrip, p: Point, arc: [f64; 3], alt: bool, shift: bool) -> Vec<(NodeId, &'static str, f64)> {
     use std::f64::consts::TAU;
     let Some((b, _)) = geo.local_box(id) else { return Vec::new() };
@@ -4129,13 +4404,23 @@ pub fn draw_select_overlay(
                     let outline = crate::document_bridge::path_outline(geo.store, path);
                     b.stroke(Affine::IDENTITY, thin.clone(), peniko::Color::new(EDIT_OUTLINE), to_screen * &*outline);
                     let points = geo.points(path);
-                    for (pid, out) in geo.shown_handles(path, edit.point) {
+                    // Selected edges: the segment drawn over in the
+                    // selection's blue.
+                    if !edit.edges.is_empty() {
+                        let wide = kurbo::Stroke::new(EDGE_WIDTH * k);
+                        for (a, c, curve) in geo.edges(path) {
+                            if edit.has(EditPart::Edge(a, c)) {
+                                b.stroke(Affine::IDENTITY, wide.clone(), blue, (to_screen * curve).into_path(0.1));
+                            }
+                        }
+                    }
+                    for (pid, out) in geo.shown_handles(path, &edit.points) {
                         if let Some(&(_, p, hi, ho)) = points.iter().find(|q| q.0 == pid) {
                             handle(b, to_screen * p, to_screen * (p + if out { ho } else { hi }), grey);
                         }
                     }
                     for &(id, p, ..) in &points {
-                        anchor(b, to_screen * p, Some(id) == edit.point);
+                        anchor(b, to_screen * p, edit.points.contains(&id));
                     }
                 }
                 // The pen's press: the new point sits where it landed, and a
@@ -4638,3 +4923,112 @@ pub fn sync_session_selection(
     *synced = store.0.selection();
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iron_document::facet::{PathShape, Transform2d};
+    use iron_document::shape::Anchor;
+    use iron_document::{LeafStruct as _, OrderKey, Slot, TypeId, contour};
+
+    fn ids(n: u32) -> Vec<NodeId> {
+        let mut store = Store::new();
+        store.document().next_ids(n as usize)
+    }
+
+    #[test]
+    fn shift_adds_and_removes_points_and_edges() {
+        let [a, b, c, d] = ids(4)[..] else { unreachable!() };
+        let mut e = PathEdit::default();
+        // A plain press picks one; another plain press replaces it.
+        assert_eq!(e.press(EditPart::Point(a), false), EditClick::Keep);
+        assert_eq!(e.points, [a]);
+        e.press(EditPart::Point(b), false);
+        assert_eq!(e.points, [b]);
+        // Shift adds points and an edge.
+        e.press(EditPart::Point(a), true);
+        e.press(EditPart::Edge(c, d), true);
+        assert_eq!((e.points.clone(), e.edges.clone()), (vec![b, a], vec![(c, d)]));
+        assert!(e.has(EditPart::Edge(d, c)), "an edge is the same either way round");
+        assert_eq!(e.moving(), [b, a, c, d]);
+        // Pressing a selected part keeps the selection, so a drag moves it
+        // all; the click after narrows to it, or with Shift takes it out.
+        let click = e.press(EditPart::Point(a), true);
+        assert_eq!(click, EditClick::Remove(EditPart::Point(a)));
+        assert_eq!(e.points, [b, a], "kept until the release");
+        e.click(click);
+        assert_eq!(e.points, [b]);
+        let click = e.press(EditPart::Edge(d, c), false);
+        assert_eq!(click, EditClick::Only(EditPart::Edge(d, c)));
+        assert_eq!(e.moving(), [b, c, d]);
+        e.click(click);
+        assert!(e.points.is_empty());
+        assert_eq!(e.edges, [(d, c)]);
+        assert_eq!(e.lone_point(), None);
+    }
+
+    #[test]
+    fn moving_counts_a_shared_point_once() {
+        let [a, b, c] = ids(3)[..] else { unreachable!() };
+        let mut e = PathEdit::default();
+        e.add(EditPart::Edge(a, b));
+        e.add(EditPart::Edge(b, c));
+        e.add(EditPart::Point(b));
+        assert_eq!(e.moving(), [b, a, c]);
+        // Gone points and edges that stopped being segments are forgotten.
+        e.retain(|p| p != c, |x, y| (x, y) == (a, b));
+        assert_eq!((e.points.clone(), e.edges.clone()), (vec![b], vec![(a, b)]));
+        assert_eq!(marquee_points(&[a], &[b, a, c]), [a, b, c]);
+    }
+
+    /// A square path at (100, 50) of four point nodes.
+    fn square() -> (Store, NodeId, Vec<NodeId>) {
+        let mut store = Store::new();
+        let path = store.document().next_ids(1)[0];
+        let mut t = Transform2d::default();
+        (t.x, t.y) = (Slot::Const(Value::Number(100.0)), Slot::Const(Value::Number(50.0)));
+        let corner = |x, y| Anchor { at: Point::new(x, y), inn: kurbo::Vec2::ZERO, out: kurbo::Vec2::ZERO };
+        let runs = vec![(vec![corner(0.0, 0.0), corner(10.0, 0.0), corner(10.0, 10.0), corner(0.0, 10.0)], true)];
+        let mut next = store.document().next_ids(1 + contour::ids_needed(&runs)).into_iter().skip(1);
+        let mut ops = vec![Op::Create { id: path, ty: TypeId::lookup("path").unwrap(), parent: None, order: OrderKey::first(), facets: vec![t.wrap(), PathShape::default().wrap()] }];
+        ops.extend(contour::contours_ops(path, &runs, &mut next));
+        store.apply(TransactionInput { label: "draw".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
+        let points = contour::contours(&store, path).into_iter().flat_map(|c| c.points).map(|p| p.0).collect();
+        (store, path, points)
+    }
+
+    fn at(store: &Store, path: NodeId) -> Vec<Point> {
+        contour::contours(store, path).into_iter().flat_map(|c| c.points).map(|p| p.1.at).collect()
+    }
+
+    #[test]
+    fn an_edge_and_a_point_move_together_as_one_transaction() {
+        let (mut store, path, points) = square();
+        let spatial = crate::document_bridge::SpatialScene::default();
+        let mut e = PathEdit::default();
+        e.press(EditPart::Edge(points[1], points[2]), false);
+        e.press(EditPart::Point(points[0]), true);
+        // Grabbed at the first point (panel px), dragged by (5, 3).
+        let p0 = Point::new(100.0, 50.0);
+        let drags = begin_points_drag(&mut store, &spatial, &e.moving(), Affine::IDENTITY, p0);
+        assert_eq!(drags.len(), 3);
+        for (h, inv) in &drags {
+            let q = *inv * (p0 + kurbo::Vec2::new(5.0, 3.0));
+            store.drag_to(h, [q.x, q.y]);
+        }
+        let before = store.history().past().len();
+        store.commit_gesture("move points", Actor::Human, 0).expect("something moved").expect("applies");
+        assert_eq!(store.history().past().len(), before + 1, "one transaction");
+        assert_eq!(at(&store, path), [Point::new(5.0, 3.0), Point::new(15.0, 3.0), Point::new(15.0, 13.0), Point::new(0.0, 10.0)]);
+        store.undo(0).expect("undoes").expect("applies");
+        assert_eq!(at(&store, path), [Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0), Point::new(0.0, 10.0)]);
+    }
+
+    #[test]
+    fn deleting_points_keeps_two_in_each_contour() {
+        let (store, _, points) = square();
+        let ops = delete_points_ops(store.document(), &points);
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[..], [Op::Delete { id: a }, Op::Delete { id: b }] if a == points[0] && b == points[1]));
+    }
+}

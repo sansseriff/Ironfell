@@ -69,7 +69,6 @@ export const FIXED_VIEWS: { title: string; spec: ViewSpec }[] = [
   { title: 'Document', spec: { source: 'document', notation: 'markup' } },
   { title: 'Inspector', spec: { source: 'selection', notation: 'selection' } },
   { title: 'Model', spec: { source: 'document', notation: 'conversation' } },
-  { title: 'Settings', spec: SETTINGS_VIEW },
 ];
 
 /** The id a new view gets: readable, and unique among the open ones. */

@@ -200,7 +200,7 @@
 
 <style>
   /* One surface with the app: the column and the ruler's corner on
-     `--bg-sunken`, as the canvas half's header and ruler are
+     `--bg-timeline`, as the canvas half's header and ruler are
      (timeline_view.rs's palettes hold the same tokens' values). */
   .timeline-column {
     position: absolute;
@@ -208,7 +208,7 @@
     top: 0;
     bottom: 0;
     overflow: hidden;
-    background: var(--bg-sunken);
+    background: var(--bg-timeline);
     border-right: 1px solid var(--border);
     color: var(--fg);
     pointer-events: auto;

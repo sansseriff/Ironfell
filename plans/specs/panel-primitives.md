@@ -1,6 +1,6 @@
 # Panel primitives: panels from the same parts as everything else
 
-**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10.**
+**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10; global settings and quieter default panel chrome built 2026-11-13.**
 
 Iron's long-term rule for panels: a panel is not special shell code. It is a view (a
 source drawn in a notation, `views.ts`), and the parts that make it up are the parts the
@@ -127,3 +127,23 @@ arrangement (Settings → Reset layout gives the new one).
 - `std:tabs` as a document component (the strip is its HTML widget only).
 - The inspector's section strip; a view's own session leaves declared by data.
 - Workspace presets (Build, Write, Animate, Present) as saved layouts chosen on purpose.
+
+### Frontend refresh (2026-11-13)
+
+The selector uses a white rail in light mode, distinct from the gray composition
+tab background. One workspace-level Settings menu sits at its lower-left foot,
+remaining reachable when left views switch or close. It offers System/Light/Dark
+appearance and opens or focuses one Settings view in the centre. Tab groups no
+longer repeat the app-settings gear or offer duplicate Settings views in their
+add-view menus. Composition run/FPS/render-inspector menus and agent settings
+retain their contextual access.
+
+Fresh layouts hide the Inspector and Timeline tab bars as well as the left panel's.
+Existing saved layouts retain the person's choice; grab menus still switch views,
+drag panels and restore tab bars. Layout and app preferences remain session/browser
+state, without authored document edits.
+
+`frontend-refresh.ts` checks the menu, theme shortcuts, singleton settings view,
+left-view switching and hidden-header recovery at DPR 1 and 2. Light/dark screenshots
+are saved under `.agents/frontend-refresh/dpr<N>/`. Frontend checking and fast smoke
+pass; timeline rendering verification is recorded in `timeline.md`.

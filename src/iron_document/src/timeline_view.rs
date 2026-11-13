@@ -605,7 +605,7 @@ const LANE: [[f32; 4]; 6] = [
 struct Palette {
     /// The rows: `--bg`.
     bg: [f32; 4],
-    /// Under the label column, and the ruler: `--bg-sunken`.
+    /// Under the label column, and the ruler: `--bg-timeline`.
     header: [f32; 4],
     ruler: [f32; 4],
     /// The grid's lines: `--border`.
@@ -639,13 +639,13 @@ const DARK: Palette = Palette {
 };
 const LIGHT: Palette = Palette {
     bg: hex(0xffffff),
-    header: hex(0xf3f3f3),
-    ruler: hex(0xf3f3f3),
+    header: hex(0xfafafa),
+    ruler: hex(0xfafafa),
     grid: hex(0xe5e5e5),
     tick: hex(0x8b8b8b),
     dim: hex(0xcecece),
     label: hex(0x616161),
-    summary: [0.55, 0.57, 0.62, 0.35],
+    summary: [0.0, 0.373, 0.722, 0.28],
     key: hex(0xffffff),
     key_edge: hex(0x3b3b3b),
     segment: hex(0x005fb8),
@@ -711,7 +711,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 6"), &lit(RULER_H - 20.0)), sized("12", "18"), rounded(3.0), paint(PLAYHEAD)], None);
 
     // Rows (their names and controls are the DOM column's, §12.3): per
-    // object a summary of its keys, per property a bar per clip and a
+    // object a summary of its keys, per property a thin line per clip and a
     // diamond per key.
     let rows = rows(plan);
     let mut ri = rows.iter();
@@ -807,19 +807,13 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
                 }
                 let times: Vec<String> = s.keys.iter().map(|&k| format!("{k}.key.t")).collect();
                 let (lo, hi) = (fold("min", &times), fold("max", &times));
-                // The clip's bar: from its first key to its last. A drag
+                // The clip's thin timing line: from its first key to its last. A drag
                 // retimes the clip (it projects the clip, so its start is
                 // the leaf the drag moves); Delete deletes the clip.
                 let x = at(&format!("{}.timing.start + {} + {lo}", s.clip, lit(s.offset)));
                 // A state lane's stretches stand in for its bar.
                 if s.states.is_empty() || plan.errors.contains(&s.clip) {
-                push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &ry(row.y + 3.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), &lit(SEG_H)), rounded(4.0), paint(colour)], Some(s.clip));
-                }
-                if s.states.is_empty() {
-                    let mut f = vec![place(&format!("{x} + 8"), &ry(row.y + 4.0))];
-                    f.extend(words(&s.label, 11.0, 500.0));
-                    f.push(paint([1.0, 1.0, 1.0, 0.9]));
-                    push("tracks", format!("bar label {} {}", s.clip, o.target), "text", f, None);
+                    push("tracks", format!("bar {} {}", s.clip, o.target), "rect", vec![place(&x, &ry(row.y + ROW_H / 2.0 - 1.0)), sized(&format!("max(({hi}) - ({lo}), 0) * {pps}"), "2"), rounded(1.0), paint(colour)], Some(s.clip));
                 }
                 // A diamond per key: a drag moves the key in time (it
                 // projects the key), Delete deletes it.
@@ -998,15 +992,15 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                     let picked = inside.picked.contains(&w);
                     let c = if picked { deep } else { pal.segment };
                     let width = format!("max({w}.tween.end - {w}.tween.start, 0) * {secs} * {pps}");
-                    let mut facets = vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), sized(&width, &lit(SEG_H)), rounded(4.0), paint(c)];
+                    let mut facets = vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + ROW_H / 2.0 - 1.0)), sized(&width, "2"), rounded(1.0), paint(c)];
                     if picked {
                         let mut st = Stroke::default();
                         st.color = Slot::Const(Value::Color(pick));
-                        st.width = Slot::Const(Value::Number(2.0));
+                        st.width = Slot::Const(Value::Number(1.0));
                         facets.push(st.wrap());
                     }
                     push("tracks", format!("slice {w}"), "rect", facets, Some(w), Some("tween.end".to_owned()));
-                    // Its easing, drawn in the bar (over everything, inert).
+                    // Its easing stays readable above the thin timing line (inert).
                     if let Some(curve) = inside.curves.get(&w).and_then(|e| crate::time::curve(e).ok()) {
                         const N: usize = 16;
                         let (top_y, h) = (2.5, SEG_H - 5.0);
@@ -1020,7 +1014,7 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                         let mut shape = crate::facet::PathShape::default();
                         shape.d = Slot::Bound(Expr::parse(&d).expect("a curve's path"));
                         let mut st = Stroke::default();
-                        st.color = Slot::Const(Value::Color([1.0, 1.0, 1.0, 0.85]));
+                        st.color = Slot::Const(Value::Color(pal.segment));
                         st.width = Slot::Const(Value::Number(1.25));
                         push("overlay", format!("curve {w}"), "path", vec![place(&at(&format!("{w}.tween.start * {secs}")), &ry(row.y + 3.0)), shape.wrap(), st.wrap()], None, None);
                     }
@@ -1046,7 +1040,7 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                     };
                     let mut c = pal.segment;
                     c[3] = 0.28;
-                    push("backdrop", format!("follow {key}"), "rect", vec![place(&at(&format!("({a}) * {secs}")), &ry(row.y + 3.0)), sized(&format!("max(({b}) - ({a}), 0) * {secs} * {pps}"), &lit(SEG_H)), rounded(4.0), paint(c)], None, None);
+                    push("backdrop", format!("follow {key}"), "rect", vec![place(&at(&format!("({a}) * {secs}")), &ry(row.y + ROW_H / 2.0 - 1.0)), sized(&format!("max(({b}) - ({a}), 0) * {secs} * {pps}"), "2"), rounded(1.0), paint(c)], None, None);
                 }
             }
         }

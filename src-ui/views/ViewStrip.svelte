@@ -46,7 +46,7 @@
   /* Navigation, not an action: a rail of the shared nav icon buttons
      (`.ui-icon-button.is-nav`, pressed for the view shown here), with a bar
      beside the shown one and a dot for one showing elsewhere. */
-  .view-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 40px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: calc((var(--panel-header-h) - var(--control-h)) / 2); background: var(--bg-chrome); border-right: 1px solid var(--border); pointer-events: auto; z-index: 2; box-sizing: border-box; }
+  .view-strip { position: absolute; left: 0; top: 0; bottom: 0; width: 40px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding-bottom: 44px; padding-top: calc((var(--panel-header-h) - var(--control-h)) / 2); background: var(--bg-rail); border-right: 1px solid var(--border); pointer-events: auto; z-index: 2; box-sizing: border-box; }
   .item { position: relative; }
   .item.here::before { content: ""; position: absolute; left: -6px; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
   .item.elsewhere::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }

@@ -1,0 +1,51 @@
+// URL=... DPR=1|2 bun .claude/skills/run-iron/frontend-refresh.ts
+import { chromium } from 'playwright-core';
+import { mkdirSync } from 'node:fs';
+import { resolve } from 'node:path';
+const dpr = Number(process.env.DPR ?? 1);
+const out = resolve(import.meta.dir, '../../../.agents/frontend-refresh', `dpr${dpr}`);
+mkdirSync(out, { recursive: true });
+const browser = await chromium.launch({ executablePath: process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 1680, height: 1000 }, deviceScaleFactor: dpr, colorScheme: 'light' });
+const errors: string[] = [];
+page.on('pageerror', e => errors.push(String(e)));
+page.on('console', m => { if (m.text().includes('panicked at')) errors.push(m.text()); });
+const assert = (ok: unknown, why: string) => { if (!ok) throw new Error(why); };
+try {
+  await page.goto(process.env.URL ?? 'http://localhost:5188/Ironfell/?gfx=webgl2&demo&showcase=0');
+  await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({ fidelity: 'full' })).includes('name="square"'), { timeout: 180000 });
+  await page.locator('.loading').waitFor({ state: 'detached' });
+  await page.locator('[data-view-strip]').first().waitFor();
+  await page.waitForTimeout(1000);
+  const hidden = () => page.evaluate(() => ['layers', 'selection', 'timeline'].map(id => (window as any).__dock.getPanel(id).group.header.hidden));
+  assert((await hidden()).every(Boolean), 'default side/timeline headers must be hidden');
+  const settings = page.getByRole('button', { name: 'Settings', exact: true });
+  assert(await settings.count() === 1, 'one app settings button');
+  const box = (await settings.boundingBox())!;
+  assert(box.x < 40 && box.y > 950, 'settings at foot of left strip');
+  const rail = await page.locator('[data-view-strip]').first().evaluate(el => getComputedStyle(el).backgroundColor);
+  assert(rail === 'rgb(255, 255, 255)', `light rail: ${rail}`);
+  assert(await page.locator('[data-timeline-column]').evaluate(el => getComputedStyle(el).backgroundColor) === 'rgb(250, 250, 250)', 'light timeline column');
+  await page.screenshot({ path: resolve(out, 'light.png') });
+  await settings.click();
+  await page.getByRole('menuitem', { name: 'Dark', exact: true }).click();
+  await page.waitForTimeout(500);
+  assert(await page.locator('html').getAttribute('data-theme') === 'dark', 'global theme choice');
+  await page.screenshot({ path: resolve(out, 'dark.png') });
+  await settings.click();
+  await page.getByRole('menuitem', { name: 'Light', exact: true }).click();
+  await settings.click();
+  await page.getByRole('menuitem', { name: 'App settings…', exact: true }).click();
+  await page.getByLabel('Theme', { exact: true }).waitFor();
+  await settings.click();
+  await page.getByRole('menuitem', { name: 'App settings…', exact: true }).click();
+  assert(await page.evaluate(() => (window as any).__dock.panels.filter((p: any) => p.params.spec.notation === 'settings').length) === 1, 'settings reuses its view');
+  await page.getByRole('button', { name: 'Model (the agent)', exact: true }).first().click();
+  assert(await settings.isVisible(), 'settings remains available after switching left view');
+  // Restore the timeline header with its existing accessible grab menu.
+  await page.getByRole('button', { name: 'Timeline: views, show the tab bar, or drag to move', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Show tab bar', exact: true }).click();
+  assert(!(await hidden())[2], 'grab menu restores timeline header');
+  assert(errors.length === 0, errors.join('\n'));
+  console.log(`PASS frontend refresh DPR ${dpr}: global settings, theme, singleton view, default headers and grab recovery; no page errors`);
+} catch (e) { await page.screenshot({ path: resolve(out, 'failure.png') }); console.log(errors); throw e; } finally { await browser.close(); }

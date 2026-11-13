@@ -21,6 +21,8 @@
   color-scheme: light;
   --bg: #ffffff;
   --bg-chrome: #eaeaea;
+  --bg-rail: #ffffff;
+  --bg-timeline: #fafafa;
   --bg-sunken: #f3f3f3;
   --bg-input: #ffffff;
   --fg: #3b3b3b;
@@ -82,6 +84,8 @@
     color-scheme: dark;
     --bg: #121314;
     --bg-chrome: #191a1b;
+    --bg-rail: #191a1b;
+    --bg-timeline: #1c1d1f;
     --bg-sunken: #1c1d1f;
     --bg-input: #222326;
     --fg: #cccccc;
@@ -114,6 +118,8 @@
   color-scheme: dark;
   --bg: #121314;
   --bg-chrome: #191a1b;
+  --bg-rail: #191a1b;
+  --bg-timeline: #1c1d1f;
   --bg-sunken: #1c1d1f;
   --bg-input: #222326;
   --fg: #cccccc;

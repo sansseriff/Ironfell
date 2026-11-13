@@ -22,6 +22,13 @@ Rendering performance (stage H) has its own handoff, [`handoff-render.md`](hando
 
 Done (details in the roadmap's Status table):
 
+- **Frontend UI refresh, 2026-11-13:** one lower-left global Settings menu, white
+  light-mode selector rail, hidden Inspector/Timeline headers by default, and
+  a lighter timeline with object bars and property timing lines/key diamonds.
+  Settings/navigation and light/dark screenshots pass at DPR 1/2; fast smoke,
+  timeline gestures, 15 timeline Rust tests and frontend checking pass. Details:
+  `specs/panel-primitives.md` and `specs/timeline.md`, “Frontend refresh”.
+
 - **Shared Model/Lesson chat, 2026-11-03, `agent-runtimes` worktree:**
   [`narrative-panel.md` §9](specs/narrative-panel.md#9-shared-conversation-ui-t3-investigation-2026-11-03)
   records the substantial T3 Code source investigation, adopted boundaries,

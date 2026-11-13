@@ -17,7 +17,7 @@ import ViewTab from './ViewTab.svelte';
 import AddViewMenu from './AddViewMenu.svelte';
 import ScopeMenu from './ScopeMenu.svelte';
 import { dockState } from './dock_state.svelte';
-import { LATENCY_VIEW, titleOf, type ViewSpec } from './views';
+import { LATENCY_VIEW, SETTINGS_VIEW, titleOf, type ViewSpec } from './views';
 import { controllerManager } from '../controller-manager.svelte';
 import { lastActive, noteActive } from './active_view.svelte';
 import type { CompositionEntry, OpenedDocument } from '../runtime/document_client.svelte';
@@ -59,11 +59,13 @@ function baseLayout(api: DockviewApi) {
   // The timeline: the session's generated `timeline` composition
   // (plans/specs/timeline.md), drawn like any other, under the canvas.
   view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { referencePanel: 'viewer', direction: 'below' }, { initialHeight: below });
-  // The left side's views are switched by their strip (panel-primitives.md
-  // §5), so its tab bar starts hidden; its grab pill shows it again. The
-  // scope menu moves to the centre's tab bar, beside the compositions.
-  const leftGroup = api.getPanel('layers')?.group;
-  if (leftGroup) leftGroup.header.hidden = true;
+  // Side panels and the timeline start without tab chrome; their grab
+  // menus can restore it. The left views switch through their selector
+  // strip, and the scope menu sits beside the centre's composition tabs.
+  for (const id of ['layers', 'selection', 'timeline']) {
+    const group = api.getPanel(id)?.group;
+    if (group) group.header.hidden = true;
+  }
 }
 
 /** A readable view id from a name, unique among the open views. */
@@ -266,6 +268,7 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
   applying++;
   baseLayout(api);
   applying--;
+  syncHiddenHeaders();
   api.onDidLayoutChange(scheduleSave);
   // A restored layout may hide some groups' tab bars.
   api.onDidLayoutChange(syncHiddenHeaders);
@@ -502,4 +505,13 @@ export function showStripView(from: { group: { id: string } }, spec: ViewSpec, i
   } else {
     freshPanel({ referenceGroup: group, direction: 'within' });
   }
+}
+
+/** The app has one settings entry, independent of the dock's tab headers.
+ * Open in the centre so the left selector and its settings button stay put. */
+export function showSettings() {
+  if (!current) return;
+  const existing = current.panels.find((p) => specOf(p)?.notation === 'settings');
+  if (existing) existing.api.setActive();
+  else current.addPanel({ id: freshId(current, 'settings'), component: 'view', title: 'Settings', params: { spec: SETTINGS_VIEW }, position: current.getPanel('viewer') ? { referencePanel: 'viewer', direction: 'within' } : undefined });
 }

@@ -7,7 +7,6 @@
   import type { DockviewApi, DockviewGroupPanel } from "dockview-core";
   import { DropdownMenu } from "bits-ui";
   import Plus from "@lucide/svelte/icons/plus";
-  import Settings from "@lucide/svelte/icons/settings";
   import PanelTopClose from "@lucide/svelte/icons/panel-top-close";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
   import IconButton from "../lib/ui/IconButton.svelte";
@@ -15,7 +14,7 @@
   import { addCompositionView, setTabBarHidden } from "./workspace";
   import type { CompositionEntry } from "../runtime/document_client.svelte";
   import { controllerManager } from "../controller-manager.svelte";
-  import { FIXED_VIEWS, LATENCY_VIEW, SETTINGS_VIEW, titleOf, viewId, type ViewSpec } from "./views";
+  import { FIXED_VIEWS, LATENCY_VIEW, titleOf, viewId, type ViewSpec } from "./views";
   import { settings as appSettings } from "../runtime/settings.svelte";
 
   let { api, group }: { api: DockviewApi; group: DockviewGroupPanel } = $props();
@@ -56,14 +55,6 @@
     addCompositionView(api, c, { referenceGroup: group });
   }
 
-  /** The gear: show the one Settings view, or open it here. */
-  function settings() {
-    open = false;
-    const existing = api.panels.find((p) => (p.params as any)?.spec?.notation === "settings");
-    if (existing) existing.api.setActive();
-    else add("Settings", SETTINGS_VIEW);
-  }
-
   const STRESS_SIZES = [1000, 2000, 5000, 10000, 20000];
 
   /** Build (or rebuild at a new size) the `stress` composition, then show
@@ -82,7 +73,6 @@
 
 <div class="add">
   <IconButton icon={PanelTopClose} size={16} large label="Hide tab bar" title="Hide the tab bar: the views keep a grab handle to switch, drag and show it again" onclick={() => setTabBarHidden(group.id, true)} />
-  <IconButton icon={Settings} size={16} large label="Settings" onclick={settings} />
   <DropdownMenu.Root bind:open onOpenChange={opened}>
     <DropdownMenu.Trigger class="ui-icon-button large" title="Open a view" aria-label="Open a view">
       <Plus size={16} strokeWidth={1.75} />

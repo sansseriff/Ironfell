@@ -115,7 +115,7 @@ share keys; with summaries that collides, so `Value` gets a real content hash fi
 A bound `path.d` evaluates to a string of **SVG path data** (`M 0 0 L 10 5 …`, every SVG
 command, absolute and relative), parsed after each change. A constant `path.d` written
 as path data in an edit is parsed the same way, so
-`<create type="path" d="M 0 0 C 20 0 20 40 40 40"/>` works. Helpers only write
+`<path d="M 0 0 C 20 0 20 40 40 40"/>` works. Helpers only write
 path-data text, so the engine reads one format:
 
 | Function | Writes |
@@ -124,6 +124,8 @@ path-data text, so the engine reads one format:
 | `smooth(xs, ys)` | `M`, then `C` segments through the points (Catmull-Rom) |
 | `circles(xs, ys, r)` | one closed circle per point (two `A` arcs each): a scatter plot as one path |
 | `segments(x0s, y0s, x1s, y1s)` | `M x0 y0 L x1 y1` per index (any argument may be a number): ticks, grid lines, error bars |
+| `line(x0, y0, x1, y1)` | the same, the name for one line (2026-11-14) |
+| `arc(cx, cy, r, a0, a1)` | `M` then an `A` arc of the circle from angle `a0` to `a1` (radians from +x towards +y, clockwise on screen); a whole turn is two arcs (2026-11-14) |
 | `bars(xs, ys, base, w)` | one closed rectangle per point |
 | `area(xs, ys, base)` | the polyline closed down to `y = base` |
 
@@ -208,7 +210,7 @@ too) stays possible for unsized templates and is not what a plot wants.
 | `xs` | series | `range(0, 10, 11)` | x samples |
 | `ys` | series | a parabola over the default `xs` | the first series |
 | `ys2`, `ys3` | series | empty | further series on the same `xs`; empty hides them |
-| `style` | enum `line \| smooth \| scatter \| area \| bars \| line+markers` | `line` | how series are drawn (`line+markers`: hollow circles on the line, built after the council review) |
+| `style` | enum `line \| smooth \| dashed \| scatter \| area \| bars \| line+markers` | `line` | how series are drawn (`line+markers`: hollow circles on the line, built after the council review; `dashed`: the line, dashed, 2026-11-14) |
 | `x_min`, `x_max`, `y_min`, `y_max` | number or quantity | auto | the axes' range; auto is `nice_lo/nice_hi` of the data (§10 Q3 on how "auto" is spelt) |
 | `x_scale`, `y_scale` | enum `linear \| log` | `linear` | |
 | `x_label`, `y_label`, `title` | text | from the series' unit (`λ (nm)`), empty | |
@@ -218,6 +220,18 @@ too) stays possible for unsized templates and is not what a plot wants.
 | `f` | function | none | instead of `ys`: sampled at one point per 2 px over the x range (§1.4) |
 | `reveal` | number 0..1 | 1 | the draw-on fraction (sets the series' dash offset), driven by the machine (§8) |
 | out `y_at_cursor` | as `ys` | | what the dot reads, for other components to use |
+| `marks_x`, `marks_y` | a value or a series each | none | ringed points in the data's coordinates (2026-11-14) |
+| `marks_label` | text, or a list of texts | none | a label beside each mark |
+| `marks_color` | colour | `@ink` | the marks' and labels' colour |
+| `hlines`, `vlines` | a value or a series each | none | dashed reference lines across the area at each y (`hlines`) and x (`vlines`) |
+
+Marks and reference lines are drawn in the clipped area, after the series, so they pan,
+zoom and clip with the curve; `marks_y` and `hlines` count in the automatic y range.
+They replace marks placed outside the plot by hand, which had to copy the plot's
+margins to turn data into pixels (the demo's wave packet did, demo.md §5): an output
+port cannot do that mapping for them, since a port belongs to the instance and the
+mapping depends on each picture's box. A `<place>` argument of series kind takes one
+value as a series of one (`hlines="20"`).
 
 `xs` and `ys` are in ports, so they can be **wired**: a model component's output series
 feeds a plot through an ordinary connection, and the plot redraws live.

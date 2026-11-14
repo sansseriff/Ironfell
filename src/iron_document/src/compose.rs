@@ -40,10 +40,10 @@ fn ty(n: &str) -> TypeId {
 /// What an `as="$alias"` names: the definition a verb made or placed, the
 /// entity it placed (or made), and that entity's picture.
 #[derive(Clone, Copy, Debug)]
-struct Named {
-    definition: NodeId,
-    entity: Option<NodeId>,
-    picture: NodeId,
+pub(crate) struct Named {
+    pub(crate) definition: NodeId,
+    pub(crate) entity: Option<NodeId>,
+    pub(crate) picture: NodeId,
 }
 
 /// Attributes of `<place>` that are not arguments.
@@ -75,6 +75,25 @@ pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Res
     if els.is_empty() {
         return Err(ComposeError::Verb("no <place> or <make-component>".into()));
     }
+    run_verbs(store, before, els).map(|c| (c.ops, c.lines.join("\n")))
+}
+
+/// What the component verbs made: every op (`before`'s first), one summary
+/// line and the end of its ops for each verb, and what each `as` named.
+pub(crate) struct Composed {
+    pub(crate) ops: Vec<Op>,
+    pub(crate) lines: Vec<String>,
+    pub(crate) ends: Vec<usize>,
+    pub(crate) named: BTreeMap<String, Named>,
+}
+
+/// [`compose_after`] on verbs already parsed (an edit's `<place>`s).
+pub(crate) fn compose_els(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
+    run_verbs(store, before, els)
+}
+
+/// The verbs run on a scratch copy holding `before`.
+fn run_verbs(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
     let mut scratch = crate::Store::with_document(store.document().clone());
     if !before.is_empty() {
         scratch
@@ -84,9 +103,10 @@ pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Res
     compose_verbs(scratch, before, els).map_err(ComposeError::Verb)
 }
 
-fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String), String> {
+fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<Composed, String> {
     let mut aliases: BTreeMap<String, Named> = BTreeMap::new();
     let mut lines = Vec::new();
+    let mut ends = Vec::new();
     for (i, el) in els.iter().enumerate() {
         let at = |m: String| format!("<{}> {}: {m}", el.name, i + 1);
         let (new, line, named) = match el.name.as_str() {
@@ -105,8 +125,9 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
             aliases.insert(a.to_owned(), named);
         }
         lines.push(line);
+        ends.push(ops.len());
     }
-    Ok((ops, lines.join("\n")))
+    Ok(Composed { ops, lines, ends, named: aliases })
 }
 
 /// A node id as written: `#3F`, or an earlier verb's `$alias` through `pick`.
@@ -147,7 +168,14 @@ fn arg_slot(kind: ValueKind, raw: &str, entity: NodeId) -> Result<Slot, String> 
         return Expr::parse(&e).map(Slot::Bound).map_err(|err| format!("{raw:?}: {err}"));
     }
     let v = match kind {
-        ValueKind::Series => Value::parse_series(t).unwrap_or_else(|| Err("expected two or more numbers, then an optional unit (400 450 500 nm), or {= range(…)}".into())).map_err(|e| format!("{raw:?}: {e}"))?,
+        // One value is a series of one.
+        ValueKind::Series => match Value::parse_series(t) {
+            Some(s) => s.map_err(|e| format!("{raw:?}: {e}"))?,
+            None => match Value::parse_quantity(t).ok().or_else(|| t.parse::<f64>().ok().map(Value::Number)).and_then(|v| v.as_quantity()) {
+                Some((si, dim)) => Value::series(vec![si], dim),
+                None => return Err(format!("{raw:?}: expected numbers, then an optional unit (400 450 500 nm), or {{= range(…)}}")),
+            },
+        },
         ValueKind::Enum => Value::Enum(t.to_owned()),
         ValueKind::Color => hex_color(t).ok_or_else(|| format!("{raw:?}: expected a colour, #rrggbb or #rrggbbaa, or {{= rgb(…)}}"))?,
         ValueKind::Number if t.eq_ignore_ascii_case("nan") || t == "auto" => Value::Number(f64::NAN),

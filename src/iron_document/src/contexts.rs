@@ -999,11 +999,23 @@ pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     let mut rest = s.trim();
     while !rest.is_empty() {
-        let eq = rest.find('=').ok_or_else(|| format!("expected name=\"value\" at \"{}\"", head(rest)))?;
-        let key = rest[..eq].trim().to_owned();
-        let r = rest[eq + 1..].trim_start().strip_prefix('"').ok_or_else(|| format!("{key}: expected a quoted value"))?;
-        let end = r.find('"').ok_or_else(|| format!("{key}: unclosed value"))?;
-        let value = r[..end].replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&");
+        let name_end = rest.find(|c: char| c == '=' || c.is_whitespace()).unwrap_or(rest.len());
+        let key = rest[..name_end].trim().to_owned();
+        let after = rest[name_end..].trim_start();
+        let Some(r) = after.strip_prefix('=') else {
+            // A bare attribute, as HTML writes one: true.
+            if key.is_empty() {
+                return Err(format!("expected name=\"value\" at \"{}\"", head(rest)));
+            }
+            out.push((key, "true".to_owned()));
+            rest = after;
+            continue;
+        };
+        let r = r.trim_start();
+        let quote = r.chars().next().filter(|&c| c == '"' || c == '\'').ok_or_else(|| format!("{key}: expected a quoted value"))?;
+        let r = &r[1..];
+        let end = r.find(quote).ok_or_else(|| format!("{key}: unclosed value"))?;
+        let value = crate::parts::unescape(&r[..end]);
         out.push((key, value));
         rest = r[end + 1..].trim_start();
     }

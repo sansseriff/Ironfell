@@ -5,10 +5,12 @@ import { makeDocumentApi } from '../src-ui/model/api';
 import { applyEdit } from '../src-ui/model/edit';
 import { ask, lookRequest } from '../src-ui/model/agent';
 import { manifest, topicRequest, topicsFor } from '../src-ui/model/manifest';
+import { fakePlanner } from './fixtures/plan';
 
 /** A document API whose engine records each call and answers from `answer`. */
 function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: true })) {
   const calls: [string, unknown[]][] = [];
+  const plan = fakePlanner(() => 3);
   const api = makeDocumentApi(command => {
     const { fn: name, args } = documentArguments(command);
     calls.push([name, args]);
@@ -17,59 +19,46 @@ function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: 
     if (name === 'view') return scope ? `<document version="3">\n  <rect id="${scope}"/>\n</document>` : `<document version="3"/>${JSON.stringify(args)}`;
     if (name === 'schema') return JSON.stringify({ types: { rect: { facets: [{ kind: 'transform2d', required: true }], default_host: '2d', children: 'any' } }, facets: { transform2d: { x: 'number', y: 'number' }, on: { x: 'number' } }, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }] }] });
     if (name === 'selection') return '[]';
-    if (name === 'place') return JSON.stringify(Array.from({ length: Number(args[2]) }, (_, i) => `k${i}`));
-    if (name === 'next_relation_ids') return '[]';
+    if (name === 'edit_plan') {
+      // A test's own answer, or the fake planner's.
+      const canned = answer(name, args) as object | undefined;
+      return JSON.stringify(canned && ('plan' in canned || 'errors' in canned || 'failure' in canned) ? canned : plan(String(args[0])));
+    }
     return JSON.stringify(answer(name, args));
   });
   return { api, calls };
 }
 
-test('component verbs go to the engine as one compose call', async () => {
-  const { api, calls } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '  <placed entity="#9"/>' } : { ok: true }));
-  const markup = '<make-component of="#a #b" name="pump" as="$p"/>\n  <place def="$p" in="#C" x="10" y="20"/>';
-  const out = await applyEdit(api, `<edit expect-version="3">\n  ${markup}\n</edit>`);
+test('an edit is planned by the engine and applied as one transaction, its summary told', async () => {
+  const plan = { ops: [{ t: 'create', id: '#D1' }, { t: 'create', id: '#R1' }], aliases: { $d: '#D1' }, op_verb: [0, 1], verbs: ['create $d', 'place $p'], summary: ['  <created alias="$d" id="#D1"/>', '  <placed entity="#9"/>'], expect_version: 3, exact: false };
+  const { api, calls } = fake(name => (name === 'edit_plan' ? { ok: true, version: 3, plan } : name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
+  const xml = '<edit expect-version="3"><rect in="#C" id="$d"/><place def="$d" in="#C" id="$p"/></edit>';
+  const out = await applyEdit(api, xml);
   assert.equal(out.ok, true);
-  assert.match(out.summary ?? '', /<placed entity="#9"\/>/);
-  assert.deepEqual(calls.filter(([n]) => n === 'compose'), [['compose', [markup.replace('\n  ', '\n'), '[]']]]);
+  assert.deepEqual(calls.filter(([n]) => n === 'edit_plan'), [['edit_plan', [xml]]]);
+  const [[, [tx, expect]]] = calls.filter(([n]) => n === 'apply');
+  assert.deepEqual(JSON.parse(String(tx)).ops, plan.ops);
+  assert.equal(expect, 3);
+  assert.equal(out.summary, '<applied version="4">\n  <created alias="$d" id="#D1"/>\n  <placed entity="#9"/>\n</applied>');
 });
 
-test('component verbs share an edit with plain verbs: their ops go first, one call', async () => {
-  const { api, calls } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '  <placed entity="#9"/>' } : name === 'next_ids' ? ['#D1', '#R1'] : { ok: true }));
-  const out = await applyEdit(api, '<edit><create id="$d" type="rect" x="0" y="0"/><create id="$r" type="rect" parent="$d" x="1" y="1"/><place def="$d" in="#C" x="10" y="20" as="$p"/></edit>');
-  assert.equal(out.ok, true, out.failure);
-  const [[, [markup, ops]]] = calls.filter(([n]) => n === 'compose');
-  assert.equal(markup, '<place def="#D1" in="#C" x="10" y="20" as="$p"/>');
-  assert.deepEqual(JSON.parse(String(ops)).map((o: any) => o.id), ['#D1', '#R1']);
-  assert.equal(calls.filter(([n]) => n === 'apply').length, 0, 'no separate transaction');
-  assert.match(out.summary ?? '', /<created alias="\$d" id="#D1"\/>/);
-  assert.match(out.summary ?? '', /<placed entity="#9"\/>/);
-});
-
-test('a mixed edit\'s errors count the verbs as the model wrote them', async () => {
-  // An op the store refuses: its index among the ops becomes the edit's verb index.
-  const op = fake(name => (name === 'compose' ? { ok: false, version: 3, errors: [{ op: 0, kind: 'facet_required', message: 'rect requires transform2d' }] } : name === 'next_ids' ? ['#D1'] : { ok: true }));
-  const bad = await applyEdit(op.api, '<edit><place def="std:laser" in="#C"/><create id="$d" type="rect" x="0" y="0"/></edit>');
-  assert.equal(bad.ok, false);
-  assert.match(bad.failure ?? '', /op="1"/);
-  // A component verb the store refuses: "<place> 2" is the edit's third verb.
-  const verb = fake(name => (name === 'compose' ? { ok: false, error: '<place> 2: no composition named nowhere' } : name === 'next_ids' ? ['#D1'] : { ok: true }));
-  const wrong = await applyEdit(verb.api, '<edit><create id="$d" type="rect" x="0" y="0"/><place def="$d" in="#C"/><place def="$d" in="nowhere"/></edit>');
-  assert.match(wrong.failure ?? '', /op="2" kind="compose"/);
-});
-
-test('component verbs refuse a table beside them, and a schematic place without its circuit', async () => {
-  const { api, calls } = fake();
-  const mixed = await applyEdit(api, '<edit><place def="#d" in="#C"/><table to="#C" x="0" y="0">a | b</table></edit>');
-  assert.equal(mixed.ok, false);
-  assert.match(mixed.failure ?? '', /only verb in their &lt;edit&gt;/);
-  const part = await applyEdit(api, '<edit><place part="resistor" x="10" y="10"></place></edit>');
-  assert.equal(part.ok, false);
-  assert.match(part.failure ?? '', /not part=/);
-  assert.equal(calls.filter(([n]) => n === 'compose' || n === 'apply').length, 0);
+test('errors read as the model wrote the edit: the verb that wrote each op, the names it gave', async () => {
+  // The engine refuses to plan: its errors already count verbs.
+  const refused = fake(name => (name === 'edit_plan' ? { ok: false, version: 3, errors: [{ op: 1, kind: 'parse', message: '"nope" is not a field of rect', verb: 'set #A' }] } : { ok: true }));
+  const bad = await applyEdit(refused.api, '<edit><rect in="#C"/><set id="#A" nope="1"/></edit>');
+  assert.equal(bad.failure, '<edit-failed applied="none" version="3">\n  <error op="1" verb="set #A" kind="parse">"nope" is not a field of rect</error>\n</edit-failed>');
+  // The store refuses ops: each is placed at its verb, minted ids as names.
+  const plan = { ops: [{ t: 'create', id: '#D1' }, { t: 'set', id: '#P' }, { t: 'set', id: '#P' }, { t: 'create', id: '#N2' }], aliases: { $d: '#D1' }, op_verb: [0, 1, 1, 2], verbs: ['create $d', 'set #P', 'create rect'], summary: [], expect_version: 0, exact: false };
+  const store = fake(name => (name === 'edit_plan' ? { ok: true, version: 3, plan } : name === 'apply' ? { ok: false, version: 3, errors: [{ op: 3, kind: 'bad_id', message: '#D1 already exists' }, { op: 2, kind: 'bad_id', message: '#D1 already exists' }, { op: 0, kind: 'bad_id', message: '#D1 already exists' }] } : { ok: true }));
+  const out = await applyEdit(store.api, '<edit/>');
+  assert.match(out.failure ?? '', /<error ops="0 1 2" kind="bad_id">\$d already exists \(3 times\)<\/error>/);
+  // A question comes back as the engine wrote it.
+  const asked = fake(name => (name === 'edit_plan' ? { ok: false, version: 3, failure: '<edit-failed applied="none" version="3">\n  <question kind="merge"/>\n</edit-failed>' } : { ok: true }));
+  assert.match((await applyEdit(asked.api, '<edit><link-figures a="#a" b="#b"/></edit>')).failure ?? '', /<question kind="merge"\/>/);
 });
 
 test('a look shows the named instances expanded, and is not a repair attempt', async () => {
-  const { api, calls } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '' } : { ok: true }));
+  const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
   const replies = ['<look expand="#u #3B"/>', '<edit><place entity="#3B" in="#C"/></edit>'];
   const seen: string[] = [];
   const transport = {
@@ -93,7 +82,7 @@ test('the prompt comes in topics: a core, the relevant ones, an index of the res
   const schema = { types: {}, facets: {}, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }] }] };
   const core = manifest(schema, false, []);
   // The core keeps what every edit needs, and lists every topic it leaves out.
-  assert.match(core, /VERBS, inside <edit/);
+  assert.match(core, /EDITS, inside <edit/);
   assert.match(core, /MORE TOPICS/);
   assert.match(core, /\n  tables\s+tables: rows of words/);
   assert.doesNotMatch(core, /std:laser/);
@@ -110,8 +99,8 @@ test('the prompt comes in topics: a core, the relevant ones, an index of the res
 });
 
 test('a topic request is answered with that topic, and is not a repair attempt', async () => {
-  const { api } = fake(name => (name === 'compose' ? { ok: true, version: 4, summary: '' } : { ok: true }));
-  const replies = ['<topic name="tables"/>', '<edit><table to="#C" x="0" y="0">a | b</table></edit>'];
+  const { api } = fake(name => (name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
+  const replies = ['<topic name="tables"/>', '<edit><table in="#C" x="0" y="0">a | b</table></edit>'];
   const seen: string[] = [];
   let system = '';
   const transport = {
@@ -136,28 +125,6 @@ test('the manifest lists the standard components from the schema', () => {
   assert.doesNotMatch(text, /only when asked/);
 });
 
-test('a ref leaf may name a node created in the same edit by its $alias', async () => {
-  const schema = {
-    facets: { name: { text: 'string' }, instance: { def: 'ref', mode: 'enum' } },
-    types: {
-      definition: { facets: [{ kind: 'name', required: false }], default_host: 'library', children: 'any' },
-      entity: { facets: [{ kind: 'instance', required: true }], default_host: 'model', children: 'any' },
-    },
-  };
-  const api = {
-    schema: async () => schema,
-    nextIds: async (n: number) => ['#D1', '#E1', '#E2'].slice(0, n),
-    nextRelationIds: async () => [],
-    place: async (_p: string, _a: string, n: number) => Array.from({ length: n }, (_, i) => `k${i}`),
-  } as any;
-  const { parseEdit } = await import('../src-ui/model/edit');
-  const parsed = await parseEdit(api, '<edit><create id="$def" type="definition" parent="#L" name="level"/><create id="$e" type="entity" parent="#M" instance.def="$def"/><set id="$e" instance.def="$def"/></edit>');
-  const create = parsed.ops[1] as any;
-  assert.deepEqual(create.facets.find((f: any) => f.instance).instance.def, { ref: '#D1' });
-  assert.deepEqual((parsed.ops[2] as any).slot, { ref: '#D1' });
-  await assert.rejects(parseEdit(api, '<edit><create id="$e" type="entity" parent="#M" instance.def="$nope"/></edit>'), /alias \$nope is not created in this edit/);
-});
-
 /** A transport that answers from a list, recording what it was sent last. */
 function scripted(replies: string[] | (() => string)) {
   const seen: string[] = [];
@@ -172,9 +139,9 @@ function scripted(replies: string[] | (() => string)) {
 
 test('<continue/> after an applied edit asks for the next step, told what the first made', async () => {
   let version = 3;
-  const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: ++version } : name === 'next_ids' ? ['#N1'] : { ok: true }));
+  const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: ++version } : { ok: true }));
   const { seen, transport } = scripted([
-    '<edit><create id="$a" type="rect" x="0" y="0"/></edit><continue/>',
+    '<edit><rect in="#1" id="$a" x="0" y="0"/></edit><continue/>',
     '<edit><set id="#N1" x="5"/></edit>',
   ]);
   const result = await ask(api, transport, 'two steps');
@@ -187,7 +154,7 @@ test('<continue/> after an applied edit asks for the next step, told what the fi
 test('repairs in a row are bounded, and a stuck turn says the earlier steps are applied', async () => {
   let applies = 0;
   const { api } = fake(name => {
-    if (name !== 'apply') return name === 'next_ids' ? ['#N1'] : { ok: true };
+    if (name !== 'apply') return { ok: true };
     applies++;
     return applies === 1 ? { ok: true, version: 4 } : { ok: false, version: 4, errors: [{ op: 0, kind: 'bad', message: 'no' }] };
   });
@@ -205,12 +172,4 @@ test('every model call counts against the turn\'s budget', async () => {
   const result = await ask(api, transport, 'forever');
   assert.equal(calls.filter(([n]) => n === 'apply').length, 20);
   assert.equal(result.ok, true, 'the last step applied');
-});
-
-test('a bare field two facets share is read against the node\'s own type', async () => {
-  const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
-  const out = await applyEdit(api, '<edit><set id="#6f" x="240"/></edit>');
-  assert.equal(out.ok, true, out.failure);
-  const [[, [tx]]] = calls.filter(([n]) => n === 'apply');
-  assert.equal(JSON.parse(String(tx)).ops[0].path, 'transform2d.x');
 });

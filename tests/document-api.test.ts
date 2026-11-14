@@ -18,22 +18,17 @@ for (const asynchronous of [false, true]) {
     assert.equal(calls.filter(([name]) => name === 'schema').length, 1);
     assert.equal(await api.version(), 12);
     assert.equal(await api.view({ fidelity: 'full', relation: 'model' }), '<document version="12"/>');
-    await api.nextIds(2);
-    await api.nextRelationIds(3);
-    await api.place('#1', 'end', 2);
+    await api.plan('<edit/>');
     assert.deepEqual(await api.apply({ ops: [] }, 12), { ok: true });
-    await api.link('#a', '#b', '#a', 'model');
     await api.selection();
-    await api.importSvg('<svg/>', '#1', 10, 20, 'human');
-    await api.table('{"rows":[]}');
+    await api.netlist('circuit');
     assert.deepEqual(calls, [
       ['schema', []],
       ['view', ['{"scope":null,"fidelity":"skeleton","depth":0}']],
       ['view', ['{"scope":null,"depth":null,"fidelity":"full","relation":"model"}']],
-      ['next_ids', [2]], ['next_relation_ids', [3]], ['place', ['#1', 'end', 2]],
-      ['apply', ['{"ops":[]}', 12]], ['link', ['#a', '#b', '#a', 'model']],
-      ['selection', []], ['import_svg_at', ['<svg/>', '#1', 10, 20, 'human']],
-      ['table', ['{"rows":[]}']],
+      ['edit_plan', ['<edit/>']],
+      ['apply', ['{"ops":[]}', 12]],
+      ['selection', []], ['netlist', ['circuit']],
     ]);
   });
 }

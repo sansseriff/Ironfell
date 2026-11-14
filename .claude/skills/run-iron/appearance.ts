@@ -17,15 +17,15 @@ try{
 await page.goto(process.env.URL??'http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
 const v=await view(),parent=v.match(/<composition id="([^"]+)" name="controls"/)[1];
 await edit(`<edit>
-<create id="$g" type="group" parent="${parent}" name="opacity scope" x="400" y="60"/><add id="$g" appearance.opacity="0.5"/>
-<create id="$a" type="rect" parent="$g" x="0" y="0" w="100" h="100" color="#ff0000"/>
-<create id="$b" type="rect" parent="$g" x="50" y="0" w="100" h="100" color="#0000ff"/>
-<create id="$r" type="rect" parent="${parent}" name="gradient sample" x="600" y="60" w="200" h="100"/>
+<group in="${parent}" id="$g" name="opacity scope" x="400" y="60"/><add id="$g" appearance.opacity="0.5"/>
+<rect in="$g" id="$a" x="0" y="0" w="100" h="100" color="#ff0000"/>
+<rect in="$g" id="$b" x="50" y="0" w="100" h="100" color="#0000ff"/>
+<rect in="${parent}" id="$r" name="gradient sample" x="600" y="60" w="200" h="100"/>
 <add id="$r" gradient.kind="linear" gradient.start="#ff0000" gradient.end="#0000ff" gradient.x0="0" gradient.y0="0" gradient.x1="1" gradient.y1="0"/>
-<create id="$c" type="group" parent="${parent}" name="clipped scope" x="400" y="260"/>
+<group in="${parent}" id="$c" name="clipped scope" x="400" y="260"/>
 <add id="$c" group_clip.enabled="true" group_clip.shape="ellipse" group_clip.w="100" group_clip.h="100"/>
-<create id="$inside" type="rect" parent="$c" x="-40" y="-40" w="180" h="180" color="#00ff00"/>
-<create id="$s" type="rect" parent="${parent}" name="scrub sample" x="600" y="260" w="200" h="100" color="#8866dd"/><add id="$s" appearance.opacity="0.8"/>
+<rect in="$c" id="$inside" x="-40" y="-40" w="180" h="180" color="#00ff00"/>
+<rect in="${parent}" id="$s" name="scrub sample" x="600" y="260" w="200" h="100" color="#8866dd"/><add id="$s" appearance.opacity="0.8"/>
 </edit>`);
 // The tab may sit in the strip's overflow menu: activate the panel itself.
 await page.evaluate(()=>(window as any).__dock.getPanel('controls').api.setActive());await wait();

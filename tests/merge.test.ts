@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ask } from '../src-ui/model/agent';
 import { changesSince, conflicts } from '../src-ui/model/merge';
+import { fakePlanner } from './fixtures/plan';
 
 const schema = {
   facets: { name: { text: 'string' }, transform2d: { x: 'number', y: 'number' }, size: { w: 'number', h: 'number' } },
@@ -12,7 +13,6 @@ const schema = {
  *  the model is thinking, adding logged transactions. */
 function world() {
   let version = 14;
-  let next = 0;
   const log: { version: number; label: string; ops: object[] }[] = [];
   const applied: { tx: any; expect: number }[] = [];
   let staleOnce = false;
@@ -23,9 +23,7 @@ function world() {
     view: async () => `<document version="${version}"/>`,
     selection: async () => [],
     netlist: async () => ({ ok: false }),
-    nextIds: async (n: number) => Array.from({ length: n }, () => `#N${++next}`),
-    nextRelationIds: async () => [],
-    place: async (_p: string, _a: string, n: number) => Array.from({ length: n }, (_, i) => `k${i}`),
+    plan: fakePlanner(() => version),
     logSince: async (since: number) => ({ gap: false, version, ndjson: log.filter((t) => t.version > since).map((t) => JSON.stringify(t) + '\n').join('') }),
     apply: async (tx: any, expect: number) => {
       applied.push({ tx, expect });
@@ -47,7 +45,7 @@ function scripted(replies: string[], during: ((call: number) => void) = () => {}
   };
 }
 
-const edit = '<edit expect-version="14"><create id="$r" type="rect" x="1" y="2"/><set id="#B" x="40"/></edit>';
+const edit = '<edit expect-version="14"><rect in="#1" id="$r" x="1" y="2"/><set id="#B" x="40"/></edit>';
 
 test('an edit that touches nothing the person changed is applied on top of their changes', async () => {
   const w = world();

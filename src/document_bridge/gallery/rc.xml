@@ -1,0 +1,61 @@
+<edit>
+  <!-- The circuit the page embeds, a schematic of its own. Its parts are
+       named without numbers, so other sheets' designators (R3, P2, …)
+       count as if it were not here. -->
+  <composition id="$rc" name="rc circuit" notation="schematic"/>
+  <composition name="RC charging">
+    <text name="title" transform2d.x="40" transform2d.y="40" text.content="Charging a capacitor through a resistor" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="80" text.content="Drag R and C: the time constant τ = RC stretches both curves, but V_C always reaches 63 % at t = τ." font.size="14" fill.color="@muted"/>
+    <embed name="circuit view" transform2d.x="40" transform2d.y="120" size.w="420" size.h="320" embed.source="$rc" frame.x0="60" frame.y0="80" frame.x1="380" frame.y1="330"/>
+    <text name="R label" transform2d.x="40" transform2d.y="480" text.content="Resistance R" font.size="14" fill.color="@ink-2"/>
+    <slider id="$r_slider" name="R slider" transform2d.x="40" transform2d.y="500" size.w="300" size.h="24" slider.min="1" slider.max="10" slider.step="0.1" slider.value="1"/>
+    <text name="R readout" transform2d.x="360" transform2d.y="502" text.content="{= fmt($r_slider.slider.value, 1) + ' kΩ'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="C label" transform2d.x="40" transform2d.y="560" text.content="Capacitance C" font.size="14" fill.color="@ink-2"/>
+    <slider id="$c_slider" name="C slider" transform2d.x="40" transform2d.y="580" size.w="300" size.h="24" slider.min="10" slider.max="1000" slider.step="10" slider.value="100"/>
+    <text name="C readout" transform2d.x="360" transform2d.y="582" text.content="{= fmt($c_slider.slider.value, 0) + ' µF'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="tau readout" transform2d.x="40" transform2d.y="640" text.content="{= 'τ = RC = ' + fmt($r_slider.slider.value * $c_slider.slider.value, 0) + ' ms'}" font.size="16" font.weight="600" font.tabular="true" fill.color="@ink"/>
+    <place def="std:plot" name="charging plot" x="500" y="120" w="480" h="320" cursor="{= $r_slider.slider.value * $c_slider.slider.value * 0.001}" style="smooth" style2="smooth" title="Capacitor voltage and current" x_label="t (s)" xs="{= range(0, 5 * $r_slider.slider.value * $c_slider.slider.value * 0.001, 201)}" y_label="V_C (V)  ·  I (scaled)" y_max="5" y_min="0" ys="{= 5 * (1 - exp(-$self.xs / ($r_slider.slider.value * $c_slider.slider.value * 0.001)))}" ys2="{= 5 * exp(-$self.xs / ($r_slider.slider.value * $c_slider.slider.value * 0.001))}"/>
+    <text name="tau marker label" transform2d.x="636" transform2d.y="150" text.content="t = τ · 63 %" font.size="13" font.weight="600" fill.color="@ink-2"/>
+    <rect name="legend swatch V" transform2d.x="500" transform2d.y="466" size.w="16" size.h="3" fill.color="@series-1"/>
+    <text name="legend V" transform2d.x="522" transform2d.y="458" text.content="V_C(t) = V(1 − e^(−t/RC))" font.size="13" fill.color="@ink-2"/>
+    <rect name="legend swatch I" transform2d.x="720" transform2d.y="466" size.w="16" size.h="3" fill.color="@series-2"/>
+    <text name="legend I" transform2d.x="742" transform2d.y="458" text.content="I(t) = (V/R)·e^(−t/RC), scaled" font.size="13" fill.color="@ink-2"/>
+    <group name="captioned table" transform2d.x="500" transform2d.y="490" layout.gap="10">
+      <text text.content="V_C AS A SHARE OF V AFTER N TIME CONSTANTS" font.size="12" font.weight="500" font.letter_spacing="12" fill.color="@muted"/>
+      <table name="table" table.columns="auto auto" table.pad_x="14" table.pad_y="9" rules.header_color="@grid">
+        <row>
+          <text text.content="t" font.family="JetBrains Mono" font.size="14" font.valign="middle" font.tabular="true" fill.color="@muted"/>
+          <text text.content="V_C (% of V)" font.size="15" font.weight="700" font.align="right" font.valign="middle" font.tabular="true" fill.color="@series-2"/>
+        </row>
+        <row>
+          <text text.content="τ" font.family="JetBrains Mono" font.size="14" font.valign="middle" font.tabular="true" fill.color="@muted"/>
+          <text text.content="63.2" font.size="15" font.weight="700" font.align="right" font.valign="middle" font.tabular="true" fill.color="@ink"/>
+        </row>
+        <row>
+          <text text.content="2τ" font.family="JetBrains Mono" font.size="14" font.valign="middle" font.tabular="true" fill.color="@muted"/>
+          <text text.content="86.5" font.size="15" font.weight="700" font.align="right" font.valign="middle" font.tabular="true" fill.color="@ink"/>
+        </row>
+        <row>
+          <text text.content="3τ" font.family="JetBrains Mono" font.size="14" font.valign="middle" font.tabular="true" fill.color="@muted"/>
+          <text text.content="95.0" font.size="15" font.weight="700" font.align="right" font.valign="middle" font.tabular="true" fill.color="@ink"/>
+        </row>
+        <row>
+          <text text.content="5τ" font.family="JetBrains Mono" font.size="14" font.valign="middle" font.tabular="true" fill.color="@muted"/>
+          <text text.content="99.3" font.size="15" font.weight="700" font.align="right" font.valign="middle" font.tabular="true" fill.color="@ink"/>
+        </row>
+      </table>
+    </group>
+  </composition>
+  <circuit sheet="$rc">
+    <place part="vsource" name="V" x="120" y="220" V="5 V"/>
+    <place part="resistor" name="R" x="220" y="160" R="{= $r_slider.slider.value * 1 kΩ}"/>
+    <place part="capacitor" name="C" x="300" y="220" rot="90" C="{= $c_slider.slider.value * 1 µF}"/>
+    <place part="ground" name="GND" x="120" y="300"/>
+    <place part="probe" name="P" x="250" y="120"/>
+    <wire from="V.p" to="R.a" elbow="vertical"/>
+    <wire from="R.b" to="C.a"/>
+    <wire from="C.b" to="V.n"/>
+    <wire from="V.n" to="GND.g"/>
+    <wire from="R.b" to="P.t"/>
+  </circuit>
+</edit>

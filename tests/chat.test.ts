@@ -61,7 +61,7 @@ test('a streaming reply shows prose, holds back half-written markup and lists cl
   const { streamView } = await import('../src-ui/chat/conversation');
   assert.deepEqual(streamView('Making a pump.\n<ed'), { prose: 'Making a pump.\n', edit: null, verbs: [] });
   assert.equal(streamView('See this:\n\n::vie').prose, 'See this:\n\n');
-  const forming = streamView('Making it.\n<edit><create id="$a" type="rect" name="pump body" x="1"/><set id="#4" x="2" fill.color="#f00"/><import-svg to="#1"><svg><g><path d="M0 0"/></g></svg></import-svg><create id="$b" type="te');
+  const forming = streamView('Making it.\n<edit><rect id="$a" name="pump body" x="1"/><set id="#4" x="2" fill.color="#f00"/><import-svg in="#1"><svg><g><path d="M0 0"/></g></svg></import-svg><text id="$b" na');
   assert.equal(forming.prose, 'Making it.\n');
   assert.deepEqual(forming.verbs, ['Create rect "pump body"', 'Set #4 · x, fill.color', 'Import SVG']);
   assert.match(forming.edit!, /^<edit>/);
@@ -76,7 +76,7 @@ test('progress folds phases, reasoning and text into labelled steps', async () =
   const progress = { steps: [], text: '' } as any;
   applyAgentEvents(progress, [{ kind: 'phase', phase: 'reading', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'reasoning', delta: 'Plan: ' }, { kind: 'reasoning', delta: 'a pump.' }], 10);
   assert.equal(stepLabel(progress.steps[1], false), 'Thinking');
-  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><create type="rect"/>' }], 20);
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><rect/>' }], 20);
   assert.equal(stepLabel(progress.steps[1], false), 'Writing the edit');
   assert.equal(progress.steps[1].reasoning, 'Plan: a pump.');
   applyAgentEvents(progress, [{ kind: 'phase', phase: 'applying', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 2 }], 30);

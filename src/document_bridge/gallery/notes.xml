@@ -1,0 +1,65 @@
+<!-- Titles, captions and labels for the demo scene's compositions, added by
+     the showcase (demo.rs `notes`): each notes element holds node markup
+     appended to the composition it names, so the scene's ids never move. -->
+<notes for="main">
+  <text name="title" transform2d.x="40" transform2d.y="30" text.content="Iron" font.size="26" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="40" transform2d.y="70" text.content="One document, many views.&#10;Drag anything: each change&#10;is one undo. The tabs above&#10;hold the gallery." font.size="13" fill.color="@ink-2"/>
+  <text name="assembly note" transform2d.x="815" transform2d.y="368" text.content="The assembly, in 3D: the torus&#10;spins on the timeline, and the&#10;card is a 2D composition&#10;shown on a plane." font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="scene">
+  <text name="square note" transform2d.x="500" transform2d.y="506" text.content="square, and a shadow bound to it" font.size="12" fill.color="@muted"/>
+  <text name="box note" transform2d.x="520" transform2d.y="666" text.content="box: the torus, drawn in 2D" font.size="12" fill.color="@muted"/>
+  <text name="bar note" transform2d.x="780" transform2d.y="646" text.content="bar: an instance;&#10;its height is level" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="pendulum">
+  <text name="pendulum note" transform2d.x="410" transform2d.y="40" text.content="Pendulum: drag the ball; distance&#10;constraints solve the arms, and the&#10;green bar follows its height." font.size="12" fill.color="@muted"/>
+  <text name="length note" transform2d.x="100" transform2d.y="640" text.content="arm length" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="controls">
+  <text name="level note" transform2d.x="100" transform2d.y="580" text.content="level: the bar's argument" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="optics">
+  <text name="title" transform2d.x="60" transform2d.y="30" text.content="Laser, fiber and power meter" font.size="22" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="60" transform2d.y="66" text.content="Three definitions with ports, connected: the meter reads the laser's power after the fiber's loss.&#10;Drag the sliders. The Schematic tab draws the same three parts another way." font.size="13" fill.color="@ink-2"/>
+  <text name="power label" transform2d.x="60" transform2d.y="320" text.content="laser power" font.size="12" fill.color="@muted"/>
+  <text name="length label" transform2d.x="60" transform2d.y="370" text.content="fiber length" font.size="12" fill.color="@muted"/>
+  <text name="reading label" transform2d.x="540" transform2d.y="282" text.content="power at the meter" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="schematic">
+  <text name="title" transform2d.x="60" transform2d.y="30" text.content="The same parts, as a schematic" font.size="22" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="60" transform2d.y="64" text.content="One entity, two pictures: these blocks and the Optics cartoon read the same ports." font.size="13" fill.color="@ink-2"/>
+  <text name="laser label" transform2d.x="72" transform2d.y="116" text.content="laser" font.size="14" fill.color="@ink"/>
+  <text name="fiber label" transform2d.x="252" transform2d.y="116" text.content="fiber" font.size="14" fill.color="@ink"/>
+  <text name="meter label" transform2d.x="462" transform2d.y="116" text.content="meter" font.size="14" fill.color="@ink"/>
+  <text name="reading label" transform2d.x="450" transform2d.y="190" text.content="reading" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="thermal">
+  <text name="title" transform2d.x="60" transform2d.y="24" text.content="Heat through a thermal link" font.size="22" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="60" transform2d.y="58" text.content="An across/through network, solved live: temperature is what the parts share, heat flow what passes." font.size="13" fill.color="@ink-2"/>
+  <text name="heater label" transform2d.x="70" transform2d.y="118" text.content="heater" font.size="13" fill.color="@surface"/>
+  <text name="sink label" transform2d.x="340" transform2d.y="103" text.content="ambient sink" font.size="13" fill.color="@ink"/>
+  <text name="temperature label" transform2d.x="370" transform2d.y="238" text.content="heater temperature" font.size="12" fill.color="@muted"/>
+  <text name="flow label" transform2d.x="370" transform2d.y="263" text.content="heat flow" font.size="12" fill.color="@muted"/>
+  <text name="power label" transform2d.x="60" transform2d.y="300" text.content="heater power" font.size="12" fill.color="@muted"/>
+  <text name="resistance label" transform2d.x="60" transform2d.y="350" text.content="link resistance" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="piston">
+  <text name="title" transform2d.x="670" transform2d.y="24" text.content="A gas in a cylinder" font.size="22" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="670" transform2d.y="60" text.content="Bevy simulates the particles in 3D;&#10;the document reads their pressure&#10;as a runtime signal. Drag the stroke&#10;to compress the gas." font.size="13" fill.color="@ink-2"/>
+  <text name="stroke label" transform2d.x="332" transform2d.y="384" text.content="stroke" font.size="12" fill.color="@muted"/>
+  <text name="pressure label" transform2d.x="332" transform2d.y="422" text.content="pressure" font.size="12" fill.color="@muted"/>
+  <text name="pv label" transform2d.x="332" transform2d.y="452" text.content="P·V, constant for an ideal gas" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="components">
+  <text name="title" transform2d.x="60" transform2d.y="30" text.content="Linked instances" font.size="22" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="60" transform2d.y="66" text.content="The optics definitions placed again: edit a definition in the Library and every instance follows." font.size="13" fill.color="@ink-2"/>
+  <text name="power label" transform2d.x="60" transform2d.y="320" text.content="source power" font.size="12" fill.color="@muted"/>
+  <text name="spare label" transform2d.x="60" transform2d.y="420" text.content="spare laser" font.size="12" fill.color="@muted"/>
+  <text name="short label" transform2d.x="540" transform2d.y="452" text.content="short fiber" font.size="12" fill.color="@muted"/>
+  <text name="long label" transform2d.x="540" transform2d.y="572" text.content="long fiber" font.size="12" fill.color="@muted"/>
+</notes>
+<notes for="data">
+  <text name="north label" transform2d.x="272" transform2d.y="72" text.content="north" font.size="13" fill.color="@ink-2"/>
+  <text name="east label" transform2d.x="272" transform2d.y="112" text.content="east" font.size="13" fill.color="@ink-2"/>
+  <text name="south label" transform2d.x="272" transform2d.y="152" text.content="south" font.size="13" fill.color="@ink-2"/>
+</notes>

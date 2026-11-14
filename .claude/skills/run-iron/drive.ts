@@ -150,6 +150,9 @@ async function run(line: string) {
       // "fast": SwiftShader manages ~8 fps here, which is fine for input.)
       const t0 = Date.now();
       await page.waitForSelector(".loading", { state: "detached", timeout: 180_000 });
+      // The overlay leaves before the document is fully in: the showcase
+      // (a few seconds in a dev build) follows the demo.
+      await page.waitForFunction(() => (globalThis as any).__documentOpened !== undefined, undefined, { timeout: 60_000 }).catch(() => {});
       let last = -1;
       let frames = 0;
       for (let i = 0; i < 120; i++) {

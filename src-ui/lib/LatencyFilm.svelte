@@ -49,9 +49,9 @@
       composition = find(saved, source, 'composition') ?? '';
       shape = composition ? find(saved, targetName, 'rect', composition) ?? '' : '';
       const r = initialRect();
-      const createComposition = composition ? '' : `<create id="$film" type="composition" name="${source}" dims="2d" notation="free"/>`;
+      const createComposition = composition ? '' : `<composition id="$film" name="${source}" dims="2d" notation="free"/>`;
       const target = composition || '$film';
-      const createShape = shape ? '' : `<create id="$target" type="rect" parent="${target}" name="${targetName}" x="${r.x}" y="${r.y}" w="${r.w}" h="${r.h}" color="#ffd600"/>`;
+      const createShape = shape ? '' : `<rect in="${target}" id="$target" name="${targetName}" x="${r.x}" y="${r.y}" w="${r.w}" h="${r.h}" color="#ffd600"/>`;
       const resetShape = shape && reset ? `<set id="${shape}" transform2d.x="${r.x}" transform2d.y="${r.y}" size.w="${r.w}" size.h="${r.h}" transform2d.rot="0"/>` : '';
       if (createComposition || createShape || resetShape) {
         const result = await doc.edit(`<edit>${createComposition}${createShape}${resetShape}</edit>`, 'latency filming fixture');

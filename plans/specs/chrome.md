@@ -49,8 +49,9 @@ outlines and hover chips; `chrome.lit="none"` leaves a node out of
 while it or its container (its first 64 children are looked at) is selected or
 hovered; which chains are dotted is cached by document version, chains and
 interaction states (resolving it every frame cost 0.7 ms at 10k; the A/B is in
-`contexts.md` step 7). The showcase: Pitch orange with round grips, Outline touch-like (no hover
-light, 14 px grips, `tolerance.hit` 2), the Dials needle's pivot dot. Shown by
+`contexts.md` step 7). The showcase: Outline touch-like (no hover light, 14 px grips,
+`tolerance.hit` 2); Pitch (orange, round grips) and Dials (the pivot dot) left the demo
+on 2026-11-13 (demo.md §1). Shown by
 `chrome.txt` (the driver's `tint` counts a box's pixels near a colour: orange grip,
 no blue, the pivot dot, the hover outline lit then not).
 **Not done:** the other chrome (path points, ports, guides, empties' markers, chips,

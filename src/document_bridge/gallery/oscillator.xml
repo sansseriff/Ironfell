@@ -1,0 +1,36 @@
+<edit>
+  <composition name="oscillator">
+    <text name="title" transform2d.x="40" transform2d.y="30" text.content="Damped harmonic oscillator" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="70" text.content="Drag t to move through time; raise ζ to watch the swing die away faster and the phase spiral tighten." font.size="14" fill.color="@muted"/>
+    <group name="controls">
+      <text name="zeta label" transform2d.x="640" transform2d.y="110" text.content="damping ratio ζ" font.size="13" fill.color="@muted"/>
+      <slider id="$zeta" name="zeta" transform2d.x="640" transform2d.y="130" size.w="240" size.h="24" slider.value="0.12"/>
+      <text name="zeta readout" transform2d.x="900" transform2d.y="133" text.content="{= fmt($zeta.slider.value, 2)}" font.size="14" fill.color="@ink"/>
+      <text name="omega label" transform2d.x="640" transform2d.y="170" text.content="natural frequency ω" font.size="13" fill.color="@muted"/>
+      <slider id="$omega" name="omega" transform2d.x="640" transform2d.y="190" size.w="240" size.h="24" slider.min="0.5" slider.max="4" slider.step="0.05" slider.value="2"/>
+      <text name="omega readout" transform2d.x="900" transform2d.y="193" text.content="{= fmt($omega.slider.value, 2) + ' rad/s'}" font.size="14" fill.color="@ink"/>
+      <text name="time label" transform2d.x="640" transform2d.y="230" text.content="time t" font.size="13" fill.color="@muted"/>
+      <slider id="$time" name="time" transform2d.x="640" transform2d.y="250" size.w="240" size.h="24" slider.max="10" slider.value="1.6"/>
+      <text name="time readout" transform2d.x="900" transform2d.y="253" text.content="{= fmt($time.slider.value, 2) + ' s'}" font.size="14" fill.color="@ink"/>
+      <text name="damped frequency readout" transform2d.x="640" transform2d.y="290" text.content="{= 'ω_d = ω√(1−ζ²) = ' + fmt($omega_d.let.value, 3) + ' rad/s'}" font.size="14" fill.color="@ink-2"/>
+      <text name="quality factor readout" transform2d.x="900" transform2d.y="290" text.content="{= 'Q = ' + ($zeta.slider.value &gt; 0.0001 ? fmt(1 / (2 * $zeta.slider.value), 2) : '∞')}" font.size="14" fill.color="@ink-2"/>
+    </group>
+    <group name="mass on spring">
+      <rect name="wall" transform2d.x="60" transform2d.y="120" size.w="20" size.h="120" fill.color="@axis"/>
+      <path name="wall hatching" path.d="M 60 124 L 48 136 M 60 136 L 48 148 M 60 148 L 48 160 M 60 160 L 48 172 M 60 172 L 48 184 M 60 184 L 48 196 M 60 196 L 48 208 M 60 208 L 48 220 M 60 220 L 48 232 M 60 232 L 48 244" fill.opacity="0" stroke.color="@muted"/>
+      <rect name="ground" transform2d.x="60" transform2d.y="240" size.w="540" size.h="2" fill.color="@axis"/>
+      <path name="equilibrium line" path.d="M 440 120 L 440 250" stroke.color="@muted" stroke.dash="4 4"/>
+      <text name="equilibrium label" transform2d.x="446" transform2d.y="112" text.content="x = 0" font.size="12" fill.color="@muted"/>
+      <rect id="$block" name="block" transform2d.x="{= 400 + 100 * $x_now.let.value}" transform2d.y="180" size.w="80" size.h="60" corners.tl="4" corners.tr="4" corners.br="4" corners.bl="4" fill.color="@series-1"/>
+      <path name="spring" path.d="{= 'M ' + points(80 + ($block.transform2d.x - 80) * range(0, 24, 25) / 24, 210 + 14 * where(range(0, 24, 25) &gt; 1.5, 1, 0) * where(22.5 &gt; range(0, 24, 25), 1, 0) * sin(pi / 2 * range(0, 24, 25)))}" stroke.color="@ink-2" stroke.width="2"/>
+      <text name="displacement readout" transform2d.x="60" transform2d.y="256" text.content="x(t) = A·e^(−ζωt)·cos(ω_d t),  A = 1 m" font.size="13" fill.color="@muted"/>
+      <text name="state readout" transform2d.x="60" transform2d.y="280" text.content="{= 'x = ' + fmt($x_now.let.value, 3) + ' m      v = ' + fmt($v_now.let.value, 3) + ' m/s'}" font.size="14" font.weight="500" fill.color="@ink"/>
+    </group>
+    <place def="std:plot" name="displacement plot" x="40" y="340" w="460" h="320" color2="@muted" color3="@muted" cursor="{= $time.slider.value}" title="Displacement against time" x_label="t (s)" xs="{= range(0, 10, 401)}" y_label="x (m)" y_max="1.2" y_min="-1.2" ys="{= exp(-$zeta.slider.value * $omega.slider.value * $self.xs) * cos($omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value) * $self.xs)}" ys2="{= exp(-$zeta.slider.value * $omega.slider.value * $self.xs)}" ys3="{= -exp(-$zeta.slider.value * $omega.slider.value * $self.xs)}"/>
+    <place id="$phase_portrait" def="std:plot" name="phase portrait" x="540" y="340" w="460" h="320" color="@series-2" title="Phase portrait" x_label="x (m)" x_max="1.2" x_min="-1.2" xs="{= exp(-$zeta.slider.value * $omega.slider.value * range(0, 10, 401)) * cos($omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value) * range(0, 10, 401))}" y_label="v (m/s)" y_max="{= 1.2 * $omega.slider.value}" y_min="{= -1.2 * $omega.slider.value}" ys="{= exp(-$zeta.slider.value * $omega.slider.value * range(0, 10, 401)) * (-$zeta.slider.value * $omega.slider.value * cos($omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value) * range(0, 10, 401)) - $omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value) * sin($omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value) * range(0, 10, 401)))}"/>
+    <let id="$omega_d" name="omega d" let.value="{= $omega.slider.value * sqrt(1 - $zeta.slider.value * $zeta.slider.value)}"/>
+    <let id="$x_now" name="x now" let.value="{= exp(-$zeta.slider.value * $omega.slider.value * $time.slider.value) * cos($omega_d.let.value * $time.slider.value)}"/>
+    <let id="$v_now" name="v now" let.value="{= exp(-$zeta.slider.value * $omega.slider.value * $time.slider.value) * (-$zeta.slider.value * $omega.slider.value * cos($omega_d.let.value * $time.slider.value) - $omega_d.let.value * sin($omega_d.let.value * $time.slider.value))}"/>
+    <ellipse name="phase marker" transform2d.x="{= $phase_portrait.transform2d.x + 54 + ($x_now.let.value - $phase_portrait.x_lo) / ($phase_portrait.x_hi - $phase_portrait.x_lo) * ($phase_portrait.size.w - 70)}" transform2d.y="{= $phase_portrait.transform2d.y + 30 + ($phase_portrait.y_hi - $v_now.let.value) / ($phase_portrait.y_hi - $phase_portrait.y_lo) * ($phase_portrait.size.h - 70)}" radius.rx="5" radius.ry="5" appearance.opacity="{= $x_now.let.value &gt;= $phase_portrait.x_lo &amp;&amp; $phase_portrait.x_hi &gt;= $x_now.let.value &amp;&amp; $v_now.let.value &gt;= $phase_portrait.y_lo &amp;&amp; $phase_portrait.y_hi &gt;= $v_now.let.value ? 1 : 0}" fill.color="@series-2" stroke.color="@surface" stroke.width="1.5"/>
+  </composition>
+</edit>

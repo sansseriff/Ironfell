@@ -57,8 +57,20 @@ pub fn advance_machines(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
 /// Traces and accumulators on the frame clock (iron_document `step.rs`):
 /// the store steps them, and the compositions holding the ones still
 /// changing (a pulse travelling a fiber) keep rendering until they rest.
-pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>) {
-    let active = store.bypass_change_detection().0.advance_steps(time.elapsed_secs_f64());
+/// An accumulator steps only while some view shows its composition (a
+/// simulation in a hidden tab holds still and costs nothing).
+pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, views: Res<super::PanelViews>, embeds: Res<super::EmbedViews>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>) {
+    let paused = {
+        let doc = store.0.document();
+        let holding: BTreeSet<NodeId> = doc.nodes_with(iron_document::FacetKind::Accumulate).filter(|&n| doc.is_live(n)).filter_map(|n| iron_document::composition::composition_of(doc, n)).collect();
+        if holding.is_empty() {
+            holding
+        } else {
+            let shown = super::liveness::reached(doc, &views, &embeds, &holding);
+            holding.difference(&shown).copied().collect()
+        }
+    };
+    let active = store.bypass_change_detection().0.advance_steps(time.elapsed_secs_f64(), &paused);
     if active.is_empty() && marked.is_empty() {
         return;
     }

@@ -520,8 +520,9 @@ behaviour-neutral refactor before anything shows.
    (`shape`, `frame`, `none`) and `chrome.handle` (`dot`: a part's own handle at its
    origin while it or its container is selected or hovered). The defaults draw exactly
    today's chrome (an accent replaces the built-in blues only when a context sets one).
-   The showcase shows them: Pitch orange with round grips, Outline touch-like (no hover
-   light, 14 px grips, `tolerance.hit` 2), the Dials needle's pivot dot. Shown by
+   The showcase shows them: Outline touch-like (no hover light, 14 px grips,
+   `tolerance.hit` 2); its Pitch (orange, round grips) and Dials (the needle's pivot
+   dot) compositions were removed from the demo on 2026-11-13 (demo.md §1). Shown by
    `chrome.txt`, which counts pixels by colour (`tint`). Chrome as picture nodes
    (C1–C5 proper) waits for a notation whose chrome differs in shape: step 8.
    Checkpoint, a same-day A/B (`bench-render.sh 1000 10000`, `wasm-bench`): the first

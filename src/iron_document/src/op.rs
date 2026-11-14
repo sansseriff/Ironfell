@@ -437,6 +437,12 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
         let style = f.style.constant().and_then(Value::as_str).unwrap_or("").to_owned();
         crate::contexts::parse_style(&style, &scope).map_err(|e| cx.err(ErrorKind::BadContext, format!("{n}.affords: {e}")))?;
     }
+    if let Op::Set { id, path, slot } = op
+        && let Some(expr) = slot.expr().filter(|e| reads_expanded(e))
+        && doc.is_live(*id)
+    {
+        return check_binding(doc, &cx, crate::expr::Leaf { node: *id, path: *path }, expr);
+    }
     let Op::Create { id, .. } = op else { return Ok(()) };
     if doc.live(*id).is_none() {
         return Ok(());
@@ -530,6 +536,11 @@ fn reparent(
     }])
 }
 
+/// Whether a binding reads a node an instance expands (`#entity/spec`).
+fn reads_expanded(expr: &crate::expr::Expr) -> bool {
+    expr.deps().iter().any(|d| d.node.is_expanded())
+}
+
 /// A binding may only read leaves that exist, and may not reach itself.
 fn check_binding(
     doc: &Document,
@@ -598,7 +609,12 @@ fn set(
     slot: &Slot,
 ) -> Result<Vec<Op>, ApplyError> {
     live(doc, cx, id)?;
-    if let Some(expr) = slot.expr() {
+    // A binding that reads an instance's expanded node is checked once the
+    // transaction's instances have expanded (`check_created`): the instance
+    // may be placed by an earlier op of the same transaction.
+    if let Some(expr) = slot.expr()
+        && !reads_expanded(expr)
+    {
         check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
     }
     if path.facet == FacetKind::Args

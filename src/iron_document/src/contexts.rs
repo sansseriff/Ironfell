@@ -1003,7 +1003,7 @@ pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
         let key = rest[..eq].trim().to_owned();
         let r = rest[eq + 1..].trim_start().strip_prefix('"').ok_or_else(|| format!("{key}: expected a quoted value"))?;
         let end = r.find('"').ok_or_else(|| format!("{key}: unclosed value"))?;
-        let value = r[..end].replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&");
+        let value = r[..end].replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#10;", "\n").replace("&amp;", "&");
         out.push((key, value));
         rest = r[end + 1..].trim_start();
     }

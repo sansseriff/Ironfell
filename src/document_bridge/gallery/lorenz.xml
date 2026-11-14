@@ -1,0 +1,32 @@
+<composition name="lorenz">
+  <text name="title" transform2d.x="40" transform2d.y="30" text.content="The Lorenz attractor" font.size="26" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="40" transform2d.y="70" text.content="Drag ρ across 24.74 to switch chaos on or off, and press Reset to restart the orbit from (1, 1, 1)." font.size="14" fill.color="@muted"/>
+  <let id="speed" name="speed" let.value="0.6"/>
+  <let id="reset_at" name="reset at" let.value="-1" let.keep="session"/>
+  <accumulate id="clock" name="clock" accumulate.next="{= $clock.accumulate.value + $clock.accumulate.dt}"/>
+  <accumulate id="x_state" name="x state" accumulate.initial="1" accumulate.next="{= $x_state.accumulate.value + $sigma.slider.value * ($y_state.accumulate.value - $x_state.accumulate.value) * min($x_state.accumulate.dt, 0.03) * $speed.let.value}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="y_state" name="y state" accumulate.initial="1" accumulate.next="{= $y_state.accumulate.value + ($x_state.accumulate.value * ($rho.slider.value - $z_state.accumulate.value) - $y_state.accumulate.value) * min($y_state.accumulate.dt, 0.03) * $speed.let.value}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="z_state" name="z state" accumulate.initial="1" accumulate.next="{= $z_state.accumulate.value + ($x_state.accumulate.value * $y_state.accumulate.value - $beta.slider.value * $z_state.accumulate.value) * min($z_state.accumulate.dt, 0.03) * $speed.let.value}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="model_time" name="model time" accumulate.next="{= $model_time.accumulate.value + min($model_time.accumulate.dt, 0.03) * $speed.let.value}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="x_history" name="x history" accumulate.initial="{= range(1, 1, 400)}" accumulate.next="{= map(range(0, 399, 400), i =&gt; i &gt;= 399 ? $x_state.accumulate.value : at($x_history.accumulate.value, i + 1))}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="z_history" name="z history" accumulate.initial="{= range(1, 1, 400)}" accumulate.next="{= map(range(0, 399, 400), i =&gt; i &gt;= 399 ? $z_state.accumulate.value : at($z_history.accumulate.value, i + 1))}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <accumulate id="time_history" name="time history" accumulate.initial="{= range(0, 0, 400)}" accumulate.next="{= map(range(0, 399, 400), i =&gt; i &gt;= 399 ? $model_time.accumulate.value : at($time_history.accumulate.value, i + 1))}" accumulate.reset="{= 0.15 &gt; $clock.accumulate.value - $reset_at.let.value}"/>
+  <text name="rho label" transform2d.x="640" transform2d.y="360" text.content="ρ (Rayleigh number)" font.size="14" fill.color="@ink-2"/>
+  <slider id="rho" name="rho" transform2d.x="640" transform2d.y="382" size.w="240" size.h="24" slider.max="50" slider.step="0.1" slider.value="28"/>
+  <text name="rho readout" transform2d.x="900" transform2d.y="384" text.content="{= 'ρ = ' + fmt($rho.slider.value, 1)}" font.size="14" fill.color="@ink"/>
+  <text name="sigma label" transform2d.x="640" transform2d.y="420" text.content="σ (Prandtl number)" font.size="14" fill.color="@ink-2"/>
+  <slider id="sigma" name="sigma" transform2d.x="640" transform2d.y="442" size.w="240" size.h="24" slider.max="20" slider.step="0.1" slider.value="10"/>
+  <text name="sigma readout" transform2d.x="900" transform2d.y="444" text.content="{= 'σ = ' + fmt($sigma.slider.value, 1)}" font.size="14" fill.color="@ink"/>
+  <text name="beta label" transform2d.x="640" transform2d.y="480" text.content="β (geometry)" font.size="14" fill.color="@ink-2"/>
+  <slider id="beta" name="beta" transform2d.x="640" transform2d.y="502" size.w="240" size.h="24" slider.max="6" slider.value="2.67"/>
+  <text name="beta readout" transform2d.x="900" transform2d.y="504" text.content="{= 'β = ' + fmt($beta.slider.value, 2)}" font.size="14" fill.color="@ink"/>
+  <group name="reset button" transform2d.x="640" transform2d.y="560">
+    <rect name="reset face" size.w="120" size.h="36" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= mix(@surface, @accent, 0.15)}" stroke.color="@accent" stroke.width="1.5"/>
+    <text name="reset text" transform2d.x="36" transform2d.y="9" text.content="↺ Reset" font.size="14" font.weight="600" fill.color="@ink"/>
+    <on name="reset orbit" write.target="$reset_at" write.to="{= $clock.accumulate.value}"/>
+  </group>
+  <text name="state readout" transform2d.x="40" transform2d.y="580" text.content="{= '(x, y, z) = (' + fmt($x_state.accumulate.value, 2) + ', ' + fmt($y_state.accumulate.value, 2) + ', ' + fmt($z_state.accumulate.value, 2) + ')'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+  <text name="regime note" transform2d.x="40" transform2d.y="610" text.content="{= $rho.slider.value &gt; 24.74 ? 'ρ above 24.74: chaotic, the orbit never settles and never repeats.' : 'ρ below 24.74: the orbit spirals into a fixed point.'}" font.size="14" fill.color="@muted"/>
+  <place def="std:plot" name="butterfly" x="40" y="110" w="560" h="440" color="@series-1" color2="@series-4" style2="scatter" title="x–z projection" x_label="x (dimensionless)" x_max="{= max(25, 0.9 * $rho.slider.value)}" x_min="{= -max(25, 0.9 * $rho.slider.value)}" xs="{= $x_history.accumulate.value}" y_label="z (dimensionless)" y_max="{= max(55, 1.8 * $rho.slider.value)}" y_min="0" ys="{= $z_history.accumulate.value}" ys2="{= map(range(0, 399, 400), i =&gt; i &gt;= 399 ? at($z_history.accumulate.value, i) : sqrt(-1))}"/>
+  <place def="std:plot" name="x vs time" x="640" y="110" w="360" h="220" color="@series-2" title="x against time" x_label="t (model time)" xs="{= $time_history.accumulate.value}" y_label="x (dimensionless)" y_max="{= max(25, 0.9 * $rho.slider.value)}" y_min="{= -max(25, 0.9 * $rho.slider.value)}" ys="{= $x_history.accumulate.value}"/>
+</composition>

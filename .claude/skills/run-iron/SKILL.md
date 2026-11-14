@@ -448,8 +448,21 @@ Each run writes `.agents/probe/<timestamp>/` (gitignored):
   and console errors.
 - `turn-N-before.xml`, `turn-N-after.xml`: the whole document (`__iron.view`, full fidelity),
   read once it has stopped changing.
-- `turn-N.png`: the page after the turn.
+- `turn-N-after.json`: the saved document after the turn (`__iron.save()`), what
+  `demo_markup` reads (below).
+- `turn-N.png`: the page after the turn; with `SHOW=name,name`, also
+  `turn-N-<name>.png`, each named composition's own picture (`picture`, content only).
 - `agent-log.jsonl`: this run's agent log (system prompt, every call, every turn outcome).
+
+From a run to demo markup (plans/specs/demo.md): `cargo run -p iron_document --target
+aarch64-apple-darwin --example demo_markup -- turn-3-after.json <composition>` prints
+that composition as node markup with `<place>`, the form the demo's gallery is seeded
+from (`src/document_bridge/gallery/*.xml`), and warns on stderr about what it cannot
+write (relations such as a clip's `animates`, non-standard components, ids outside the
+composition). A run that kept no JSON can be rebuilt: `replay-edits.ts edits.json out.json`
+applies a JSON list of `<edit>` blocks on a fresh demo page and saves the document.
+`demo-shots.ts` screenshots every composition tab of the demo, light and dark at 1× and
+2×, into `.agents/demo-shots/` (`SCHEMES`, `DPRS`, titles as arguments to narrow it).
 
 Read `report.md` and the screenshots first; the log holds the full system prompt and
 messages. The page's boot-time pairing attempt on 4318 is filtered from console errors.
@@ -882,10 +895,10 @@ false
 true
 "<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#41\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#41\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
 [true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":61933}
-"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" count=\"26\"> |     <rect id=\"#2\" x=\"111\" y=\"231\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#986ecaff\" opacity=\"1\"/> |     <rect id=\"#3\" x=\"406\" y=\"241\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"30\" h=\"30\" color=\"#9d399aff\" opacity=\"1\"/>"
+{"roundtrip_equal":true,"bytes":58876}
+"<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" background=\"theme\" background_color=\"#ffffffff\" grid=\"off\" grid_spacing=\"20\" grid_snap=\"true\" grid_opacity=\"0.15\" count=\"6\"> |     <rect id=\"#M\" name=\"square\" x=\"650\" y=\"320\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"80\" color=\"#333333ff\" opacity=\"1\"> |       <driven-by ref=\"#T\" rel=\"animates\" prop=\"transform2d.x\"/>"
 Access to fetch at 'http://127.0.0.1:4318/pair' from origin 'http://localhost:5173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
-DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (302 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (282 ops, System) -> v1
 DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v2
 DEBUG src/document_bridge/mod.rs:492 applied "move mesh" (1 ops, Human) -> v3
 DEBUG src/document_bridge/mod.rs:492 applied "undo: move mesh" (1 ops, System) -> v4
@@ -917,7 +930,7 @@ DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (4 ops, System) -> v22
 DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Model) -> v23
 DEBUG src/document_bridge/mod.rs:492 applied "link" (5 ops, Model) -> v24
 DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (5 ops, System) -> v25
-DEBUG src/document_bridge/mod.rs:433 loaded document v25 (294 live nodes)
+DEBUG src/document_bridge/mod.rs:433 loaded document v25 (274 live nodes)
 (no page errors)
 ```
 
@@ -1104,7 +1117,7 @@ tab Library
 tab Controls
 "controls"
 ["Render inspector watching controls","Chunks","1 1 in view","Nodes","8"]
-DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (302 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (282 ops, System) -> v1
 DEBUG src/document_bridge/mod.rs:492 applied "resize rect" (2 ops, Human) -> v2
 DEBUG src/document_bridge/mod.rs:492 applied "rotate rect" (3 ops, Human) -> v3
 DEBUG src/document_bridge/mod.rs:492 applied "undo: rotate rect" (3 ops, System) -> v4
@@ -1893,7 +1906,7 @@ clicked button[aria-label="Bind content"]
 1
 [["content=\"0.00 mW\"","family=\"Inter\""],["content=\"level = 0.200\"","family=\"Playfair Display\""]]
 1
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "add text" (1 ops, Human) -> v2
 applied "add text" (1 ops, Human) -> v3
 applied "style text" (1 ops, Human) -> v4
@@ -1931,12 +1944,11 @@ on or off for the next move and returns the current move's guides (`x=…` or
 cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < snapping.txt; cd -
 ```
 
-The square dragged by (23, 3) keeps its right edge on rect #E's left (603) and
-snaps its centre to rect #6's (465); with Cmd held it lands unsnapped; an Alt-drag
-copy snaps its left edge to the original's right (580) and its bottom to an edge
-at 501; with snapping off the first drag lands unsnapped. Then, snapping
-on again: the square's bottom edge resized to 586 snaps to the small green
-rect's bottom (587; `h` carries the resize's own float noise, unsnapped too);
+The square dragged by (23, 3) snaps its left edge to the box's left (520); with
+Cmd held it lands unsnapped; an Alt-drag copy snaps its left edge to the
+original's right (580) and its top, middle and bottom level with the original's;
+with snapping off the first drag lands unsnapped. Then, snapping on again: the
+square's bottom edge resized to 586 snaps to the box's top (590);
 the pen's second point, clicked 3 px low, lands level with the first; and in
 point editing the third point dragged to x 873 snaps plumb under the first.
 Inspect `screenshots/snapping-guides.png` (two red guides),
@@ -1944,29 +1956,29 @@ Inspect `screenshots/snapping-guides.png` (two red guides),
 screenshot, `nav` and `ready` lines:
 
 ```
-{"enabled":true,"guides":["x=603 (4)","y=465 (2)"]}
-"<rect id=\"#M\" name=\"square\" x=\"523\" y=\"425\""
+{"enabled":true,"guides":["x=520 (4)"]}
+"<rect id=\"#M\" name=\"square\" x=\"520\" y=\"423\""
 {"enabled":true,"guides":[]}
 {"enabled":true,"guides":[]}
 "<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
-{"enabled":true,"guides":["x=580 (4)","y=501 (4)"]}
-["<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\"","<rect id=\"#3t\" name=\"square\" x=\"580\" y=\"421\""]
+{"enabled":true,"guides":["x=580 (4)","y=420 (4)","y=460 (2)","y=500 (4)"]}
+["<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\"","<rect id=\"#3x\" name=\"square\" x=\"580\" y=\"420\""]
 {"enabled":false,"guides":[]}
 "<rect id=\"#M\" name=\"square\" x=\"523\" y=\"423\""
 {"enabled":true,"guides":[]}
-{"enabled":true,"guides":["y=587 (4)"]}
-"<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"167.00000000000003\""
-["<path id=\"#3v\" name=\"path\" x=\"870\" y=\"420\"","<point id=\"#3x\" x=\"0\" y=\"0\"","<point id=\"#3y\" x=\"120\" y=\"0\"","<point id=\"#3z\" x=\"66\" y=\"77\""]
+{"enabled":true,"guides":["y=590 (4)"]}
+"<rect id=\"#M\" name=\"square\" x=\"500\" y=\"420\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"170\""
+["<path id=\"#3z\" name=\"path\" x=\"870\" y=\"420\"","<point id=\"#41\" x=\"0\" y=\"0\"","<point id=\"#42\" x=\"120\" y=\"0\"","<point id=\"#43\" x=\"66\" y=\"77\""]
 {"enabled":true,"guides":["x=870 (2)"]}
-["<point id=\"#3x\" x=\"0\" y=\"0\"","<point id=\"#3y\" x=\"120\" y=\"0\"","<point id=\"#3z\" x=\"0\" y=\"100\""]
-applied "open demo scene" (298 ops, System) -> v1
+["<point id=\"#41\" x=\"0\" y=\"0\"","<point id=\"#42\" x=\"120\" y=\"0\"","<point id=\"#43\" x=\"0\" y=\"100\""]
+applied "open demo scene" (282 ops, System) -> v1
 applied "move rect" (2 ops, Human) -> v2
 applied "undo: move rect" (2 ops, System) -> v3
 applied "move rect" (2 ops, Human) -> v4
 applied "undo: move rect" (2 ops, System) -> v5
 applied "duplicate rect" (3 ops, Human) -> v6
-applied "duplicate rect" (2 ops, Human) -> v7
-applied "undo: duplicate rect" (5 ops, System) -> v8
+applied "duplicate rect" (1 ops, Human) -> v7
+applied "undo: duplicate rect" (4 ops, System) -> v8
 applied "move rect" (2 ops, Human) -> v9
 applied "undo: move rect" (2 ops, System) -> v10
 applied "resize rect" (1 ops, Human) -> v11
@@ -2010,7 +2022,7 @@ true
 ["name=\"stack\" x=\"510\" y=\"280\" mode=\"stack_x\" gap=\"20\"","name=\"a\" x=\"0\" x.by=\"#40\" y=\"0\"","name=\"b\" x=\"60\" x.by=\"#40\" y=\"0\"","name=\"c\" x=\"120\" x.by=\"#40\" y=\"0\""]
 true
 ["name=\"b\" x=\"570\" y=\"280\""]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (4 ops, Model) -> v2
 applied "model edit" (1 ops, Model) -> v3
 applied "undo: model edit" (1 ops, System) -> v4
@@ -2072,7 +2084,7 @@ undefined
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Table")
 4
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (1 ops, Model) -> v2
 applied "add table" (18 ops, Model) -> v3
 applied "replace table" (1 ops, Model) -> v4
@@ -2183,7 +2195,7 @@ true
 ["position","fill"]
 ["#15"]
 ["position","embed"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "make component component" (6 ops, Human) -> v2
 applied "undo: make component component" (6 ops, System) -> v3
 applied "model edit" (1 ops, Model) -> v4
@@ -2231,7 +2243,7 @@ undefined
 "a b"
 [1,"copy paste-here copy-svg ask draw-on front back(off: Already at the back) wrap layout make-component"]
 "b a"
-applied "open demo scene" (302 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (1 ops, Model) -> v2
 applied "model edit" (2 ops, Model) -> v3
 applied "bring to front" (1 ops, Human) -> v4
@@ -2289,7 +2301,7 @@ undefined
 ["body"]
 [["body"],["title","footer","body"]]
 ["title","body","footer"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (1 ops, Model) -> v2
 applied "add table" (16 ops, Model) -> v3
 applied "add row" (5 ops, Human) -> v4
@@ -2338,7 +2350,7 @@ true
 ["body 12","title 37","footer 69"]
 true
 ["title 12","body 44","footer 69"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (4 ops, Model) -> v2
 applied "reorder text" (1 ops, Human) -> v3
 applied "undo: reorder text" (1 ops, System) -> v4
@@ -2387,7 +2399,7 @@ undefined
 ["0.75","true","28","center"]
 ["affords.drives=\"font.italic\" affords.drives.by=\"inline on #…\"","affords.activate=\"toggle\" affords.activate.by=\"inline on #…\""]
 ["0.50","false","24","left"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "model edit" (1 ops, Model) -> v2
 applied "model edit" (1 ops, Model) -> v3
 applied "model edit" (5 ops, Model) -> v4
@@ -2410,6 +2422,9 @@ a rule on the standard meter's pivot reaches both placed meters, and turning one
 moves its `in`).
 
 ## The contexts showcase (2026-10-27)
+
+History: since 2026-11-13 the showcase is the demo's gallery, Outline, Data, Circuit and
+RC charging (`plans/specs/demo.md`); Pitch and Dials are gone.
 
 The app's own URL adds three tabs after the demo scene, one transaction "open
 showcase" (`document_bridge::demo::showcase`): **Outline** (a notation whose texts
@@ -2449,7 +2464,7 @@ undefined
 ["0.60","north  | {= fmt(#4e.slider.value * 100, 0)}"]
 "90"
 ["0.90","north  | {= fmt(#4e.slider.value * 100, 0)}"]
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "open showcase" (176 ops, System) -> v2
 applied "set size.h" (1 ops, Human) -> v3
 applied "edit text" (1 ops, Human) -> v4
@@ -2494,7 +2509,7 @@ true
 60
 true
 0
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "context" (1 ops, Model) -> v2
 applied "model edit" (1 ops, Model) -> v3
 applied "model edit" (4 ops, Model) -> v4
@@ -2540,7 +2555,7 @@ undefined
 [5,true]
 "<applied version=\"14\">\n  <circuit>placed V9 R8 R9 GND9 P9; 5 wires</circuit>\n</applied>\n<netlist sheet=\"circuit\">\n* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V\n</netlist>"
 "* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V"
-applied "open demo scene" (298 ops, System) -> v1
+applied "open demo scene" (282 ops, System) -> v1
 applied "open showcase" (176 ops, System) -> v2
 applied "set slider" (1 ops, Human) -> v3
 applied "place resistor" (9 ops, Human) -> v4
@@ -2707,10 +2722,10 @@ cd .claude/skills/run-iron && SIZE=1680x1000@1 bun run drive.ts < workspace.txt;
 Expected, minus `nav`, `ready`, `clicked` and bare `1` lines:
 
 ```
-applied "open demo scene" (302 ops, System) -> v1
-"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components timeline layers model library selection"
+applied "open demo scene" (282 ops, System) -> v1
+"demo page: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components layers model library selection timeline"
 (no new console output)
-"empty scope: viewer timeline layers model library selection"
+"empty scope: viewer layers model library selection timeline"
 "suggested name: composition"
 "made: Pendulum=#4:Pendulum; active Pendulum"
 "renamed: Swing (#4)"
@@ -2727,7 +2742,7 @@ applied "undo: delete composition" (2 ops, System) -> v6
 "missing view shown: true"
 "after Create: missing view shown false"
 applied "new composition" (1 ops, Human) -> v7
-"new demo scope: viewer scene assembly card pendulum controls optics schematic thermal cylinder piston components outline pitch dials data circuit timeline lesson layers model library selection"
+"new demo scope: viewer oscillator refraction interference wavepacket kepler lorenz blackbody enzyme RCcharging scene assembly card pendulum controls optics schematic thermal cylinder piston components outline data circuit rccircuit lesson layers model library selection timeline"
 "back in Untitled: ghost layers library model selection timeline viewer"
 (no page errors)
 ```
@@ -2791,7 +2806,7 @@ lines:
 "12 blocks, mode authoring; values [\"500\",\"0.40\"]; mentions [\"square\",\"shadow\",\"level\",\"torus\"]"
 "typed; store has it: true; versions advanced by 1"
 "Cmd+Z: store undone true, editor undone true"
-"menu offers [\"square\"]"
+"menu offers [\"square\",\"square note\"]"
 "heading now \"A tour of the demo with the square \"; mention of square"
 "hover lights [\"#U\"] (#U); after: []"
 "x is now shown as 612"
@@ -2881,7 +2896,7 @@ summary bar spans all its keys (display only).
 
 ```
 "{}"
-"clock at 0, auto-keyframe false, last key at 4; rows [\"o:torus\",\"p:rot\",\"o:square\",\"p:x\"]"
+"clock at 0, auto-keyframe false, last key at 8; rows [\"o:torus\",\"p:rot\",\"o:square\",\"p:x\",\"o:t\",\"p:value\",\"o:displacement plot\",\"p:vis\",\"o:phase portrait\",\"p:vis\",\"o:angle plot\",\"p:vis\",\"o:intensity plot\",\"p:vis\",\"o:packet plot\",\"p:vis\",\"o:speed plot\",\"p:vis\",\"o:butterfly\",\"p:vis\",\"o:x vs time\",\"p:vis\",\"o:planck plot\",\"p:vis\",\"o:rate plot\",\"p:vis\",\"o:Lineweaver–Burk plot\",\"p:vis\",\"o:charging plot\",\"p:vis\"]"
 "scrubbed to 2.60 s; square at x 700; version 2"
 "slide: start=\"1.5\""
 "over the last key: cursor trim-end"
@@ -2901,8 +2916,8 @@ clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
 "auto-keyframe on: keys [\"0@500\",\"2@700\",\"1@650\"]"
 "after delete: slide clip gone"
 "after undo: slide clip back"
-applied "open demo scene" (302 ops, System) -> v1
-applied "open showcase" (189 ops, System) -> v2
+applied "open demo scene" (282 ops, System) -> v1
+applied "open showcase" (1026 ops, System) -> v2
 applied "retime slide" (1 ops, Human) -> v3
 applied "undo: retime slide" (1 ops, System) -> v4
 applied "move key of slide" (1 ops, Human) -> v5

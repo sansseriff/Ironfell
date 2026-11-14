@@ -299,7 +299,7 @@ export class DocumentClient {
       viewContext: (panel: string) => this.command({ op: 'view_context', panel: panel }),
       // Schematics (plans/specs/schematic.md): a sheet's netlist.
       netlist: (sheet: string) => this.command({ op: 'netlist', sheet: sheet }),
-      // The contexts showcase's tabs (added at start unless `?showcase=0`).
+      // The showcase's tabs (added at start unless `?showcase=0`).
       showcase: () => this.command({ op: 'showcase' }),
       timings: (reset = false) => this.command({ op: 'timings', reset: reset }),
       // Raster tiles for cold chunks (render-cache.md §5); off draws live.
@@ -603,9 +603,9 @@ export class DocumentClient {
     const first = !this.booted;
     this.booted = true;
     const q = new URLSearchParams(location.search);
-    // The contexts showcase (plans/specs/contexts.md): its outline, pitch
-    // and dials compositions. `?showcase=0` leaves it out (the driver does,
-    // so its scripts' ids stay those after the demo scene).
+    // The showcase (plans/specs/demo.md): the gallery's science pages and
+    // the outline, data and circuit compositions. `?showcase=0` leaves it out
+    // (the driver does, so its scripts' ids stay those after the demo scene).
     // An engine that already holds a document (the native engine across a
     // webview reload) keeps it: `demo` answers `already`, and so does the
     // showcase, so neither lands on top of it.
@@ -655,6 +655,9 @@ export class DocumentClient {
     await this.settled();
     await this.refreshCompositions();
     this.openedDocument = opened;
+    // For drivers (run-iron's `ready`): the document, with the showcase
+    // that follows the demo, is in.
+    (globalThis as any).__documentOpened = opened.key;
     for (const watcher of this.openedWatchers) watcher(opened);
   }
 

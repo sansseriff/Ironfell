@@ -40,10 +40,10 @@ fn ty(n: &str) -> TypeId {
 /// What an `as="$alias"` names: the definition a verb made or placed, the
 /// entity it placed (or made), and that entity's picture.
 #[derive(Clone, Copy, Debug)]
-struct Named {
-    definition: NodeId,
-    entity: Option<NodeId>,
-    picture: NodeId,
+pub(crate) struct Named {
+    pub(crate) definition: NodeId,
+    pub(crate) entity: Option<NodeId>,
+    pub(crate) picture: NodeId,
 }
 
 /// Attributes of `<place>` that are not arguments.
@@ -75,6 +75,17 @@ pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Res
     if els.is_empty() {
         return Err(ComposeError::Verb("no <place> or <make-component>".into()));
     }
+    run_verbs(store, before, els).map(|(ops, summary, _)| (ops, summary))
+}
+
+/// [`compose_after`] on verbs already parsed (node markup's `<place>`s),
+/// with what each `as` alias named.
+pub(crate) fn compose_els(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, BTreeMap<String, Named>), ComposeError> {
+    run_verbs(store, before, els).map(|(ops, _, named)| (ops, named))
+}
+
+/// The verbs run on a scratch copy holding `before`.
+fn run_verbs(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String, BTreeMap<String, Named>), ComposeError> {
     let mut scratch = crate::Store::with_document(store.document().clone());
     if !before.is_empty() {
         scratch
@@ -84,7 +95,7 @@ pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Res
     compose_verbs(scratch, before, els).map_err(ComposeError::Verb)
 }
 
-fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String), String> {
+fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String, BTreeMap<String, Named>), String> {
     let mut aliases: BTreeMap<String, Named> = BTreeMap::new();
     let mut lines = Vec::new();
     for (i, el) in els.iter().enumerate() {
@@ -106,7 +117,7 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
         }
         lines.push(line);
     }
-    Ok((ops, lines.join("\n")))
+    Ok((ops, lines.join("\n"), aliases))
 }
 
 /// A node id as written: `#3F`, or an earlier verb's `$alias` through `pick`.

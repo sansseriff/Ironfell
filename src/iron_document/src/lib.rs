@@ -1984,8 +1984,10 @@ impl Store {
 
     /// Step the traces and accumulators to `now` (seconds, the host's
     /// clock) and publish them (step.rs). Returns the nodes still
-    /// changing, so the host keeps their compositions drawing.
-    pub fn advance_steps(&mut self, now: f64) -> Vec<NodeId> {
+    /// changing, so the host keeps their compositions drawing. The
+    /// accumulators in a `paused` composition (one no view shows) hold
+    /// still: a simulation in a hidden tab costs nothing.
+    pub fn advance_steps(&mut self, now: f64, paused: &std::collections::BTreeSet<NodeId>) -> Vec<NodeId> {
         // Each accumulator's formula reads the step's length, so it is
         // published before the formulas are read: but only while one of
         // them is moving. Frame times jitter, and republishing a length
@@ -2006,7 +2008,7 @@ impl Store {
             }
             let restless = {
                 let (reactive, doc) = (&self.reactive, &self.doc);
-                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l))
+                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), paused)
             };
             if restless {
                 shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
@@ -2019,7 +2021,7 @@ impl Store {
             let reactive = &self.reactive;
             let doc = &self.doc;
             let read = |l: Leaf| reactive.read(doc, l);
-            self.steps.advance(doc, &read, now)
+            self.steps.advance(doc, &read, now, paused)
         };
         values.extend(dts);
         if values != self.reactive.published_by(ProducerId::STEPS) {

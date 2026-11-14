@@ -168,7 +168,26 @@ try {
     const state = await turn.getAttribute('data-status');
     const status = timedOut ? `timed out (${state})` : state ?? 'unknown';
     await writeFile(join(runDir, after), await view());
+    // The canonical document too: the view summarises packed path data.
+    await writeFile(join(runDir, after.replace(/\.xml$/, '.json')), await page.evaluate(() => (window as any).__iron.save() as Promise<string>));
     await page.screenshot({ path: join(runDir, shot) });
+    // SHOW=a,b: each named composition's GPU picture after the turn (the
+    // agent's own <look picture>), whether or not a tab shows it.
+    for (const source of (process.env.SHOW ?? '').split(',').map(s => s.trim()).filter(Boolean)) {
+      const png = await page.evaluate(async source => {
+        const call = (name: string, a: unknown[]) => (window as any).__iron.call(name, a);
+        const start = await call('picture', [source]);
+        if (!start.ok) return `error: ${start.error}`;
+        for (const end = Date.now() + 20000; Date.now() < end;) {
+          const r = await call('picture_poll', [start.ticket, false]);
+          if (!r.pending) return r.ok ? r.image.data as string : `error: ${r.error}`;
+          await new Promise(ok => setTimeout(ok, 50));
+        }
+        return 'error: timed out';
+      }, source).catch(e => `error: ${e}`);
+      if (png.startsWith('error')) console.log(`turn ${n}: picture of ${source}: ${png}`);
+      else await writeFile(join(runDir, `turn-${n}-${source}.png`), Buffer.from(png, 'base64'));
+    }
     turns.push({ index: n, prompt: text, id, status, ms: Date.now() - started, shown: await turn.innerText(), screenshot: shot, before, after });
     console.log(`turn ${n}/${prompts.length}: ${status} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
     if (timedOut) break;

@@ -780,3 +780,12 @@ After the sixth round's second review (8.4):
 - Two-ridge trim grips; a previewed transition's end chips in their own hues; Layers icons
   match the canvas tags (main four-diamond, instance outline diamond); the running line is
   muted; the transition Inspector no longer repeats the timing kind.
+
+After the seventh round (8.8 and 8.8):
+
+- The key row's badge reads **Auto-key** once the state is keyed.
+- A transition's Name is edited in the header only; the Inspector's transition section is a
+  summary (name, length, the two states with their swatches).
+- A graph label is level and moved sideways just clear of the pair's other arrow; an
+  unnamed transition's label names its states.
+- An unset Fill in the table keeps its swatch at full colour.

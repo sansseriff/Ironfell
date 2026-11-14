@@ -5,7 +5,8 @@
   // (its name, length and easing).
   import Section from "../../lib/ui/Section.svelte";
   import Checkbox from "../../lib/ui/Checkbox.svelte";
-  import { machines } from "../../lib/machines.svelte";
+  import ArrowRight from "@lucide/svelte/icons/arrow-right";
+  import { machines, hueOf } from "../../lib/machines.svelte";
 
   const view = $derived(machines.view);
   const pin = $derived(machines.pinned);
@@ -22,9 +23,6 @@
     if (!r.ok) error = r.error ?? "That did not work";
   }
   const text = (e: Event) => (e.currentTarget as HTMLInputElement).value.trim();
-  function editPair(edit: { ms?: number; ease?: string; name?: string }, label: string) {
-    if (view && m && pair) void run(machines.editPair(view.def, m.id, pair.from, pair.to, edit, label));
-  }
 </script>
 
 {#if view && m && st}
@@ -34,11 +32,9 @@
     {#if error}<p class="error" role="alert">{error}</p>{/if}
   </Section>
 {:else if view && m && pair}
-  <Section title="{pair.from} → {pair.to}" class="property-section" data-section="transition">
-    {#if t}
-      <label class="ui-field name"><span>Name</span><input aria-label="Transition name" value={own && t.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : ""} onchange={(e: Event) => { const v = text(e); if (v) editPair({ name: v }, "name transition"); }} /></label>
-    {/if}
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
+  <!-- A transition's controls are in its header; here, what it is. -->
+  <Section title={own && t?.name && t.name !== `${t.from} to ${t.to}` && t.name !== "change" ? t.name : "Transition"} class="property-section" data-section="transition" meta={t ? `${Math.round((pair.ms ?? t.ms ?? 0) / 10) / 100} s` : "Snaps"}>
+    <div class="ends"><i class="ui-swatch-dot" style:background={hueOf(m, pair.from)}></i>{pair.from}<ArrowRight size={12} strokeWidth={1.75} /><i class="ui-swatch-dot" style:background={hueOf(m, pair.to)}></i>{pair.to}</div>
   </Section>
 {/if}
 
@@ -46,5 +42,7 @@
   .ui-field { gap: 6px; padding: 0 8px; color: var(--fg-muted); font-size: var(--text-sm); }
   .ui-field input { flex: 1; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-md); outline: none; text-align: right; }
   .name { width: 100%; box-sizing: border-box; }
+  .ends { display: flex; align-items: center; gap: 6px; min-height: var(--control-h); font-size: var(--text-md); color: var(--fg); }
+  .ends :global(svg) { color: var(--fg-muted); }
   .error { margin: 0; color: var(--danger); font-size: var(--text-sm); }
 </style>

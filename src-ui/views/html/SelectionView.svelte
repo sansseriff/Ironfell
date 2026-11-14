@@ -486,7 +486,7 @@
                 {@const anim = !!sf?.key && sf.key !== "none"}
                 <!-- Whether choosing a state records: not animated, animated
                      (a choice adds a key at the playhead), or a key here. -->
-                {#if sf?.key}<div class="key-row" data-key={sf.key}><Button small variant="outline" class="key-state {sf.key}" onclick={() => keyState(inspected!.component!.entity, sf.leaf)} title={sf.key === "on" ? "Remove this key" : anim ? "Add a key for this state at the playhead" : "Animate the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{sf.key === "on" ? `Key at ${clockLabel}` : anim ? `Add key at ${clockLabel}` : "Key state"}</Button>{#if anim}<span class="ui-badge animated" title="Choosing a state adds a key at the playhead"><Diamond size={10} strokeWidth={1.75} />Animated</span>{/if}</div>{/if}
+                {#if sf?.key}<div class="key-row" data-key={sf.key}><Button small variant="outline" class="key-state {sf.key}" onclick={() => keyState(inspected!.component!.entity, sf.leaf)} title={sf.key === "on" ? "Remove this key" : anim ? "Add a key for this state at the playhead" : "Animate the state: a key at the playhead"}><Diamond size={12} strokeWidth={1.75} />{sf.key === "on" ? `Key at ${clockLabel}` : anim ? `Add key at ${clockLabel}` : "Key state"}</Button>{#if anim}<span class="ui-badge animated" title="Choosing a state adds a key at the playhead"><Diamond size={10} strokeWidth={1.75} />Auto-key</span>{/if}</div>{/if}
               {/if}
             {/each}
             <!-- What this picture reads from where it is placed (reactivity.md §6). -->

@@ -275,15 +275,18 @@
         const x1 = a.x + (dx / len) * 50 + nx * 12, y1 = a.y + (dy / len) * 22 + ny * 12;
         const x2 = b.x - (dx / len) * 50 + nx * 12, y2 = b.y - (dy / len) * 22 + ny * 12;
         const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-        const u = 0.3;
+        const u = 0.32;
         const mine = own(t, q.from, q.to);
-        const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
+        const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) : `${q.from} → ${q.to}`} · ${secs(q.ms)}`;
         // With the two states' swatches before it, so it says which way
         // it goes without tracing its arrow.
         const w = label.length * 6.2 + 16 + 30;
-        // The label sits on its own line, nearer its start, so it reads
+        // The label sits over its own line, nearer its start, so it reads
         // as that arrow's and a pair's two never meet.
-        const lx = x1 + (x2 - x1) * u, ly = y1 + (y2 - y1) * u;
+        // Level, and moved sideways from the pair's other arrow (24 away)
+        // just far enough to clear it, so it still touches its own.
+        const side = Math.abs(nx) > 0.2 ? Math.max(0, w / 2 + 4 - (24 - 9 * Math.abs(ny)) / Math.abs(nx)) : 0;
+        const lx = x1 + (x2 - x1) * u + Math.sign(nx) * side, ly = y1 + (y2 - y1) * u;
         return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, w };
       });
   }
@@ -551,7 +554,6 @@
   .poses .col:hover { background: var(--hover); }
   .poses .col-on { background: color-mix(in srgb, var(--col-hue, var(--accent)) 10%, transparent); }
   .poses td.rest .val { color: var(--fg-faint); font-style: italic; }
-  .poses td.rest .sw { opacity: 0.45; }
   .cell { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
   .cell input { width: 64px; min-height: 22px; height: 22px; padding: 0 6px; text-align: right; }
   .cell input.wide { width: 96px; text-align: left; }

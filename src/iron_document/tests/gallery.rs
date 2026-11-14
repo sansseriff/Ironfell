@@ -1,9 +1,9 @@
-//! The demo's gallery (plans/specs/demo.md): each page is node markup with
-//! `<place>` (`markup::compose`), seeded by `document_bridge::demo`. Every
-//! page must build and apply in one transaction on a fresh store, and a
-//! node that reads a placed plot's ports (`$plot.x_lo`) must see them.
+//! The demo's gallery (plans/specs/demo.md): each page is an edit
+//! (plans/specs/markup.md), seeded by `document_bridge::demo`. Every page
+//! must plan and apply in one transaction on a fresh store, and a node that
+//! reads a placed plot's ports (`$plot.x_lo`) must see them.
 
-use iron_document::facet::{Composition, Name};
+use iron_document::facet::Name;
 use iron_document::*;
 
 const PAGES: [(&str, &str); 9] = [
@@ -32,43 +32,39 @@ fn named(t: &str) -> facet::Facet {
     n.wrap()
 }
 
-fn last_root(store: &Store) -> OrderKey {
-    let doc = store.document();
-    let last = doc.roots().iter().filter_map(|&r| doc.live(r)).map(|n| n.order.clone()).max().unwrap();
-    OrderKey::after(&last)
-}
-
 fn find(store: &Store, name: &str) -> NodeId {
     let doc = store.document();
-    doc.roots().iter().flat_map(|&r| doc.descendants(r)).collect::<Vec<_>>().into_iter().find(|&n| doc.is_live(n) && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no node {name}"))
+    doc.roots().iter().flat_map(|&r| doc.descendants(r)).collect::<Vec<_>>().into_iter().find(|&n| !n.is_expanded() && doc.is_live(n) && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no node {name}"))
 }
 
-/// A store with a model root and the circuit the RC page embeds.
+/// A store with a model root and a timeline for the pages' clips.
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
     let ids = store.document().next_ids(2);
-    let mut c = Composition::default();
-    c.dims = Slot::Const(Value::Enum("2d".into()));
     store
         .apply(tx(
             "desk",
             vec![
                 Op::Create { id: ids[0], ty: ty("model"), parent: None, order: OrderKey::first(), facets: vec![named("model")] },
-                Op::Create { id: ids[1], ty: ty("composition"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![named("circuit"), c.wrap()] },
+                Op::Create { id: ids[1], ty: ty("timeline"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![named("timeline")] },
             ],
         ))
         .unwrap();
     (store, ids[1])
 }
 
+/// Plan page `src` and apply it.
+fn page(store: &mut Store, name: &str, src: &str, timeline: NodeId) {
+    let src = src.replace("#TIMELINE", &timeline.to_string());
+    let (t, _) = edit::transaction(store, &src, name, Actor::System).unwrap_or_else(|e| panic!("{name}: {e}"));
+    store.apply(t).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+}
+
 #[test]
 fn every_page_builds_in_one_transaction() {
-    let (mut store, circuit) = desk();
+    let (mut store, timeline) = desk();
     for (name, src) in PAGES {
-        let src = src.replace("#CIRCUIT", &circuit.to_string());
-        let order = last_root(&store);
-        let built = markup::compose(&store, &src, None, order).unwrap_or_else(|e| panic!("{name}: {e}"));
-        store.apply(tx(name, built.ops)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        page(&mut store, name, src, timeline);
         let doc = store.document();
         let comps = composition::compositions(doc);
         assert!(comps.iter().any(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)), "{name}: no composition");
@@ -79,10 +75,8 @@ fn every_page_builds_in_one_transaction() {
 /// ports and its place: it sits inside the plot's box.
 #[test]
 fn a_node_reads_a_placed_plots_ports() {
-    let (mut store, _) = desk();
-    let order = last_root(&store);
-    let built = markup::compose(&store, PAGES[0].1, None, order).unwrap_or_else(|e| panic!("{e}"));
-    store.apply(tx("oscillator", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let (mut store, timeline) = desk();
+    page(&mut store, "oscillator", PAGES[0].1, timeline);
     let marker = find(&store, "phase marker");
     let x = store.resolved(marker, "transform2d.x".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     let y = store.resolved(marker, "transform2d.y".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
@@ -104,10 +98,8 @@ fn a_node_reads_a_placed_plots_ports() {
 /// panicked the spatial index.
 #[test]
 fn a_plot_cursor_past_the_end_of_its_curve_stays_finite() {
-    let (mut store, _) = desk();
-    let order = last_root(&store);
-    let built = markup::compose(&store, PAGES[1].1, None, order).unwrap_or_else(|e| panic!("{e}"));
-    store.apply(tx("refraction", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let (mut store, timeline) = desk();
+    page(&mut store, "refraction", PAGES[1].1, timeline);
     let set = |id: NodeId, v: f64| Op::Set { id, path: "slider.value".parse().unwrap(), slot: Slot::Const(Value::Number(v)) };
     let (n1, n2, theta1) = (find(&store, "n1"), find(&store, "n2"), find(&store, "theta1"));
     // n₁ = 2 over n₂ = 1: the critical angle is 30°; θ₁ = 60° is past it.
@@ -127,4 +119,30 @@ fn a_plot_cursor_past_the_end_of_its_curve_stays_finite() {
         }
     }
     assert!(checked > 0);
+}
+
+/// The wave packet's clip and the RC page's circuit are in their markup:
+/// relations (`<link>`) and the circuit verb (`<circuit>`) are written in
+/// an edit like nodes.
+#[test]
+fn a_page_writes_its_relations_and_its_circuit() {
+    let (mut store, timeline) = desk();
+    page(&mut store, "wave packet", PAGES[3].1, timeline);
+    page(&mut store, "RC charging", PAGES[8].1, timeline);
+    let doc = store.document();
+    let clip = find(&store, "play t");
+    let t = find(&store, "t");
+    assert!(doc.relations_from(clip).any(|r| r.rel == document::RelKind::Animates && r.to == t), "the clip animates t ({t}): {:?}", doc.relations_from(clip).collect::<Vec<_>>());
+    assert_eq!(doc.live(clip).and_then(|n| n.parent), Some(timeline));
+    // The circuit: five parts wired, R bound to the page's slider.
+    let r = doc.nodes_of_type(TypeId::lookup("entity").unwrap()).find(|&e| doc.is_live(e) && doc.get::<Name>(e).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("R")).expect("R");
+    let r_slider = find(&store, "R slider");
+    let arg = doc.get::<facet::Args>(r).and_then(|a| a.get("R").cloned()).expect("R's argument");
+    assert!(arg.expr().is_some_and(|e| e.to_string().contains(&r_slider.to_string())), "R reads the slider: {arg:?}");
+    let wires = doc.nodes_of_type(TypeId::lookup("connection").unwrap()).filter(|&c| doc.is_live(c)).count();
+    assert_eq!(wires, 5);
+    // Its probe reads the steady state.
+    let embed = find(&store, "circuit view");
+    let rc = doc.get::<facet::Embed>(embed).and_then(|e| e.source.constant().cloned());
+    assert!(matches!(rc, Some(Value::Ref(_))), "the page embeds the circuit");
 }

@@ -5,7 +5,7 @@
 nav
 ready
 eval __iron.snapping(false)
-eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$g" type="group" parent="#1" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><create id="$a" type="text" parent="$g" name="title" content="Title" font.size="20" font.weight="700"/><create id="$b" type="text" parent="$g" name="body" content="Body line" font.size="14"/><create id="$c" type="text" parent="$g" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><group in="#1" id="$g" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><text in="$g" id="$a" name="title" content="Title" font.size="20" font.weight="700"/><text in="$g" id="$b" name="body" content="Body line" font.size="14"/><text in="$g" id="$c" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
 sleep 1000
 eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<text[^>]*name="(title|body|footer)"/.test(l)).map(l=>l.trim().match(/name="\w+" x="[^"]+" x.by="[^"]+" y="[^"]+"/)[0])})()
 eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><set id="#3v" content="Body line\nand a second"/></edit>`); return r.ok})()
@@ -15,7 +15,7 @@ eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n
 key Meta+z
 sleep 1000
 eval (async()=>{const v=await __iron.view({fidelity:'full'}); return v.split('\n').filter(l=>/<text[^>]*name="footer"/.test(l)).map(l=>l.trim().match(/ y="[^"]+"/)[0])})()
-eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><create id="$a" type="rect" parent="#1" name="a" x="510" y="280" w="40" h="40" color="#e04040ff"/><create id="$b" type="rect" parent="#1" name="b" x="570" y="280" w="40" h="60" color="#40a040ff"/><create id="$c" type="rect" parent="#1" name="c" x="630" y="280" w="40" h="40" color="#4060e0ff"/></edit>`); return r.ok})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="4"><rect in="#1" id="$a" name="a" x="510" y="280" w="40" h="40" color="#e04040ff"/><rect in="#1" id="$b" name="b" x="570" y="280" w="40" h="60" color="#40a040ff"/><rect in="#1" id="$c" name="c" x="630" y="280" w="40" h="40" color="#4060e0ff"/></edit>`); return r.ok})()
 sleep 800
 dclick 530 300
 sleep 700

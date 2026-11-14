@@ -101,7 +101,7 @@ atomically.
 ### 4.1 What makes it tractable
 
 - **Apply only complete verbs.** Primitive verbs are self-closing elements
-  (`<create …/>`), so a tolerant scanner simply ignores a trailing incomplete
+  (`<rect …/>`), so a tolerant scanner simply ignores a trailing incomplete
   one. Nothing has to be guessed or auto-closed. Verbs only append, so each
   tick adds a suffix of ops to the previous tick's.
 - **Aliases** are minted lazily and kept stable across ticks: one map per

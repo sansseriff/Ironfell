@@ -1,17 +1,17 @@
 /**
  * `<revise>`: patch the edit the store just rejected instead of resending it
  * whole. The harness keeps the rejected `<edit>` as written; a revise names
- * its verbs by handle (an `$alias` it created, an `as=` it named, or its op
- * number, counting verbs from 0 as `<edit-failed>` does) and changes only
+ * its verbs by handle (the `id="$name"` it gave, or its op number, counting
+ * verbs from 0 as `<edit-failed>` does) and changes only
  * those. Handles always mean the rejected edit as sent, never as partly
  * revised, so the order of a revise's own verbs does not move them. The
  * revised edit is then applied whole, one transaction, like any edit.
  *
  *   <revise>
  *     <change op="$sinv" port.signal="{= $sin.port.signal * 2}"/>   set or add attributes on one verb
- *     <replace op="14"><create …/></replace>                         swap one verb for any number
+ *     <replace op="14"><rect …/></replace>                           swap one verb for any number
  *     <drop op="$bfill"/>
- *     <insert after="$ta"><create …/></insert>                       or before="…"
+ *     <insert after="$ta"><rect …/></insert>                         or before="…"
  *     <text old="$spump.port" new="$sp.port" all="true"/>            exact text, once unless all
  *   </revise>
  *
@@ -156,9 +156,9 @@ function reviseOrThrow(rejected: string, markup: string): string {
       if (n >= draft.items.length) throw new Error(`${where}: there is no op ${n}; the edit had ops 0 to ${draft.items.length - 1}`);
       return n;
     }
-    const hits = draft.items.flatMap((item, i) => (item.attrs.id === raw || item.attrs.as === raw ? [i] : []));
+    const hits = draft.items.flatMap((item, i) => (item.attrs.id === raw ? [i] : []));
     if (hits.length === 1) return hits[0];
-    if (hits.length === 0) throw new Error(`${where}: no op of the rejected edit has id or as "${raw}"`);
+    if (hits.length === 0) throw new Error(`${where}: no op of the rejected edit has id "${raw}"`);
     throw new Error(`${where}: "${raw}" names ops ${hits.join(' and ')}; use op="N"`);
   };
 

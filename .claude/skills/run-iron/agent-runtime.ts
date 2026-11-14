@@ -42,7 +42,7 @@ try {
     const iron = (window as any).__iron;
     const before = await iron.save();
     iron.configureAgent({ provider: 'codex', endpoint, token });
-    const setup = await iron.edit('<edit><create id="$canvas" type="composition" name="agent-sandbox" notation="free" dims="2d"/></edit>');
+    const setup = await iron.edit('<edit><composition id="$canvas" name="agent-sandbox" notation="free" dims="2d"/></edit>');
     if (!setup.ok) throw new Error(JSON.stringify(setup));
     const canvas = setup.aliases.$canvas;
     const created = await iron.ask(`TARGET ${canvas}. In this 2D composition create exactly one rect named agent-test-shape, x=100, y=120, w=80, h=60, fill.color=#ff2200. No other changes.`);

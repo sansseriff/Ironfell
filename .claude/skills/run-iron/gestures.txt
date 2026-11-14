@@ -237,7 +237,7 @@ dclick 580 267
 ddrag 616 267 660 267
 sleep 400
 eval optics()
-eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const laser = v.match(/<entity id="([^"]+)" name="laser"/)[1]; const meterIn = v.match(/<entity[^>]*name="meter"[\s\S]*?<port id="([^"]+)"/)[1]; const model = (await __iron.view({fidelity:'skeleton'})).match(/<model id="([^"]+)"/)[1]; const r = await __iron.edit(`<edit><create id="$p" type="port" parent="${laser}" name="rf" kind="rf_voltage" dir="out"/><create id="$c" type="connection" parent="${model}"/><link from="$c" to="$p" rel="connects" end="a"/><link from="$c" to="${meterIn}" rel="connects" end="b"/></edit>`); return r.failure.replace(/#\w+/g, '#…'); })()
+eval (async () => { const v = await __iron.view({fidelity:'full', relation:'model'}); const laser = v.match(/<entity id="([^"]+)" name="laser"/)[1]; const meterIn = v.match(/<entity[^>]*name="meter"[\s\S]*?<port id="([^"]+)"/)[1]; const model = (await __iron.view({fidelity:'skeleton'})).match(/<model id="([^"]+)"/)[1]; const r = await __iron.edit(`<edit><port in="${laser}" id="$p" name="rf" kind="rf_voltage" dir="out"/><connection in="${model}" id="$c"/><link from="$c" to="$p" rel="connects" end="a"/><link from="$c" to="${meterIn}" rel="connects" end="b"/></edit>`); return r.failure.replace(/#\w+/g, '#…'); })()
 shot optics
 # Stage F step 3 (ECM §6.1): across/through pairs solved as equations. A
 # heater, a 2 K/W thermal link and an ambient sink at 293.15 K: the heater
@@ -485,7 +485,7 @@ key Meta+z
 sleep 600
 eval controlsCount()
 # The model surface's <import-svg>: placed where it says, cuts in the summary.
-eval (async () => { const id = (await __iron.view({fidelity:'skeleton'})).match(/<composition id="([^"]+)" name="controls"/)[1]; return __iron.edit(`<edit><import-svg to="${id}" x="40" y="200">${figmaSvg}</import-svg></edit>`); })()
+eval (async () => { const id = (await __iron.view({fidelity:'skeleton'})).match(/<composition id="([^"]+)" name="controls"/)[1]; return __iron.edit(`<edit><import-svg in="${id}" x="40" y="200">${figmaSvg}</import-svg></edit>`); })()
 sleep 400
 eval controlsCount()
 key Meta+z
@@ -571,7 +571,7 @@ key Meta+z
 sleep 600
 eval comps()
 # Scope (§8): outside may read an instance's ports, not its insides.
-eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><create id="$t" type="text" parent="${c}" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
+eval (async () => { const [, m] = await inside('meter', 'needle'); const v = await __iron.view({fidelity:'skeleton'}); const c = v.match(/<composition id="([^"]+)" name="components"/)[1]; const r = await __iron.edit(`<edit><text in="${c}" id="$t" content="{= str(#${m[1].slice(1)}.transform2d.rot)}"/></edit>`); return r.failure?.match(/kind="[a-z_]+"/)?.[0]; })()
 # Plugging (component-model.md §4.3): a drag that starts on a port connects
 # or disconnects it. The meter's port is joined to the fiber's end, so it is
 # grabbed by the meter's half of the joint handle. The meter dragged by its `in` port onto the spare

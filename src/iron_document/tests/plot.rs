@@ -246,3 +246,23 @@ fn the_plot_follows_the_theme_and_styles_each_series() {
     assert_eq!(colour(&store, "series 2", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
     assert_ne!(colour(&store, "series 1", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
 }
+
+/// Marks in the data's coordinates (plot.md §4.2): points with labels and
+/// dashed reference lines, drawn in the clipped area and counted in the
+/// auto range; a series may be dashed.
+#[test]
+fn marks_label_points_and_reference_lines_in_data_coordinates() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, r#"xs="0 1 2 3 4" ys="0 1 4 9 16" style="dashed" marks_x="{= series(2, 3)}" marks_y="{= series(4, 9)}" marks_label="{= list('peak', 'next')}" hlines="20" vlines="{= series(1)}""#);
+    assert!(errors(&store, e, u).is_empty(), "{:?}", errors(&store, e, u));
+    // Path data resolves to geometry: count its contours.
+    let contours = |name: &str| format!("{:?}", store.resolved(part(&store, u, name), path("path.d")));
+    assert!(contours("marks").contains("(2 contours"), "two marks: {}", contours("marks"));
+    assert!(contours("reference lines").contains("(2 contours"), "one h, one v: {}", contours("reference lines"));
+    let dash = store.resolved(part(&store, u, "series 1"), path("stroke.dash")).unwrap();
+    assert_eq!(dash.as_str(), Some("7 5"));
+    // The reference line at 20 is in view: the y range reaches it.
+    let y_hi = store.resolved(store.document().children(e).iter().copied().find(|&p| store.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("y_hi")).unwrap(), path("port.signal")).unwrap();
+    assert!(y_hi.as_f64().unwrap() >= 20.0, "{y_hi:?}");
+    assert_eq!(labels(&store, u, "mark label"), vec!["peak", "next"]);
+}

@@ -10,7 +10,6 @@
 //! library is embedded and read-only, like the built-in contexts; a document
 //! gets a copy of a part on first placement (`import.source = std:<key>`).
 
-use crate::contexts::attributes;
 use crate::expr::Expr;
 use crate::facet::{Anchor, Equation, Facet, Fill, Font, Import, LeafStruct, Name, PathShape, Port, Radius, Stroke, Template, Text, Transform2d};
 use crate::geometry::{Geometry, PackedContour};
@@ -75,13 +74,24 @@ pub fn find(key: &str) -> Option<&'static Part> {
     library().iter().find(|p| p.key == key)
 }
 
-/// An element of the markup: its name, attributes and children.
-#[derive(Debug)]
+/// An element of the markup: its name, attributes and children, the text
+/// it holds (entities decoded), and its own source.
+#[derive(Debug, Clone)]
 pub(crate) struct El {
     pub(crate) name: String,
     pub(crate) attrs: Vec<(String, String)>,
     pub(crate) children: Vec<El>,
+    /// Text between its tags, decoded; for a raw element ([`RAW`]), all of
+    /// its content as written, decoded.
+    pub(crate) text: String,
+    /// The element as written, tags included.
+    pub(crate) src: String,
+    /// What lies between its tags, as written.
+    pub(crate) inner: String,
 }
+
+/// Elements whose content is text, not elements: markdown and SVG.
+const RAW: &[&str] = &["write", "rewrite", "import-svg"];
 
 impl El {
     pub(crate) fn attr(&self, k: &str) -> Option<&str> {
@@ -98,22 +108,55 @@ impl El {
     }
 }
 
-/// Elements in `src`, comments skipped. No text content: everything is in
-/// attributes.
+/// XML's entities in text, decoded.
+pub(crate) fn unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&#10;", "\n").replace("&amp;", "&")
+}
+
+/// Elements in `src`, comments, `<?…?>` and `<!…>` declarations skipped.
+/// Text between tags is the element's `text`; the elements in [`RAW`]
+/// hold text only, so markdown or SVG inside them is not read as markup.
 pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
-    fn level(rest: &mut &str, closing: Option<&str>) -> Result<Vec<El>, String> {
+    fn level(all: &str, rest: &mut &str, closing: Option<&str>, text: &mut String) -> Result<Vec<El>, String> {
         let mut out = Vec::new();
         loop {
-            *rest = rest.trim_start();
+            let t = rest.find('<').unwrap_or(rest.len());
+            if !rest[..t].trim().is_empty() {
+                if closing.is_none() {
+                    return Err(format!("text outside an element: \"{}\"", rest[..t].trim().chars().take(40).collect::<String>()));
+                }
+                text.push_str(&unescape(&rest[..t]));
+            }
+            *rest = &rest[t..];
             if rest.is_empty() {
                 return match closing {
                     Some(n) => Err(format!("<{n}> is not closed")),
                     None => Ok(out),
                 };
             }
+            // A `<` that starts no tag is text (a table's merge mark, `a < b`).
+            if !rest[1..].starts_with(|c: char| c.is_alphabetic() || matches!(c, '/' | '!' | '?')) {
+                if closing.is_none() {
+                    return Err(format!("text outside an element: \"{}\"", rest.chars().take(40).collect::<String>()));
+                }
+                text.push('<');
+                *rest = &rest[1..];
+                continue;
+            }
             if let Some(r) = rest.strip_prefix("<!--") {
                 let end = r.find("-->").ok_or("unclosed comment")?;
                 *rest = &r[end + 3..];
+                continue;
+            }
+            if let Some(r) = rest.strip_prefix("<![CDATA[") {
+                let end = r.find("]]>").ok_or("unclosed CDATA")?;
+                text.push_str(&r[..end]);
+                *rest = &r[end + 3..];
+                continue;
+            }
+            if rest.starts_with("<?") || rest.starts_with("<!") {
+                let end = rest.find('>').ok_or("unclosed declaration")?;
+                *rest = &rest[end + 1..];
                 continue;
             }
             if let Some(r) = rest.strip_prefix("</") {
@@ -125,14 +168,17 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
                 *rest = &r[end + 1..];
                 return Ok(out);
             }
-            let r = rest.strip_prefix('<').ok_or_else(|| format!("expected a tag at \"{}\"", &rest[..rest.char_indices().nth(20).map_or(rest.len(), |(i, _)| i)]))?;
+            let start = all.len() - rest.len();
+            let r = &rest[1..];
             // The tag ends at the first `>` outside a quoted value.
-            let mut quoted = false;
+            let mut quote: Option<char> = None;
             let end = r.char_indices().find(|&(_, c)| {
-                if c == '"' {
-                    quoted = !quoted;
+                match quote {
+                    Some(q) if c == q => quote = None,
+                    None if c == '"' || c == '\'' => quote = Some(c),
+                    _ => {}
                 }
-                c == '>' && !quoted
+                c == '>' && quote.is_none()
             }).map(|(i, _)| i).ok_or("unclosed tag")?;
             let (tag, empty) = match r[..end].strip_suffix('/') {
                 Some(t) => (t, true),
@@ -140,13 +186,35 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
             };
             *rest = &r[end + 1..];
             let (name, attrs) = tag.trim().split_once(char::is_whitespace).unwrap_or((tag.trim(), ""));
-            let attrs = attributes(attrs)?;
-            let children = if empty { Vec::new() } else { level(rest, Some(name))? };
-            out.push(El { name: name.to_owned(), attrs, children });
+            if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                return Err(format!("expected a tag at \"<{}\"", tag.chars().take(20).collect::<String>()));
+            }
+            let attrs = crate::contexts::attributes(attrs).map_err(|e| format!("<{name}>: {e}"))?;
+            let inner_start = all.len() - rest.len();
+            let mut own = String::new();
+            let children = if empty {
+                Vec::new()
+            } else if RAW.contains(&name) {
+                let close = format!("</{name}>");
+                let at = rest.find(&close).ok_or_else(|| format!("<{name}> is not closed"))?;
+                let body = &rest[..at];
+                own = match body.trim().strip_prefix("<![CDATA[").and_then(|b| b.strip_suffix("]]>")) {
+                    Some(raw) => raw.to_owned(),
+                    None => unescape(body),
+                };
+                *rest = &rest[at + close.len()..];
+                Vec::new()
+            } else {
+                level(all, rest, Some(name), &mut own)?
+            };
+            let end_at = all.len() - rest.len();
+            let inner = if empty { String::new() } else { all[inner_start..end_at].rsplit_once("</").map_or(String::new(), |(i, _)| i.to_owned()) };
+            out.push(El { name: name.to_owned(), attrs, children, text: own, src: all[start..end_at].to_owned(), inner });
         }
     }
     let mut rest = src;
-    level(&mut rest, None)
+    let mut stray = String::new();
+    level(src, &mut rest, None, &mut stray)
 }
 
 /// Parse parts markup.
@@ -1052,8 +1120,12 @@ pub fn circuit_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, Strin
                     if !part.inputs.iter().any(|(n, _)| n == k) {
                         return Err(at(format!("a {} has no input {k} ({})", part.key, part.inputs.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", "))));
                     }
-                    let value = Value::parse_quantity(v).map_err(|e| at(format!("{k}=\"{v}\": {e}")))?;
-                    sets.push(Op::Set { id: p.entity, path: format!("args.{k}").parse().map_err(|e| at(format!("{e:?}")))?, slot: Slot::Const(value) });
+                    // A value, or a binding: `R="{= #s.slider.value * 1 kΩ}"`.
+                    let slot = match v.trim().strip_prefix("{=").and_then(|r| r.strip_suffix('}')) {
+                        Some(e) => Slot::Bound(Expr::parse(e.trim()).map_err(|e| at(format!("{k}=\"{v}\": {e}")))?),
+                        None => Slot::Const(Value::parse_quantity(v).map_err(|e| at(format!("{k}=\"{v}\": {e}")))?),
+                    };
+                    sets.push(Op::Set { id: p.entity, path: format!("args.{k}").parse().map_err(|e| at(format!("{e:?}")))?, slot });
                 }
                 if !sets.is_empty() {
                     apply(&mut scratch, sets, &mut ops).map_err(at)?;
@@ -1076,7 +1148,12 @@ pub fn circuit_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, Strin
                     pts.push([x.trim().parse().map_err(|_| at(format!("via: {c}")))?, y.trim().parse().map_err(|_| at(format!("via: {c}")))?]);
                 }
                 let last = *pts.last().expect("starts at from");
-                pts.extend(elbow(last, pb, false));
+                let vertical = match el.attr("elbow").unwrap_or("horizontal") {
+                    "horizontal" => false,
+                    "vertical" => true,
+                    e => return Err(at(format!("elbow=\"{e}\": horizontal (the default: across, then up or down) or vertical"))),
+                };
+                pts.extend(elbow(last, pb, vertical));
                 pts.push(pb);
                 for w in pts.windows(2) {
                     if (w[0][0] - w[1][0]).abs() > 1e-9 && (w[0][1] - w[1][1]).abs() > 1e-9 {

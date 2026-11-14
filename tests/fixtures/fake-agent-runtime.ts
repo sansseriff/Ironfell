@@ -36,7 +36,7 @@ if (process.argv.includes('app-server')) {
       const shape = input.match(/SHAPE (#\w+)/)?.[1] ?? '#fixture';
       let text = input.includes('edit-test-shape')
         ? `<edit><set id="${shape}" x="240" fill.color="#22aa55"/></edit>`
-        : `<edit><create id="$shape" type="rect" parent="${target}" name="agent-test-shape" x="100" y="120" w="80" h="60" color="#ff2200"/></edit>`;
+        : `<edit><rect in="${target}" id="$shape" name="agent-test-shape" x="100" y="120" w="80" h="60" color="#ff2200"/></edit>`;
       if (input.includes('chat-test-prose')) text = '## A shared conversation\n\nA **rectangle** is a 2D shape.\n\n| Property | Meaning |\n| --- | --- |\n| width | horizontal size |\n\n```ts\nconst safe = true;\n```\n\n::view{show=main}\n\n<script>window.chatInjected = true</script>\n\n[unsafe](javascript:alert(1))';
       if (input.includes('image-wire-test')) {
         const image = message.params.input.find((i: any) => i.type === 'localImage');
@@ -77,7 +77,7 @@ if (process.argv.includes('app-server')) {
           await pause(150);
         }
         if (request.includes('chat-test-stop')) await pause(4000);
-        const streamed = `Here is a **pump** with two ports.\n<edit><create id="$a" type="rect" parent="${main}" name="pump body" x="40" y="40" w="80" h="50" color="#3366cc"/><create id="$b" type="rect" parent="${main}" name="inlet" x="20" y="55" w="20" h="20" color="#22aa55"/><create id="$c" type="rect" parent="${main}" name="outlet" x="120" y="55" w="20" h="20" color="#cc3322"/></edit>`;
+        const streamed = `Here is a **pump** with two ports.\n<edit><rect in="${main}" id="$a" name="pump body" x="40" y="40" w="80" h="50" color="#3366cc"/><rect in="${main}" id="$b" name="inlet" x="20" y="55" w="20" h="20" color="#22aa55"/><rect in="${main}" id="$c" name="outlet" x="120" y="55" w="20" h="20" color="#cc3322"/></edit>`;
         for (const piece of streamed.match(/[\s\S]{1,24}/g) ?? []) {
           reply({ method: 'item/agentMessage/delta', params: { itemId: 'answer', delta: piece } });
           await pause(70);

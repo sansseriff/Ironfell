@@ -29,7 +29,7 @@ set each theme's value.
 
 A COLOURS section in the prompt: prefer tokens to literal colours; series in order
 for categories; text in `ink`, `ink-2` or `muted`, never a series colour; edit or
-extend the palette with `<set>` and `<create type="token">`.
+extend the palette with `<set>` and `<token>`.
 
 ## 4. `std:plot`
 

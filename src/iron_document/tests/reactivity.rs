@@ -58,7 +58,7 @@ fn x_of(store: &Store, id: NodeId) -> f64 {
 
 #[test]
 fn a_failed_binding_fails_its_readers_and_recovers() {
-    let (mut store, _, n) = sheet(r#"<let id="a" value="{= 2 mW * 3}"/><let id="b" value="{= $a * 2}"/><rect id="r" x="{= $b / 1 mW}" w="10" h="10"/>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$a" value="{= 2 mW * 3}"/><let id="$b" value="{= $a * 2}"/><rect id="$r" x="{= $b / 1 mW}" w="10" h="10"/>"#);
     let (a, b, r) = (n["a"], n["b"], n["r"]);
     assert_eq!(x_of(&store, r), 12.0);
     assert!(store.reactive().errors.is_empty());
@@ -81,7 +81,7 @@ fn a_failed_binding_fails_its_readers_and_recovers() {
 
 #[test]
 fn hover_reaches_a_look_through_a_let_and_never_content() {
-    let (mut store, _, n) = sheet(r#"<rect id="r" x="0" w="10" h="10" interaction.hovered="false" fill.opacity="1"/><let id="lit" value="1"/><rect id="s" x="0" w="10" h="10" fill.opacity="1"/>"#);
+    let (mut store, _, n) = sheet(r#"<rect id="$r" x="0" w="10" h="10" interaction.hovered="false" fill.opacity="1"/><let id="$lit" value="1"/><rect id="$s" x="0" w="10" h="10" fill.opacity="1"/>"#);
     let (r, lit, s) = (n["r"], n["lit"], n["s"]);
     let hover = format!("{r}.interaction.hovered ? 1 : 0.4");
     store.apply(tx("shared", vec![Op::Set { id: lit, path: path("let.value"), slot: bind(&hover) }])).unwrap();
@@ -90,7 +90,7 @@ fn hover_reaches_a_look_through_a_let_and_never_content() {
     let refused = store.apply(tx("content", vec![Op::Set { id: s, path: path("transform2d.x"), slot: bind(&format!("{lit}.let.value * 10")) }]));
     assert!(refused.is_err());
     // Nor may a let that content already reads start carrying it.
-    let (mut store, _, n) = sheet(r#"<rect id="r" x="0" w="10" h="10" interaction.hovered="false"/><let id="k" value="1"/><rect id="s" x="{= $k * 10}" w="10" h="10"/>"#);
+    let (mut store, _, n) = sheet(r#"<rect id="$r" x="0" w="10" h="10" interaction.hovered="false"/><let id="$k" value="1"/><rect id="$s" x="{= $k * 10}" w="10" h="10"/>"#);
     let refused = store.apply(tx("taint", vec![Op::Set { id: n["k"], path: path("let.value"), slot: bind(&format!("{}.interaction.hovered ? 1 : 0", n["r"])) }]));
     assert!(refused.is_err());
 }
@@ -126,9 +126,9 @@ fn a_repeat_of_a_component_gives_each_item_its_own_instance() {
     let def = standard::find(store.document(), "meter").unwrap();
     let comp = store.document().roots()[0];
     let markup = format!(
-        r#"<group id="g" name="meters" repeat.each="5 10 15">
-             <entity id="e" name="m" instance.def="{def}" instance.mode="linked" args.in="{{= $g.repeat.item * 1 mW}}" args.range="20 mW"/>
-             <use id="u" name="m" notation="free" x="{{= $g.repeat.index * 130}}" y="200"/>
+        r#"<group id="$g" name="meters" repeat.each="5 10 15">
+             <entity id="$e" name="m" instance.def="{def}" instance.mode="linked" args.in="{{= $g.repeat.item * 1 mW}}" args.range="20 mW"/>
+             <use id="$u" name="m" notation="free" x="{{= $g.repeat.index * 130}}" y="200"/>
            </group>"#
     );
     let built = markup::ops(&markup, Some(comp), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
@@ -155,7 +155,7 @@ fn a_repeat_of_a_component_gives_each_item_its_own_instance() {
 /// producer's publish both add items, with no history entry.
 #[test]
 fn items_follow_a_drag_and_a_publish_without_a_transaction() {
-    let (mut store, _, n) = sheet(r#"<slider id="s" x="0" y="0" min="0" max="10" step="1" value="2"/><group id="g" repeat.count="{= $s.slider.value}"><rect x="{= $g.repeat.index * 20}" w="10" h="10"/></group><let id="data" value="1 2"/><group id="h" repeat.each="{= $data}"><rect x="{= $h.repeat.item}" w="5" h="5"/></group>"#);
+    let (mut store, _, n) = sheet(r#"<slider id="$s" x="0" y="0" min="0" max="10" step="1" value="2"/><group id="$g" repeat.count="{= $s.slider.value}"><rect x="{= $g.repeat.index * 20}" w="10" h="10"/></group><let id="$data" value="1 2"/><group id="$h" repeat.each="{= $data}"><rect x="{= $h.repeat.item}" w="5" h="5"/></group>"#);
     let (s, g, data, h) = (n["s"], n["g"], n["data"], n["h"]);
     assert_eq!(items(&store, g).len(), 2);
     let version = store.document().version();
@@ -180,7 +180,7 @@ fn items_follow_a_drag_and_a_publish_without_a_transaction() {
 /// item's copy and nothing else.
 #[test]
 fn changing_one_element_re_evaluates_one_item() {
-    let (mut store, _, n) = sheet(r#"<let id="data" value="10 20 30 40"/><group id="g" repeat.each="{= $data}"><rect x="{= $g.repeat.item * 2}" w="5" h="5"/></group>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$data" value="10 20 30 40"/><group id="$g" repeat.each="{= $data}"><rect x="{= $g.repeat.item * 2}" w="5" h="5"/></group>"#);
     let (data, g) = (n["data"], n["g"]);
     let xs = |s: &Store| items(s, g).iter().map(|&i| x_of(s, s.document().children(i)[0])).collect::<Vec<_>>();
     assert_eq!(xs(&store), vec![20.0, 40.0, 60.0, 80.0]);
@@ -232,7 +232,7 @@ fn lists_and_records_are_values_of_the_floor() {
 /// is attached to it, where it was.
 #[test]
 fn a_legend_over_a_list_keeps_each_items_identity_when_one_is_added_in_front() {
-    let (mut store, _, n) = sheet(r#"<let id="names" value="{= list('alpha', 'beta', 'gamma')}"/><group id="g" name="legend" repeat.each="{= $names}"><let id="open" name="open" value="false"/><text name="label" x="0" y="{= $g.repeat.index * 20}" content="{= $g.repeat.item}"/></group>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$names" value="{= list('alpha', 'beta', 'gamma')}"/><group id="$g" name="legend" repeat.each="{= $names}"><let id="$open" name="open" value="false"/><text name="label" x="0" y="{= $g.repeat.index * 20}" content="{= $g.repeat.item}"/></group>"#);
     let (names, g) = (n["names"], n["g"]);
     let labels = |s: &Store| items(s, g).iter().map(|&i| text_of(s, named(s, i, "label")[0])).collect::<Vec<_>>();
     assert_eq!(labels(&store), vec!["alpha", "beta", "gamma"]);
@@ -265,7 +265,7 @@ fn a_legend_over_a_list_keeps_each_items_identity_when_one_is_added_in_front() {
 /// there keeps its node; new ones are made and old ones go.
 #[test]
 fn ticks_keyed_by_value_keep_the_labels_that_stay() {
-    let (mut store, _, n) = sheet(r#"<let id="lo" value="0"/><group id="g" repeat.each="{= range($lo, $lo + 30, 4)}" repeat.key="{= t => t}"><text name="tick" x="{= $g.repeat.item}" y="0" content="{= fmt($g.repeat.item)}"/></group>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$lo" value="0"/><group id="$g" repeat.each="{= range($lo, $lo + 30, 4)}" repeat.key="{= t => t}"><text name="tick" x="{= $g.repeat.item}" y="0" content="{= fmt($g.repeat.item)}"/></group>"#);
     let (lo, g) = (n["lo"], n["g"]);
     let ids = |s: &Store| items(s, g).iter().map(|i| i.to_string()).collect::<Vec<_>>();
     assert_eq!(ids(&store), vec![format!("{g}/~0"), format!("{g}/~10"), format!("{g}/~20"), format!("{g}/~30")]);
@@ -280,7 +280,7 @@ fn ticks_keyed_by_value_keep_the_labels_that_stay() {
 /// `when`: the children exist only while the condition holds.
 #[test]
 fn a_conditional_groups_children_exist_only_while_it_holds() {
-    let (mut store, _, n) = sheet(r#"<let id="show" value="false"/><group id="g" name="detail" when="{= $show}"><text name="body" x="0" y="0" content="more"/></group>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$show" value="false"/><group id="$g" name="detail" when="{= $show}"><text name="body" x="0" y="0" content="more"/></group>"#);
     let (show, g) = (n["show"], n["g"]);
     assert!(named(&store, g, "body").is_empty());
     store.apply(tx("show", vec![Op::Set { id: show, path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
@@ -305,11 +305,11 @@ fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
     let library = store.document().next_id();
     store.apply(tx("library", vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![] }])).unwrap();
     let def_markup = r##"<definition name="accordion">
-        <port_spec id="title" name="title" kind="value" dir="in" signal="Section"/>
+        <port_spec id="$title" name="title" kind="value" dir="in" signal="Section"/>
         <template notation="free">
-          <let id="open" name="open" value="false"/>
-          <let id="hot" name="hot" keep="session" value="false"/>
-          <group id="head" name="head">
+          <let id="$open" name="open" value="false"/>
+          <let id="$hot" name="hot" keep="session" value="false"/>
+          <group id="$head" name="head">
             <rect name="bar" x="0" y="0" w="200" h="24" fill.color="{= $hot ? rgb(0.8, 0.9, 1) : rgb(0.9, 0.9, 0.9)}"/>
             <text name="title" x="8" y="4" content="{= $title}"/>
             <on name="toggle section" event="click" target="$open" to="{= !$open}"/>
@@ -370,8 +370,8 @@ fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
 /// steps by its `by`.
 #[test]
 fn an_actions_writes_are_parallel_and_one_step() {
-    let (mut store, _, n) = sheet(r#"<let id="a" value="1"/><let id="b" value="2"/><let id="count" value="0"/>
-      <group id="btn" name="swap"><rect name="face" x="0" y="0" w="40" h="20"/>
+    let (mut store, _, n) = sheet(r#"<let id="$a" value="1"/><let id="$b" value="2"/><let id="$count" value="0"/>
+      <group id="$btn" name="swap"><rect name="face" x="0" y="0" w="40" h="20"/>
         <on name="swap" event="click"><set target="$a" to="{= $b}"/><set target="$b" to="{= $a}"/><set target="$count" verb="step" by="5"/></on>
       </group>"#);
     let val = |s: &Store, id: NodeId| s.resolved(id, path("let.value")).unwrap().as_f64().unwrap();
@@ -393,7 +393,7 @@ fn named_any(store: &Store, under: NodeId, name: &str) -> NodeId {
 /// selection, and the selected node's width.
 #[test]
 fn a_readout_of_the_selected_nodes_width_follows_selection_and_resize() {
-    let (mut store, _, n) = sheet(r#"<rect id="r1" x="0" y="0" w="30" h="10"/><rect id="r2" x="50" y="0" w="70" h="10"/><let id="sel" value="0" selection.count="0"/><text id="t" x="0" y="40" content="{= $sel.selection.count == 0 ? 'nothing' : 'w = ' + fmt(deref($sel.selection.node, 'size.w', 0))}"/>"#);
+    let (mut store, _, n) = sheet(r#"<rect id="$r1" x="0" y="0" w="30" h="10"/><rect id="$r2" x="50" y="0" w="70" h="10"/><let id="$sel" value="0" selection.count="0"/><text id="$t" x="0" y="40" content="{= $sel.selection.count == 0 ? 'nothing' : 'w = ' + fmt(deref($sel.selection.node, 'size.w', 0))}"/>"#);
     let (r1, r2, t) = (n["r1"], n["r2"], n["t"]);
     assert_eq!(text_of(&store, t), "nothing");
     store.set_selection(&[(r1, BTreeMap::new())]).unwrap();
@@ -423,7 +423,7 @@ fn a_readout_of_the_selected_nodes_width_follows_selection_and_resize() {
 /// the right order, and a read that reaches itself is an error on the leaf.
 #[test]
 fn a_tracked_read_follows_a_reference_and_reports_a_cycle() {
-    let (mut store, _, n) = sheet(r#"<let id="k" value="2"/><rect id="r1" x="0" y="0" w="{= $k * 10}" h="10"/><rect id="r2" x="0" y="20" w="{= $k * 100}" h="10"/><let id="cur" value="0"/><let id="w" value="{= deref($cur, 'size.w', -1)}"/><let id="twice" value="{= $w * 2}"/>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$k" value="2"/><rect id="$r1" x="0" y="0" w="{= $k * 10}" h="10"/><rect id="$r2" x="0" y="20" w="{= $k * 100}" h="10"/><let id="$cur" value="0"/><let id="$w" value="{= deref($cur, 'size.w', -1)}"/><let id="$twice" value="{= $w * 2}"/>"#);
     let (k, r1, r2, cur, w, twice) = (n["k"], n["r1"], n["r2"], n["cur"], n["w"], n["twice"]);
     let val = |s: &Store, id: NodeId| s.resolved(id, path("let.value")).unwrap().as_f64().unwrap();
     assert_eq!(val(&store, w), -1.0, "the fallback: no node");
@@ -437,7 +437,7 @@ fn a_tracked_read_follows_a_reference_and_reports_a_cycle() {
     assert!(store.reactive().transitive_deps(Leaf { node: twice, path: path("let.value") }).contains(&Leaf { node: r2, path: path("size.w") }));
     // A node whose own width reads the tracked value: pointing at it is a
     // cycle, reported on the leaf, not a hang.
-    let (mut store, _, n) = sheet(r#"<let id="cur" value="0"/><let id="w" value="{= deref($cur, 'size.w', 1)}"/><rect id="r" x="0" y="0" w="{= $w + 1}" h="10"/>"#);
+    let (mut store, _, n) = sheet(r#"<let id="$cur" value="0"/><let id="$w" value="{= deref($cur, 'size.w', 1)}"/><rect id="$r" x="0" y="0" w="{= $w + 1}" h="10"/>"#);
     store.apply(tx("loop", vec![Op::Set { id: n["cur"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["r"])) }])).unwrap();
     let why = store.reactive().errors.get(&Leaf { node: n["w"], path: path("let.value") }).cloned().unwrap_or_default();
     assert!(why.contains("cycle"), "{:?}", store.reactive().errors);
@@ -450,10 +450,10 @@ fn a_tracked_read_follows_a_reference_and_reports_a_cycle() {
 #[test]
 fn a_component_reads_context_from_wherever_it_is_placed() {
     let (mut store, _, named_ids) = sheet(
-        r##"<group id="plain" name="plain"/>
-        <group id="wide" name="wide"><let name="gap" provide="yes" value="40"/></group>
-        <group id="night" name="night"><let id="ink" name="ink" provide="yes" value="#ffffffff"/><rect id="r" name="r" w="4" h="4" fill.color="@ink"/></group>
-        <rect id="day" name="day" w="4" h="4" fill.color="@ink"/>"##,
+        r##"<group id="$plain" name="plain"/>
+        <group id="$wide" name="wide"><let name="gap" provide="yes" value="40"/></group>
+        <group id="$night" name="night"><let id="$ink" name="ink" provide="yes" value="#ffffffff"/><rect id="$r" name="r" w="4" h="4" fill.color="@ink"/></group>
+        <rect id="$day" name="day" w="4" h="4" fill.color="@ink"/>"##,
     );
     let library = store.document().next_id();
     store.apply(tx("library", vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![] }])).unwrap();
@@ -516,13 +516,13 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
 #[test]
 fn a_trace_delays_a_click_and_an_accumulator_integrates() {
     let (mut store, _, n) = sheet(
-        r##"<let id="lit" name="lit" value="false"/>
-        <trace id="tr" name="tr" of="{= $lit}" delay="2"/>
-        <rect id="lamp" name="lamp" w="4" h="4" fill.opacity="{= $tr ? 1 : 0.2}"/>
-        <path id="glow" name="glow" stroke.path_length="1" stroke.cap="butt" stroke.dash="{= $tr.trace.dash}"/>
-        <let id="rate" name="rate" value="3"/>
-        <accumulate id="acc" name="acc" initial="10" next="{= $acc + $rate * $acc.accumulate.dt}"/>
-        <text id="t" name="t" content="{= fmt($acc, 2)}"/>"##,
+        r##"<let id="$lit" name="lit" value="false"/>
+        <trace id="$tr" name="tr" of="{= $lit}" delay="2"/>
+        <rect id="$lamp" name="lamp" w="4" h="4" fill.opacity="{= $tr ? 1 : 0.2}"/>
+        <path id="$glow" name="glow" stroke.path_length="1" stroke.cap="butt" stroke.dash="{= $tr.trace.dash}"/>
+        <let id="$rate" name="rate" value="3"/>
+        <accumulate id="$acc" name="acc" initial="10" next="{= $acc + $rate * $acc.accumulate.dt}"/>
+        <text id="$t" name="t" content="{= fmt($acc, 2)}"/>"##,
     );
     let version = store.history().past().len();
     let out = |s: &Store| s.resolved(n["tr"], path("trace.out")).unwrap();
@@ -601,7 +601,7 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
 /// nothing awake; shown again, it carries on from there.
 #[test]
 fn an_accumulator_in_a_hidden_composition_holds_still() {
-    let (mut store, comp, n) = sheet(r##"<accumulate id="acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/>"##);
+    let (mut store, comp, n) = sheet(r##"<accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/>"##);
     let acc = |s: &Store| s.resolved(n["acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
     let hidden: std::collections::BTreeSet<NodeId> = [comp].into();
     store.advance_steps(0.0, &Default::default());
@@ -654,10 +654,10 @@ fn steady_stepped_producers_are_at_rest() {
 #[test]
 fn a_query_asks_when_read_debounces_and_drops_a_late_answer() {
     let (mut store, _, n) = sheet(
-        r##"<let id="k" name="k" value="1"/>
-        <query id="q" name="q" model="sim" input="{= record(k: $k)}" debounce="0.5" initial="{= 0}"/>
-        <query id="unread" name="unread" model="sim" input="{= record(k: $k)}"/>
-        <text id="t" name="t" content="{= $q.query.status + ' ' + fmt($q) + ($q.query.stale ? ' (old)' : '')}"/>"##,
+        r##"<let id="$k" name="k" value="1"/>
+        <query id="$q" name="q" model="sim" input="{= record(k: $k)}" debounce="0.5" initial="{= 0}"/>
+        <query id="$unread" name="unread" model="sim" input="{= record(k: $k)}"/>
+        <text id="$t" name="t" content="{= $q.query.status + ' ' + fmt($q) + ($q.query.stale ? ' (old)' : '')}"/>"##,
     );
     let text = |s: &Store| text_of(s, n["t"]);
     let set_k = |s: &mut Store, k: f64| s.apply(tx("k", vec![Op::Set { id: n["k"], path: path("let.value"), slot: Slot::Const(Value::Number(k)) }])).unwrap();
@@ -707,12 +707,12 @@ fn a_query_asks_when_read_debounces_and_drops_a_late_answer() {
 #[test]
 fn items_enter_and_leave_over_time() {
     let (mut store, _, n) = sheet(
-        r##"<let id="names" name="names" value="{= list('a', 'b')}"/>
-        <group id="rows" name="rows" repeat.each="{= $names}" repeat.enter_ms="200" repeat.exit_ms="400">
+        r##"<let id="$names" name="names" value="{= list('a', 'b')}"/>
+        <group id="$rows" name="rows" repeat.each="{= $names}" repeat.enter_ms="200" repeat.exit_ms="400">
           <text name="row" content="{= $rows.repeat.item}" appearance.opacity="{= $rows.repeat.presence}"/>
         </group>
-        <let id="open" name="open" value="false"/>
-        <group id="body" name="body" when="{= $open}" when.exit_ms="100">
+        <let id="$open" name="open" value="false"/>
+        <group id="$body" name="body" when="{= $open}" when.exit_ms="100">
           <rect name="panel" w="10" h="10" appearance.opacity="{= $body.when.presence}"/>
         </group>"##,
     );
@@ -756,14 +756,14 @@ fn items_enter_and_leave_over_time() {
 #[test]
 fn a_drag_previews_its_writes_and_commits_one_step() {
     let (mut store, _, n) = sheet(
-        r##"<let id="pan" name="pan" value="0"/>
-        <let id="zoom" name="zoom" value="1"/>
-        <group id="pad" name="pad">
-          <rect id="hit" name="hit" w="100" h="100"/>
-          <on id="d" name="pan view" event="drag" target="$pan" to="{= $pan - $d.on.dx / $zoom}"/>
-          <on id="w" name="zoom view" event="wheel" target="$zoom" to="{= $zoom * exp(-$w.on.delta / 100)}"/>
+        r##"<let id="$pan" name="pan" value="0"/>
+        <let id="$zoom" name="zoom" value="1"/>
+        <group id="$pad" name="pad">
+          <rect id="$hit" name="hit" w="100" h="100"/>
+          <on id="$d" name="pan view" event="drag" target="$pan" to="{= $pan - $d.on.dx / $zoom}"/>
+          <on id="$w" name="zoom view" event="wheel" target="$zoom" to="{= $zoom * exp(-$w.on.delta / 100)}"/>
         </group>
-        <text id="t" name="t" content="{= fmt($pan, 1)}"/>"##,
+        <text id="$t" name="t" content="{= fmt($pan, 1)}"/>"##,
     );
     let history = store.history().past().len();
     assert_eq!(store.listens_for(n["hit"], "drag"), Some(n["pad"]));

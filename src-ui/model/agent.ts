@@ -9,7 +9,7 @@ import type { DocumentApi } from './api';
 import { applyEdit, extractEdit, type EditOutcome } from './edit';
 import { manifest, topicRequest, topicsFor, topicText } from './manifest';
 import { extractRevise, revise } from './revise';
-import { changesSince, conflicts, deletedNamed } from './merge';
+import { changesSince, conflicts } from './merge';
 import { validImages, wireImages } from './images';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
@@ -261,17 +261,8 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
         }
       },
     };
-    const before = await api.version();
-    const storeChanges = STORE_BUILT.test(edit) && before !== since ? await changesSince(api, since) : null;
-    if (storeChanges?.gap) unmergeable = true;
-    const store = storeChanges && !storeChanges.gap ? deletedNamed(edit, storeChanges) : [];
+    lastOutcome = await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);
     if (unmergeable) return unmerged(edit);
-    lastOutcome = store.length
-      ? { ok: false, failure: `<edit-failed applied="none">\n  <error kind="conflict">the person deleted ${store.join(' ')} while you worked</error>\n</edit-failed>` }
-      : await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);
-    if (unmergeable) return unmerged(edit);
-    if (store.length) since = before;
-    if (lastOutcome.ok && STORE_BUILT.test(edit)) merged = before - cycleVersion;
     trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}), ...(patch ? { revised: true } : {}), ...(merged > 0 ? { merged } : {}) });
     if (lastOutcome.ok) {
       if (merged > 0) mergedWith += merged;
@@ -332,10 +323,6 @@ function appliedMarkup(outcome: EditOutcome): string {
 const CONTINUE = /<continue\s*\/>/;
 
 const UNMERGEABLE = 'the document changed while the agent worked, and too much of that is gone from history to merge its edit; ask again with the current document';
-
-/** Edits the store builds from markup rather than ops (edit.ts): merged by
- *  checking only that the nodes they name still exist. */
-const STORE_BUILT = /<(?:place|make-component|link-figures|import-svg|table|circuit|context|write|rewrite)[\s/>]/;
 
 /** Model calls one request may make, of every kind: steps, repairs, looks,
  *  topics and refinements after a picture. Each re-sends the conversation. */

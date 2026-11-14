@@ -1,8 +1,9 @@
-//! Writes one composition of a saved document as node markup with `<place>`
-//! (markup.rs `compose`), the form the demo's gallery is seeded from
+//! Writes one composition of a saved document as an edit (plans/specs/
+//! markup.md), the form the demo's gallery is seeded from
 //! (`src/document_bridge/gallery/*.xml`). Leaves at their facet's default
 //! are left out; ids become `$names`; a `use` of a standard component
-//! becomes a `<place def="std:…">` with its entity's arguments.
+//! becomes a `<place def="std:…">` with its entity's arguments; a relation
+//! from a node of the composition becomes a `<link>` after it.
 //!
 //! `cargo run -p iron_document --target aarch64-apple-darwin --example demo_markup -- doc.json <composition>`
 //!
@@ -44,8 +45,9 @@ fn main() {
         }
         locals.insert(id, local);
     }
-    let mut w = Writer { doc, locals: &locals, referenced: Default::default(), warnings: Vec::new() };
-    let body = w.node(comp, 0);
+    let mut w = Writer { doc, locals: &locals, referenced: Default::default(), warnings: Vec::new(), links: Vec::new() };
+    let body = w.node(comp, 1);
+    let body = format!("<edit>\n{body}{}</edit>\n", w.links.iter().map(|l| format!("  {l}\n")).collect::<String>());
     // Only nodes something refers to keep their id= (written after the fact).
     let mut out = String::new();
     for line in body.lines() {
@@ -53,7 +55,7 @@ fn main() {
         if let Some(at) = line.find(" __ID__=\"") {
             let end = line[at + 9..].find('"').expect("closed") + at + 9;
             let local = line[at + 9..end].to_owned();
-            line.replace_range(at..=end, &if w.referenced.contains(&local) { format!(" id=\"{local}\"") } else { String::new() });
+            line.replace_range(at..=end, &if w.referenced.contains(&local) { format!(" id=\"${local}\"") } else { String::new() });
         }
         out.push_str(&line);
         out.push('\n');
@@ -82,6 +84,8 @@ struct Writer<'a> {
     locals: &'a BTreeMap<NodeId, String>,
     referenced: std::collections::BTreeSet<String>,
     warnings: Vec<String>,
+    /// Relations from the composition's nodes, written after it.
+    links: Vec<String>,
 }
 
 fn escape(s: &str) -> String {
@@ -206,7 +210,16 @@ impl Writer<'_> {
             }
         }
         for r in doc.relations_from(id) {
-            self.warnings.push(format!("{id} ({}): its {:?} relation is not written", self.locals[&id], r.rel));
+            let end = |n: NodeId, w: &mut Self| match w.locals.get(&n) {
+                Some(l) => {
+                    w.referenced.insert(l.clone());
+                    format!("${l}")
+                }
+                None => n.to_string(),
+            };
+            let (from, to) = (end(id, self), end(r.to, self));
+            let data: String = r.data.iter().map(|(k, v)| format!(" {k}=\"{}\"", escape(&iron_document::text::display(v)))).collect();
+            self.links.push(format!("<link from=\"{from}\" to=\"{to}\" rel=\"{}\"{data}/>", r.rel.name()));
         }
         let kids: Vec<NodeId> = doc.children(id).iter().copied().filter(|c| !c.is_expanded() && doc.live(*c).is_some()).collect();
         if kids.is_empty() {

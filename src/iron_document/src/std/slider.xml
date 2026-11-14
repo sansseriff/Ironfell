@@ -1,9 +1,9 @@
 <!-- std:slider: a level between min and max, out as a quantity. -->
 <definition name="slider">
-  <port_spec id="level" name="level" kind="value" dir="in" signal="10"/>
-  <port_spec id="min" name="min" kind="value" dir="in" signal="0"/>
-  <port_spec id="max" name="max" kind="value" dir="in" signal="20"/>
-  <port_spec id="unit" name="unit" kind="value" dir="in" signal="1 mW"/>
+  <port_spec id="$level" name="level" kind="value" dir="in" signal="10"/>
+  <port_spec id="$min" name="min" kind="value" dir="in" signal="0"/>
+  <port_spec id="$max" name="max" kind="value" dir="in" signal="20"/>
+  <port_spec id="$unit" name="unit" kind="value" dir="in" signal="1 mW"/>
   <port_spec name="value" kind="value" dir="out" signal="{= $level * $unit}"/>
   <template notation="free">
     <slider name="slider" x="0" y="0" size.w="200" size.h="24" min="{= $min}" max="{= $max}" step="0.1" value="{= $level}"/>

@@ -34,7 +34,7 @@ try {
 
   const png = await page.evaluate(async () => {
     const api = (window as any).__iron;
-    const edit = await api.edit('<edit><create id="$c" type="composition" name="vision-test" notation="free" dims="2d"/><create type="rect" parent="$c" x="0" y="0" w="100" h="60" color="#ff0000"/></edit>');
+    const edit = await api.edit('<edit><composition id="$c" name="vision-test" notation="free" dims="2d"/><rect in="$c" x="0" y="0" w="100" h="60" color="#ff0000"/></edit>');
     if (!edit.ok) throw new Error(JSON.stringify(edit));
     const before = await api.save();
     const invalid = await api.call('picture', ['not-a-composition']);

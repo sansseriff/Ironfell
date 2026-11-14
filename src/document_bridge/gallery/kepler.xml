@@ -1,40 +1,42 @@
-<composition name="kepler">
-  <text name="title" transform2d.x="40" transform2d.y="30" text.content="Kepler's laws of planetary motion" font.size="26" font.weight="600" fill.color="@ink"/>
-  <text name="caption" transform2d.x="40" transform2d.y="72" text.content="Drag E to move the planet: it races near perihelion, yet its radius vector sweeps equal areas in equal times." font.size="14" fill.color="@muted"/>
-  <group name="orbit diagram">
-    <rect name="orbit panel" transform2d.x="40" transform2d.y="120" size.w="520" size.h="420" corners.tl="8" corners.tr="8" corners.br="8" corners.bl="8" fill.color="@surface" stroke.color="@grid"/>
-    <path name="major axis" path.d="{= 'M ' + fmt(300 - $semi_major_axis.slider.value * 95, 2) + ' 330 L ' + fmt(300 + $semi_major_axis.slider.value * 95, 2) + ' 330'}" fill.opacity="0" stroke.color="@grid" stroke.dash="4 4"/>
-    <path name="swept wedge" path.d="{= 'M ' + fmt(300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value, 2) + ' 330 L ' + points(300 + $semi_major_axis.slider.value * 95 * cos(range(0, $eccentric_anomaly.slider.value, 90)), 330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin(range(0, $eccentric_anomaly.slider.value, 90))) + ' Z'}" fill.color="@series-1" fill.opacity="0.18"/>
-    <ellipse name="orbit" transform2d.x="300" transform2d.y="330" radius.rx="{= $semi_major_axis.slider.value * 95}" radius.ry="{= $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2))}" fill.color="@surface" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
-    <path name="radius vector" path.d="{= 'M ' + fmt(300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value, 2) + ' 330 L ' + fmt(300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value), 2) + ' ' + fmt(330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value), 2)}" fill.opacity="0" stroke.color="@series-2" stroke.width="2"/>
-    <ellipse name="perihelion mark" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95}" transform2d.y="330" radius.rx="3" radius.ry="3" fill.color="@muted"/>
-    <ellipse name="empty focus" transform2d.x="{= 300 - $semi_major_axis.slider.value * 95 * $eccentricity.slider.value}" transform2d.y="330" radius.rx="5" radius.ry="5" appearance.opacity="{= $eccentricity.slider.value &gt; 0.03 ? 1 : 0}" fill.color="@surface" stroke.color="@muted" stroke.width="1.5"/>
-    <ellipse name="sun" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value}" transform2d.y="330" radius.rx="10" radius.ry="10" fill.color="@series-4"/>
-    <ellipse name="planet" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value)}" transform2d.y="{= 330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value)}" radius.rx="7" radius.ry="7" fill.color="@series-1"/>
-    <text name="sun label" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value - 12}" transform2d.y="346" text.content="Sun" font.size="12" fill.color="@ink-2"/>
-    <text name="empty focus label" transform2d.x="{= 300 - $semi_major_axis.slider.value * 95 * $eccentricity.slider.value - 8}" transform2d.y="304" appearance.opacity="{= $eccentricity.slider.value &gt; 0.03 ? 1 : 0}" text.content="empty focus" font.size="12" fill.color="@muted"/>
-    <text name="perihelion label" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 + 6}" transform2d.y="322" appearance.opacity="{= cos($eccentric_anomaly.slider.value) &gt; 0.97 ? 0 : 1}" text.content="perihelion" font.size="12" fill.color="@muted"/>
-    <text name="planet label" transform2d.x="{= min(300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value) + (cos($eccentric_anomaly.slider.value) &gt;= 0 ? 12 : -50), 500)}" transform2d.y="{= max(330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value) + (sin($eccentric_anomaly.slider.value) &gt;= 0 ? -22 : 8), 126)}" text.content="planet" font.size="12" fill.color="@ink-2"/>
-    <text name="orbit title" transform2d.x="54" transform2d.y="128" text.content="Orbit (Sun at a focus)" font.size="13" font.weight="600" fill.color="@ink"/>
-  </group>
-  <group name="controls">
-    <text name="a label" transform2d.x="600" transform2d.y="380" text.content="Semi-major axis a" font.size="14" fill.color="@ink-2"/>
-    <slider id="semi_major_axis" name="semi-major axis" transform2d.x="600" transform2d.y="400" size.w="240" size.h="24" slider.min="0.5" slider.max="2" slider.value="1.5"/>
-    <text name="a readout" transform2d.x="860" transform2d.y="403" text.content="{= fmt($semi_major_axis.slider.value, 2) + ' AU'}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="e label" transform2d.x="600" transform2d.y="440" text.content="Eccentricity e" font.size="14" fill.color="@ink-2"/>
-    <slider id="eccentricity" name="eccentricity" transform2d.x="600" transform2d.y="460" size.w="240" size.h="24" slider.max="0.9" slider.value="0.6"/>
-    <text name="e readout" transform2d.x="860" transform2d.y="463" text.content="{= 'e = ' + fmt($eccentricity.slider.value, 2)}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="E label" transform2d.x="600" transform2d.y="500" text.content="Eccentric anomaly E" font.size="14" fill.color="@ink-2"/>
-    <slider id="eccentric_anomaly" name="eccentric anomaly" transform2d.x="600" transform2d.y="520" size.w="240" size.h="24" slider.max="6.28" slider.value="2.2"/>
-    <text name="E readout" transform2d.x="860" transform2d.y="523" text.content="{= fmt($eccentric_anomaly.slider.value, 2) + ' rad (' + fmt($eccentric_anomaly.slider.value * 180 / pi, 0) + '°)'}" font.size="14" font.tabular="true" fill.color="@ink"/>
-  </group>
-  <group name="readouts">
-    <text name="r readout" transform2d.x="40" transform2d.y="560" text.content="{= 'Distance r = a(1 − e cos E) = ' + fmt($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($eccentric_anomaly.slider.value)), 3) + ' AU'}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="v readout" transform2d.x="40" transform2d.y="584" text.content="{= 'Speed v = ' + fmt(29.78 * sqrt(2 / ($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($eccentric_anomaly.slider.value))) - 1 / $semi_major_axis.slider.value), 1) + ' km/s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="M readout" transform2d.x="340" transform2d.y="560" text.content="{= 'Mean anomaly M = E − e sin E = ' + fmt($eccentric_anomaly.slider.value - $eccentricity.slider.value * sin($eccentric_anomaly.slider.value), 3)}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="T readout" transform2d.x="340" transform2d.y="584" text.content="{= 'Period T = a^(3/2) = ' + fmt(pow($semi_major_axis.slider.value, 1.5), 2) + ' yr (T² = a³ in years and AU)'}" font.size="14" font.tabular="true" fill.color="@ink"/>
-    <text name="swept readout" transform2d.x="40" transform2d.y="620" text.content="{= 'Shaded wedge = M / 2π = ' + fmt(100 * ($eccentric_anomaly.slider.value - $eccentricity.slider.value * sin($eccentric_anomaly.slider.value)) / (2 * pi), 1) + ' % of the orbit’s area, swept in the same fraction of the period.'}" font.size="14" fill.color="@ink-2"/>
-    <text name="scale note" transform2d.x="40" transform2d.y="644" text.content="Scale 95 px = 1 AU. Speeds from vis-viva, v = 29.78 km/s · √(2/r − 1/a), with r and a in AU." font.size="12" fill.color="@muted"/>
-  </group>
-  <place def="std:plot" name="speed plot" x="600" y="120" w="400" h="240" cursor="{= $eccentric_anomaly.slider.value}" title="Orbital speed (vis-viva)" x_label="eccentric anomaly E (rad)" xs="{= range(0, 2 * pi, 181)}" y_label="speed v (km/s)" y_max="{= nice_hi(0, 1.25 * max($self.ys), 5)}" y_min="0" ys="{= 29.78 * sqrt(2 / ($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($self.xs))) - 1 / $semi_major_axis.slider.value)}"/>
-</composition>
+<edit>
+  <composition name="kepler">
+    <text name="title" transform2d.x="40" transform2d.y="30" text.content="Kepler's laws of planetary motion" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="72" text.content="Drag E to move the planet: it races near perihelion, yet its radius vector sweeps equal areas in equal times." font.size="14" fill.color="@muted"/>
+    <group name="orbit diagram">
+      <rect name="orbit panel" transform2d.x="40" transform2d.y="120" size.w="520" size.h="420" corners.tl="8" corners.tr="8" corners.br="8" corners.bl="8" fill.color="@surface" stroke.color="@grid"/>
+      <path name="major axis" path.d="{= 'M ' + fmt(300 - $semi_major_axis.slider.value * 95, 2) + ' 330 L ' + fmt(300 + $semi_major_axis.slider.value * 95, 2) + ' 330'}" fill.opacity="0" stroke.color="@grid" stroke.dash="4 4"/>
+      <path name="swept wedge" path.d="{= 'M ' + fmt(300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value, 2) + ' 330 L ' + points(300 + $semi_major_axis.slider.value * 95 * cos(range(0, $eccentric_anomaly.slider.value, 90)), 330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin(range(0, $eccentric_anomaly.slider.value, 90))) + ' Z'}" fill.color="@series-1" fill.opacity="0.18"/>
+      <ellipse name="orbit" transform2d.x="300" transform2d.y="330" radius.rx="{= $semi_major_axis.slider.value * 95}" radius.ry="{= $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2))}" fill.color="@surface" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
+      <path name="radius vector" path.d="{= 'M ' + fmt(300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value, 2) + ' 330 L ' + fmt(300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value), 2) + ' ' + fmt(330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value), 2)}" fill.opacity="0" stroke.color="@series-2" stroke.width="2"/>
+      <ellipse name="perihelion mark" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95}" transform2d.y="330" radius.rx="3" radius.ry="3" fill.color="@muted"/>
+      <ellipse name="empty focus" transform2d.x="{= 300 - $semi_major_axis.slider.value * 95 * $eccentricity.slider.value}" transform2d.y="330" radius.rx="5" radius.ry="5" appearance.opacity="{= $eccentricity.slider.value &gt; 0.03 ? 1 : 0}" fill.color="@surface" stroke.color="@muted" stroke.width="1.5"/>
+      <ellipse name="sun" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value}" transform2d.y="330" radius.rx="10" radius.ry="10" fill.color="@series-4"/>
+      <ellipse name="planet" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value)}" transform2d.y="{= 330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value)}" radius.rx="7" radius.ry="7" fill.color="@series-1"/>
+      <text name="sun label" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 * $eccentricity.slider.value - 12}" transform2d.y="346" text.content="Sun" font.size="12" fill.color="@ink-2"/>
+      <text name="empty focus label" transform2d.x="{= 300 - $semi_major_axis.slider.value * 95 * $eccentricity.slider.value - 8}" transform2d.y="304" appearance.opacity="{= $eccentricity.slider.value &gt; 0.03 ? 1 : 0}" text.content="empty focus" font.size="12" fill.color="@muted"/>
+      <text name="perihelion label" transform2d.x="{= 300 + $semi_major_axis.slider.value * 95 + 6}" transform2d.y="322" appearance.opacity="{= cos($eccentric_anomaly.slider.value) &gt; 0.97 ? 0 : 1}" text.content="perihelion" font.size="12" fill.color="@muted"/>
+      <text name="planet label" transform2d.x="{= min(300 + $semi_major_axis.slider.value * 95 * cos($eccentric_anomaly.slider.value) + (cos($eccentric_anomaly.slider.value) &gt;= 0 ? 12 : -50), 500)}" transform2d.y="{= max(330 - $semi_major_axis.slider.value * 95 * sqrt(1 - pow($eccentricity.slider.value, 2)) * sin($eccentric_anomaly.slider.value) + (sin($eccentric_anomaly.slider.value) &gt;= 0 ? -22 : 8), 126)}" text.content="planet" font.size="12" fill.color="@ink-2"/>
+      <text name="orbit title" transform2d.x="54" transform2d.y="128" text.content="Orbit (Sun at a focus)" font.size="13" font.weight="600" fill.color="@ink"/>
+    </group>
+    <group name="controls">
+      <text name="a label" transform2d.x="600" transform2d.y="380" text.content="Semi-major axis a" font.size="14" fill.color="@ink-2"/>
+      <slider id="$semi_major_axis" name="semi-major axis" transform2d.x="600" transform2d.y="400" size.w="240" size.h="24" slider.min="0.5" slider.max="2" slider.value="1.5"/>
+      <text name="a readout" transform2d.x="860" transform2d.y="403" text.content="{= fmt($semi_major_axis.slider.value, 2) + ' AU'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="e label" transform2d.x="600" transform2d.y="440" text.content="Eccentricity e" font.size="14" fill.color="@ink-2"/>
+      <slider id="$eccentricity" name="eccentricity" transform2d.x="600" transform2d.y="460" size.w="240" size.h="24" slider.max="0.9" slider.value="0.6"/>
+      <text name="e readout" transform2d.x="860" transform2d.y="463" text.content="{= 'e = ' + fmt($eccentricity.slider.value, 2)}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="E label" transform2d.x="600" transform2d.y="500" text.content="Eccentric anomaly E" font.size="14" fill.color="@ink-2"/>
+      <slider id="$eccentric_anomaly" name="eccentric anomaly" transform2d.x="600" transform2d.y="520" size.w="240" size.h="24" slider.max="6.28" slider.value="2.2"/>
+      <text name="E readout" transform2d.x="860" transform2d.y="523" text.content="{= fmt($eccentric_anomaly.slider.value, 2) + ' rad (' + fmt($eccentric_anomaly.slider.value * 180 / pi, 0) + '°)'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    </group>
+    <group name="readouts">
+      <text name="r readout" transform2d.x="40" transform2d.y="560" text.content="{= 'Distance r = a(1 − e cos E) = ' + fmt($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($eccentric_anomaly.slider.value)), 3) + ' AU'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="v readout" transform2d.x="40" transform2d.y="584" text.content="{= 'Speed v = ' + fmt(29.78 * sqrt(2 / ($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($eccentric_anomaly.slider.value))) - 1 / $semi_major_axis.slider.value), 1) + ' km/s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="M readout" transform2d.x="340" transform2d.y="560" text.content="{= 'Mean anomaly M = E − e sin E = ' + fmt($eccentric_anomaly.slider.value - $eccentricity.slider.value * sin($eccentric_anomaly.slider.value), 3)}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="T readout" transform2d.x="340" transform2d.y="584" text.content="{= 'Period T = a^(3/2) = ' + fmt(pow($semi_major_axis.slider.value, 1.5), 2) + ' yr (T² = a³ in years and AU)'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="swept readout" transform2d.x="40" transform2d.y="620" text.content="{= 'Shaded wedge = M / 2π = ' + fmt(100 * ($eccentric_anomaly.slider.value - $eccentricity.slider.value * sin($eccentric_anomaly.slider.value)) / (2 * pi), 1) + ' % of the orbit’s area, swept in the same fraction of the period.'}" font.size="14" fill.color="@ink-2"/>
+      <text name="scale note" transform2d.x="40" transform2d.y="644" text.content="Scale 95 px = 1 AU. Speeds from vis-viva, v = 29.78 km/s · √(2/r − 1/a), with r and a in AU." font.size="12" fill.color="@muted"/>
+    </group>
+    <place def="std:plot" name="speed plot" x="600" y="120" w="400" h="240" cursor="{= $eccentric_anomaly.slider.value}" title="Orbital speed (vis-viva)" x_label="eccentric anomaly E (rad)" xs="{= range(0, 2 * pi, 181)}" y_label="speed v (km/s)" y_max="{= nice_hi(0, 1.25 * max($self.ys), 5)}" y_min="0" ys="{= 29.78 * sqrt(2 / ($semi_major_axis.slider.value * (1 - $eccentricity.slider.value * cos($self.xs))) - 1 / $semi_major_axis.slider.value)}"/>
+  </composition>
+</edit>

@@ -71,7 +71,8 @@ DC operating point: the probe reads 5 V, the charged state; the curves show the 
 names the place, and another node may read it before it exists: `$plot.transform2d.x` (the
 `use`'s own leaf) or `$plot.x_lo` (an output port of the placed instance, an expanded
 node `#entity/spec`). Leaves that read a place are set after the places are composed
-(`compose::compose_els`). The store checks a `Set` whose binding reads an expanded node at
+(`compose::compose_els`). The places are composed after the nodes, so the siblings around a
+place are then put back in markup order: a mark written after a plot paints over it. The store checks a `Set` whose binding reads an expanded node at
 the end of the transaction, after instances expand (op.rs `reads_expanded`), as it already
 did for a `Create`.
 

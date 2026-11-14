@@ -82,16 +82,28 @@ pub fn compose(store: &crate::Store, src: &str, parent: Option<NodeId>, order: O
     // read a place: they are written after it.
     let mut places: Vec<(Option<String>, El)> = Vec::new();
     let mut deferred: Vec<(String, String, String)> = Vec::new();
+    // Siblings among which a place sits, in markup order (a node's local
+    // name, or a place's alias): the places are made after the nodes, so
+    // the siblings are put back in this order once they all exist.
+    let mut sequences: Vec<(Option<String>, Vec<Sibling>)> = Vec::new();
     let mut synthetic = 0;
-    fn lift(els: &mut Vec<El>, owner: Option<&str>, places: &mut Vec<(Option<String>, El)>, deferred: &mut Vec<(String, String, String)>, synthetic: &mut usize, reads_place: &dyn Fn(&str) -> bool) {
+    enum Sibling {
+        Node(String),
+        Place(String),
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn lift(els: &mut Vec<El>, owner: Option<&str>, places: &mut Vec<(Option<String>, El)>, deferred: &mut Vec<(String, String, String)>, sequences: &mut Vec<(Option<String>, Vec<Sibling>)>, synthetic: &mut usize, reads_place: &dyn Fn(&str) -> bool) {
+        let has_place = els.iter().any(|e| e.name == "place");
+        let mut sequence = Vec::new();
         let mut kept = Vec::with_capacity(els.len());
         for mut el in els.drain(..) {
             if el.name == "place" {
+                sequence.push(Sibling::Place(el.attr("as").expect("aliased above").to_owned()));
                 places.push((owner.map(str::to_owned), el));
                 continue;
             }
             let defers = el.attrs.iter().any(|(_, v)| reads_place(v));
-            if (defers || el.children.iter().any(|c| c.name == "place")) && el.attr("id").is_none() {
+            if (defers || has_place || el.children.iter().any(|c| c.name == "place")) && el.attr("id").is_none() {
                 el.attrs.push(("id".into(), format!("__node_{synthetic}")));
                 *synthetic += 1;
             }
@@ -105,12 +117,18 @@ pub fn compose(store: &crate::Store, src: &str, parent: Option<NodeId>, order: O
                 }
             }
             let id = el.attr("id").map(str::to_owned);
-            lift(&mut el.children, id.as_deref(), places, deferred, synthetic, reads_place);
+            if has_place {
+                sequence.push(Sibling::Node(id.clone().expect("named above")));
+            }
+            lift(&mut el.children, id.as_deref(), places, deferred, sequences, synthetic, reads_place);
             kept.push(el);
+        }
+        if has_place {
+            sequences.push((owner.map(str::to_owned), sequence));
         }
         *els = kept;
     }
-    lift(&mut els, None, &mut places, &mut deferred, &mut synthetic, &names_a_place);
+    lift(&mut els, None, &mut places, &mut deferred, &mut sequences, &mut synthetic, &names_a_place);
     let mut built = build(&els, parent, order, store.document().next_id())?;
     let type_of: BTreeMap<NodeId, TypeId> = built.ops.iter().filter_map(|op| match op {
         Op::Create { id, ty, .. } => Some((*id, *ty)),
@@ -148,6 +166,23 @@ pub fn compose(store: &crate::Store, src: &str, parent: Option<NodeId>, order: O
         .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
         .map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
     let doc = scratch.document();
+    // Siblings back in markup order: a mark written after a plot paints
+    // over it.
+    for (owner, sequence) in &sequences {
+        let parent_id = match owner {
+            Some(local) => Some(types[local].0),
+            None => parent,
+        };
+        let ids: Vec<NodeId> = sequence.iter().map(|s| match s {
+            Sibling::Node(local) => types[local].0,
+            Sibling::Place(alias) => aliases[alias].picture,
+        }).collect();
+        let Some(mut key) = ids.first().and_then(|&id| doc.live(id)).map(|n| n.order.clone()) else { continue };
+        for &id in &ids[1..] {
+            key = OrderKey::after(&key);
+            ops.push(Op::Reparent { id, parent: parent_id, order: key.clone() });
+        }
+    }
     for (local, key, raw) in deferred {
         let (id, ty) = types[&local];
         let mut text = raw.trim().strip_prefix("{=").and_then(|r| r.strip_suffix('}')).ok_or_else(|| format!("{key}=\"{raw}\": a leaf that reads a place is a binding, {{= …}}"))?.trim().to_owned();

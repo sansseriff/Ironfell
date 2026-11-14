@@ -90,4 +90,10 @@ fn a_node_reads_a_placed_plots_ports() {
     assert!((540.0..1000.0).contains(&x) && (340.0..660.0).contains(&y), "marker at ({x}, {y})");
     let opacity = store.resolved(marker, "appearance.opacity".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     assert_eq!(opacity, 1.0);
+    // Written after the plots, it paints over them: siblings keep markup order.
+    let doc = store.document();
+    let kids: Vec<NodeId> = doc.children(doc.live(marker).unwrap().parent.unwrap()).to_vec();
+    let at = |id: NodeId| kids.iter().position(|&k| k == id).unwrap();
+    let last_use = kids.iter().copied().filter(|&k| doc.live(k).is_some_and(|n| n.ty.name() == "use")).map(at).max().unwrap();
+    assert!(at(marker) > last_use, "the marker sits above the plots");
 }

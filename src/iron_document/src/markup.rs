@@ -5,14 +5,15 @@
 //! the node's name; children are child nodes. A value is a constant of the
 //! leaf's kind, a colour token (`@ink`), or a binding `{= expr}`.
 //!
-//! `id="x"` names a node for the rest of the markup: `$x` is its id, in a
-//! binding (`{= $x.size.w}`) or a reference (`anchor.port="$x"`). Bare `$x`
-//! in a binding reads the value a node holds: a `let`'s `let.value`, a
-//! `port_spec`'s `port.signal`, a `channel`'s `channel.value`.
+//! `id="$x"` names a new node for the rest of the markup: `$x` is its id,
+//! in a binding (`{= $x.size.w}`) or a reference (`anchor.port="$x"`). Bare
+//! `$x` in a binding reads the value a node holds: a `let`'s `let.value`, a
+//! `port_spec`'s `port.signal`, a `channel`'s `channel.value`. `k.bind="e"`
+//! is `k="{= e}"` (the form a view prints a binding in, beside its value).
 //!
-//! The standard components are written in it (`std/*.xml`), so a component
-//! is data the engine reads, not code: anything one does, an agent's edit
-//! can do too.
+//! The same language is the model's edits (`edit.rs`, plans/specs/markup.md)
+//! and the standard components (`std/*.xml`), so a component is data the
+//! engine reads, not code: anything one does, an agent's edit can do too.
 
 use crate::expr::Expr;
 use crate::facet::{Facet, FacetKind};
@@ -40,242 +41,50 @@ pub fn ops(src: &str, parent: Option<NodeId>, order: OrderKey, first: NodeId) ->
     build(&crate::parts::elements(src)?, parent, order, first)
 }
 
-/// Node markup that also places components: a `<place>` element among the
-/// nodes, at any depth, is the model's `<place>` verb (compose.rs) with
-/// `in` its parent node (or `parent` at the top), applied after the nodes.
-/// Its attributes may name the markup's nodes as `$x`, in a binding or as
-/// `def`; `$self` keeps its meaning there. A place's `id="p"` names it for
-/// the nodes: `$p.transform2d.x` is its picture's leaf and `$p.x_lo` its
-/// instance's port, so a mark can sit on a plot; such leaves are set once
-/// the places exist. This is how a whole composition is written as data
-/// (`document_bridge::demo`'s gallery). Returns the ops, starting with the
-/// nodes', and what the markup named.
-pub fn compose(store: &crate::Store, src: &str, parent: Option<NodeId>, order: OrderKey) -> Result<Built, String> {
-    let mut els = crate::parts::elements(src)?;
-    // The places' own names, each given an alias for compose.rs.
-    let mut place_names: BTreeMap<String, String> = BTreeMap::new();
-    fn name_places(els: &mut [El], out: &mut BTreeMap<String, String>) -> Result<(), String> {
-        for el in els.iter_mut() {
-            if el.name == "place" {
-                let alias = format!("$__place_{}", out.len());
-                if let Some(pos) = el.attrs.iter().position(|(k, _)| k == "id") {
-                    let (_, local) = el.attrs.remove(pos);
-                    if out.insert(local.clone(), alias.clone()).is_some() {
-                        return Err(format!("id=\"{local}\" names two places"));
-                    }
-                } else {
-                    out.insert(format!("__anonymous_{}", out.len()), alias.clone());
-                }
-                if el.attr("as").is_some() {
-                    return Err("a <place> in node markup is named by id=, not as=".into());
-                }
-                el.attrs.push(("as".into(), alias));
-            }
-            name_places(&mut el.children, out)?;
-        }
-        Ok(())
-    }
-    name_places(&mut els, &mut place_names)?;
-    let names_a_place = |v: &str| place_names.keys().any(|p| v.match_indices(&format!("${p}")).any(|(i, m)| !v[i + m.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')));
-    // Lift the places out, each with the local name of the node it sits in
-    // (one is given to a node that has none), and set aside the leaves that
-    // read a place: they are written after it.
-    let mut places: Vec<(Option<String>, El)> = Vec::new();
-    let mut deferred: Vec<(String, String, String)> = Vec::new();
-    // Siblings among which a place sits, in markup order (a node's local
-    // name, or a place's alias): the places are made after the nodes, so
-    // the siblings are put back in this order once they all exist.
-    let mut sequences: Vec<(Option<String>, Vec<Sibling>)> = Vec::new();
-    let mut synthetic = 0;
-    enum Sibling {
-        Node(String),
-        Place(String),
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn lift(els: &mut Vec<El>, owner: Option<&str>, places: &mut Vec<(Option<String>, El)>, deferred: &mut Vec<(String, String, String)>, sequences: &mut Vec<(Option<String>, Vec<Sibling>)>, synthetic: &mut usize, reads_place: &dyn Fn(&str) -> bool) {
-        let has_place = els.iter().any(|e| e.name == "place");
-        let mut sequence = Vec::new();
-        let mut kept = Vec::with_capacity(els.len());
-        for mut el in els.drain(..) {
-            if el.name == "place" {
-                sequence.push(Sibling::Place(el.attr("as").expect("aliased above").to_owned()));
-                places.push((owner.map(str::to_owned), el));
-                continue;
-            }
-            let defers = el.attrs.iter().any(|(_, v)| reads_place(v));
-            if (defers || has_place || el.children.iter().any(|c| c.name == "place")) && el.attr("id").is_none() {
-                el.attrs.push(("id".into(), format!("__node_{synthetic}")));
-                *synthetic += 1;
-            }
-            if defers {
-                let local = el.attr("id").expect("named above").to_owned();
-                for (k, v) in el.attrs.iter_mut() {
-                    if reads_place(v) {
-                        deferred.push((local.clone(), k.clone(), std::mem::take(v)));
-                        *k = format!("__defer:{k}");
-                    }
-                }
-            }
-            let id = el.attr("id").map(str::to_owned);
-            if has_place {
-                sequence.push(Sibling::Node(id.clone().expect("named above")));
-            }
-            lift(&mut el.children, id.as_deref(), places, deferred, sequences, synthetic, reads_place);
-            kept.push(el);
-        }
-        if has_place {
-            sequences.push((owner.map(str::to_owned), sequence));
-        }
-        *els = kept;
-    }
-    lift(&mut els, None, &mut places, &mut deferred, &mut sequences, &mut synthetic, &names_a_place);
-    let mut built = build(&els, parent, order, store.document().next_id())?;
-    let type_of: BTreeMap<NodeId, TypeId> = built.ops.iter().filter_map(|op| match op {
-        Op::Create { id, ty, .. } => Some((*id, *ty)),
-        _ => None,
-    }).collect();
-    let types: BTreeMap<String, (NodeId, TypeId)> = built.named.iter().map(|(k, id)| (k.clone(), (*id, type_of[id]))).collect();
-    built.named.retain(|k, _| !k.starts_with("__node_"));
-    if places.is_empty() {
-        return Ok(built);
-    }
-    let mut verbs = Vec::new();
-    for (owner, mut el) in places {
-        for (k, v) in el.attrs.iter_mut() {
-            if k != "as" {
-                *v = resolve_known(v, &types);
-            }
-        }
-        if el.attr("in").is_none() {
-            let target = match owner {
-                Some(local) => types.get(&local).map(|(id, _)| *id).ok_or_else(|| format!("no node {local}"))?,
-                None => parent.ok_or("a <place> at the top level needs in=")?,
-            };
-            el.attrs.push(("in".into(), target.to_string()));
-        }
-        verbs.push(el);
-    }
-    let (mut ops, aliases) = crate::compose::compose_els(store, built.ops, verbs).map_err(|e| match e {
-        crate::compose::ComposeError::Ops(errors) => errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
-        crate::compose::ComposeError::Verb(m) => m,
-    })?;
-    // The leaves that read a place, now that it exists: `$p.a.b` is its
-    // picture's leaf, `$p.port` its entity's port.
-    let mut scratch = crate::Store::with_document(store.document().clone());
-    scratch
-        .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
-        .map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
-    let doc = scratch.document();
-    // Siblings back in markup order: a mark written after a plot paints
-    // over it.
-    for (owner, sequence) in &sequences {
-        let parent_id = match owner {
-            Some(local) => Some(types[local].0),
-            None => parent,
-        };
-        let ids: Vec<NodeId> = sequence.iter().map(|s| match s {
-            Sibling::Node(local) => types[local].0,
-            Sibling::Place(alias) => aliases[alias].picture,
-        }).collect();
-        let Some(mut key) = ids.first().and_then(|&id| doc.live(id)).map(|n| n.order.clone()) else { continue };
-        for &id in &ids[1..] {
-            key = OrderKey::after(&key);
-            ops.push(Op::Reparent { id, parent: parent_id, order: key.clone() });
-        }
-    }
-    for (local, key, raw) in deferred {
-        let (id, ty) = types[&local];
-        let mut text = raw.trim().strip_prefix("{=").and_then(|r| r.strip_suffix('}')).ok_or_else(|| format!("{key}=\"{raw}\": a leaf that reads a place is a binding, {{= …}}"))?.trim().to_owned();
-        for (place, alias) in &place_names {
-            let named = aliases[alias];
-            let needle = format!("${place}.");
-            while let Some(at) = text.find(&needle) {
-                let rest = &text[at + needle.len()..];
-                let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).unwrap_or(rest.len());
-                let path = rest[..end].trim_end_matches('.');
-                let with = if path.contains('.') {
-                    format!("{}.{path}", named.picture)
-                } else {
-                    let entity = named.entity.ok_or_else(|| format!("${place} placed no entity"))?;
-                    let spec = doc.children(named.definition).iter().copied().find(|&c| doc.get::<crate::facet::Port>(c).is_some() && doc.get::<crate::facet::Name>(c).and_then(|n| n.text.constant()?.as_str().map(str::to_owned)).as_deref() == Some(path)).ok_or_else(|| format!("${place} has no port {path}"))?;
-                    format!("{}.port.signal", NodeId::expanded(entity, spec).ok_or("no derived id")?)
-                };
-                text.replace_range(at..at + needle.len() + path.len(), &with);
-            }
-        }
-        let text = resolve(&text, &types)?;
-        let (kind, field) = leaf(ty, &key)?;
-        let path = crate::facet::LeafPath::new(kind, &field).map_err(|e| format!("{key}: {e}"))?;
-        let expr = Expr::parse(&text).map_err(|e| format!("{key}=\"{raw}\": {e}"))?;
-        ops.push(Op::Set { id, path, slot: Slot::Bound(expr) });
-    }
-    built.ops = ops;
-    Ok(built)
+/// What a markup's `$names` stand for: the nodes it makes, the components
+/// an edit places (compose.rs), and the document they are read against
+/// (for `$p.port`, `#use.port`).
+#[derive(Default)]
+pub(crate) struct Names<'a> {
+    /// `x` (from `id="$x"`) to the node and its type.
+    pub(crate) nodes: BTreeMap<String, (NodeId, TypeId)>,
+    /// `p` (from a `<place id="$p">`) to what it placed.
+    pub(crate) places: BTreeMap<String, crate::compose::Named>,
+    /// The document, once the places exist in it.
+    pub(crate) doc: Option<&'a crate::document::Document>,
 }
 
-/// `$x` in `text` as the id markup gave `x` (bare, the value it holds, as
-/// [`resolve`]); a `$name` the markup did not name is left as written.
-fn resolve_known(text: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(i) = rest.find('$') {
-        out.push_str(&rest[..i]);
-        let after = &rest[i + 1..];
-        let end = after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len());
-        let name = &after[..end];
-        let next = &after[end..after.len().min(end + 1)];
-        match resolve(&format!("${name}{next}"), named) {
-            // `resolve` saw the name and the character after it, so it
-            // added the value suffix only for a bare reference.
-            Ok(r) if named.contains_key(name) => out.push_str(r.strip_suffix(next).unwrap_or(&r)),
-            _ => {
-                out.push('$');
-                out.push_str(name);
-            }
-        }
-        rest = &after[end..];
+impl Names<'_> {
+    /// The node `$name` stands for: a node, or a place's picture.
+    pub(crate) fn node(&self, name: &str) -> Option<NodeId> {
+        self.nodes.get(name).map(|(id, _)| *id).or_else(|| self.places.get(name).map(|p| p.picture))
     }
-    out.push_str(rest);
-    out
+}
+
+/// A new node's name, `id="$x"`, without its `$`.
+pub(crate) fn local_name(el: &El) -> Result<Option<&str>, String> {
+    match el.attr("id") {
+        None => Ok(None),
+        Some(n) => match n.strip_prefix('$') {
+            Some(local) if !local.is_empty() && local.chars().all(|c| c.is_alphanumeric() || c == '_') => Ok(Some(local)),
+            _ if n.starts_with('#') => Err(format!("<{} id=\"{n}\">: {n} is a node that exists; change it with <set id=\"{n}\" …/>. A new node is named id=\"$x\"", el.name)),
+            _ => Err(format!("<{} id=\"{n}\">: a new node is named id=\"$x\", a $ then letters, digits or _", el.name)),
+        },
+    }
 }
 
 /// [`ops`] on parsed elements.
 fn build(els: &[El], parent: Option<NodeId>, order: OrderKey, first: NodeId) -> Result<Built, String> {
-    // Ids first, so a node may name one written after it.
-    let mut next = first.raw();
-    let mut named: BTreeMap<String, (NodeId, TypeId)> = BTreeMap::new();
-    fn number(els: &[El], next: &mut u64, named: &mut BTreeMap<String, (NodeId, TypeId)>, ids: &mut Vec<NodeId>) -> Result<(), String> {
-        for el in els {
-            let ty = TypeId::lookup(&el.name).ok_or_else(|| format!("<{}>: no node type {:?}", el.name, el.name))?;
-            let id = NodeId::from_raw(*next);
-            *next += 1;
-            ids.push(id);
-            if let Some(n) = el.attr("id")
-                && named.insert(n.to_owned(), (id, ty)).is_some()
-            {
-                return Err(format!("id=\"{n}\" names two nodes"));
-            }
-            number(&el.children, next, named, ids)?;
-        }
-        Ok(())
-    }
+    let mut names = Names::default();
     let mut ids = Vec::new();
-    number(els, &mut next, &mut named, &mut ids)?;
-    let mut built = Built { ops: Vec::new(), roots: Vec::new(), named: named.iter().map(|(k, (id, _))| (k.clone(), *id)).collect() };
+    number(els, &mut first.raw(), &mut names.nodes, &mut ids)?;
+    let mut built = Built { ops: Vec::new(), roots: Vec::new(), named: names.nodes.iter().map(|(k, (id, _))| (k.clone(), *id)).collect() };
     let mut ids = ids.into_iter();
-    fn emit(els: &[El], parent: Option<NodeId>, mut order: OrderKey, ids: &mut std::vec::IntoIter<NodeId>, named: &BTreeMap<String, (NodeId, TypeId)>, out: &mut Built) -> Result<(), String> {
-        for el in els {
-            let id = ids.next().expect("numbered");
-            let ty = TypeId::lookup(&el.name).expect("numbered");
-            let facets = facets(el, ty, named).map_err(|e| format!("<{}{}>: {e}", el.name, el.attr("name").map(|n| format!(" name=\"{n}\"")).unwrap_or_default()))?;
-            out.ops.push(Op::Create { id, ty, parent, order: order.clone(), facets });
-            emit(&el.children, Some(id), OrderKey::first(), ids, named, out)?;
-            order = OrderKey::after(&order);
-        }
-        Ok(())
+    let mut order = order;
+    for el in els {
+        emit(el, parent, order.clone(), &mut ids, &names, &mut built.ops)?;
+        order = OrderKey::after(&order);
     }
-    emit(els, parent, order, &mut ids, &named, &mut built)?;
-    // Top-level nodes are those created under `parent`.
     built.roots = built.ops.iter().filter_map(|op| match op {
         Op::Create { id, parent: p, .. } if *p == parent => Some(*id),
         _ => None,
@@ -283,8 +92,42 @@ fn build(els: &[El], parent: Option<NodeId>, order: OrderKey, first: NodeId) -> 
     Ok(built)
 }
 
+/// Ids for `els` and their descendants in document order, from `next`;
+/// each `id="$x"` recorded in `named`. Ids first, so a node may name one
+/// written after it.
+pub(crate) fn number(els: &[El], next: &mut u64, named: &mut BTreeMap<String, (NodeId, TypeId)>, ids: &mut Vec<NodeId>) -> Result<(), String> {
+    for el in els {
+        let ty = TypeId::lookup(&el.name).ok_or_else(|| format!("<{}>: no node type {:?}", el.name, el.name))?;
+        let id = NodeId::from_raw(*next);
+        *next += 1;
+        ids.push(id);
+        if let Some(n) = local_name(el)?
+            && named.insert(n.to_owned(), (id, ty)).is_some()
+        {
+            return Err(format!("id=\"${n}\" names two nodes"));
+        }
+        number(&el.children, next, named, ids)?;
+    }
+    Ok(())
+}
+
+/// The ops creating `el` (its id the next of `ids`) under `parent` at
+/// `order`, then its children.
+pub(crate) fn emit(el: &El, parent: Option<NodeId>, order: OrderKey, ids: &mut std::vec::IntoIter<NodeId>, names: &Names, out: &mut Vec<Op>) -> Result<(), String> {
+    let id = ids.next().expect("numbered");
+    let ty = TypeId::lookup(&el.name).expect("numbered");
+    let facets = facets(el, ty, names).map_err(|e| format!("<{}{}>: {e}", el.name, el.attr("name").map(|n| format!(" name=\"{n}\"")).unwrap_or_default()))?;
+    out.push(Op::Create { id, ty, parent, order, facets });
+    let mut child = OrderKey::first();
+    for c in &el.children {
+        emit(c, Some(id), child.clone(), ids, names, out)?;
+        child = OrderKey::after(&child);
+    }
+    Ok(())
+}
+
 /// The facet and field attribute `attr` names on a node of type `ty`.
-fn leaf(ty: TypeId, attr: &str) -> Result<(FacetKind, String), String> {
+pub(crate) fn leaf(ty: TypeId, attr: &str) -> Result<(FacetKind, String), String> {
     if attr == "name" {
         return Ok((FacetKind::Name, "text".into()));
     }
@@ -309,15 +152,35 @@ fn leaf(ty: TypeId, attr: &str) -> Result<(FacetKind, String), String> {
     }
 }
 
-/// A node's facets: those its attributes name, then its type's required
-/// ones it lacks, at their defaults.
-fn facets(el: &El, ty: TypeId, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<Vec<Facet>, String> {
-    let mut out: Vec<Facet> = Vec::new();
-    for (attr, raw) in &el.attrs {
-        if attr == "id" {
+/// The value kind of `kind`'s field `field`.
+pub(crate) fn kind_of(kind: FacetKind, field: &str) -> ValueKind {
+    if kind.is_dynamic() { ValueKind::Any } else { kind.fields().iter().find(|(n, _)| *n == field).map(|(_, k)| *k).unwrap_or(ValueKind::Any) }
+}
+
+/// An element's leaf attributes, `k.bind="e"` read as `k="{= e}"` (a
+/// binding written so wins over the value beside it), without `skip`.
+pub(crate) fn leaf_attrs<'a>(el: &'a El, skip: &[&str]) -> Vec<(String, std::borrow::Cow<'a, str>)> {
+    let bound: Vec<&str> = el.attrs.iter().filter_map(|(k, _)| k.strip_suffix(".bind")).collect();
+    let mut out = Vec::new();
+    for (k, v) in &el.attrs {
+        if skip.contains(&k.as_str()) {
             continue;
         }
-        // A leaf written later (`compose`): its facet, at its default.
+        match k.strip_suffix(".bind") {
+            Some(base) => out.push((base.to_owned(), std::borrow::Cow::Owned(format!("{{= {v}}}")))),
+            None if bound.contains(&k.as_str()) => {}
+            None => out.push((k.clone(), std::borrow::Cow::Borrowed(v.as_str()))),
+        }
+    }
+    out
+}
+
+/// A node's facets: those its attributes name, then its type's required
+/// ones it lacks, at their defaults.
+pub(crate) fn facets(el: &El, ty: TypeId, names: &Names) -> Result<Vec<Facet>, String> {
+    let mut out: Vec<Facet> = Vec::new();
+    for (attr, raw) in leaf_attrs(el, &["id", "in", "after", "first"]) {
+        // A leaf written later (edit.rs): its facet, at its default.
         if let Some(later) = attr.strip_prefix("__defer:") {
             let (kind, _) = leaf(ty, later)?;
             if !out.iter().any(|f| f.kind() == kind) {
@@ -325,13 +188,12 @@ fn facets(el: &El, ty: TypeId, named: &BTreeMap<String, (NodeId, TypeId)>) -> Re
             }
             continue;
         }
-        let (kind, field) = leaf(ty, attr)?;
+        let (kind, field) = leaf(ty, &attr)?;
         if !out.iter().any(|f| f.kind() == kind) {
             out.push(kind.default_facet());
         }
         let f = out.iter_mut().find(|f| f.kind() == kind).expect("added");
-        let vk = if kind.is_dynamic() { ValueKind::Any } else { kind.fields().iter().find(|(n, _)| *n == field).map(|(_, k)| *k).expect("checked") };
-        let slot = slot(vk, raw, named).map_err(|e| format!("{attr}=\"{raw}\": {e}"))?;
+        let slot = slot(kind_of(kind, &field), &raw, names).map_err(|e| format!("{attr}=\"{raw}\": {e}"))?;
         match f {
             Facet::Args(a) => a.insert(&field, slot),
             f => {
@@ -355,51 +217,114 @@ fn facets(el: &El, ty: TypeId, named: &BTreeMap<String, (NodeId, TypeId)>) -> Re
     Ok(out)
 }
 
+/// The port `name` of the instance `node` stands for (an entity, or a
+/// `use` picturing one), as the expanded node holding its signal.
+pub(crate) fn instance_port(doc: &crate::document::Document, node: NodeId, name: &str) -> Option<NodeId> {
+    let entity = match doc.live(node)?.ty.name() {
+        "use" => crate::composition::figure_of(doc, node).map(|(_, e)| e)?,
+        _ => node,
+    };
+    let def = crate::expand::linked_definition(doc, entity)?;
+    let spec = doc.children(def).iter().copied().find(|&c| {
+        doc.get::<crate::facet::Port>(c).is_some() && doc.get::<crate::facet::Name>(c).and_then(|n| n.text.constant()?.as_str().map(str::to_owned)).as_deref() == Some(name)
+    })?;
+    NodeId::expanded(entity, spec)
+}
+
+/// A name's characters, from the start of `s`.
+fn word(s: &str) -> usize {
+    s.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(s.len())
+}
+
 /// `$x` and `$x.facet.field` in a binding's text, as ids; bare `$x` reads
-/// the value `x` holds.
-fn resolve(text: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<String, String> {
+/// the value `x` holds. A place's `$p.facet.field` is its picture's leaf,
+/// `$p.port` its instance's port; so is `#use.port` for an instance the
+/// document has.
+pub(crate) fn resolve(text: &str, names: &Names) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.char_indices().peekable();
-    while let Some((i, c)) = chars.next() {
-        if c != '$' {
+    let mut i = 0;
+    let quoted = |at: usize| text[..at].matches('\'').count() % 2 == 1;
+    while i < text.len() {
+        let c = text[i..].chars().next().expect("in range");
+        if (c != '$' && c != '#') || quoted(i) {
             out.push(c);
+            i += c.len_utf8();
+            continue;
+        }
+        if c == '#' {
+            // `#use.port`: an id, then one name not followed by another.
+            let id_end = i + 1 + text[i + 1..].find(|c: char| !(c.is_alphanumeric() || c == '/' || c == '~')).unwrap_or(text.len() - i - 1);
+            let rest = &text[id_end..];
+            if let (Some(doc), Some(after_dot)) = (names.doc, rest.strip_prefix('.')) {
+                let n = word(after_dot);
+                let follows = &after_dot[n..];
+                if n > 0 && !follows.starts_with('.')
+                    && let Ok(id) = text[i..id_end].parse::<NodeId>()
+                    && let Some(port) = instance_port(doc, id, &after_dot[..n])
+                {
+                    out.push_str(&format!("{port}.port.signal"));
+                    i = id_end + 1 + n;
+                    continue;
+                }
+            }
+            out.push_str(&text[i..id_end]);
+            i = id_end;
             continue;
         }
         let start = i + 1;
-        let mut end = start;
-        while let Some(&(j, d)) = chars.peek() {
-            if d.is_alphanumeric() || d == '_' {
-                end = j + d.len_utf8();
-                chars.next();
-            } else {
-                break;
-            }
-        }
+        let end = start + word(&text[start..]);
         let name = &text[start..end];
-        let (id, ty) = named.get(name).ok_or_else(|| format!("${name} names no node"))?;
-        out.push_str(&id.to_string());
-        if text[end..].starts_with('.') {
+        let rest = &text[end..];
+        if let Some((id, ty)) = names.nodes.get(name) {
+            out.push_str(&id.to_string());
+            if !rest.starts_with('.') {
+                out.push_str(match ty.name() {
+                    "let" => ".let.value",
+                    "trace" => ".trace.out",
+                    "query" => ".query.value",
+                    "accumulate" => ".accumulate.value",
+                    "port_spec" => ".port.signal",
+                    "channel" => ".channel.value",
+                    // Any other node, bare, is the node itself: `list($a, $b)`.
+                    _ => "",
+                });
+            }
+            i = end;
             continue;
         }
-        out.push_str(match ty.name() {
-            "let" => ".let.value",
-            "trace" => ".trace.out",
-            "query" => ".query.value",
-            "accumulate" => ".accumulate.value",
-            "port_spec" => ".port.signal",
-            "channel" => ".channel.value",
-            // Any other node, bare, is the node itself: `list($a, $b)`.
-            _ => "",
-        });
+        if let Some(placed) = names.places.get(name) {
+            let path_len = rest.strip_prefix('.').map_or(0, |r| r.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).unwrap_or(r.len()));
+            let path = rest.get(1..1 + path_len).unwrap_or("").trim_end_matches('.');
+            if path.is_empty() {
+                out.push_str(&placed.picture.to_string());
+                i = end;
+            } else if path.contains('.') {
+                out.push_str(&format!("{}.{path}", placed.picture));
+                i = end + 1 + path.len();
+            } else {
+                let doc = names.doc.ok_or_else(|| format!("${name}.{path}: a place's port is read once it is placed"))?;
+                let entity = placed.entity.ok_or_else(|| format!("${name} placed no entity"))?;
+                let port = instance_port(doc, entity, path).ok_or_else(|| format!("${name} has no port {path}"))?;
+                out.push_str(&format!("{port}.port.signal"));
+                i = end + 1 + path.len();
+            }
+            continue;
+        }
+        return Err(format!("${name} names no node made in this edit"));
     }
     Ok(out)
 }
 
+/// Whether `text` reads one of `places` (`$p`, not `$pq`).
+pub(crate) fn reads_place(text: &str, places: &[String]) -> bool {
+    places.iter().any(|p| text.match_indices(&format!("${p}")).any(|(i, m)| !text[i + m.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')))
+}
+
 /// One attribute's slot, for a leaf of kind `kind`.
-fn slot(kind: ValueKind, raw: &str, named: &BTreeMap<String, (NodeId, TypeId)>) -> Result<Slot, String> {
+pub(crate) fn slot(kind: ValueKind, raw: &str, names: &Names) -> Result<Slot, String> {
     let t = raw.trim();
     if let Some(e) = t.strip_prefix("{=").and_then(|r| r.strip_suffix('}')) {
-        let e = resolve(e.trim(), named)?;
+        let e = resolve(e.trim(), names)?;
         return Expr::parse(&e).map(Slot::Bound).map_err(|err| err.to_string());
     }
     // A colour token, as CSS writes a variable (palette.rs).
@@ -428,7 +353,7 @@ fn slot(kind: ValueKind, raw: &str, named: &BTreeMap<String, (NodeId, TypeId)>) 
         }
         ValueKind::Ref => {
             let id = match t.strip_prefix('$') {
-                Some(n) => named.get(n).map(|(id, _)| *id).ok_or_else(|| format!("${n} names no node"))?,
+                Some(n) => names.node(n).ok_or_else(|| format!("${n} names no node made in this edit"))?,
                 None => t.parse::<NodeId>().map_err(|e| e.to_string())?,
             };
             Value::Ref(id)
@@ -469,9 +394,9 @@ mod tests {
     fn markup_names_resolve_and_values_take_their_leaf_s_kind() {
         let src = r#"
             <definition name="d">
-              <port_spec id="a" name="a" kind="value" dir="in" signal="3 mW"/>
+              <port_spec id="$a" name="a" kind="value" dir="in" signal="3 mW"/>
               <template notation="free" w="40" h="20">
-                <let id="half" value="{= $a / 2}"/>
+                <let id="$half" value="{= $a / 2}"/>
                 <rect name="r" x="1" y="{= $half / 1 mW}" w="10" h="10" fill.color="@ink" corners.tl="2"/>
                 <empty name="e" anchor.port="$a"/>
               </template>

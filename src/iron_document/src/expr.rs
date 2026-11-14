@@ -60,6 +60,9 @@ pub enum Expr {
     /// A function value called: `f(x)`, where `f` is a parameter or a leaf
     /// holding a function.
     Apply(Box<Expr>, Vec<Expr>),
+    /// `with(a = e1, b = e2, body)`: names for values inside one formula,
+    /// each readable by the ones after it and by the body.
+    With(Vec<(&'static str, Expr)>, Box<Expr>),
     /// A colour token, `@series-2` (palette.rs): the document token of that
     /// name, in the theme in use. The graph resolves it to the token's
     /// `token.color` leaf when it builds and evaluates.
@@ -284,6 +287,10 @@ impl Expr {
                 g.walk(f);
                 args.iter().for_each(|a| a.walk(f));
             }
+            Expr::With(binds, body) => {
+                binds.iter().for_each(|(_, e)| e.walk(f));
+                body.walk(f);
+            }
             Expr::Lit(_) | Expr::Const(_) | Expr::Ref(_) | Expr::Var(_) | Expr::Token(_) => {}
         }
     }
@@ -318,6 +325,12 @@ impl Expr {
                     a.collect_deps(out);
                 }
             }
+            Expr::With(binds, body) => {
+                for (_, e) in binds {
+                    e.collect_deps(out);
+                }
+                body.collect_deps(out);
+            }
         }
     }
 
@@ -339,6 +352,7 @@ impl Expr {
             Expr::Var(_) | Expr::Token(_) => self.clone(),
             Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.map_refs(f))),
             Expr::Apply(g, args) => Expr::Apply(Box::new(g.map_refs(f)), args.iter().map(|a| a.map_refs(f)).collect()),
+            Expr::With(binds, body) => Expr::With(binds.iter().map(|(n, e)| (*n, e.map_refs(f))).collect(), Box::new(body.map_refs(f))),
         }
     }
 
@@ -358,6 +372,7 @@ impl Expr {
             Expr::Var(_) | Expr::Token(_) => self.clone(),
             Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), Box::new(body.replace_refs(f))),
             Expr::Apply(g, args) => Expr::Apply(Box::new(g.replace_refs(f)), args.iter().map(|a| a.replace_refs(f)).collect()),
+            Expr::With(binds, body) => Expr::With(binds.iter().map(|(n, e)| (*n, e.replace_refs(f))).collect(), Box::new(body.replace_refs(f))),
         }
     }
 
@@ -381,6 +396,16 @@ impl Expr {
                 Expr::Lambda(inner.clone(), Box::new(body.close(read, env, &all)?))
             }
             Expr::Apply(g, args) => Expr::Apply(Box::new(g.close(read, env, params)?), args.iter().map(|a| a.close(read, env, params)).collect::<Result<_, _>>()?),
+            // Its names are locals of the closed body, like a lambda's.
+            Expr::With(binds, body) => {
+                let mut all = params.to_vec();
+                let mut closed = Vec::new();
+                for (n, e) in binds {
+                    closed.push((*n, e.close(read, env, &all)?));
+                    all.push(n);
+                }
+                Expr::With(closed, Box::new(body.close(read, env, &all)?))
+            }
         })
     }
 
@@ -413,6 +438,14 @@ impl Expr {
                 read(leaf).ok_or(EvalError::Unresolved(leaf))
             }
             Expr::Lambda(params, body) => Ok(Value::Fn(std::sync::Arc::new(Closure { params: params.clone(), body: body.close(read, env, params)? }))),
+            Expr::With(binds, body) => {
+                let mut env = env.to_vec();
+                for (n, e) in binds {
+                    let v = e.eval_in(read, &env)?;
+                    env.push((n, v));
+                }
+                body.eval_in(read, &env)
+            }
             Expr::Apply(f, args) => {
                 let f = f.eval_in(read, env)?;
                 let vals: Vec<Value> = args.iter().map(|a| a.eval_in(read, env)).collect::<Result<_, _>>()?;
@@ -546,6 +579,16 @@ impl Expr {
                     f.write_str(")")?;
                 }
                 Ok(())
+            }
+            Expr::With(binds, body) => {
+                f.write_str("with(")?;
+                for (n, e) in binds {
+                    write!(f, "{n} = ")?;
+                    e.write(f, PREC_TERNARY)?;
+                    f.write_str(", ")?;
+                }
+                body.write(f, PREC_TERNARY)?;
+                f.write_str(")")
             }
             Expr::Apply(g, args) => {
                 g.write(f, PREC_GET)?;
@@ -839,10 +882,10 @@ pub mod floor {
     use crate::units::Dim;
 
     pub const NAMES: &[&str] = &[
-        "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt",
+        "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt",
         "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
         "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
-        "spectrum", "points", "smooth", "circles", "segments", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
+        "spectrum", "points", "smooth", "circles", "segments", "line", "arc", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
         "ease", "window", "list", "record", "get", "filter", "sort_by", "zip", "enumerate", "unique", "deref",
     ];
 
@@ -988,14 +1031,18 @@ pub mod floor {
                 q(a[3].0 + (a[4].0 - a[3].0) * t, same(func, &a, &[3, 4])?)
             }
             // Trigonometry in radians, matching `transform2d.rot`.
-            "sin" | "cos" | "tan" => {
+            "sin" | "cos" | "tan" | "asin" | "acos" | "atan" => {
                 let a = n(1)?;
                 plain(func, &a, &[0])?;
                 let x = a[0].0;
+                // asin and acos of a value past ±1 are NaN: a curve stops there.
                 Value::Number(match func {
                     "sin" => x.sin(),
                     "cos" => x.cos(),
-                    _ => x.tan(),
+                    "tan" => x.tan(),
+                    "asin" => x.asin(),
+                    "acos" => x.acos(),
+                    _ => x.atan(),
                 })
             }
             // atan2(y, x), the usual argument order; any shared dimension.
@@ -1283,6 +1330,7 @@ fn lex(text: &str) -> Result<Vec<Tok>, ParseError> {
                         b'<' => "<",
                         b'>' => ">",
                         b'!' => "!",
+                        b'=' => "=",
                         other => return Err(ParseError(format!("unexpected {:?} at {i}", other as char))),
                     },
                 };
@@ -1482,6 +1530,47 @@ impl Parser {
         Ok(Expr::Lambda(interned, Box::new(body?)))
     }
 
+    /// `with(a = e1, b = e2, body)` after `with`: each name readable by the
+    /// values after it and by the body.
+    fn with(&mut self) -> Result<Expr, ParseError> {
+        self.expect(Tok::LParen)?;
+        let depth = self.scope.len();
+        let mut binds = Vec::new();
+        let result = loop {
+            if let (Some(Tok::Ident(n)), Some(Tok::Op("="))) = (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)) {
+                let n = n.clone();
+                if matches!(n.as_str(), "true" | "false") || Constant::from_name(&n).is_some() {
+                    self.scope.truncate(depth);
+                    return Err(ParseError(format!("{n} cannot be a name in with(…)")));
+                }
+                self.pos += 2;
+                let e = match self.expr(PREC_TERNARY) {
+                    Ok(e) => e,
+                    Err(err) => {
+                        self.scope.truncate(depth);
+                        return Err(err);
+                    }
+                };
+                let name = crate::sym::intern(&n);
+                binds.push((name, e));
+                self.scope.push(name);
+                if let Err(err) = self.expect(Tok::Comma) {
+                    self.scope.truncate(depth);
+                    return Err(ParseError(format!("with(name = value, …, result): {err}")));
+                }
+                continue;
+            }
+            let body = self.expr(PREC_TERNARY);
+            let close = self.expect(Tok::RParen);
+            break body.and_then(|b| close.map(|_| b));
+        };
+        self.scope.truncate(depth);
+        if binds.is_empty() {
+            return Err(ParseError("with(name = value, …, result) names at least one value".into()));
+        }
+        Ok(Expr::With(binds, Box::new(result?)))
+    }
+
     fn primary(&mut self) -> Result<Expr, ParseError> {
         match self.next() {
             Some(Tok::Num(n)) => Ok(Expr::Lit(Value::Number(n))),
@@ -1523,6 +1612,7 @@ impl Parser {
                 self.lambda(vec![name])
             }
             Some(Tok::Ident(name)) if self.scope.iter().any(|p| *p == name) => Ok(Expr::Var(crate::sym::intern(&name))),
+            Some(Tok::Ident(name)) if name == "with" && self.peek() == Some(&Tok::LParen) => self.with(),
             Some(Tok::Ident(name)) => match name.as_str() {
                 "true" => Ok(Expr::Lit(Value::Bool(true))),
                 "false" => Ok(Expr::Lit(Value::Bool(false))),
@@ -1585,6 +1675,8 @@ mod tests {
             "#3.args.beam.waist * 2",
             "-#3.args.beam.waist",
             "#3.args.beam.m2 + 1",
+            "with(r = #3.slider.value * 2, s = r + 1, r * s)",
+            "with(k = 2, xs => xs * k)",
         ];
         for text in cases {
             let e = Expr::parse(text).unwrap_or_else(|err| panic!("{text}: {err}"));
@@ -1605,6 +1697,36 @@ mod tests {
         assert_eq!(d.len(), 3);
         assert!(d.contains(&leaf(3, "slider.value")));
         assert!(d.contains(&leaf(4, "size.h")));
+    }
+
+    #[test]
+    fn with_names_values_for_the_rest_of_its_formula() {
+        let read = |l: Leaf| (l == leaf(3, "slider.value")).then_some(Value::Number(0.5));
+        let e = Expr::parse("with(r = #3.slider.value * 2, s = r + 1, r * s)").unwrap();
+        assert_eq!(e.eval(&read).unwrap(), Value::Number(2.0));
+        assert!(e.deps().contains(&leaf(3, "slider.value")));
+        // A lambda inside closes over its names.
+        let f = Expr::parse("map(series(1, 2, 3), with(k = #3.slider.value, x => x * k))").unwrap();
+        assert_eq!(f.eval(&read).unwrap().to_string(), Value::series(vec![0.5, 1.0, 1.5], crate::units::Dim::NONE).to_string());
+        // A name is not seen outside it, and with needs one.
+        assert!(Expr::parse("with(a = 1, a) + a").is_err());
+        assert!(Expr::parse("with(1)").is_err());
+        assert!(Expr::parse("with(pi = 1, 2)").is_err());
+    }
+
+    #[test]
+    fn line_and_arc_are_path_data() {
+        let read = |_: Leaf| None;
+        let line = Expr::parse("line(0, 0, 10, 5)").unwrap().eval(&read).unwrap();
+        assert_eq!(line, Value::Str("M 0,0 L 10,5".into()));
+        let quarter = Expr::parse("arc(0, 0, 10, 0, pi / 2)").unwrap().eval(&read).unwrap();
+        assert_eq!(quarter, Value::Str("M 10,0 A 10,10 0 0,1 0,10".into()));
+        let back = Expr::parse("arc(0, 0, 10, pi / 2, 0)").unwrap().eval(&read).unwrap();
+        assert_eq!(back, Value::Str("M 0,10 A 10,10 0 0,0 10,0".into()));
+        assert_eq!(Expr::parse("asin(1) * 2").unwrap().eval(&read).unwrap(), Value::Number(std::f64::consts::PI));
+        assert!(Expr::parse("asin(2)").unwrap().eval(&read).unwrap().as_f64().unwrap().is_nan());
+        let whole = Expr::parse("arc(5, 5, 5, 0, 2 * pi)").unwrap().eval(&read).unwrap();
+        assert_eq!(whole.as_str().unwrap().matches(" A ").count(), 2);
     }
 
     #[test]

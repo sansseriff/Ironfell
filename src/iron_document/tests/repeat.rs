@@ -46,7 +46,7 @@ fn copies(store: &Store, g: NodeId) -> Vec<f64> {
 
 #[test]
 fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
-    let (mut store, named) = sheet(r#"<group id="g" name="row" repeat.count="3"><rect name="cell" x="{= $g.repeat.index * 20}" w="10" h="10"/></group>"#);
+    let (mut store, named) = sheet(r#"<group id="$g" name="row" repeat.count="3"><rect name="cell" x="{= $g.repeat.index * 20}" w="10" h="10"/></group>"#);
     let g = named["g"];
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0]);
     // The template is a child too, but no copy; it is never drawn.
@@ -75,7 +75,7 @@ fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
 
 #[test]
 fn each_copy_reads_its_own_element_and_nothing_derived_is_saved() {
-    let (mut store, named) = sheet(r#"<group id="g" name="dots" repeat.each="{= range(0, 30, 4)}"><ellipse name="dot" x="{= $g.repeat.item * 2}" rx="2" ry="2"/></group>"#);
+    let (mut store, named) = sheet(r#"<group id="$g" name="dots" repeat.each="{= range(0, 30, 4)}"><ellipse name="dot" x="{= $g.repeat.item * 2}" rx="2" ry="2"/></group>"#);
     let g = named["g"];
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0, 60.0]);
     let text = store.save();

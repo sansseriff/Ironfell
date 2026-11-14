@@ -1008,65 +1008,25 @@ pub fn document_table_edit(app: &mut WorkerApp, table: String, verb: String, cel
     result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
 }
 
-/// Write one context into the document (plans/specs/contexts.md §2.2; the
-/// model's `<context name="…">` verb): its markup replaces a document
-/// context of the same name, or a new `context` node holds it. One
-/// transaction.
-pub fn document_context(app: &mut WorkerApp, markup: String) -> String {
-    let mut run = || -> Result<serde_json::Value, String> {
-        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let (ops, node) = iron_document::contexts::put_ops(store.0.document(), &markup)?;
-        let applied = store.0
-            .apply(iron_document::TransactionInput { label: "context".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
-            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
-        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "context": node.to_string()}))
+/// Plan one `<edit>`, the model's write surface (iron_document::edit;
+/// plans/specs/markup.md): its ops as one transaction, not applied, with
+/// the verb that wrote each op, the edit's `$names` and what to tell the
+/// model once it applies. `{"ok": true, "plan": …}`, or `{"ok": false,
+/// "version", "errors": [{op, kind, message, verb}]}`, or `{"ok": false,
+/// "version", "failure": markup}` (a question for the model).
+pub fn document_edit_plan(app: &mut WorkerApp, xml: String) -> String {
+    use iron_document::edit::{self, Failure};
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "no_store", "message": "document bridge not installed"}]}).to_string();
     };
-    let result = run();
-    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
-    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
-}
-
-/// Place and wire parts from a model's `<circuit>` (schematic.md §5), as
-/// one history entry (`parts::circuit_ops`).
-pub fn document_circuit(app: &mut WorkerApp, markup: String) -> String {
-    let mut run = || -> Result<serde_json::Value, String> {
-        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let (ops, summary) = iron_document::parts::circuit_ops(&store.0, &markup)?;
-        let applied = store.0
-            .apply(iron_document::TransactionInput { label: "circuit".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
-            .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
-        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "summary": summary}))
-    };
-    let result = run();
-    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
-    result.unwrap_or_else(|error| serde_json::json!({"ok": false, "error": error})).to_string()
-}
-
-/// The model's component verbs (`compose::compose_after`): `<place>` and
-/// `<make-component>`, after the edit's other ops (`ops_json`, a JSON array,
-/// often empty), as one history entry. The summary names what each verb
-/// made. A failing op answers `errors` indexed into `ops_json`, as `apply`
-/// does; a failing verb answers `error`.
-pub fn document_compose(app: &mut WorkerApp, markup: String, ops_json: String) -> String {
-    use iron_document::compose::ComposeError;
-    let mut run = || -> Result<serde_json::Value, serde_json::Value> {
-        let verb = |error: String| serde_json::json!({"ok": false, "error": error});
-        let before: Vec<iron_document::Op> = serde_json::from_str(&ops_json)
-            .map_err(|e| serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "parse", "message": e.to_string()}]}))?;
-        let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or_else(|| verb("document bridge not installed".into()))?;
-        let current = store.0.document().version().0;
-        let (ops, summary) = iron_document::compose::compose_after(&store.0, before, &markup).map_err(|e| match e {
-            ComposeError::Ops(errors) => serde_json::json!({"ok": false, "version": current, "errors": errors}),
-            ComposeError::Verb(message) => verb(message),
-        })?;
-        let applied = store.0
-            .apply(iron_document::TransactionInput { label: "model: components".into(), actor: iron_document::Actor::Model, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
-            .map_err(|es| verb(es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")))?;
-        Ok(serde_json::json!({"ok": true, "version": applied.version.0, "summary": summary}))
-    };
-    let result = run();
-    if let Some(mut activity) = app.world_mut().get_resource_mut::<ActivityControl>() { activity.remaining_frames = 10; }
-    result.unwrap_or_else(|error| error).to_string()
+    let version = store.0.document().version().0;
+    let svg = |text: &str| iron_svg::import(text).map(|i| (i.fragment, i.cuts));
+    match edit::plan(&store.0, &xml, Some(&svg)) {
+        Ok(plan) => serde_json::json!({"ok": true, "version": version, "plan": plan}),
+        Err(Failure::Errors(errors)) => serde_json::json!({"ok": false, "version": version, "errors": errors}),
+        Err(Failure::Markup(failure)) => serde_json::json!({"ok": false, "version": version, "failure": failure}),
+    }
+    .to_string()
 }
 
 /// A sheet's netlist, SPICE-like, with each net's solved voltage
@@ -1332,40 +1292,6 @@ fn import_svg(app: &mut WorkerApp, text: String, share: bool) -> String {
         active_info.remaining_frames = 10;
     }
     serde_json::json!({"ok": true, "cuts": imported.cuts, "nodes": imported.nodes, "anchors": imported.anchors, "definitions": imported.definitions, "references": imported.references}).to_string()
-}
-
-pub fn document_import_svg_at(app: &mut WorkerApp, text: String, parent: String, x: f64, y: f64, actor: String) -> String {
-    let Ok(parent) = parent.parse::<iron_document::NodeId>() else {
-        return serde_json::json!({"ok": false, "error": format!("bad id {parent:?}")}).to_string();
-    };
-    let imported = match iron_svg::import(&text) {
-        Ok(i) => i,
-        Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
-    };
-    let actor = if actor == "model" { iron_document::Actor::Model } else { iron_document::Actor::Human };
-    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
-        return serde_json::json!({"ok": false, "error": "no document"}).to_string();
-    };
-    if !store.0.document().is_live(parent) {
-        return serde_json::json!({"ok": false, "error": format!("no node {parent}")}).to_string();
-    }
-    let place = iron_document::copy::Placement { parent: Some(parent), beside: false, offset: [x, y], share_entities: false };
-    let result = match iron_document::copy::paste(&store.0, &imported.fragment, &place, "import") {
-        Err(e) => serde_json::json!({"ok": false, "error": e}),
-        Ok(pasted) => match store.0.apply(iron_document::TransactionInput { label: "import SVG".into(), actor, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false }) {
-            Ok(applied) => serde_json::json!({
-                "ok": true,
-                "version": applied.version.0,
-                "roots": pasted.roots.iter().map(|r| r.to_string()).collect::<Vec<_>>(),
-                "cuts": imported.cuts,
-            }),
-            Err(errors) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
-        },
-    };
-    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
-        active_info.remaining_frames = 10;
-    }
-    result.to_string()
 }
 
 pub fn document_focus(app: &mut WorkerApp, node: String) -> String {
@@ -2205,48 +2131,6 @@ pub fn document_next_ids(app: &mut WorkerApp, n: u32) -> String {
     serde_json::to_string(&ids).expect("strings serialise")
 }
 
-pub fn document_next_relation_ids(app: &mut WorkerApp, n: u32) -> String {
-    let ids: Vec<String> = app
-        .world()
-        .get_resource::<crate::document_bridge::DocumentStore>()
-        .map(|s| s.0.document().next_relation_ids(n as usize).iter().map(|i| i.to_string()).collect())
-        .unwrap_or_default();
-    serde_json::to_string(&ids).expect("strings serialise")
-}
-
-pub fn document_place(app: &mut WorkerApp, parent: String, after: String, count: u32) -> Result<String, String> {
-    use iron_document::OrderKey;
-    let store = app
-        .world()
-        .get_resource::<crate::document_bridge::DocumentStore>()
-        .ok_or_else(|| String::from("document bridge not installed"))?;
-    let doc = store.0.document();
-    let siblings: &[iron_document::NodeId] = if parent.is_empty() {
-        doc.roots()
-    } else {
-        let p: iron_document::NodeId = parent.parse().map_err(|e: iron_document::id::IdParseError| String::from(&e.to_string()))?;
-        doc.children(p)
-    };
-    let key_of = |id: iron_document::NodeId| doc.live(id).map(|n| n.order.clone());
-    let (lo, hi): (Option<OrderKey>, Option<OrderKey>) = if after == "end" {
-        (siblings.last().and_then(|&s| key_of(s)), None)
-    } else if after.is_empty() {
-        (None, siblings.first().and_then(|&s| key_of(s)))
-    } else {
-        let a: iron_document::NodeId = after.parse().map_err(|e: iron_document::id::IdParseError| String::from(&e.to_string()))?;
-        let pos = siblings.iter().position(|&s| s == a).ok_or_else(|| String::from(&format!("{a} is not a child of {}", if parent.is_empty() { "the root" } else { &parent })))?;
-        (key_of(a), siblings.get(pos + 1).and_then(|&s| key_of(s)))
-    };
-    let mut keys = Vec::new();
-    let mut prev = lo;
-    for _ in 0..count {
-        let k = OrderKey::between(prev.as_ref(), hi.as_ref()).map_err(|e| String::from(&e.to_string()))?;
-        keys.push(k.to_string());
-        prev = Some(k);
-    }
-    Ok(serde_json::to_string(&keys).expect("strings serialise"))
-}
-
 pub fn document_schema() -> String {
     iron_document::registry::schema_json().to_string()
 }
@@ -2671,66 +2555,6 @@ pub fn narrative_markdown(app: &mut WorkerApp, source: String) -> String {
     narrative_run(app, |store| {
         let n = narrative_source(store, &source)?;
         Ok(serde_json::json!({"ok": true, "name": iron_document::narrative::name(store.document(), n), "markdown": iron_document::narrative::to_markdown(store.document(), n, false)}))
-    })
-}
-
-/// Insert `markdown`'s blocks after `after` (a block id; empty: at the
-/// start; `"end"`: at the end), one transaction: the model's `<write>`.
-/// `{"ok", "version", "blocks": [ids]}`.
-pub fn narrative_write(app: &mut WorkerApp, source: String, after: String, markdown: String, actor: String) -> String {
-    narrative_run(app, |store| {
-        use iron_document::narrative::{self, Edit};
-        let n = narrative_source(store, &source)?;
-        let mut prev = match after.as_str() {
-            "" => None,
-            "end" => store.document().children(n).last().map(|b| b.to_string()),
-            a => Some(a.to_owned()),
-        };
-        let mut edits = Vec::new();
-        for (i, block) in narrative::parse_markdown(&markdown).into_iter().enumerate() {
-            let key = format!("w{i}");
-            edits.push(Edit::Insert { key: key.clone(), after: prev.clone(), block });
-            prev = Some(key);
-        }
-        if edits.is_empty() {
-            return Err("nothing to write: the markdown has no blocks".into());
-        }
-        let planned = narrative::plan(store.document(), n, &edits)?;
-        let ids: Vec<String> = (0..edits.len()).map(|i| planned.minted[&format!("w{i}")].to_string()).collect();
-        let version = narrative_apply(store, if actor == "model" { "model: write" } else { "write" }, &actor, planned.ops)?;
-        Ok(serde_json::json!({"ok": true, "version": version, "blocks": ids}))
-    })
-}
-
-/// Replace block `block` with `markdown`'s blocks (none: delete it), one
-/// transaction: the model's `<rewrite>`. `{"ok", "version", "blocks": [ids]}`.
-pub fn narrative_rewrite(app: &mut WorkerApp, block: String, markdown: String, actor: String) -> String {
-    narrative_run(app, |store| {
-        use iron_document::narrative::{self, Edit};
-        let id = block.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
-        let n = store.document().live(id).and_then(|b| b.parent).filter(|p| narrative::narratives(store.document()).contains(p)).ok_or_else(|| format!("{block} is not a narrative block"))?;
-        let parsed = narrative::parse_markdown(&markdown);
-        let mut edits = Vec::new();
-        let mut ids = Vec::new();
-        let mut prev = block.clone();
-        for (i, b) in parsed.into_iter().enumerate() {
-            if i == 0 {
-                edits.push(Edit::Set { id: block.clone(), block: b });
-                ids.push(block.clone());
-            } else {
-                let key = format!("r{i}");
-                edits.push(Edit::Insert { key: key.clone(), after: Some(prev.clone()), block: b });
-                prev = key.clone();
-                ids.push(key);
-            }
-        }
-        if edits.is_empty() {
-            edits.push(Edit::Delete { id: block.clone() });
-        }
-        let planned = narrative::plan(store.document(), n, &edits)?;
-        let ids: Vec<String> = ids.into_iter().map(|k| planned.minted.get(&k).map_or(k, |v| v.to_string())).collect();
-        let version = narrative_apply(store, if actor == "model" { "model: rewrite" } else { "rewrite" }, &actor, planned.ops)?;
-        Ok(serde_json::json!({"ok": true, "version": version, "blocks": ids}))
     })
 }
 

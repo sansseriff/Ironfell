@@ -4,7 +4,7 @@
 # fresh browser context), so the first page makes the Demo scope.
 nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&bevy=debuglog&scope=last
 ready
-eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const a=await __iron.edit('<edit><create id="$m" type="rect" parent="#1" name="marker" x="40" y="40" w="60" h="40" color="#2266ff"/></edit>');if(!a.ok)throw new Error(JSON.stringify(a));sessionStorage.setItem('demo',__iron.scope().current.id);return 'opened '+__iron.scope().current.name+', marked'})()
+eval (async()=>{for(let i=0;i<200&&!__iron.scope().current;i++)await new Promise(r=>setTimeout(r,50));const a=await __iron.edit('<edit><rect in="#1" id="$m" name="marker" x="40" y="40" w="60" h="40" color="#2266ff"/></edit>');if(!a.ok)throw new Error(JSON.stringify(a));sessionStorage.setItem('demo',__iron.scope().current.id);return 'opened '+__iron.scope().current.name+', marked'})()
 clickel [data-scope-menu]
 sleep 300
 shot scope-menu

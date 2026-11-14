@@ -193,14 +193,13 @@ function describeVerb(verb: string, attrText: string): string {
   for (const m of attrText.matchAll(/([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) a[m[1]] = m[2] ?? m[3];
   const named = a.name ? ` "${a.name}"` : '';
   switch (verb) {
-    case 'create': return `Create ${a.type ?? 'node'}${named}`;
     case 'set': case 'add': {
       const leaves = Object.keys(a).filter(k => !['id', 'type', 'path', 'value', 'bind'].includes(k));
       if (a.path) leaves.unshift(a.path);
       return `${verb === 'set' ? 'Set' : 'Add to'} ${a.id ?? ''}${leaves.length ? ` · ${leaves.slice(0, 4).join(', ')}${leaves.length > 4 ? ', …' : ''}` : ''}`;
     }
     case 'delete': return `Delete ${a.id ?? ''}`;
-    case 'reparent': return `Move ${a.id ?? ''} into ${a.to ?? ''}`;
+    case 'reparent': return `Move ${a.id ?? ''} into ${a.in ?? ''}`;
     case 'link': return `Link ${a.from ?? ''} ${a.rel ?? 'references'} ${a.to ?? ''}`;
     case 'unlink': return `Unlink ${a.id ?? ''}`;
     case 'place': return `Place ${a.def ?? a.entity ?? a.part ?? ''}${named}${a.in ? ` in ${a.in}` : ''}`;
@@ -215,7 +214,9 @@ function describeVerb(verb: string, attrText: string): string {
     case 'drop': return `Drop ${a.op ?? ''}`;
     case 'insert': return `Insert ${a.after !== undefined ? `after ${a.after}` : `before ${a.before ?? ''}`}`;
     case 'text': return `Replace text "${(a.old ?? '').slice(0, 30)}"${/^(true|yes|1)$/i.test(a.all ?? '') ? ' everywhere' : ''}`;
-    default: return verb;
+    case 'context': return 'Write a context';
+    // Any other element is a new node of that type.
+    default: return `Create ${verb}${named}`;
   }
 }
 

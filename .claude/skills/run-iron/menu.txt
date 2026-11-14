@@ -7,11 +7,11 @@
 nav
 ready
 eval __iron.snapping(false)
-eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$c" type="composition" name="slide" notation="free" dims="2d"/></edit>`); window.__slide=r.aliases['$c']; return 1})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><composition id="$c" name="slide" notation="free" dims="2d"/></edit>`); window.__slide=r.aliases['$c']; return 1})()
 eval __dock.addPanel({ id: 'slide', component: 'view', title: 'Slide', params: { spec: { source: 'slide', notation: 'composition' } }, position: { referencePanel: 'viewer', direction: 'within' } }).id
 sleep 1200
 # a, then b over it (a later sibling draws on top).
-eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><create type="rect" parent="${window.__slide}" name="a" x="100" y="100" w="120" h="80" color="#e04040ff"/><create type="rect" parent="${window.__slide}" name="b" x="160" y="140" w="120" h="80" color="#40a040ff"/></edit>`); return r.ok})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="2"><rect in="${window.__slide}" name="a" x="100" y="100" w="120" h="80" color="#e04040ff"/><rect in="${window.__slide}" name="b" x="160" y="140" w="120" h="80" color="#40a040ff"/></edit>`); return r.ok})()
 sleep 800
 eval window.order = async () => { const v = await __iron.view({fidelity:'full', scope: window.__slide}); return [...v.matchAll(/<rect id="[^"]+"[^>]*name="(\w+)"/g)].map(m => m[1]).join(' '); }
 eval window.menu = () => [...document.querySelectorAll('[data-canvas-menu] [data-command]')].map(e => e.dataset.command + (e.hasAttribute('data-disabled') ? '(off: ' + e.title + ')' : '')).join(' ')

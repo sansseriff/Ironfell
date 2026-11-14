@@ -134,9 +134,3 @@ function show(slot: unknown): string {
   const text = JSON.stringify(slot);
   return text.length > 60 ? `${text.slice(0, 57)}…` : text;
 }
-
-/** For edits the store builds itself (compose, circuit, table, …), which
- *  name nodes but are not ops here: refuse only if one they name is gone. */
-export function deletedNamed(markup: string, changes: Changes): string[] {
-  return [...new Set(markup.match(/#[\w/]+/g) ?? [])].filter((id) => changes.deleted.has(id));
-}

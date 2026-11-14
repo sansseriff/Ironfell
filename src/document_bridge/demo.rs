@@ -1366,8 +1366,9 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 /// double-click; and a column stack to reorder (drag, Alt+arrows) whose items
 /// glide. `pitch`: a notation with its own palette, keys and inspector
 /// sections. `dials`: controls made only of inline `affords` facets.
-/// The gallery's pages (plans/specs/demo.md), in tab order; the RC page,
-/// whose circuit the showcase builds, comes after them.
+/// The gallery's pages (plans/specs/demo.md), in tab order, each an edit
+/// (plans/specs/markup.md); `#TIMELINE` stands for the timeline its clips
+/// go in. The RC page comes after them.
 const GALLERY: [&str; 8] = [
     include_str!("gallery/oscillator.xml"),
     include_str!("gallery/refraction.xml"),
@@ -1378,7 +1379,7 @@ const GALLERY: [&str; 8] = [
     include_str!("gallery/blackbody.xml"),
     include_str!("gallery/enzyme.xml"),
 ];
-/// The RC charging page; `#CIRCUIT` stands for the circuit it embeds.
+/// The RC charging page, with the circuit it embeds.
 const RC_PAGE: &str = include_str!("gallery/rc.xml");
 
 pub fn showcase(store: &iron_document::Store) -> Result<iron_document::TransactionInput, String> {
@@ -1554,38 +1555,27 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     }
     phase(&mut scratch, ops)?;
 
-    // The gallery: science pieces, one composition each, written in node
-    // markup with `<place>` (plans/specs/demo.md); their tabs come first.
-    for src in GALLERY {
-        let built = iron_document::markup::compose(&scratch, src, None, gallery_key())?;
-        let wave_t = src.starts_with("<composition name=\"wave packet\"").then(|| built.named["t"]);
-        phase(&mut scratch, built.ops)?;
-        // The wave packet's time plays on the timeline: a clip sweeping its
-        // `t` slider from 0 to 8 s (markup has no relations, so it is made here).
-        if let Some(t) = wave_t {
-            let doc = scratch.document();
-            let timeline = doc.nodes_of_type(ty("timeline")).find(|&n| doc.is_live(n)).ok_or("no timeline for the wave packet's clip")?;
-            let order = doc.children(timeline).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
-            let ids = doc.next_ids(3);
-            let rel = doc.next_relation_ids(1)[0];
-            let mut timing = Timing::default();
-            timing.start = n(0.0);
-            let mut c = Clip::default();
-            c.prop = Slot::Const(Value::Str("slider.value".into()));
-            let key = |at: f64| {
-                let mut k = iron_document::facet::Key::default();
-                k.t = n(at);
-                k.value = n(at);
-                k.easing = Slot::Const(Value::Enum("linear".into()));
-                k.wrap()
-            };
-            phase(&mut scratch, vec![
-                Op::Create { id: ids[0], ty: ty("clip"), parent: Some(timeline), order, facets: vec![timing.wrap(), c.wrap(), named("play t")] },
-                Op::Create { id: ids[1], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![key(0.0)] },
-                Op::Create { id: ids[2], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::after(&OrderKey::first()), facets: vec![key(8.0)] },
-                Op::Link { rel: Relation { id: rel, from: ids[0], to: t, rel: RelKind::Animates, data: BTreeMap::new() } },
-            ])?;
+    // The gallery: science pieces, one composition each, written as edits
+    // (plans/specs/markup.md, demo.md); their tabs come first.
+    let timeline = {
+        let doc = scratch.document();
+        doc.nodes_of_type(ty("timeline")).find(|&n| doc.is_live(n)).ok_or("no timeline for the gallery's clips")?
+    };
+    let page = |scratch: &iron_document::Store, src: &str, key: Option<OrderKey>| -> Result<Vec<Op>, String> {
+        let src = src.replace("#TIMELINE", &timeline.to_string());
+        let (tx, _) = iron_document::edit::transaction(scratch, &src, "gallery", Actor::System)?;
+        let mut ops = tx.ops;
+        // Its page among the gallery's tabs.
+        if let Some(k) = key
+            && let Some(Op::Create { order, .. }) = ops.iter_mut().find(|op| matches!(op, Op::Create { parent: None, ty, .. } if ty.name() == "composition"))
+        {
+            *order = k;
         }
+        Ok(ops)
+    };
+    for src in GALLERY {
+        let ops = page(&scratch, src, Some(gallery_key()))?;
+        phase(&mut scratch, ops)?;
     }
 
     // Circuit (schematic.md): a divider in the schematic notation, its parts
@@ -1626,44 +1616,10 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         Op::Set { id: r2.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{}.slider.value * 4 kΩ", s[0])) },
         Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("9 V").expect("quantity")) },
     ])?;
-    // The RC charging page's circuit (schematic.md): its parts from the
-    // parts library, wired pin to pin and solved live, in a schematic
-    // composition of its own that the page embeds; a probe reads the
-    // capacitor's node, and R and C follow the page's sliders.
-    let circuit = scratch.document().next_id();
-    let op = composition(&scratch, circuit, "rc circuit", "schematic");
-    phase(&mut scratch, vec![op])?;
-    let built = iron_document::markup::compose(&scratch, &RC_PAGE.replace("#CIRCUIT", &circuit.to_string()), None, gallery_key())?;
-    let (r_slider, c_slider) = (built.named["r_slider"], built.named["c_slider"]);
-    phase(&mut scratch, built.ops)?;
-    let mut placed = Vec::new();
-    // Named without numbers, so the divider's and any new part's
-    // designators (R3, P2, …) count as if this circuit were not here.
-    for (key, x, y, turns, name) in [("vsource", 120.0, 220.0, 0.0, "V"), ("resistor", 220.0, 160.0, 0.0, "R"), ("capacitor", 300.0, 220.0, 1.0, "C"), ("ground", 120.0, 300.0, 0.0, "GND"), ("probe", 250.0, 120.0, 0.0, "P")] {
-        let part = iron_document::parts::find(key).ok_or("no such part")?;
-        let (ops, p) = iron_document::parts::place_ops(scratch.document(), part, circuit, [x, y], turns * std::f64::consts::FRAC_PI_2, Some(name))?;
-        phase(&mut scratch, ops)?;
-        placed.push(p);
-    }
-    let [v1, r1, c1, gnd, probe] = placed[..] else { unreachable!() };
-    let pins = iron_document::parts::pins_on(&scratch, circuit);
-    let end = |p: iron_document::parts::Placed, name: &str| -> Result<(iron_document::parts::End, [f64; 2]), String> {
-        let pin = iron_document::parts::pin(scratch.document(), p.entity, name).ok_or("no pin")?;
-        pins.iter().find(|(e, _)| e.pin == pin).copied().ok_or_else(|| "pin not drawn".to_owned())
-    };
-    let wires = [(end(v1, "p")?, end(r1, "a")?, true), (end(r1, "b")?, end(c1, "a")?, false), (end(c1, "b")?, end(v1, "n")?, false), (end(v1, "n")?, end(gnd, "g")?, false), (end(r1, "b")?, end(probe, "t")?, false)];
-    for ((a, pa), (b, pb), vertical_first) in wires {
-        let mut pts = vec![pa];
-        pts.extend(iron_document::parts::elbow(pa, pb, vertical_first));
-        pts.push(pb);
-        let (ops, _) = iron_document::parts::wire_ops(scratch.document(), circuit, a, b, &pts)?;
-        phase(&mut scratch, ops)?;
-    }
-    phase(&mut scratch, vec![
-        Op::Set { id: r1.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{r_slider}.slider.value * 1 kΩ")) },
-        Op::Set { id: c1.entity, path: "args.C".parse().expect("argument"), slot: bound(format!("{c_slider}.slider.value * 1 µF")) },
-        Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("5 V").expect("quantity")) },
-    ])?;
+    // The RC charging page and the circuit it embeds (schematic.md), a
+    // schematic of its own whose R and C follow the page's sliders.
+    let ops = page(&scratch, RC_PAGE, None)?;
+    phase(&mut scratch, ops)?;
     // A narrative about the demo (narrative-panel.md): mentions, live values
     // and view blocks over the scene, the pendulum and the assembly.
     if let Some(md) = lesson_markdown(scratch.document()) {

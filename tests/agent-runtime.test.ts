@@ -13,6 +13,7 @@ import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-o
 import { ask } from '../src-ui/model/agent';
 import { discoverLocalAgent } from '../src-ui/model/local-pairing';
 import type { DocumentApi } from '../src-ui/model/api';
+import { fakePlanner } from './fixtures/plan';
 
 const fixture = resolve(import.meta.dir, 'fixtures/fake-agent-runtime.ts');
 const token = 'iron-test-token-not-a-provider-key-12345';
@@ -168,7 +169,7 @@ test('Codex app-server handshake, final items, failures, approvals, exit and can
   try {
     const runtime = codexRuntime(fixture);
     const result = await runtime(payload, AbortSignal.timeout(3000));
-    assert.match(result.text, /<create/);
+    assert.match(result.text, /<rect in=/);
     await assert.rejects(() => codexRuntime('/missing-iron-codex')(payload, AbortSignal.timeout(3000)), /ENOENT/);
     for (const [mode, expected] of [['failed', /fixture turn failed/], ['approval', /Unexpected runtime request/], ['exit', /Runtime exited/], ['malformed', /JSON|Unexpected/], ['timeout', /abort|timed out/i]] as const) {
       process.env.IRON_TEST_RUNTIME_MODE = mode;
@@ -228,7 +229,7 @@ function documentFixture() {
     version: () => version,
     schema: () => ({ facets: { transform2d: { x: 'number', y: 'number' }, size: { w: 'number', h: 'number' }, fill: { color: 'color' } }, types: { rect: { facets: [{ kind: 'transform2d', required: true }, { kind: 'size', required: true }, { kind: 'fill', required: true }], default_host: '2d', children: 'none' } } }),
     view: () => `<document version="${version}"><composition id="#1" name="test" notation="2d">${Object.entries(nodes).map(([id, node]) => `<rect id="${id}" name="${node.name}" x="${node.x}"/>`).join('')}</composition></document>`,
-    selection: () => [], nextIds: () => ['#fixture'], nextRelationIds: () => [], place: () => ['a0'],
+    selection: () => [], plan: fakePlanner(() => version, () => '#fixture'),
     apply: (transaction: any, expected: number) => {
       applyCalls++;
       assert.equal(transaction.actor, 'model');
@@ -262,7 +263,7 @@ test('agent edit pipeline sends model-authored shape creation through the transa
 
 test('late replies cannot edit a document changed during generation', async () => {
   const fixtureDoc = documentFixture();
-  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { fixtureDoc.changed(); return { text: '<edit><create type="rect" parent="#1"/></edit>' }; } }, 'add a rectangle');
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { fixtureDoc.changed(); return { text: '<edit><rect in="#1"/></edit>' }; } }, 'add a rectangle');
   assert.equal(result.ok, false);
   assert.match(result.error!, /document changed/);
   assert.equal(fixtureDoc.calls(), 0);
@@ -273,9 +274,9 @@ test('invalid model edits get one correction attempt and no partial transaction'
   let calls = 0;
   const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async (_system, messages) => {
     calls++;
-    if (calls === 1) return { text: '<edit><create type="not-a-type" parent="#1"/></edit>' };
+    if (calls === 1) return { text: '<edit><not-a-type in="#1"/></edit>' };
     assert.match(messages.at(-1)!.content, /edit-failed/);
-    return { text: '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+    return { text: '<edit><rect in="#1" id="$shape" x="20"/></edit>' };
   } }, 'add a rectangle');
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.attempts, 2);
@@ -309,7 +310,7 @@ test('chat explicitly accepts prose-only replies with bounded previous conversat
 
 test('chat renders edit examples as prose without applying fenced or inline code', async () => {
   const fixtureDoc = documentFixture();
-  for (const text of ['Here is an example:\n\n```xml\n<edit><create type="rect" parent="#1"/></edit>\n```', 'Example: `<edit><create type="rect" parent="#1"/></edit>`', 'Example:\n\n    <edit><create type="rect" parent="#1"/></edit>', '> <edit><create type="rect" parent="#1"/></edit>']) {
+  for (const text of ['Here is an example:\n\n```xml\n<edit><rect in="#1"/></edit>\n```', 'Example: `<edit><rect in="#1"/></edit>`', 'Example:\n\n    <edit><rect in="#1"/></edit>', '> <edit><rect in="#1"/></edit>']) {
     const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text }) }, 'Explain edit syntax', { allowTextReply: true });
     assert.equal(result.ok, true);
     assert.equal(result.edit, null);
@@ -320,7 +321,7 @@ test('chat renders edit examples as prose without applying fenced or inline code
 test('a prose-only correction cannot turn a rejected edit into a reported success', async () => {
   const fixtureDoc = documentFixture();
   let calls = 0;
-  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text: ++calls === 1 ? '<edit><create type="not-a-type"/></edit>' : 'Done.' }) }, 'Make a shape', { allowTextReply: true });
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text: ++calls === 1 ? '<edit><not-a-type/></edit>' : 'Done.' }) }, 'Make a shape', { allowTextReply: true });
   assert.equal(result.ok, false);
   assert.equal(result.attempts, 2);
   assert.equal(fixtureDoc.calls(), 0);
@@ -394,8 +395,8 @@ test('ask reports its phases and passes deltas on; a stopped turn applies nothin
   const fixtureDoc = documentFixture();
   const events: any[] = [];
   const streaming = { name: 'fixture', complete: async (_s: string, _m: unknown, live: any = {}) => {
-    live.onEvent?.({ kind: 'text', delta: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' });
-    return { text: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' };
+    live.onEvent?.({ kind: 'text', delta: '<edit><rect in="#1" id="$shape"/></edit>' });
+    return { text: '<edit><rect in="#1" id="$shape"/></edit>' };
   } };
   const result = await ask(fixtureDoc.api, streaming, 'add a rectangle', {}, { onEvent: event => events.push(event) });
   assert.equal(result.ok, true, JSON.stringify(result));
@@ -403,7 +404,7 @@ test('ask reports its phases and passes deltas on; a stopped turn applies nothin
   assert.equal(events.filter(e => e.kind === 'text').length, 1);
   // Stop while the model is answering: the reply that still arrives is not applied.
   const controller = new AbortController();
-  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><create id="$s" type="rect" parent="#1"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
+  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><rect in="#1" id="$s"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
   assert.equal(stopped.ok, false);
   assert.equal(stopped.error, 'stopped');
   assert.equal(fixtureDoc.calls(), 1);
@@ -459,7 +460,7 @@ test('ask sends the turn id with each call and logs each reply\'s fate once the 
     complete: async (_s: string, _m: unknown, live: any = {}) => {
       turns.push(live.turn);
       calls++;
-      return { text: calls === 1 ? '<edit><create type="not-a-type" parent="#1"/></edit>' : '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+      return { text: calls === 1 ? '<edit><not-a-type in="#1"/></edit>' : '<edit><rect in="#1" id="$shape" x="20"/></edit>' };
     },
     log: async (record: any) => { records.push(record); },
   };
@@ -494,7 +495,7 @@ test('agent receives pasted pixels and can inspect an applied edit then refine i
     calls++;
     if (calls === 1) {
       assert.deepEqual(messages.at(-1)?.images, [testImage]);
-      return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+      return { text: '<edit><rect in="#1"/></edit><look picture="test"/>' };
     }
     assert.deepEqual(messages.at(-1)?.images, [testImage]);
     if (calls === 2) return { text: '<edit><set id="#fixture" x="240"/></edit><look picture="test"/>' };
@@ -583,7 +584,7 @@ test('a refinement sends the captured composition\'s view, not the whole documen
   let calls = 0;
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
     calls++;
-    if (calls === 1) return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+    if (calls === 1) return { text: '<edit><rect in="#1"/></edit><look picture="test"/>' };
     const last = messages.at(-1)!;
     assert.deepEqual(last.images, [testImage]);
     assert.match(last.content, /^Edit applied successfully\. Current #1:/);

@@ -85,19 +85,21 @@ export const TOPICS: Record<TopicName, Topic> = {
   a definition's bindings read only its own nodes. Setting an unknown or wrongly
   typed argument is rejected.
 
-COMPONENT VERBS  (place instances and pictures; any number, alone or after plain verbs)
+COMPONENT VERBS  (place instances and pictures)
     <edit>
-      <make-component of="#rect #dot" name="pump" as="$pump"/>
-      <place def="$pump" in="#bench" x="300" y="80" name="P1" as="$p1"/>
+      <make-component of="#rect #dot" name="pump" id="$pump"/>
+      <place def="$pump" in="#bench" x="300" y="80" name="P1" id="$p1"/>
       <place entity="$p1" in="#overview" x="40" y="40"/>
       <place def="std:laser" in="#bench" x="40" y="200" power="5 mW"/>
     </edit>
-  In an edit with plain verbs (create, set, …) those apply first, then the component
-  verbs in order, as one change: create a definition with id="$d" and its template,
-  then <place def="$d" …/> in the same edit. A component verb's as= alias is for the
-  component verbs after it, not for plain verbs.
-  place def= puts a new linked instance of a definition (an id, std:<key>, or an
-  earlier verb's $alias) under the model root, named name=, and its picture (a use)
+  New nodes are made first, then the component verbs in the order written, so a
+  <place def="$d"> may place a definition the same edit writes. A component verb's
+  id="$p" names what it made for the whole edit: $p is its picture (a use), and a
+  binding reads $p.facet.field (its picture's leaf, $p.transform2d.x) and $p.port (its
+  instance's port, $p.x_lo); #use.port does the same for an instance you saw. A
+  <place> may sit inside a new group, among its siblings, in= that group.
+  place def= puts a new linked instance of a definition (an id, std:<key>, or a $name
+  this edit gave) under the model root, named name=, and its picture (a use)
   in= a 2D composition (id or name) or a group in one, at x, y (rot in degrees).
   place entity= adds another picture of an entity a linked instance already is, in
   another composition: one thing, drawn in each. The use's notation is the
@@ -106,8 +108,7 @@ COMPONENT VERBS  (place instances and pictures; any number, alone or after plain
   Other attributes (k= or args.k=) are arguments: a value of the input's kind or
   {= expr}. make-component of= turns shapes side by side into a definition shown by
   its main (edit the main to edit the definition; place instances of it), or uses
-  of linked instances into one instance of a new definition nesting them. as="$x"
-  names what a verb made for the verbs after it. The answer lists each <placed>
+  of linked instances into one instance of a new definition nesting them. The answer lists each <placed>
   entity, use and definition, and each <made> definition. A component cannot be
   pictured in a 3D composition yet: draw a mesh there and <link-figures> it.
   Standard components (std:<key>, copied in once; each port: name, its kind, an
@@ -120,11 +121,17 @@ ${p.standard}
       style="area" x_label="y (mm)"/></edit>
   xs/ys are series (ys2, ys3 more series on the same xs), or f="{= x => …}" with
   x_min/x_max (sampled at the plot's width). $self.k reads this entity's argument k.
-  style line|smooth|scatter|area|bars|line+markers (style2, style3 for the other
+  style line|smooth|dashed|scatter|area|bars|line+markers (style2, style3 for the other
   series, default the same); color color2 color3 default to @series-1..3; x_min x_max y_min y_max cursor are
   in the data's unit (y_min="0 mW" for mW data) or auto; cursor
   marks an x and outputs y_at_cursor; reveal 0..1 draws the series on; axis titles
   default to the data's units; outputs x_lo x_hi y_lo y_hi are the ranges in use.
+  Mark points and levels in the data's own coordinates, never by computing pixels:
+  marks_x marks_y (a value or a series each) draw ringed points, labelled by
+  marks_label (one text, or a list: {= list('peak', 'crest')}) in marks_color (default
+  @ink); hlines (y values) and vlines (x values) draw dashed reference lines across the
+  plot (a V_max, a critical angle, t = τ). They pan, zoom and clip with the curve, and
+  hlines and marks_y count in the automatic y range.
   vis="hidden" or "shown" plays its disappear or appear (axes, ticks, then the curve).`,
   },
   data: {
@@ -160,15 +167,20 @@ ${p.standard}
     text: () => `STATE MACHINES  (a component's states and animated transitions)
   A definition holds channels (numbers its template binds to) and a machine named for
   an in port whose value is the state:
-    <create id="$v" type="port_spec" parent="$d" name="vis" kind="value" dir="in" signal="shown" datatype="choice(hidden|shown)"/>
-    <create id="$f" type="channel" parent="$d" name="fade" value="1"/>
-    <create id="$m" type="machine" parent="$d" name="vis"/>
-    <create type="state" parent="$m" name="hidden" args.fade="0"/>
-    <create type="state" parent="$m" name="shown" args.fade="1"/>
-    <create id="$a" type="transition" parent="$m" name="appear" from="hidden" to="shown" ms="900" ease="ease_in_out"/>
-    <create type="tween" parent="$a" channel="fade" start="0.2" end="1" ease="easy_ease"/>
+    <definition in="#library" id="$d" name="badge">
+      <port_spec name="vis" kind="value" dir="in" signal="shown" datatype="choice(hidden|shown)"/>
+      <channel id="$f" name="fade" value="1"/>
+      <machine name="vis">
+        <state name="hidden" args.fade="0"/>
+        <state name="shown" args.fade="1"/>
+        <transition name="appear" from="hidden" to="shown" ms="900" ease="ease_in_out">
+          <tween channel="fade" start="0.2" end="1" ease="easy_ease"/>
+        </transition>
+      </machine>
+      <template notation="free"> … parts … </template>
+    </definition>
   A state's args are its pose (a value per channel; unset: the channel's value). A
-  part reads a channel: opacity="{= $f.channel.value}", trim.end="{= $f.channel.value}".
+  part reads a channel: opacity="{= $f}", trim.end="{= $f}" (bare $f is its value).
   Setting the instance's state, <set id="#entity" args.vis="hidden"/>, plays the
   transition from that state to the new one (from/to may be *), each channel easing
   over the whole transition or its tween's slice (start, end: fractions of the
@@ -199,11 +211,12 @@ ${p.standard}
   port_spec of its definition. Kinds: optical_power (W), rf_voltage (V), value carry a
   one-way signal; electrical and heat_flow carry an across/through pair. An out port's
   signal is the definition's behaviour (a binding over in ports); an in port's
-  signal is its argument, or whatever its connection's out port carries. To connect, create a
+  signal is its argument, or whatever its connection's out port carries. To connect, make a
   connection under the model root with two links, ends a and b:
-  <create id="$c" type="connection" parent="#model"/>
-  <link from="$c" to="#laser_out" rel="connects" end="a"/>
-  <link from="$c" to="#fiber_in" rel="connects" end="b"/>
+    <connection in="#model" id="$c">
+      <link from="$c" to="#laser_out" rel="connects" end="a"/>
+      <link from="$c" to="#fiber_in" rel="connects" end="b"/>
+    </connection>
   A connection joins two ports of one kind, an out to an in, and an in port takes
   one connection; anything else is rejected as bad_connection. Readers bind to a
   port's signal ({= #port.port.signal / 1 mW}). The model view lists every port with
@@ -219,7 +232,8 @@ ${p.standard}
   (pin g, 0 V), probe (pin t, shows its net's voltage), junction (pin j, a T in a wire).
   Pins are electrical ports; a connection between two is a wire, and every pin joined
   by wires is one net, solved live (DC: capacitors open, inductors short). The netlist
-  of each sheet comes with the view. Draw or extend one, alone in its <edit>:
+  of each sheet comes with the view. Draw or extend one with a <circuit> (a new sheet
+  is <composition id="$s" name="rc" notation="schematic"/> in the same edit, sheet="$s"):
     <edit><circuit sheet="circuit">
       <place part="vsource" name="V1" x="120" y="220" V="9 V"/>
       <place part="resistor" name="R1" x="220" y="160" R="1 kΩ"/>
@@ -230,9 +244,11 @@ ${p.standard}
     </circuit></edit>
   x, y is a part's origin, on the 10 px grid; a resistor's pins sit 30 px left and right of
   it (a source's 30 px above and below), turned with rot (90, 180, 270). name is the
-  designator (R1; next free if left out); other attributes set inputs. A wire joins
-  designator.pin to designator.pin through via corners, then one elbow (horizontal first);
-  every leg must be horizontal or vertical. Parts placed before may be wired by name.
+  designator (R1; next free if left out); other attributes set inputs, a value or a
+  binding (R="{= #s.slider.value * 1 kΩ}"). A wire joins designator.pin to
+  designator.pin through via corners, then one elbow (horizontal first, or
+  elbow="vertical"); every leg must be horizontal or vertical. Parts placed before may
+  be wired by name.
   The answer carries the sheet's netlist. Change a value with <set id="#entity"
   args.R="4.7 kΩ"/>. To remove a part, <delete> its use, its entity, and each
   connection on its pins with that connection's wire path, in one <edit>.`,
@@ -250,7 +266,7 @@ ${p.standard}
       <context name="std:table">
         <rule match="type:text" affords.enter="edit"/>
       </context>
-  alone in its <edit>: rules after the built-in's, so they win, in this document only.
+  in an <edit>: rules after the built-in's, so they win, in this document only.
   match is all, self or children, with type:a|b and state:s. Writing a name again
   replaces its rules; <delete> its id removes them. Views print a document's contexts
   in this markup. One node's exception is its affords facet, CSS's style attribute:
@@ -301,8 +317,9 @@ ${p.contextFields}`,
   template for one item: inside it, #group.repeat.item is the element and
   #group.repeat.index its index, and each copy reads its own. Write ONE template,
   never the copies:
-    <create id="$g" type="group" parent="#C" name="dots" repeat.each="{= range(0, 300, 13)}"/>
-    <create type="ellipse" parent="$g" x="{= $g.repeat.item}" y="{= 40 + 10 * sin($g.repeat.index)}" rx="4" ry="4"/>
+    <group in="#C" id="$g" name="dots" repeat.each="{= range(0, 300, 13)}">
+      <ellipse x="{= $g.repeat.item}" y="{= 40 + 10 * sin($g.repeat.index)}" rx="4" ry="4"/>
+    </group>
   The items are derived, never saved: #4/~3 is the item with key 3 (a group), #4/~3/7
   its copy of template node #7. The view shows the repeat with copies="N";
   <look expand="#4"/> shows the items. Their number follows each and count as they
@@ -327,8 +344,11 @@ ${p.contextFields}`,
   lighter for marks that need no node each; use a repeat when each copy is its own
   node: a label, a cell with its own colour, a component.
   A let names a value for bindings to read, computed once: a series, a number, a
-  function. <create id="$aw" type="let" parent="#C" name="area w" value="{= #F.size.w - 70}"/>,
-  then {= $aw.let.value / 2}. In a definition's template each picture has its own copy,
+  function. <let in="#C" id="$aw" name="area w" value="{= #F.size.w - 70}"/>, then
+  {= $aw / 2} in the same edit ($aw alone is its value; #id.let.value once you saw its id).
+  Name what a formula repeats: a let for n₁·sin θ₁/n₂ read ten times is clearer than
+  ten copies, and so is with(r = expr, …) inside one formula (EXPRESSIONS).
+  In a definition's template each picture has its own copy,
   so it may read the picture's box; in a definition's body each instance has one.
   ENTER AND EXIT: repeat.enter_ms and repeat.exit_ms (when.enter_ms, when.exit_ms on a
   conditional) make items arrive and leave over time. An item that joins has
@@ -341,18 +361,19 @@ ${p.contextFields}`,
   },
   state: {
     summary: 'state and actions: a let that clicks change (toggle, counter, current tab), on click/enter/leave, session state, reading the selected node',
-    doc: /type="on"|<on |keep="session"|deref\(|selection\.|<trace |<accumulate |<query |provide="/,
+    doc: /<on |keep="session"|deref\(|selection\.|<trace |<accumulate |<query |provide="/,
     request: /\b(?:click\w*|toggl\w*|buttons?|accordions?|tabs?|expand\w*|collaps\w*|hover\w*|state|counters?|interactive|press\w*|selected node|inspector|delay\w*|pulses?|travel\w*|accumulat\w*|integrat\w*|running|smooth\w*|context|provide\w*|quer\w*|fetch\w*|api|server|simulat\w*|slow|loading|spinner)\b/i,
     text: () => `STATE AND ACTIONS
-  State is a let holding a constant: <create id="$open" type="let" parent="#C"
-  name="open" value="false"/>. Where it is declared says whose it is: in a
+  State is a let holding a constant: <let in="#C" id="$open" name="open"
+  value="false"/>. Where it is declared says whose it is: in a
   definition's template, one per picture (each instance has its own); in a repeat's
   template, one per item; in a composition, one for the document. let.keep="session"
   makes it session state: never saved, not in undo (hover, a menu that is open).
   An action writes state when something happens on a node. An on node listens on its
   parent (or on.node="#n"), and an event on anything inside that node reaches it:
-    <create id="$btn" type="group" parent="#C" name="header"/> … its shapes …
-    <create type="on" parent="$btn" name="toggle" event="click" write.target="$open" write.to="{= !$open.let.value}"/>
+    <group in="#C" name="header"> … its shapes …
+      <on name="toggle" event="click" write.target="$open" write.to="{= !$open}"/>
+    </group>
   event: click, press, release, enter, leave. One write is the on's own write facet:
   target (the let, or any node), prop (default let.value), to (an expression), or
   verb="toggle", or verb="step" with by. For several, give the on children of type set,
@@ -374,15 +395,15 @@ ${p.contextFields}`,
   document px), $o.on.x and $o.on.y (where it is, in the listening node's own space)
   and $o.on.delta (the wheel, px; negative is away from you). Each event reads what
   the last one wrote, and the whole drag (or burst of wheel) is one undo step:
-    <create id="$o" type="on" parent="#pad" name="pan view" event="drag"
+    <on in="#pad" id="$o" name="pan view" event="drag"
       write.target="#pan" write.to="{= #pan.let.value - $o.on.dx}"/>
   std:plot does this itself: drag its plot area to pan, wheel to zoom about the
   pointer (state lets zoom, centre x, centre y on the instance; its margins still
   move it).
   CONTEXT: @name reads the nearest value of that name provided above the reader, with
   no port in between, so one component reads different values where it is placed. A
-  let provides: <create type="let" parent="#group" name="gap" let.provide="yes"
-  value="40"/> serves everything under #group as {= @gap}. let.provide="default" in a
+  let provides: <let in="#group" name="gap" let.provide="yes" value="40"/> serves
+  everything under #group as {= @gap}. let.provide="default" in a
   definition's template serves only where nothing above provides the name. Colour
   tokens (@ink) are the document's providers; a group's own let named ink shadows the
   token for what is under it. A name nothing provides is a problem on the leaf.
@@ -392,20 +413,20 @@ ${p.contextFields}`,
   for how a component looks where it is placed; what changes its behaviour or its
   outputs is an input port.
   TIME (never saved, runs as the picture plays, not on the timeline):
-  a trace remembers a value: <create id="$tr" type="trace" parent="#C" name="tr"
+  a trace remembers a value: <trace in="#C" id="$tr" name="tr"
   trace.of="{= #lit.let.value}" trace.delay="2"/> gives $tr.trace.out, the value as it
   was 2 seconds ago, and $tr.trace.dash, where it was on along a path of length 1: put
   stroke.path_length="1" stroke.cap="butt" stroke.dash="{= $tr.trace.dash}" on a path
   and a pulse travels it, start to end. std:fiber's delay_s input does this.
   an accumulate steps a formula of its own value once a frame:
-  <create id="$q" type="accumulate" parent="#C" name="q" accumulate.initial="0"
+  <accumulate in="#C" id="$q" name="q" accumulate.initial="0"
   accumulate.next="{= $q.accumulate.value + #rate.let.value * $q.accumulate.dt}"/>
   (dt is the seconds of the last step; accumulate.reset="true" restarts it). A smoothed
   value: next="{= v + (target - v) * min(1, dt / 0.3)}". A count of clicks that should
   undo is an on with verb step on a let instead.
   A QUERY asks a Model (a URL that takes the input as JSON by POST and answers JSON)
   for a value that may take seconds, without blocking:
-    <create id="$q" type="query" parent="#C" name="wave" query.model="https://…/wave"
+    <query in="#C" id="$q" name="wave" query.model="https://…/wave"
       query.input="{= record(k: #k.let.value, n: 41)}"
       query.initial="{= record(xs: series(0, 1), ys: series(0, 0))}"/>
   $q.query.value is the answer (initial until the first; an array of numbers is a
@@ -436,8 +457,8 @@ ${p.contextFields}`,
   preset (light: hairlines between rows, a muted monospace label column; boxed:
   every line, a filled header), header (header rows), columns (one size per column:
   auto, a length, 1fr), label-col, emphasis (1-based column: bold, accent header),
-  align (per column: left center right). Make one, alone in its <edit>:
-    <edit><table to="#comp" x="80" y="400" preset="light" header="1" label-col="true" emphasis="3" caption="Same cable, other thickness">
+  align (per column: left center right). Make one:
+    <edit><table in="#comp" x="80" y="400" preset="light" header="1" label-col="true" emphasis="3" caption="Same cable, other thickness">
     PI per side (µm) | 75 | 100 | 125
     S (µm)           | 85 | 113 | 140
     </table></edit>
@@ -451,13 +472,16 @@ ${p.contextFields}`,
     text: () => `TIME
   A clip node (child of a timeline) animates one property: timing.start (where its
   keys are measured from, seconds on the clock) and clip.prop (the leaf, e.g.
-  transform2d.x), with key children: <create type="key" parent="$clip" t="0"
-  value="500" easing="ease_in_out"/>, t in seconds after the start, value the leaf's
-  kind, easing into the next key (linear, ease_in, ease_out, ease_in_out, hold). A
-  clip needs two keys to move anything; before its first key the authored value
-  shows, after its last it holds that value. It reaches its target through <link
-  from="#clip" to="#target" rel="animates"/>. A leaf may be bound or animated, not
-  both.`,
+  transform2d.x), with key children, and reaches its target through an animates link:
+    <clip in="#timeline" id="$clip" name="slide" start="0" prop="transform2d.x">
+      <key t="0" value="500" easing="ease_in_out"/>
+      <key t="2" value="800"/>
+    </clip>
+    <link from="$clip" to="#target" rel="animates"/>
+  t is seconds after the start, value the leaf's kind, easing into the next key
+  (linear, ease_in, ease_out, ease_in_out, hold). A clip needs two keys to move
+  anything; before its first key the authored value shows, after its last it holds
+  that value. A leaf may be bound or animated, not both.`,
   },
   narratives: {
     summary: 'narratives: lesson text with mentions and live values, the <write> and <rewrite> verbs',
@@ -469,7 +493,7 @@ ${p.contextFields}`,
   :e[words]{#id} (a mention: words that point at a node), :val{#id.facet.field unit=mm
   digits=1} (a live value, shown formatted). Blocks: paragraphs, # headings, - items,
   1. items, > quotes, \`\`\` code, ::view[caption]{show=composition focus=#node} (shows a
-  composition when read). Write with narrative verbs, in an <edit> of their own:
+  composition when read). Write with narrative verbs:
     <edit><write narrative="#N" after="#B">New paragraph with :e[the laser]{#4}.</write></edit>
     <edit><rewrite block="#B">The block's new text.</rewrite></edit>
   after="end" appends; after="" puts it first. Rewriting with nothing deletes the block.
@@ -518,8 +542,9 @@ never rewrite the document; name each node by the id you saw and change only
 what the request needs.
 
 VIEW
-  <document version="N"> holds nodes. Every node has an opaque id like #3F; copy
-  ids exactly, never invent one. Attributes are the node's leaves; one at its
+  <document version="N"> holds nodes: the element is the node's type, its children
+  its children. Every node has an opaque id like #3F; copy ids exactly, never invent
+  one. Attributes are the node's leaves; one at its
   default is left out (no rot="0", sx="1", opacity="1"). attr.bind="expr"
   means the attr is bound to an expression and its shown value is derived; write
   a binding as attr="{= expr}" (attr.bind="expr" is accepted too).
@@ -536,12 +561,22 @@ ${types}
 FACETS AND FIELDS  (field:kind, or field:a|b|c for an enum's values)
 ${comps}
 
-VERBS, inside <edit expect-version="N">  (N = the version you read)
-  <create id="$a" type="rect" parent="#1" x="10" y="20" w="30" h="30" color="#ff0000"/>
-      $a is an alias you choose; later verbs in the same edit may use it anywhere
-      an id goes, bindings included: h="{= $a.size.w * 2}". id is optional; leave it
-      off a node nothing else in the edit names.
-      after="#id" or first="true" places it; default is last child. parent omitted = root.
+EDITS, inside <edit expect-version="N">  (N = the version you read)
+  An edit is one change, undone as one. Write a new node the way the view prints one,
+  with its children inside it:
+    <group in="#1" id="$key" name="legend" x="40" y="300">
+      <rect w="12" h="12" fill.color="@series-1"/>
+      <text x="18" content="{= 'λ = ' + fmt(#L.port.signal, 'nm', 0)}"/>
+    </group>
+  A new node at the top of the edit goes in= a node you saw (or one this edit makes,
+  written earlier, or a composition by name); after="#id" or first="true" places it,
+  default last; with no in= it is a root (a composition, a library). id="$a" names a
+  new node for the whole edit: any verb or binding may use $a where an id goes
+  (h="{= $a.size.w * 2}"), before or after it is written. Leave id off a node
+  nothing names. A bare $a in a binding is the value a let, port_spec, channel,
+  trace, accumulate or query holds; $a.facet.field is any leaf.
+  Verbs change what exists. New nodes and component verbs are made first, then the
+  verbs in the order written, each seeing what came before it:
   <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
       attributes are leaves: facet.field, or a bare field name, which means the
       first of the node's facets (in the order listed above) that has that field:
@@ -549,16 +584,19 @@ VERBS, inside <edit expect-version="N">  (N = the version you read)
       {= expr} binds the leaf to an expression instead of a value.
   <add id="#N" stroke.width="2"/>            add an optional facet with fields
   <delete id="#3"/>                          deletes the subtree
-  <reparent id="#4" to="#1" after="#2"/>
-  <link from="#clip" to="#node" rel="animates" offset="0.5"/>
+  <reparent id="#4" in="#1" after="#2"/>
+  <link from="$clip" to="#node" rel="animates" offset="0.5"/>   a relation; inside a new node too
   <unlink id="r1"/>
-  <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity
-      (alone in its <edit>). If both already picture different entities you get a
-      <question>; resend with keep="#entity" naming the one to keep.
-  <import-svg to="#comp" x="100" y="50"><svg …>…</svg></import-svg>
-      SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y
-      (alone in its <edit>). Paths stay paths; what SVG cannot carry (text, images,
-      gradients beyond their first colour, filters) is listed as <cut> lines.
+  <link-figures a="#box" b="#torus"/>          make two pictures pictures of one entity.
+      If both already picture different entities you get a <question>; resend with
+      keep="#entity" naming the one to keep.
+  <import-svg in="#comp" x="100" y="50"><svg …>…</svg></import-svg>
+      SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y.
+      Paths stay paths; what SVG cannot carry (text, images, gradients beyond their
+      first colour, filters) is listed as <cut> lines.
+  Inside a new node every element is a node, except <place>, <make-component> and
+  <link>; at the top of the edit set, table and context are verbs, and <place>,
+  <circuit>, <table>, <write> (topics) may share an edit with anything.
 
 STEPS
   Build in one <edit> when you can; never split one only to learn ids (use $aliases).
@@ -590,7 +628,7 @@ VALUES
   outline holding its points in order (x, y in the path's space; handles ix iy ox oy
   relative to the point) and closed or not; a second contour inside the first is a hole
   when it runs the other way, or always under fill_rule evenodd. Write a path's shape
-  as SVG path data instead: <create type="path" d="M 0 0 C 20 0 20 40 40 40"/>, and
+  as SVG path data instead: <path in="#C" d="M 0 0 C 20 0 20 40 40 40"/>, and
   bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
   contour children. trim (rect, ellipse, path) is Trim Paths: trim.start..trim.end of
   the outline is stroked (fractions; trim.offset shifts it), the fill stays whole, so
@@ -606,14 +644,20 @@ COLOURS  (theme tokens: light and dark, like CSS variables)
   series-8 (series in this order for categories; text in ink, ink-2 or muted, never a
   series colour). The first use adds the theme to the document: a palette root of
   token nodes (token.light, token.dark), which you may edit with <set> or extend:
-  <create type="token" parent="#P" name="brand" light="#1d3557" dark="#a8dadc"/>.
+  <token in="#P" name="brand" light="#1d3557" dark="#a8dadc"/>.
 
 EXPRESSIONS (for {= …} bindings)
   #id.facet.field references a leaf; + - * / % < <= > >= == != && || !;
   cond ? a : b; functions abs floor ceil round min(a,b) max(a,b) clamp(x,lo,hi)
-  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan atan2(y,x) sqrt pow(x,y) hypot(x,y);
+  lerp(a,b,t) scale(x,d0,d1,r0,r1) sin cos tan asin acos atan atan2(y,x) sqrt pow(x,y)
+  hypot(x,y);
   the constant pi; angles in radians; quantity literals 9.58 mW. A binding may not
-  depend on itself. Inside an attribute write < as &lt; (or flip the comparison).
+  depend on itself. with(a = expr, b = expr, result) names values inside one formula,
+  each readable after it: {= with(s = #n1.slider.value * sin(#t.slider.value) /
+  #n2.slider.value, s > 1 ? 0 : asin(s))}: never write one subexpression twice.
+  Path data for a bound path.d (pixels): line(x0, y0, x1, y1) a straight line,
+  arc(cx, cy, r, a0, a1) an arc from angle a0 to a1 (radians, clockwise on screen),
+  joined with + ' ' +; more in the data topic. Inside an attribute write < as &lt; (or flip the comparison).
   Text: '…' strings (single quotes inside an attribute), + joins them; fmt(x) a
   number or quantity as text, fmt(x, d) with d decimals, fmt(q, 'nm', d) converted
   to that unit with it appended, sci(x, d) scientific, str(v) anything. So a text
@@ -640,12 +684,12 @@ names with a <revise> of that edit, which changes only the verbs you name and ke
 the rest as you wrote it; send a whole new <edit> only when most of it must change:
   <revise>
     <change op="$a" h="{= $b.size.h}"/>     set or add attributes on one verb
-    <replace op="14"><create …/></replace>  swap one verb for any number
+    <replace op="14"><rect …/></replace>    swap one verb for any number
     <drop op="$c"/>
-    <insert after="$a"><create …/></insert> (or before="…")
+    <insert after="$a"><rect …/></insert>   (or before="…")
     <text old="0.5 mw" new="0.5 mW" all="true"/>   exact text, once unless all
   </revise>
-op names a verb by the $alias it created or its number in the rejected edit as sent;
+op names a verb by its id="$name" or its number in the rejected edit as sent;
 <text> runs last. <revise expect-version="N"> updates the version.
 The person may edit while you work; your edit is merged with their changes. An error
 kind="conflict" means they changed what that op changes, and says to what: <drop op>

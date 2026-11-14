@@ -235,9 +235,9 @@ Graph (it branches): a resizable pane left of the tracks
 ```xml
 <edit><set id="#plot1" args.vis="hidden"/></edit>        <!-- plays disappear in the user's view -->
 <edit>
-  <create id="$k" type="clip" parent="#timeline" prop="args.vis" start="0"/>
-  <create type="key" parent="$k" t="0" value="hidden" easing="hold"/>
-  <create type="key" parent="$k" t="2" value="shown" easing="hold"/>
+  <clip in="#timeline" id="$k" prop="args.vis" start="0"/>
+  <key in="$k" t="0" value="hidden" easing="hold"/>
+  <key in="$k" t="2" value="shown" easing="hold"/>
   <link from="$k" to="#plot1" rel="animates"/>
 </edit>                                                   <!-- appears at 2 s, scrubbable -->
 ```

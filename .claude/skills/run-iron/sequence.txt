@@ -8,7 +8,7 @@
 nav
 ready
 eval __iron.snapping(false)
-eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><create id="$g" type="group" parent="#1" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><create id="$a" type="text" parent="$g" name="title" content="Title" font.size="20" font.weight="700"/><create id="$b" type="text" parent="$g" name="body" content="Body line" font.size="14"/><create id="$c" type="text" parent="$g" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
+eval (async()=>{const r=await __iron.edit(`<edit expect-version="1"><group in="#1" id="$g" x="120" y="60" layout.mode="stack_y" layout.gap="8" layout.pad_t="12" layout.pad_l="12" layout.pad_r="12" layout.pad_b="12"/><text in="$g" id="$a" name="title" content="Title" font.size="20" font.weight="700"/><text in="$g" id="$b" name="body" content="Body line" font.size="14"/><text in="$g" id="$c" name="footer" content="Footer" font.size="12"/></edit>`); return r.ok})()
 sleep 1000
 eval window.ys = async () => { const v = await __iron.view({fidelity:'full', scope:'#1'}); return [...v.matchAll(/<text id="[^"]+" name="(title|body|footer)"[^>]* y="([\d.]+)"/g)].map(m => `${m[1]} ${Math.round(Number(m[2]))}`); }
 eval ys()

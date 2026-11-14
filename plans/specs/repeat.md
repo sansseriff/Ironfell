@@ -109,10 +109,11 @@ replaces a builder's habit of pasting one expression into many bindings.
 `markup.rs` reads nodes written as XML: the element is the node type, attributes are
 its leaves (`facet.field`, or a bare field: the first of the type's facets, in registry
 order, that has it), children are child nodes. A value is a constant of the leaf's kind,
-a colour token (`@ink`), or a binding `{= expr}`. `id="x"` names a node for the rest of
+a colour token (`@ink`), or a binding `{= expr}`. `id="$x"` names a node for the rest of
 the markup: `$x` is its id in a binding or a reference; a bare `$x` in a binding reads
 the value a `let`, `port_spec` or `channel` holds. An input declared `choice(…)` holds an
-enum. This is the model's `<create>` vocabulary, nested.
+enum. Since 2026-11-14 this is also the language of the model's edits and the demo's
+gallery: one `<edit>` holds node markup and verbs, read in Rust (markup.md).
 
 The standard components are written in it (`src/iron_document/src/std/*.xml`) and read
 when first placed; `standard.rs` keeps only the list of entries and the file for each

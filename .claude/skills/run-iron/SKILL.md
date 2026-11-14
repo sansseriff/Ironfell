@@ -783,7 +783,7 @@ DEBUG src/document_bridge/render.rs:408 redraw (document): 2 of 36 nodes changed
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.886921905584122,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3x"}}
+{"ok":true,"version":9,"aliases":{"$n":"#3x"},"summary":"<applied version=\"9\">\n  <created alias=\"$n\" id=\"#3x\"/>\n</applied>"}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" verb=\"set #zz\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" verb=\"set #N\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
 "<rect id=\"#3x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.1254151928860334\""," h=\"240\""]
@@ -1323,7 +1323,10 @@ a view-space partial-rasterization command. `M` now counts submitted visible
 leaves across views, so it can be smaller than historical expected-output totals.
 
 `__iron.edit(xml)` applies `<edit>` markup exactly as a model reply would be
-applied (see `src-ui/model/edit.ts` for the verbs); `__iron.ask(text)` runs a
+applied: the engine plans it (`edit_plan`, iron_document::edit; the language is
+plans/specs/markup.md: `<rect in="#1" id="$r" …/>` for a new node, `<set>`, `<link>`,
+`<place>`, `<circuit>`, `<table in=…>` for the rest) and `src-ui/model/edit.ts`
+applies the plan; `__iron.ask(text)` runs a
 real model turn and needs an Anthropic API key entered in the Document
 panel, so the smoke script does not call it.
 
@@ -2067,7 +2070,7 @@ and `ready` lines:
 "<applied version=\"3\">\n  <table id=\"#3w\"/>\n</applied>"
 ["<table id=\"#3w\" name=\"table\" x=\"0\" x.by=\"#3u\" y=\"24.51953125\" y.by=\"#3u\" preset=\"light\" header=\"1\" columns=\"auto auto auto auto\" label-col=\"true\" emphasis=\"3\">","PI per side (µm) | 75  | 100 | 125","S (µm)           | 85  | 113 | 140","Gap W (µm)       | 153 | 138 | 125"]
 [true,"<cells>#40 #41 #42 #43 / #44 #45 #46 #47 / #48 #49 #4A #4B</cells>"]
-"<edit-failed applied=\"none\" version=\"4\">\n  <error op=\"0\" kind=\"table\">the merge at row 1 column 1 is not a rectangle</error>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"4\">\n  <error op=\"0\" verb=\"table #3x\" kind=\"table\">the merge at row 1 column 1 is not a rectangle</error>\n</edit-failed>"
 ["#3u"]
 "<applied version=\"5\">\n  <table id=\"#4C\"/>\n</applied>"
 ["#4C"]
@@ -2795,8 +2798,9 @@ it to the top, "follow views") shows its composition, and the bar switches
 Authoring / Hybrid / Exploration. A model turn's changed blocks are marked with
 Show / Keep / Revert. Driver: `__narrative.get('lesson')` →
 `{editor(), mode(m?), flush(), askWith(xml, text), turns(), keep(i), revert(i),
-status()}`; engine calls `narrative_list/read/edit/create/markdown/write/rewrite/
-values/targets/probe` through `__iron.call`.
+status()}`; engine calls `narrative_list/read/edit/create/markdown/values/targets/probe`
+through `__iron.call` (a model's `<write>` and `<rewrite>` are edit verbs, planned by
+`edit_plan`).
 
 `narrative.txt` (no `showcase=0`, so ids differ from other scripts; masked
 below as `#ID`). Expected, minus `nav`, `ready`, `tab`, `key` and `screenshot`

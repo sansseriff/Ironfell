@@ -27,6 +27,7 @@ pub mod contour;
 pub mod copy;
 pub mod definition;
 pub mod document;
+pub mod edit;
 pub mod expand;
 pub mod machine;
 pub mod markup;

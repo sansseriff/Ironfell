@@ -166,6 +166,7 @@ fn inline(doc: &Document, reactive: &Reactive, expr: &Expr) -> Expr {
         Expr::Var(_) | Expr::Token(_) => expr.clone(),
         Expr::Lambda(ps, body) => Expr::Lambda(ps.clone(), i(body)),
         Expr::Apply(g, args) => Expr::Apply(i(g), args.iter().map(|a| inline(doc, reactive, a)).collect()),
+        Expr::With(binds, body) => Expr::With(binds.iter().map(|(n, e)| (*n, inline(doc, reactive, e))).collect(), i(body)),
     }
 }
 

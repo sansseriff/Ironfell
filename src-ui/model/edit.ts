@@ -1,306 +1,47 @@
 /**
- * The write surface: `<edit>` markup in, one transaction out (doc 04 §9.2).
+ * The write surface: an `<edit>` in, one transaction out (doc 04 §9.2;
+ * plans/specs/markup.md).
  *
- * Correspondence is declared, never inferred: every verb names its node by
- * id. `$aliases` name nodes created in the same edit. Attributes on
- * `<create>` and `<set>` are leaves, resolved against the registry schema
- * and coerced by kind; a `{= expr}` value is a binding.
+ * The engine reads the edit (iron_document::edit, the `edit_plan` call):
+ * the same markup as the standard components and the demo's gallery, nodes
+ * as elements and verbs on what exists, all one transaction. What comes
+ * back is a plan: its ops, the verb that wrote each, the edit's `$names`
+ * and what to tell the model once it applies. This file applies the plan
+ * as the model, through `api.apply` (so a merge with the person's changes
+ * sees every op, merge.ts), and answers in the edit's own terms.
  *
  *   <edit expect-version="7">
- *     <create id="$b" type="rect" parent="#1" after="#M" x="10" y="20" w="30" h="30" color="#ff0000"/>
+ *     <rect in="#1" id="$b" after="#M" x="10" y="20" w="30" h="30" fill.color="@series-1"/>
  *     <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>
- *     <add id="#N" stroke.width="2"/>
- *     <delete id="#3"/>
- *     <reparent id="#4" to="#1" first="true"/>
- *     <link from="#S" to="#Q" rel="animates" offset="0.5"/>
- *     <unlink id="r1"/>
+ *     <link from="$clip" to="#Q" rel="animates" offset="0.5"/>
+ *     <place def="std:plot" in="#C" id="$plot" x="40" y="40" ys="{= $self.xs * 2}"/>
  *   </edit>
- *
- *   <edit><link-figures a="#l" b="#Q" keep="#v"/></edit>   (alone: the store builds it)
- *   <edit><import-svg to="#4" x="100" y="50"><svg …>…</svg></import-svg></edit>   (alone too)
- *   <edit><table to="#4" x="80" y="400" preset="light">a | b\n1 | 2</table></edit>   (alone too)
- *   <edit><circuit sheet="circuit"><place part="resistor" x="200" y="100"/>…</circuit></edit>   (alone too)
- *   <edit><create id="$d" type="definition" …/>…<place def="$d" in="#C" x="10" y="20"/></edit>   (component verbs: after the other verbs' ops, one transaction)
- *   <edit><write narrative="#N" after="#B">markdown</write>…</edit>   (narrative verbs, only with each other)
- *   <edit><rewrite block="#B">markdown</rewrite></edit>
  */
-import { XMLParser } from 'fast-xml-parser';
 import type { ApplyResult, DocumentApi, SolverSummary } from './api';
-import { coerce, resolveLeaf, type SlotJson } from './schema';
 
-export interface ParsedEdit {
-  expectVersion: number;
-  exact: boolean;
+/** What the engine planned: one transaction, and how to speak of it. */
+export interface Plan {
   ops: object[];
-  /** alias -> minted id */
+  /** `$name` -> the node it named. */
   aliases: Record<string, string>;
-  /** For each op, the index of the verb that wrote it: a verb may write several. */
-  opVerb: number[];
-  /** Each verb, briefly, in the model's terms: `create $sinv`, `create point in $btric`. */
+  /** For each op, the verb (the edit's top-level element, from 0) that wrote it. */
+  op_verb: number[];
+  /** Each verb, briefly, in the model's terms: `create $sinv`, `set #P`. */
   verbs: string[];
+  /** Lines for the `<applied>` answer: what was created, placed, built. */
+  summary: string[];
+  expect_version: number;
+  exact: boolean;
 }
 
-export class EditError extends Error {
-  constructor(
-    message: string,
-    readonly line?: number,
-  ) {
-    super(message);
-  }
-}
-
-const VERBS = ['create', 'set', 'add', 'delete', 'reparent', 'link', 'unlink'] as const;
+export type PlanResult =
+  | { ok: true; version: number; plan: Plan }
+  | { ok: false; version?: number; errors?: EditErrorLine[]; failure?: string };
 
 /** Pull the `<edit>…</edit>` block out of a model reply that may say more. */
 export function extractEdit(text: string): string | null {
   const m = text.match(/<edit[\s>][\s\S]*?<\/edit>|<edit\s*\/>/);
   return m ? m[0] : null;
-}
-
-export async function parseEdit(api: DocumentApi, xml: string): Promise<ParsedEdit> {
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '',
-    allowBooleanAttributes: true,
-    preserveOrder: true,
-    trimValues: true,
-  });
-  let tree: any[];
-  try {
-    tree = parser.parse(xml);
-  } catch (e) {
-    throw new EditError(`not well-formed: ${e instanceof Error ? e.message : e}`);
-  }
-  const root = tree.find((n) => n.edit !== undefined);
-  if (!root) throw new EditError('no <edit> element');
-  const rootAttrs = root[':@'] ?? {};
-  const expectVersion = Number(rootAttrs['expect-version'] ?? 0) || 0;
-  // exact="true": refuse the edit if the solver cannot honour every value it
-  // sets, instead of adjusting and reporting (constraint-system.md §9.2).
-  const exact = /^(true|yes|1)$/i.test(String(rootAttrs['exact'] ?? ''));
-  const schema = await api.schema();
-
-  // Pass 1: verbs in order, with their attributes.
-  type Verb = { verb: (typeof VERBS)[number]; attrs: Record<string, string>; index: number };
-  const verbs: Verb[] = [];
-  for (const child of root.edit as any[]) {
-    const verb = Object.keys(child).find((k) => k !== ':@');
-    if (!verb) continue;
-    if (!(VERBS as readonly string[]).includes(verb)) throw new EditError(`unknown verb <${verb}>; use ${VERBS.join(', ')}`);
-    verbs.push({ verb: verb as Verb['verb'], attrs: { ...(child[':@'] ?? {}) }, index: verbs.length });
-  }
-
-  // Pass 2: mint an id for every create that does not name an existing one
-  // (an $alias, or no id at all), in order of creation.
-  const fresh = verbs.filter((v) => v.verb === 'create' && (!v.attrs.id || v.attrs.id.startsWith('$')));
-  const minted = await api.nextIds(fresh.length);
-  const aliases: Record<string, string> = {};
-  const mintedFor = new Map<number, string>();
-  fresh.forEach((v, i) => {
-    mintedFor.set(v.index, minted[i]);
-    if (v.attrs.id) {
-      if (aliases[v.attrs.id]) throw new EditError(`op ${v.index}: alias ${v.attrs.id} is created twice in this edit`, v.index);
-      aliases[v.attrs.id] = minted[i];
-    }
-  });
-  const resolveId = (raw: string | undefined, what: string, index: number): string => {
-    if (!raw) throw new EditError(`op ${index}: missing ${what}`, index);
-    if (raw.startsWith('$')) {
-      const id = aliases[raw];
-      if (!id) throw new EditError(`op ${index}: alias ${raw} is not created in this edit`, index);
-      return id;
-    }
-    return raw.startsWith('#') || raw.startsWith('r') ? raw : `#${raw}`;
-  };
-  // A leaf value: a ref leaf (instance.def, …) may name a node this edit
-  // creates by its $alias, like any id attribute, and so may a binding's
-  // expression ({= $a.port.signal * 2}).
-  const leafValue = (kind: Parameters<typeof coerce>[0], raw: string, index: number): SlotJson => {
-    const text = raw.trim();
-    if (kind === 'ref' && text.startsWith('$')) return { ref: resolveId(text, 'ref', index) };
-    if (/^\{=[\s\S]*\}$/.test(text)) return coerce(kind, text.replace(ALIAS_IN_EXPR, (alias) => resolveId(alias, 'alias', index)));
-    return coerce(kind, raw);
-  };
-
-  // Pass 3: placements, batched per (parent, after) so keys are distinct.
-  const placementKeys = new Map<string, string[]>();
-  const wantPlacement: { key: string; index: number }[] = [];
-  const placementOf = (v: Verb): { parent: string; after: string } => {
-    const parentRaw = v.verb === 'reparent' ? v.attrs.to : v.attrs.parent;
-    const parent = parentRaw ? resolveId(parentRaw, 'parent', v.index) : '';
-    const after = v.attrs.first !== undefined ? '' : v.attrs.after ? resolveId(v.attrs.after, 'after', v.index) : 'end';
-    return { parent, after };
-  };
-  for (const v of verbs) {
-    if (v.verb === 'create' || v.verb === 'reparent') {
-      const p = placementOf(v);
-      const key = `${p.parent}|${p.after}`;
-      wantPlacement.push({ key, index: v.index });
-    }
-  }
-  for (const key of new Set(wantPlacement.map((w) => w.key))) {
-    const count = wantPlacement.filter((w) => w.key === key).length;
-    const [parent, after] = key.split('|');
-    // A parent created in this same edit has no children yet; keys start fresh.
-    const keys = minted.includes(parent) ? freshKeys(count) : await api.place(parent, after, count);
-    placementKeys.set(key, keys);
-  }
-  const takeKey = (v: Verb) => {
-    const p = placementOf(v);
-    const keys = placementKeys.get(`${p.parent}|${p.after}`)!;
-    return { parent: p.parent || null, order: keys.shift()! };
-  };
-
-  // Pass 4: ops.
-  const relIds = await api.nextRelationIds(verbs.filter((v) => v.verb === 'link').length);
-  let relIndex = 0;
-  const ops: object[] = [];
-  const opVerb: number[] = [];
-  const skip = new Set(['id', 'type', 'parent', 'after', 'first', 'to', 'from', 'rel', 'path', 'value', 'bind']);
-  // A verb's leaf attributes. Only placement and the verb's own words are
-  // reserved: `value` is a leaf (slider.value, key.value) unless `path=`
-  // names the leaf (the `path="…" value="…"` form), and `x.bind="expr"`, the
-  // form the view prints, is accepted as `x="{= expr}"`.
-  const leafPairs = (a: Record<string, string>, reserved: Set<string>): [string, string][] => {
-    const out: [string, string][] = [];
-    for (const [k, raw] of Object.entries(a)) {
-      if (reserved.has(k)) continue;
-      if (k.endsWith('.bind')) out.push([k.slice(0, -'.bind'.length), `{= ${raw}}`]);
-      else out.push([k, raw]);
-    }
-    return out;
-  };
-  const placement = new Set(['id', 'type', 'parent', 'after', 'first']);
-  for (const v of verbs) {
-    const a = v.attrs;
-    const at = (msg: string) => new EditError(`op ${v.index} <${v.verb}>: ${msg}`, v.index);
-    switch (v.verb) {
-      case 'create': {
-        const type = a.type;
-        if (!type) throw at('missing type');
-        if (!schema.types[type]) throw at(`unknown type "${type}"; types: ${Object.keys(schema.types).join(', ')}`);
-        const id = mintedFor.get(v.index) ?? resolveId(a.id, 'id', v.index);
-        const { parent, order } = takeKey(v);
-        const comps: Record<string, Record<string, SlotJson>> = {};
-        for (const [k, raw] of leafPairs(a, placement)) {
-          let leaf;
-          try {
-            leaf = resolveLeaf(schema, type, k);
-            comps[leaf.facet] ??= {};
-            comps[leaf.facet][leaf.field] = leafValue(leaf.kind, raw, v.index);
-          } catch (e) {
-            throw at(e instanceof Error ? e.message : String(e));
-          }
-        }
-        for (const c of schema.types[type].facets) if (c.required) comps[c.kind] ??= {};
-        ops.push({ t: 'create', id, ty: type, parent, order, facets: Object.entries(comps).map(([k, f]) => ({ [k]: f })) });
-        break;
-      }
-      case 'set':
-      case 'add': {
-        const id = resolveId(a.id, 'id', v.index);
-        // A bare field is read against the node's type: written as a hint, made
-        // by this edit, or (only when the name is ambiguous across facets) read.
-        let type: string | undefined = a.type ?? verbs.find((c) => c.verb === 'create' && c.attrs.id && mintedFor.get(c.index) === id)?.attrs.type;
-        const pairs: [string, string][] = [];
-        if (a.path) pairs.push([a.path, a.bind !== undefined ? `{= ${a.bind}}` : (a.value ?? '')]);
-        pairs.push(...leafPairs(a, a.path ? new Set([...placement, 'path', 'value', 'bind']) : placement));
-        if (pairs.length === 0) throw at('nothing to set; give leaf attributes such as x="10" or path="size.h" value="10"');
-        const byComp: Record<string, Record<string, SlotJson>> = {};
-        for (const [k, raw] of pairs) {
-          let leaf;
-          try {
-            if (!k.includes('.') && !type && ambiguous(schema, k)) type = await nodeType(api, id);
-            leaf = k.includes('.') || !type ? resolveLeafAnyType(schema, k) : resolveLeaf(schema, type, k);
-            const slot = leafValue(leaf.kind, raw, v.index);
-            if (v.verb === 'set') ops.push({ t: 'set', id, path: `${leaf.facet}.${leaf.field}`, slot });
-            else (byComp[leaf.facet] ??= {})[leaf.field] = slot;
-          } catch (e) {
-            throw at(e instanceof Error ? e.message : String(e));
-          }
-        }
-        for (const [comp, fields] of Object.entries(byComp)) ops.push({ t: 'add_facet', id, facet: { [comp]: fields } });
-        break;
-      }
-      case 'delete':
-        ops.push({ t: 'delete', id: resolveId(a.id, 'id', v.index) });
-        break;
-      case 'reparent': {
-        const id = resolveId(a.id, 'id', v.index);
-        const { parent, order } = takeKey(v);
-        ops.push({ t: 'reparent', id, parent, order });
-        break;
-      }
-      case 'link': {
-        const data: Record<string, SlotJson> = {};
-        for (const [k, raw] of Object.entries(a)) if (!skip.has(k)) data[k] = coerce('any', raw);
-        ops.push({
-          t: 'link',
-          rel: {
-            id: relIds[relIndex++],
-            from: resolveId(a.from, 'from', v.index),
-            to: resolveId(a.to, 'to', v.index),
-            rel: a.rel ?? 'references',
-            ...(Object.keys(data).length ? { data } : {}),
-          },
-        });
-        break;
-      }
-      case 'unlink':
-        ops.push({ t: 'unlink', id: resolveId(a.id, 'id', v.index) });
-        break;
-    }
-    while (opVerb.length < ops.length) opVerb.push(v.index);
-  }
-  return { expectVersion, exact, ops, aliases, opVerb, verbs: verbs.map(describe) };
-}
-
-/** An `$alias` inside a binding's expression. */
-const ALIAS_IN_EXPR = /\$[A-Za-z_]\w*/g;
-
-/** A verb in the model's own terms, for errors: what it names, or what it makes and where. */
-function describe(v: { verb: string; attrs: Record<string, string> }): string {
-  const a = v.attrs;
-  if (v.verb === 'create') return a.id ? `create ${a.id}` : `create ${a.type ?? 'node'}${a.parent ? ` in ${a.parent}` : ''}`;
-  if (v.verb === 'link') return `link ${a.from ?? ''} ${a.rel ?? 'references'} ${a.to ?? ''}`;
-  return `${v.verb} ${a.id ?? ''}`.trim();
-}
-
-/** Whether a bare field names a field of more than one facet. */
-function ambiguous(schema: Awaited<ReturnType<DocumentApi['schema']>>, attr: string): boolean {
-  return attr !== 'name' && Object.values(schema.facets).filter((fields) => fields[attr] !== undefined).length > 1;
-}
-
-/** An existing node's type, from a skeleton view of it alone. */
-async function nodeType(api: DocumentApi, id: string): Promise<string | undefined> {
-  try {
-    const text = await api.view({ fidelity: 'skeleton', scope: id, depth: 0 });
-    return text.match(new RegExp(`<([\\w-]+)\\s[^>]*id="${id.replace(/[^\w#/]/g, '')}"`))?.[1];
-  } catch {
-    return undefined;
-  }
-}
-
-/** A leaf written as `facet.field`, or a bare field unique across all facets. */
-function resolveLeafAnyType(schema: Awaited<ReturnType<DocumentApi['schema']>>, attr: string) {
-  if (attr === 'name') return { facet: 'name', field: 'text', kind: 'string' as const };
-  if (attr.includes('.')) {
-    const [facet, field] = attr.split('.', 2);
-    const kind = schema.facets[facet]?.[field] ?? schema.facets[facet]?.['*'];
-    if (!kind) throw new Error(`unknown leaf "${attr}"`);
-    return { facet, field, kind };
-  }
-  // Bare names never match a run-time field (`*`): arguments are written args.<name>.
-  const hits = Object.entries(schema.facets).filter(([, fields]) => fields[attr] !== undefined && attr !== '*');
-  if (hits.length === 1) return { facet: hits[0][0], field: attr, kind: hits[0][1][attr] };
-  if (hits.length === 0) throw new Error(`unknown leaf "${attr}"`);
-  throw new Error(`"${attr}" is ambiguous; write one of ${hits.map(([c]) => `${c}.${attr}`).join(', ')}`);
-}
-
-/** Order keys for children of a node that does not exist yet: a0, a1, a2 … */
-function freshKeys(count: number): string[] {
-  const digits = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-  return Array.from({ length: count }, (_, i) => (i < 62 ? `a${digits[i]}` : `b${digits[Math.floor(i / 62)]}${digits[i % 62]}`));
 }
 
 export interface EditOutcome {
@@ -311,325 +52,53 @@ export interface EditOutcome {
   failure?: string;
   /** What the solver did, when constraints were involved. */
   solver?: SolverSummary;
-  /** Markup for the model about an applied edit: the solver's outcome (clusters, moved
-   *  nodes, unmet requests), or an import's new roots and cuts. */
+  /** Markup for the model about an applied edit: what it created, placed and
+   *  built, and the solver's outcome (clusters, moved nodes, unmet requests). */
   summary?: string;
 }
 
-/** `<link-figures a b keep?>` (ECM §7.2): the store computes the ops, so it
- *  stands alone in its edit. A merge question comes back as an
- *  `<edit-failed>` naming both entities and asking for `keep`. */
-const LINK_FIGURES = /^\s*<edit(?:\s[^>]*)?>\s*<link-figures\s([^>]*?)\/?>\s*(?:<\/link-figures>)?\s*<\/edit>\s*$/;
-
-async function linkFigures(api: DocumentApi, attrText: string): Promise<EditOutcome> {
-  const attrs: Record<string, string> = {};
-  for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
-  const id = (s: string | undefined) => (s === undefined || s === '' ? '' : s.startsWith('#') ? s : `#${s}`);
-  const version = await api.version();
-  if (!attrs.a || !attrs.b) {
-    return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<link-figures> needs a="#id" and b="#id"' }]) };
-  }
-  const r = await api.link(id(attrs.a), id(attrs.b), id(attrs.keep), 'model');
-  if (r.ok) return { ok: true, version: r.version };
-  if (r.question) {
-    const q = r.question;
-    const entity = (e: typeof q.a) =>
-      `    <entity id="${e.entity}"${e.name ? ` name="${escapeXml(e.name)}"` : ''}${e.def ? ` definition="${escapeXml(e.def)}"` : ''}` +
-      `${e.args.map(([k, v]) => ` ${k}="${escapeXml(v)}"`).join('')} figures="${e.figures.join(' ')}"` +
-      `${e.ports.length ? ` ports="${e.ports.join(' ')}"` : ''}/>`;
-    const collisions = q.port_collisions.length ? `\n    <port-collision names="${q.port_collisions.join(' ')}"/>` : '';
-    return {
-      ok: false,
-      failure:
-        `<edit-failed applied="none" version="${version}">\n` +
-        `  <question kind="merge" a="${id(attrs.a)}" b="${id(attrs.b)}">\n${entity(q.a)}\n${entity(q.b)}${collisions}\n` +
-        `    Both already picture an entity. Resend <link-figures> with keep="${q.a.entity}" or keep="${q.b.entity}"; the other entity is deleted and its figures move to the one kept.\n` +
-        `  </question>\n</edit-failed>`,
-    };
-  }
-  return { ok: false, failure: failed(version, [{ op: 0, kind: 'link', message: r.error ?? 'link failed' }]) };
-}
-
-/** `<import-svg to x y>` with SVG inside (plans/specs/svg-import-export.md):
- *  the SVG's shapes as new nodes under `to`, its origin at `x`, `y`. Alone in
- *  its edit, like `<link-figures>`; what SVG could not carry comes back as
- *  `<cut>` lines in the `<applied>` summary. */
-const IMPORT_SVG = /^\s*<edit(?:\s[^>]*)?>\s*<import-svg\s([^>]*?)>([\s\S]*)<\/import-svg>\s*<\/edit>\s*$/;
-
-async function importSvg(api: DocumentApi, attrText: string, svg: string): Promise<EditOutcome> {
-  const attrs: Record<string, string> = {};
-  for (const m of attrText.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
-  const version = await api.version();
-  if (!attrs.to) return { ok: false, failure: failed(version, [{ op: 0, kind: 'parse', message: '<import-svg> needs to="#id" (a composition or group)' }]) };
-  const text = svg.trim().replace(/^<!\[CDATA\[([\s\S]*)\]\]>$/, '$1');
-  const to = attrs.to.startsWith('#') ? attrs.to : `#${attrs.to}`;
-  const r = await api.importSvg(text, to, Number(attrs.x ?? 0) || 0, Number(attrs.y ?? 0) || 0, 'model');
-  if (!r.ok) return { ok: false, failure: failed(version, [{ op: 0, kind: 'import_svg', message: r.error ?? 'import failed' }]) };
-  const cuts = (r.cuts ?? []).map((c) => `\n  <cut>${escapeXml(c)}</cut>`).join('');
-  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <imported roots="${(r.roots ?? []).join(' ')}"/>${cuts}\n</applied>` };
-}
-
-/** `<table>` (plans/specs/layout-and-tables.md §5.2): rows of cells, one per
- *  line, split by `|`; `<` merges a position into the cell on its left, `^`
- *  into the one above; `{= expr}` binds a cell. With `to` (and `x`, `y`,
- *  `preset`, `header`, `label-col`, `emphasis` (1-based), `align`, `caption`)
- *  it makes a table; with `id` it replaces that table's words, keeping each
- *  cell's id when the shape holds. Alone in its edit. The `<cells>` and
- *  `<style>` lines of a table's view are ignored, so a model may send back
- *  what it read. */
-const TABLE = /^\s*<edit(?:\s[^>]*)?>\s*<table(\s[^>]*?)?>([\s\S]*)<\/table>\s*<\/edit>\s*$/;
-
-async function table(api: DocumentApi, attrText: string, body: string): Promise<EditOutcome> {
-  const attrs: Record<string, string> = {};
-  for (const m of attrText.matchAll(/([\w.-]+)="([^"]*)"/g)) attrs[m[1]] = m[2];
-  const version = await api.version();
-  const fail = (message: string) => ({ ok: false as const, failure: failed(version, [{ op: 0, kind: 'table', message }]) });
-  const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
-  const rows = body
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('<cells') && !l.startsWith('<style'))
-    .map(unescape)
-    .join('\n');
-  const hash = (s: string) => (s.startsWith('#') ? s : `#${s}`);
-  const num = (k: string) => (attrs[k] !== undefined && attrs[k] !== '' ? Number(attrs[k]) : undefined);
-  let spec: Record<string, unknown>;
-  if (attrs.id) {
-    spec = { id: hash(attrs.id), rows, header: num('header'), preset: attrs.preset };
-  } else if (attrs.to) {
-    const emphasis = num('emphasis');
-    spec = {
-      parent: hash(attrs.to), x: num('x') ?? 0, y: num('y') ?? 0, rows, preset: attrs.preset ?? 'light', header: num('header') ?? 1,
-      label_col: attrs['label-col'] === 'true', emphasis: emphasis !== undefined && emphasis >= 1 ? emphasis - 1 : undefined, align: attrs.align, caption: attrs.caption,
-    };
-  } else {
-    return fail('<table> needs to="#id" (a composition or group) to make a table, or id="#table" to replace one');
-  }
-  const r = await api.table(JSON.stringify({ ...spec, actor: 'model' }));
-  if (!r.ok) return fail(r.error ?? 'table failed');
-  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <table id="${r.table}"/>\n</applied>` };
-}
-
-/** `<context name="…">` (plans/specs/contexts.md §2.2): rules over a
- *  built-in context (`std:table`) or a new one, in the markup views print
- *  them in. Alone in its edit; writing a name again replaces its rules. */
-const CONTEXT = /^\s*<edit(?:\s[^>]*)?>\s*(<context[\s>][\s\S]*<\/context>)\s*<\/edit>\s*$/;
-
-async function context(api: DocumentApi, markup: string): Promise<EditOutcome> {
-  // A context printed by a view carries its node's id; the name decides.
-  const r = await api.context(markup.replace(/^<context id="[^"]*"/, '<context'));
-  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'context', message: r.error ?? 'context failed' }]) };
-  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <context id="${r.context}"/>\n</applied>` };
-}
-
-/** `<circuit sheet="…">` (plans/specs/schematic.md §5): parts placed and
- *  wired on a schematic sheet, computed by the store as one transaction.
- *  Alone in its edit. The answer carries the sheet's netlist, so the model
- *  reads back what it built. */
-const CIRCUIT = /^\s*<edit(?:\s[^>]*)?>\s*(<circuit[\s>][\s\S]*<\/circuit>)\s*<\/edit>\s*$/;
-
-async function circuit(api: DocumentApi, markup: string): Promise<EditOutcome> {
-  const r = await api.circuit(markup);
-  if (!r.ok) return { ok: false, failure: failed(await api.version(), [{ op: 0, kind: 'circuit', message: r.error ?? 'circuit failed' }]) };
-  const sheet = markup.match(/<circuit[^>]*\ssheet="([^"]*)"/)?.[1] ?? '';
-  const net = await api.netlist(sheet);
-  return { ok: true, version: r.version, summary: `<applied version="${r.version}">\n  <circuit>${r.summary}</circuit>\n</applied>${net.ok ? `\n<netlist sheet="${sheet}">\n${net.netlist}\n</netlist>` : ''}` };
-}
-
-/** `<place>` and `<make-component>` (src/iron_document/src/compose.rs):
- *  instances of definitions pictured in any 2D composition, another picture
- *  of an entity, a component made of a selection. They may share an edit
- *  with the plain verbs: the store applies those verbs' ops first, then the
- *  component verbs in order, each seeing what came before it, as one
- *  transaction. So `<place def="$d">` may name a definition this edit
- *  creates, and `as="$x"` names what a component verb made for the
- *  component verbs after it (not for plain verbs). The store answers with
- *  what each component verb made. */
-const COMPOSE_VERB = /<(?:place|make-component)(?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*\/>/g;
-
-async function compose(api: DocumentApi, xml: string, label: string): Promise<EditOutcome> {
-  const verbs = xml.match(COMPOSE_VERB) ?? [];
-  const rest = xml.replace(COMPOSE_VERB, '');
-  // Each verb's place among all the edit's verbs, so errors count as the model wrote them.
-  const order = topLevelVerbs(xml);
-  const restIndex = order.map((v, i) => ({ v, i })).filter(({ v }) => v !== 'place' && v !== 'make-component').map(({ i }) => i);
-  const composeIndex = order.map((v, i) => ({ v, i })).filter(({ v }) => v === 'place' || v === 'make-component').map(({ i }) => i);
-  const hasOps = restIndex.length > 0;
-  let parsed: ParsedEdit | null = null;
-  if (hasOps) {
-    try {
-      parsed = await parseEdit(api, rest);
-    } catch (e) {
-      const err = e instanceof EditError ? e : new EditError(String(e));
-      return { ok: false, failure: failed(await api.version(), [{ op: err.line === undefined ? null : restIndex[err.line] ?? null, kind: 'parse', message: err.message }]) };
-    }
-  }
-  const aliases = parsed?.aliases ?? {};
-  for (const v of verbs) {
-    const as = v.match(/\sas=["'](\$[A-Za-z_]\w*)["']/)?.[1];
-    if (as && aliases[as]) return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: `${as} is created by a <create> and named again by as=; use another alias` }]) };
-  }
-  const markup = verbs.map((v) => v.replace(ALIAS_IN_EXPR, (a) => aliases[a] ?? a)).join('\n');
-  const r = await api.compose(markup, parsed?.ops ?? []);
-  if (!r.ok) {
-    if (r.errors && parsed) {
-      const tx = { label, ops: parsed.ops };
-      const lines = inModelTerms(tx, parsed, r.errors).map((e) => ({ ...e, op: e.op === null ? null : restIndex[e.op] ?? null }));
-      return { ok: false, version: r.version, failure: failed(r.version ?? await api.version(), lines) };
-    }
-    // "<place> 2: …" counts the component verbs; say which verb of the edit it is.
-    const message = (r.error ?? r.errors?.map((e) => e.message).join('; ') ?? 'compose failed');
-    const n = Number(message.match(/^<(?:place|make-component)> (\d+):/)?.[1]);
-    return { ok: false, failure: failed(await api.version(), [{ op: n ? composeIndex[n - 1] ?? 0 : 0, kind: 'compose', message }]) };
-  }
-  const created = Object.entries(aliases).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`);
-  return { ok: true, version: r.version, aliases, summary: `<applied version="${r.version}">\n${[...created, r.summary ?? ''].filter(Boolean).join('\n')}\n</applied>` };
-}
-
-/** The names of an edit's top-level verbs, in order. */
-function topLevelVerbs(xml: string): string[] {
-  try {
-    const tree = new XMLParser({ ignoreAttributes: true, preserveOrder: true }).parse(xml) as any[];
-    const root = tree.find((n) => n.edit !== undefined);
-    return ((root?.edit ?? []) as any[]).map((c) => Object.keys(c).find((k) => k !== ':@' && k !== '#text')).filter((k): k is string => !!k);
-  } catch {
-    return [];
-  }
-}
-
-/** `<write narrative after>` and `<rewrite block>` (plans/specs/narrative-
- *  panel.md §4): markdown with directives into a narrative, each verb one
- *  history entry. They may be several in one edit, but only with each other;
- *  the body is markdown, its `<`, `>` and `&` escaped as XML text. */
-const NARRATIVE_VERB = /<(write|rewrite)(\s[^>]*)?>([\s\S]*?)<\/\1>/g;
-const ONLY_NARRATIVE = /^\s*<edit(?:\s[^>]*)?>\s*(?:<(?:write|rewrite)(?:\s[^>]*)?>[\s\S]*?<\/(?:write|rewrite)>\s*)+<\/edit>\s*$/;
-
-async function narrativeVerbs(api: DocumentApi, xml: string): Promise<EditOutcome> {
-  const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&');
-  const lines: string[] = [];
-  let version = await api.version();
-  let i = 0;
-  for (const m of xml.matchAll(NARRATIVE_VERB)) {
-    const attrs: Record<string, string> = {};
-    for (const a of (m[2] ?? '').matchAll(/([\w.-]+)="([^"]*)"/g)) attrs[a[1]] = a[2];
-    const body = unescape(m[3].replace(/^\n/, '').replace(/\n\s*$/, ''));
-    const r = m[1] === 'write'
-      ? attrs.narrative
-        ? await api.narrativeWrite(attrs.narrative, attrs.after ?? 'end', body)
-        : { ok: false, error: '<write> needs narrative="#N" (and after="#B", or after="end")' }
-      : attrs.block
-        ? await api.narrativeRewrite(attrs.block, body)
-        : { ok: false, error: '<rewrite> needs block="#B"' };
-    if (!r.ok) return { ok: false, failure: failed(version, [{ op: i, kind: m[1], message: r.error ?? `${m[1]} failed` }]) };
-    version = r.version ?? version;
-    lines.push(`  <${m[1]} blocks="${(r.blocks ?? []).join(' ')}"/>`);
-    i++;
-  }
-  return { ok: true, version, summary: `<applied version="${version}">\n${lines.join('\n')}\n</applied>` };
-}
-
-/** Parse and apply one edit as the model, answering in the model's terms. */
+/** Plan and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
-  if (ONLY_NARRATIVE.test(xml)) return narrativeVerbs(api, xml);
-  if (/<(?:write|rewrite)[\s>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<write> and <rewrite> go in an <edit> of their own (narrative verbs only)' }]) };
+  const planned = await api.plan(xml);
+  if (!planned.ok) {
+    if (planned.failure) return { ok: false, version: planned.version, failure: planned.failure };
+    return { ok: false, version: planned.version, failure: failed(planned.version ?? await api.version(), planned.errors ?? []) };
   }
-  const link = xml.match(LINK_FIGURES);
-  if (link) return linkFigures(api, link[1]);
-  if (/<link-figures[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<link-figures> must be the only verb in its <edit>' }]) };
+  const { plan } = planned;
+  const tx = { label, actor: 'model', ts: Date.now(), ops: plan.ops, ...(plan.exact ? { exact: true } : {}) };
+  const result: ApplyResult = await api.apply(tx, plan.expect_version);
+  if (!result.ok) {
+    return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), inModelTerms(plan, result.errors ?? [])) };
   }
-  const svg = xml.match(IMPORT_SVG);
-  if (svg) return importSvg(api, svg[1], svg[2]);
-  const ctx = xml.match(CONTEXT);
-  if (ctx) return context(api, ctx[1]);
-  if (/<context[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<context> must be the only verb in its <edit>' }]) };
-  }
-  const circ = xml.match(CIRCUIT);
-  if (circ) return circuit(api, circ[1]);
-  if (/<circuit[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<circuit> must be the only verb in its <edit>' }]) };
-  }
-  if (/<(?:place|make-component)[\s/>]/.test(xml)) {
-    const stray = xml.replace(COMPOSE_VERB, '');
-    if (/<(?:place|make-component)[\s/>]/.test(stray)) {
-      return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<place> and <make-component> are self-closing tags; outside a <circuit>, <place> takes def= or entity=, not part=' }]) };
-    }
-    if (/<(?:table|import-svg)[\s/>]/.test(stray)) {
-      return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<table> and <import-svg> must be the only verb in their <edit>' }]) };
-    }
-    return compose(api, xml, label);
-  }
-  const tbl = xml.match(TABLE);
-  if (tbl) return table(api, tbl[1] ?? '', tbl[2]);
-  if (/<table[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<table> must be the only verb in its <edit>' }]) };
-  }
-  if (/<import-svg[\s/>]/.test(xml)) {
-    return { ok: false, failure: failed(await api.version(), [{ op: null, kind: 'parse', message: '<import-svg> must be the only verb in its <edit>' }]) };
-  }
-  let parsed: ParsedEdit;
-  try {
-    parsed = await parseEdit(api, xml);
-  } catch (e) {
-    const err = e instanceof EditError ? e : new EditError(String(e));
-    return { ok: false, failure: failed(await api.version(), [{ op: err.line ?? null, kind: 'parse', message: err.message }]) };
-  }
-  const tx = { label, actor: 'model', ts: Date.now(), ops: parsed.ops, ...(parsed.exact ? { exact: true } : {}) };
-  const result: ApplyResult = await api.apply(tx, parsed.expectVersion);
-  if (result.ok) {
-    const out: EditOutcome = { ok: true, version: result.version, aliases: parsed.aliases };
-    if (result.solver) {
-      out.solver = result.solver;
-      out.summary = solverMarkup(result.version ?? 0, result.solver);
-    }
-    return out;
-  }
-  return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), inModelTerms(tx, parsed, result.errors ?? [])) };
+  const lines = [...plan.summary, ...(result.solver ? solverLines(result.solver) : [])];
+  return {
+    ok: true,
+    version: result.version,
+    aliases: plan.aliases,
+    ...(result.solver ? { solver: result.solver } : {}),
+    ...(lines.length ? { summary: `<applied version="${result.version}">\n${lines.join('\n')}\n</applied>` } : {}),
+  };
 }
 
 type EditErrorLine = { op: number | null; kind: string; message: string; verb?: string };
 
 /** The store's errors as the model wrote the edit: each op as the verb that
- *  wrote it (a verb may write several ops), ids this edit minted as the
- *  aliases they were written as, and an op the transaction's JSON failed to
- *  read in (a bad expression) found by its column. */
-function inModelTerms(tx: { ops: object[] }, parsed: ParsedEdit, errors: { op: number | null; kind: string; message: string }[]): EditErrorLine[] {
-  const aliasOf = new Map(Object.entries(parsed.aliases).map(([alias, id]) => [id, alias]));
-  const renamed = (message: string) => message.replace(/#[\w/]+/g, (id) => aliasOf.get(id) ?? id);
+ *  wrote it (a verb may write several ops), and ids this edit minted as the
+ *  names it gave them. */
+function inModelTerms(plan: Plan, errors: { op: number | null; kind: string; message: string }[]): EditErrorLine[] {
+  const aliasOf = new Map(Object.entries(plan.aliases).map(([alias, id]) => [id, alias]));
+  const renamed = (message: string) => message.replace(/#[\w/~]+/g, (id) => aliasOf.get(id) ?? id);
   return errors.map((e) => {
-    let op = e.op;
-    let message = e.message;
-    const at = message.match(/ at line (\d+) column (\d+)$/);
-    if (op === null && at) {
-      op = opAtColumn(tx, Number(at[2]));
-      message = message.slice(0, at.index);
-    }
-    const verb = op === null ? null : parsed.opVerb[op] ?? null;
-    return { op: verb, kind: e.kind, message: renamed(message), ...(verb === null ? {} : { verb: parsed.verbs[verb] }) };
+    const verb = e.op === null ? null : plan.op_verb[e.op] ?? null;
+    return { op: verb, kind: e.kind, message: renamed(e.message), ...(verb === null ? {} : { verb: plan.verbs[verb] }) };
   });
 }
 
-/** Which op of a transaction holds a 1-based byte column of its JSON
- *  (serde reports positions in bytes; the JSON is one line). */
-function opAtColumn(tx: { ops: object[] }, column: number): number | null {
-  const bytes = (s: string) => new TextEncoder().encode(s).length;
-  const { ops, ...head } = tx;
-  let at = bytes(JSON.stringify({ ...head, ops: [] })) - 2; // just inside "ops":[
-  for (let i = 0; i < ops.length; i++) {
-    const end = at + bytes(JSON.stringify(ops[i]));
-    if (column - 1 < end) return column - 1 >= at ? i : null;
-    at = end + 1; // the comma
-  }
-  return null;
-}
-
-function solverMarkup(version: number, s: SolverSummary): string {
-  const unmet = (s.unmet ?? []).map(
-    (u) => `\n  <unmet leaf="${u.leaf}" requested="${u.requested}" solved="${u.solved}">${escapeXml(u.reason)}</unmet>`,
-  );
-  return `<applied version="${version}">\n  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>${unmet.join('')}\n</applied>`;
+function solverLines(s: SolverSummary): string[] {
+  return [
+    `  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>`,
+    ...(s.unmet ?? []).map((u) => `  <unmet leaf="${u.leaf}" requested="${u.requested}" solved="${u.solved}">${escapeXml(u.reason)}</unmet>`),
+  ];
 }
 
 /** `<edit-failed>` markup. Errors that say the same thing are one line

@@ -165,7 +165,7 @@ pub fn binary(op: BinOp, a: &Value, b: &Value) -> Option<Result<Value, EvalError
 
 /// The scalar floor functions that apply per element to a series.
 const ELEMENTWISE: &[&str] = &[
-    "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "atan2", "sqrt", "pow", "hypot", "log10", "ln", "exp", "sinc", "sig",
+    "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt", "pow", "hypot", "log10", "ln", "exp", "sinc", "sig",
 ];
 
 /// The floor functions this module answers; `None` passes `func` on to
@@ -185,7 +185,7 @@ pub fn call(func: &str, args: &[Value]) -> Option<Result<Value, EvalError>> {
         "map" => map(args),
         "sample" => sample(args),
         "rgb" | "hsl" | "mix" | "spectrum" => colour(func, args),
-        "points" | "smooth" | "circles" | "segments" | "bars" | "area" => path_data(func, args),
+        "points" | "smooth" | "circles" | "segments" | "line" | "arc" | "bars" | "area" => path_data(func, args),
         "ease" => ease(args),
         "window" => window(args),
         "isnan" => isnan(args),
@@ -614,6 +614,7 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
     let need = match func {
         "points" | "smooth" => 2,
         "circles" | "area" => 3,
+        "arc" => 5,
         _ => 4,
     };
     if args.len() != need {
@@ -654,11 +655,35 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
                 }
             }
         }
-        "segments" => {
+        // segments(x0, y0, x1, y1): one line per element; line is its name
+        // for one.
+        "segments" | "line" => {
             for i in 0..n {
                 let (x0, y0, x1, y1) = (p[0].at(i), p[1].at(i), p[2].at(i), p[3].at(i));
                 if [x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
                     out.push(format!("M {} L {}", xy(x0, y0), xy(x1, y1)));
+                }
+            }
+        }
+        // arc(cx, cy, r, a0, a1): the circle's arc from angle a0 to a1
+        // (radians, from +x towards +y, so clockwise on screen).
+        "arc" => {
+            for i in 0..n {
+                let (cx, cy, r, a0, a1) = (p[0].at(i), p[1].at(i), p[2].at(i).abs(), p[3].at(i), p[4].at(i));
+                if ![cx, cy, r, a0, a1].iter().all(|v| v.is_finite()) || r == 0.0 {
+                    continue;
+                }
+                let at = |a: f64| xy(cx + r * a.cos(), cy + r * a.sin());
+                let sweep = if a1 >= a0 { 1 } else { 0 };
+                let span = (a1 - a0).abs();
+                let rr = pn(r);
+                if span >= std::f64::consts::TAU - 1e-9 {
+                    // A whole turn is two half arcs (SVG draws no arc to its own start).
+                    let mid = a0 + (a1 - a0) / 2.0;
+                    out.push(format!("M {} A {rr},{rr} 0 0,{sweep} {} A {rr},{rr} 0 0,{sweep} {}", at(a0), at(mid), at(a0)));
+                } else {
+                    let large = if span > std::f64::consts::PI { 1 } else { 0 };
+                    out.push(format!("M {} A {rr},{rr} 0 {large},{sweep} {}", at(a0), at(a1)));
                 }
             }
         }

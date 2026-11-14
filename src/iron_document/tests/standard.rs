@@ -81,8 +81,9 @@ fn the_library_recolours_its_cards_for_the_theme() {
     let dark = standard::library_theme_ops(store.document(), false);
     // Each card's fill and edge, each label's ink, and the previews' dark
     // ink and light surfaces: the Readout's figure, the Laser's body, the
-    // dial's face, rim and reading, and nine of the Plot's baked tokens.
-    assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 9);
+    // dial's face, rim and reading, and eleven of the Plot's baked tokens
+    // (its reference lines and marks among them).
+    assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 11);
     store.apply_session(dark).unwrap();
     assert!(standard::library_theme_ops(store.document(), false).is_empty());
 }

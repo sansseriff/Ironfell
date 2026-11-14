@@ -35,7 +35,7 @@
       check('document dispatch rejects ' + name + ' ' + JSON.stringify(args), error.includes(expected), error);
     }
     check('invalid dispatch leaves authored state unchanged', await timed(__iron.save()) === baseline);
-    const result = await timed(__iron.edit('<edit><create id="$native" type="rect" parent="#1" name="native test" x="50" y="50" w="80" h="60" color="#ff2200"/></edit>', 'native parity fixture'));
+    const result = await timed(__iron.edit('<edit><rect in="#1" id="$native" name="native test" x="50" y="50" w="80" h="60" color="#ff2200"/></edit>', 'native parity fixture'));
     check('shared edit parser and transaction', result.ok, result);
     const authored = await timed(__iron.save());
     check('authored state changed', authored !== baseline && authored.includes('native test'));
@@ -80,7 +80,7 @@
     check('no page errors', report.errors.length===0, report.errors);
     await timed(__iron.load(baseline));
     await sleep(300);
-    const reloadEdit = await timed(__iron.edit('<edit><create id="$reload" type="rect" parent="#1" name="reload history fixture" x="30" y="30" w="20" h="20"/></edit>'));
+    const reloadEdit = await timed(__iron.edit('<edit><rect in="#1" id="$reload" name="reload history fixture" x="30" y="30" w="20" h="20"/></edit>'));
     if (!reloadEdit.ok) throw new Error(JSON.stringify(reloadEdit));
     await sleep(200);
     sessionStorage.setItem('iron.native.protocol.reload', JSON.stringify({report, baseline, authored: await timed(__iron.save())}));

@@ -1,48 +1,50 @@
-<composition name="enzyme">
-  <group name="header">
-    <text name="title" transform2d.x="40" transform2d.y="40" text.content="Enzyme kinetics: Michaelis–Menten and competitive inhibition" font.size="26" font.weight="600" fill.color="@ink"/>
-    <text name="caption" transform2d.x="40" transform2d.y="80" text.content="Drag Vmax, Km and the inhibitor [I] (Ki = 2 mM): a competitive inhibitor raises the apparent Km but leaves Vmax unchanged." font.size="14" fill.color="@muted"/>
-  </group>
-  <group name="controls">
-    <group name="V_max control">
-      <text name="V_max label" transform2d.x="40" transform2d.y="520" text.content="Vmax (µM/s)" font.size="14" fill.color="@ink-2"/>
-      <slider id="v_max" name="V_max" transform2d.x="52" transform2d.y="540" size.w="196" size.h="24" slider.min="10" slider.max="100" slider.step="1" slider.value="80"/>
-      <text name="V_max readout" transform2d.x="280" transform2d.y="542" text.content="{= fmt($v_max.slider.value, 0) + ' µM/s'}" font.size="14" fill.color="@ink"/>
+<edit>
+  <composition name="enzyme">
+    <group name="header">
+      <text name="title" transform2d.x="40" transform2d.y="40" text.content="Enzyme kinetics: Michaelis–Menten and competitive inhibition" font.size="26" font.weight="600" fill.color="@ink"/>
+      <text name="caption" transform2d.x="40" transform2d.y="80" text.content="Drag Vmax, Km and the inhibitor [I] (Ki = 2 mM): a competitive inhibitor raises the apparent Km but leaves Vmax unchanged." font.size="14" fill.color="@muted"/>
     </group>
-    <group name="K_m control">
-      <text name="K_m label" transform2d.x="360" transform2d.y="520" text.content="Km (mM)" font.size="14" fill.color="@ink-2"/>
-      <slider id="k_m" name="K_m" transform2d.x="372" transform2d.y="540" size.w="196" size.h="24" slider.min="1" slider.max="20" slider.step="0.5" slider.value="6"/>
-      <text name="K_m readout" transform2d.x="600" transform2d.y="542" text.content="{= fmt($k_m.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+    <group name="controls">
+      <group name="V_max control">
+        <text name="V_max label" transform2d.x="40" transform2d.y="520" text.content="Vmax (µM/s)" font.size="14" fill.color="@ink-2"/>
+        <slider id="$v_max" name="V_max" transform2d.x="52" transform2d.y="540" size.w="196" size.h="24" slider.min="10" slider.max="100" slider.step="1" slider.value="80"/>
+        <text name="V_max readout" transform2d.x="280" transform2d.y="542" text.content="{= fmt($v_max.slider.value, 0) + ' µM/s'}" font.size="14" fill.color="@ink"/>
+      </group>
+      <group name="K_m control">
+        <text name="K_m label" transform2d.x="360" transform2d.y="520" text.content="Km (mM)" font.size="14" fill.color="@ink-2"/>
+        <slider id="$k_m" name="K_m" transform2d.x="372" transform2d.y="540" size.w="196" size.h="24" slider.min="1" slider.max="20" slider.step="0.5" slider.value="6"/>
+        <text name="K_m readout" transform2d.x="600" transform2d.y="542" text.content="{= fmt($k_m.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+      </group>
+      <group name="inhibitor control">
+        <text name="inhibitor label" transform2d.x="680" transform2d.y="520" text.content="Inhibitor [I] (mM)" font.size="14" fill.color="@ink-2"/>
+        <slider id="$inhibitor" name="inhibitor" transform2d.x="692" transform2d.y="540" size.w="196" size.h="24" slider.max="20" slider.step="0.5" slider.value="6"/>
+        <text name="inhibitor readout" transform2d.x="920" transform2d.y="542" text.content="{= fmt($inhibitor.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+      </group>
     </group>
-    <group name="inhibitor control">
-      <text name="inhibitor label" transform2d.x="680" transform2d.y="520" text.content="Inhibitor [I] (mM)" font.size="14" fill.color="@ink-2"/>
-      <slider id="inhibitor" name="inhibitor" transform2d.x="692" transform2d.y="540" size.w="196" size.h="24" slider.max="20" slider.step="0.5" slider.value="6"/>
-      <text name="inhibitor readout" transform2d.x="920" transform2d.y="542" text.content="{= fmt($inhibitor.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+    <group name="readouts">
+      <rect name="readout panel" transform2d.x="40" transform2d.y="600" size.w="960" size.h="60" corners.tl="8" corners.tr="8" corners.br="8" corners.bl="8" fill.color="@surface" stroke.color="@grid"/>
+      <text name="K_m value" transform2d.x="60" transform2d.y="620" text.content="{= 'Km = ' + fmt($k_m.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+      <text name="apparent K_m value" transform2d.x="240" transform2d.y="620" text.content="{= 'apparent Km = ' + fmt($k_m.slider.value * (1 + $inhibitor.slider.value / 2), 1) + ' mM'}" font.size="14" fill.color="@ink"/>
+      <text name="V_max value" transform2d.x="460" transform2d.y="620" text.content="{= 'Vmax = ' + fmt($v_max.slider.value, 0) + ' µM/s'}" font.size="14" fill.color="@ink"/>
+      <text name="rate at 10 mM" transform2d.x="640" transform2d.y="620" text.content="{= 'v at 10 mM: ' + fmt($v_max.slider.value * 10 / ($k_m.slider.value + 10), 1) + ' µM/s  (with I: ' + fmt($v_max.slider.value * 10 / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + 10), 1) + ' µM/s)'}" font.size="14" fill.color="@ink"/>
     </group>
-  </group>
-  <group name="readouts">
-    <rect name="readout panel" transform2d.x="40" transform2d.y="600" size.w="960" size.h="60" corners.tl="8" corners.tr="8" corners.br="8" corners.bl="8" fill.color="@surface" stroke.color="@grid"/>
-    <text name="K_m value" transform2d.x="60" transform2d.y="620" text.content="{= 'Km = ' + fmt($k_m.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
-    <text name="apparent K_m value" transform2d.x="240" transform2d.y="620" text.content="{= 'apparent Km = ' + fmt($k_m.slider.value * (1 + $inhibitor.slider.value / 2), 1) + ' mM'}" font.size="14" fill.color="@ink"/>
-    <text name="V_max value" transform2d.x="460" transform2d.y="620" text.content="{= 'Vmax = ' + fmt($v_max.slider.value, 0) + ' µM/s'}" font.size="14" fill.color="@ink"/>
-    <text name="rate at 10 mM" transform2d.x="640" transform2d.y="620" text.content="{= 'v at 10 mM: ' + fmt($v_max.slider.value * 10 / ($k_m.slider.value + 10), 1) + ' µM/s  (with I: ' + fmt($v_max.slider.value * 10 / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + 10), 1) + ' µM/s)'}" font.size="14" fill.color="@ink"/>
-  </group>
-  <group name="legend">
-    <rect name="swatch no inhibitor" transform2d.x="60" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-1"/>
-    <text name="legend no inhibitor" transform2d.x="88" transform2d.y="490" text.content="no inhibitor" font.size="12" fill.color="@ink-2"/>
-    <rect name="swatch with inhibitor" transform2d.x="200" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-2"/>
-    <text name="legend with inhibitor" transform2d.x="228" transform2d.y="490" text.content="with inhibitor" font.size="12" fill.color="@ink-2"/>
-    <text name="legend guides" transform2d.x="360" transform2d.y="490" text.content="dots: Vmax and Vmax/2 · dashed line: Km" font.size="12" fill.color="@muted"/>
-  </group>
-  <group name="cartoon">
-    <text name="cartoon title" transform2d.x="640" transform2d.y="360" text.content="Substrate and inhibitor compete for the active site" font.size="13" fill.color="@ink-2"/>
-    <path name="enzyme" path.d="M 700 380 L 780 380 C 793.333 380 800 386.667 800 400 L 800 405 C 790 405 785 412 785 420 C 785 428 790 435 800 435 L 800 440 C 800 453.333 793.333 460 780 460 L 700 460 C 686.667 460 680 453.333 680 440 L 680 400 C 680 386.667 686.667 380 700 380 Z" fill.color="@grid" stroke.color="@axis" stroke.width="2"/>
-    <ellipse name="substrate" transform2d.x="850" transform2d.y="420" radius.rx="13" radius.ry="13" fill.color="@series-1"/>
-    <rect name="inhibitor" transform2d.x="908" transform2d.y="408" size.w="24" size.h="24" corners.tl="4" corners.tr="4" corners.br="4" corners.bl="4" appearance.opacity="{= clamp(0.2 + $inhibitor.slider.value / 20, 0.2, 1)}" fill.color="@series-2"/>
-    <text name="enzyme label" transform2d.x="708" transform2d.y="468" text.content="enzyme (E)" font.size="12" fill.color="@muted"/>
-    <text name="substrate label" transform2d.x="818" transform2d.y="468" text.content="substrate (S)" font.size="12" fill.color="@muted"/>
-    <text name="inhibitor label" transform2d.x="906" transform2d.y="468" text.content="inhibitor (I)" font.size="12" fill.color="@muted"/>
-  </group>
-  <place def="std:plot" name="rate plot" x="40" y="120" w="560" h="360" color="@series-1" color2="@series-2" color3="@axis" cursor="{= $k_m.slider.value}" style="smooth" style2="smooth" style3="scatter" title="Michaelis–Menten rate" x_label="[S] (mM)" x_max="50" x_min="0" xs="{= range(0, 50, 201)}" y_label="v (µM/s)" y_max="{= $v_max.slider.value * 1.1}" y_min="0" ys="{= $v_max.slider.value * $self.xs / ($k_m.slider.value + $self.xs)}" ys2="{= $v_max.slider.value * $self.xs / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + $self.xs)}" ys3="{= where(cos(pi * $self.xs) &gt; 0.95, $v_max.slider.value + 0 * $self.xs, where(cos(pi * $self.xs) &lt; -0.95, $v_max.slider.value / 2 + 0 * $self.xs, 0 * $self.xs / (0 * $self.xs)))}"/>
-  <place def="std:plot" name="Lineweaver–Burk plot" x="640" y="120" w="360" h="220" color="@series-1" color2="@series-2" title="Lineweaver–Burk" x_label="1/[S] (1/mM)" x_max="1" x_min="{= -max(0.15, 1.25 / $k_m.slider.value)}" xs="{= range(-max(0.15, 1.25 / $k_m.slider.value), 1, 131)}" y_label="1/v (s/µM)" y_min="0" ys="{= where(($k_m.slider.value * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}" ys2="{= where(($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}"/>
-</composition>
+    <group name="legend">
+      <rect name="swatch no inhibitor" transform2d.x="60" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-1"/>
+      <text name="legend no inhibitor" transform2d.x="88" transform2d.y="490" text.content="no inhibitor" font.size="12" fill.color="@ink-2"/>
+      <rect name="swatch with inhibitor" transform2d.x="200" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-2"/>
+      <text name="legend with inhibitor" transform2d.x="228" transform2d.y="490" text.content="with inhibitor" font.size="12" fill.color="@ink-2"/>
+      <text name="legend guides" transform2d.x="360" transform2d.y="490" text.content="dots: Vmax and Vmax/2 · dashed line: Km" font.size="12" fill.color="@muted"/>
+    </group>
+    <group name="cartoon">
+      <text name="cartoon title" transform2d.x="640" transform2d.y="360" text.content="Substrate and inhibitor compete for the active site" font.size="13" fill.color="@ink-2"/>
+      <path name="enzyme" path.d="M 700 380 L 780 380 C 793.333 380 800 386.667 800 400 L 800 405 C 790 405 785 412 785 420 C 785 428 790 435 800 435 L 800 440 C 800 453.333 793.333 460 780 460 L 700 460 C 686.667 460 680 453.333 680 440 L 680 400 C 680 386.667 686.667 380 700 380 Z" fill.color="@grid" stroke.color="@axis" stroke.width="2"/>
+      <ellipse name="substrate" transform2d.x="850" transform2d.y="420" radius.rx="13" radius.ry="13" fill.color="@series-1"/>
+      <rect name="inhibitor" transform2d.x="908" transform2d.y="408" size.w="24" size.h="24" corners.tl="4" corners.tr="4" corners.br="4" corners.bl="4" appearance.opacity="{= clamp(0.2 + $inhibitor.slider.value / 20, 0.2, 1)}" fill.color="@series-2"/>
+      <text name="enzyme label" transform2d.x="708" transform2d.y="468" text.content="enzyme (E)" font.size="12" fill.color="@muted"/>
+      <text name="substrate label" transform2d.x="818" transform2d.y="468" text.content="substrate (S)" font.size="12" fill.color="@muted"/>
+      <text name="inhibitor label" transform2d.x="906" transform2d.y="468" text.content="inhibitor (I)" font.size="12" fill.color="@muted"/>
+    </group>
+    <place def="std:plot" name="rate plot" x="40" y="120" w="560" h="360" color="@series-1" color2="@series-2" color3="@axis" cursor="{= $k_m.slider.value}" style="smooth" style2="smooth" style3="scatter" title="Michaelis–Menten rate" x_label="[S] (mM)" x_max="50" x_min="0" xs="{= range(0, 50, 201)}" y_label="v (µM/s)" y_max="{= $v_max.slider.value * 1.1}" y_min="0" ys="{= $v_max.slider.value * $self.xs / ($k_m.slider.value + $self.xs)}" ys2="{= $v_max.slider.value * $self.xs / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + $self.xs)}" ys3="{= where(cos(pi * $self.xs) &gt; 0.95, $v_max.slider.value + 0 * $self.xs, where(cos(pi * $self.xs) &lt; -0.95, $v_max.slider.value / 2 + 0 * $self.xs, 0 * $self.xs / (0 * $self.xs)))}"/>
+    <place def="std:plot" name="Lineweaver–Burk plot" x="640" y="120" w="360" h="220" color="@series-1" color2="@series-2" title="Lineweaver–Burk" x_label="1/[S] (1/mM)" x_max="1" x_min="{= -max(0.15, 1.25 / $k_m.slider.value)}" xs="{= range(-max(0.15, 1.25 / $k_m.slider.value), 1, 131)}" y_label="1/v (s/µM)" y_min="0" ys="{= where(($k_m.slider.value * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}" ys2="{= where(($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}"/>
+  </composition>
+</edit>

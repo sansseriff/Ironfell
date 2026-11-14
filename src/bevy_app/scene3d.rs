@@ -30,9 +30,6 @@ impl ActiveState {
 }
 
 #[derive(Component, Debug)]
-pub(crate) struct Despawnable;
-
-#[derive(Component, Debug)]
 pub(crate) struct CurrentVolume(pub Aabb3d);
 impl Deref for CurrentVolume {
     type Target = Aabb3d;
@@ -477,9 +474,6 @@ fn place(_camera: &mut Mut<Camera>, screen: Option<Mut<ScreenRect>>, viewport: &
 pub(crate) struct ViewImage {
     image: Handle<Image>,
     bucket: UVec2,
-    /// The quad pasting it into the window; none for a 3D embed, whose
-    /// texture the 2D view that embeds it draws instead.
-    composite: Option<Entity>,
     /// Renders this frame: its version moves on, so the 2D view drawing it
     /// re-renders in step (see `EmbedImages`).
     was_active: bool,
@@ -602,8 +596,8 @@ pub(crate) fn sync_view_images(
                         let material = materials.add(ViewCompositeMaterial { texture: image.clone(), rect, params });
                         // A 3D embed's texture is drawn by the 2D view that
                         // embeds it; only panel cameras paste into the window.
-                        let composite = embed.is_none().then(|| commands
-                            .spawn((
+                        if embed.is_none() {
+                            commands.spawn((
                                 Mesh2d(quad.clone()),
                                 MeshMaterial2d(material.clone()),
                                 // Under the vector composite (z = 0): 2D content
@@ -614,9 +608,9 @@ pub(crate) fn sync_view_images(
                                 Visibility::Visible,
                                 ViewCompositeOf(entity),
                                 Name::new("view composite"),
-                            ))
-                            .id());
-                        commands.entity(entity).insert(ViewImage { image: image.clone(), bucket: want, composite, material, fresh: 2, awake: 0, was_active: true, version: 0 });
+                            ));
+                        }
+                        commands.entity(entity).insert(ViewImage { image: image.clone(), bucket: want, material, fresh: 2, awake: 0, was_active: true, version: 0 });
                     }
                 }
                 // In place where it exists, so Bevy's camera update, which

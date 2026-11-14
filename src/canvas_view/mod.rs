@@ -44,7 +44,6 @@ impl ViewObj {
 /// for the lifetime of the app.
 pub struct ActiveCanvas {
     pub view: ViewObj,
-    pub window: Entity,
 }
 
 /// Spawn the single primary window for the provided canvas and wire up its raw handle.
@@ -61,10 +60,7 @@ pub fn spawn_canvas_window(app: &mut App, view: ViewObj) -> Entity {
     }.expect("failed to wrap canvas window handle");
     let entity=crate::surface::spawn_external_window(app,raw,width,height,PresentMode::AutoNoVsync);
 
-    app.insert_non_send(ActiveCanvas {
-        view,
-        window: entity,
-    });
+    app.insert_non_send(ActiveCanvas { view });
 
     info!("Created canvas window {entity:?} ({width}x{height})");
     entity

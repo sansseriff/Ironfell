@@ -56,23 +56,9 @@ fn place(store: &mut Store, attrs: &str) -> (NodeId, NodeId) {
     (get("entity"), get("use"))
 }
 
-/// The plot's part named `name`.
-fn part(store: &Store, u: NodeId, name: &str) -> NodeId {
-    let doc = store.document();
-    doc.descendants(u).into_iter().find(|&n| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no part {name}"))
-}
-
 /// Every binding error inside the plot (its picture or its entity's ports).
 fn errors(store: &Store, e: NodeId, u: NodeId) -> Vec<String> {
     store.reactive().errors.iter().filter(|(l, _)| l.node == u || l.node == e || l.node.expanded_parts().is_some_and(|(o, _)| o == u || o == e)).map(|(l, m)| format!("{l}: {m}")).collect()
-}
-
-fn text(store: &Store, id: NodeId) -> String {
-    store.resolved(id, path("text.content")).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
-}
-
-fn anchors(store: &Store, id: NodeId) -> usize {
-    contour::geometry(store, id).anchor_count()
 }
 
 

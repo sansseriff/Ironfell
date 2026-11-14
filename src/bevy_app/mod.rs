@@ -50,7 +50,6 @@ use crate::{
     WorkerApp,
     surface::announce_window,
     camera_controller::CameraControllerPlugin,
-    // tracking_circle::TrackingCircle,
 };
 
 const MAX_HISTORY_LENGTH: usize = 200;
@@ -175,9 +174,7 @@ pub fn init_app(variant_flags: u32, create_window: impl FnOnce(&mut App) -> Enti
     }
 
     app.add_plugins((
-        // WebAssetPlugin::default(),
         default_plugins,
-        // TrackingCircle,
         // One renderer: the sparse-strips backend. A second one would be a
         // sibling of `vector::hybrid` on the same view-texture path.
         VectorPlugin::hybrid_only(),

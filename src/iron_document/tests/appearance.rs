@@ -60,8 +60,8 @@ fn a_scrub_previews_then_commits_once_and_round_trips() {
     s.commit_gesture("scrub opacity", Actor::Human, 1).unwrap().unwrap();
     let saved = s.save();
     assert_eq!(Store::load(&saved).unwrap().save(), saved);
-    s.undo(2).unwrap();
+    s.undo(2).unwrap().unwrap();
     assert_eq!(s.resolved(g, path), Some(Value::Number(1.0)));
-    s.redo(3).unwrap();
+    s.redo(3).unwrap().unwrap();
     assert_eq!(s.resolved(g, path), Some(Value::Number(0.5)));
 }

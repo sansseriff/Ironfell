@@ -684,14 +684,12 @@ height and the timeline sits under the canvas only: at `SIZE=1680x1000@1` the le
 at its top shows the bar again), the Inspector 300 px, the timeline 250 px, and the viewer
 reads `viewer panel {"x":340,"y":36,"w":1040,"h":714}`. The scope menu sits at the left of
 the centre's tab bar. `workspace.ts` `baseLayout` scales the sizes with the window.
-**Known broken, before this:** `schematic.txt` parses markup the demo no longer prints (R2
-is now a resistor component, not a slider), 3 step errors on the old layout and the new.
 
 **Which scripts are checks (2026-11-09).** A script earns its place by driving an
 interaction a unit test cannot reach: a real pointer or keyboard gesture through the
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `canvas-grid.txt`, `sequence.txt`, `text.txt`,
-`text-styles.txt`, `keys.txt`, `menu.txt`, `tables.txt`, `schematic.txt` (broken, see above), `contexts.txt`,
+`text-styles.txt`, `keys.txt`, `menu.txt`, `tables.txt`, `schematic.txt`, `contexts.txt`,
 `narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
@@ -773,7 +771,9 @@ selection's SVG on the clipboard; undo; the same SVG imported by a paste event a
 by the model's `<import-svg>`, each undone; each count is the Controls
 composition's nodes). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines (2026-11-09; `regression.txt`, then
-`gestures.txt`; a long number's last digits and a hunt's found point may vary):
+`gestures.txt`, re-run whole 2026-11-14; a long number's last digits and a hunt's found
+point may vary). Run it with nothing else loading the machine: a `cargo check` alongside
+made the Thermal tab activate late, so its readings came back empty:
 
 ```
 {"enabled":false,"guides":[]}
@@ -990,7 +990,7 @@ undefined
 ["power=\"10 mW\"","signal=\"7.94328234724 mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
 [75.9,28.5]
 ["power=\"15.7894737167 mW\"","signal=\"4.99307 mW\"",["<connection a=\"laser.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>","<connection a=\"heater.out\" b=\"thermal link.a\" kind=\"heat_flow\"/>","<connection a=\"thermal link.b\" b=\"ambient.p\" kind=\"heat_flow\"/>","<connection a=\"source.out\" b=\"fiber.in\" kind=\"optical_power\"/>","<connection a=\"fiber.out\" b=\"meter.in\" kind=\"optical_power\"/>"]]
-"<edit-failed applied=\"none\" version=\"27\">\n  <error op=\"2\" verb=\"link $c connects $p\" kind=\"bad_connection\">$c: cannot connect rf_voltage ($p) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
+"<edit-failed applied=\"none\" version=\"41\">\n  <error op=\"2\" verb=\"link $c connects $p\" kind=\"bad_connection\">$c: cannot connect rf_voltage ($p) to optical_power (#…); a connection joins ports of one kind</error>\n</edit-failed>"
 tab Thermal
 undefined
 ["out 303.15 K -5 W","a 303.15 K 5 W","b 293.15 K -5 W","p 293.15 K 5 W"]
@@ -1058,7 +1058,7 @@ undefined
 undefined
 8
 4
-{"ok":true,"version":60,"summary":"<applied version=\"60\">\n  <imported roots=\"#4Y #4Z #4a #4b\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
+{"ok":true,"version":74,"aliases":{},"summary":"<applied version=\"74\">\n  <imported roots=\"#4Y #4Z #4a #4b\"/>\n  <cut>filters are not imported</cut>\n</applied>"}
 8
 4
 tab Components
@@ -1069,7 +1069,7 @@ undefined
 {"derivedNodesSaved":0,"connectionsToPorts":4}
 [0,5]
 ["#…/3V","15.8865646945 mW"]
-["source lasersource",["power"]]
+["Instance of source laser",["power"]]
 clicked button[aria-label="Detach instance"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser detached","short fiber linked","long fiber linked"]
 ["fiber detached","meter detached","source linked","fiber linked","meter linked","spare laser linked","short fiber linked","long fiber linked"]
@@ -1117,128 +1117,128 @@ tab Library
 tab Controls
 "controls"
 ["Render inspector watching controls","Chunks","1 1 in view","Nodes","8"]
-DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (282 ops, System) -> v1
-DEBUG src/document_bridge/mod.rs:492 applied "resize rect" (2 ops, Human) -> v2
-DEBUG src/document_bridge/mod.rs:492 applied "rotate rect" (3 ops, Human) -> v3
-DEBUG src/document_bridge/mod.rs:492 applied "undo: rotate rect" (3 ops, System) -> v4
-DEBUG src/document_bridge/mod.rs:492 applied "undo: resize rect" (2 ops, System) -> v5
-DEBUG src/document_bridge/mod.rs:492 applied "nudge rect" (1 ops, Human) -> v6
-DEBUG src/document_bridge/mod.rs:492 applied "nudge rect" (1 ops, Human) -> v7
-DEBUG src/document_bridge/mod.rs:492 applied "delete group" (1 ops, Human) -> v8
-DEBUG src/document_bridge/mod.rs:492 applied "undo: delete group" (16 ops, System) -> v9
-DEBUG src/document_bridge/mod.rs:492 applied "draw path" (3 ops, Human) -> v10
-DEBUG src/document_bridge/mod.rs:492 applied "add point" (1 ops, Human) -> v11
-DEBUG src/document_bridge/mod.rs:492 applied "add point" (1 ops, Human) -> v12
-DEBUG src/document_bridge/mod.rs:492 applied "close path" (1 ops, Human) -> v13
-DEBUG src/document_bridge/mod.rs:492 applied "undo: close path" (1 ops, System) -> v14
-DEBUG src/document_bridge/mod.rs:492 applied "move point" (2 ops, Human) -> v15
-DEBUG src/document_bridge/mod.rs:492 applied "add point" (5 ops, Human) -> v16
-DEBUG src/document_bridge/mod.rs:492 applied "undo: add point" (5 ops, System) -> v17
-DEBUG src/document_bridge/mod.rs:492 applied "bend segment" (4 ops, Human) -> v18
-DEBUG src/document_bridge/mod.rs:492 applied "undo: bend segment" (4 ops, System) -> v19
-DEBUG src/document_bridge/mod.rs:492 applied "delete point" (1 ops, Human) -> v20
-DEBUG src/document_bridge/mod.rs:492 applied "undo: delete point" (1 ops, System) -> v21
-DEBUG src/document_bridge/mod.rs:492 applied "delete point" (1 ops, Human) -> v22
-DEBUG src/document_bridge/mod.rs:492 applied "undo: delete point" (1 ops, System) -> v23
-DEBUG src/document_bridge/mod.rs:492 applied "move points" (4 ops, Human) -> v24
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move points" (4 ops, System) -> v25
-DEBUG src/document_bridge/mod.rs:492 applied "move edge" (4 ops, Human) -> v26
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move edge" (4 ops, System) -> v27
-DEBUG src/document_bridge/mod.rs:492 applied "delete point" (1 ops, Human) -> v28
-DEBUG src/document_bridge/mod.rs:492 applied "undo: delete point" (1 ops, System) -> v29
-DEBUG src/document_bridge/mod.rs:492 applied "make corner" (4 ops, Human) -> v30
-DEBUG src/document_bridge/mod.rs:492 applied "move handle" (4 ops, Human) -> v31
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move handle" (4 ops, System) -> v32
-DEBUG src/document_bridge/mod.rs:492 applied "undo: make corner" (4 ops, System) -> v33
-DEBUG src/document_bridge/mod.rs:492 applied "move handle" (1 ops, Human) -> v34
-DEBUG src/document_bridge/mod.rs:492 applied "move handle" (1 ops, Human) -> v35
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move handle" (1 ops, System) -> v36
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move handle" (1 ops, System) -> v37
-DEBUG src/document_bridge/mod.rs:492 applied "set size.w" (1 ops, Human) -> v38
-DEBUG src/document_bridge/mod.rs:492 applied "set transform2d.x" (1 ops, Human) -> v39
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v40
-DEBUG src/document_bridge/mod.rs:492 applied "resize rect" (1 ops, Human) -> v41
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v42
-DEBUG src/document_bridge/mod.rs:492 applied "draw rectangle" (1 ops, Human) -> v43
-DEBUG src/document_bridge/mod.rs:492 applied "draw ellipse" (1 ops, Human) -> v44
-DEBUG src/document_bridge/mod.rs:492 applied "resize ellipse" (2 ops, Human) -> v45
-DEBUG src/document_bridge/mod.rs:492 applied "convert ellipse to path" (7 ops, Human) -> v46
-DEBUG src/document_bridge/mod.rs:492 applied "undo: convert ellipse to path" (7 ops, System) -> v47
-DEBUG src/document_bridge/mod.rs:492 applied "round corners" (1 ops, Human) -> v48
-DEBUG src/document_bridge/mod.rs:492 applied "add shadow" (1 ops, Human) -> v49
-DEBUG src/document_bridge/mod.rs:492 applied "edit arc" (1 ops, Human) -> v50
-DEBUG src/document_bridge/mod.rs:492 applied "duplicate 2 nodes" (7 ops, Human) -> v51
-DEBUG src/document_bridge/mod.rs:492 applied "paste 2 nodes" (7 ops, Human) -> v52
-DEBUG src/document_bridge/mod.rs:492 applied "cut 2 nodes" (2 ops, Human) -> v53
-DEBUG src/document_bridge/mod.rs:492 applied "paste 2 nodes" (4 ops, Human) -> v54
-DEBUG src/document_bridge/mod.rs:492 applied "undo: paste 2 nodes" (4 ops, System) -> v55
-DEBUG src/document_bridge/mod.rs:492 applied "undo: cut 2 nodes" (2 ops, System) -> v56
-DEBUG src/document_bridge/mod.rs:492 applied "undo: paste 2 nodes" (7 ops, System) -> v57
-DEBUG src/document_bridge/mod.rs:492 applied "undo: duplicate 2 nodes" (7 ops, System) -> v58
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v59
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v60
-DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v61
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move rect" (2 ops, System) -> v62
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v63
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v64
-DEBUG src/document_bridge/mod.rs:492 applied "duplicate rect" (5 ops, Human) -> v65
-DEBUG src/document_bridge/mod.rs:492 applied "duplicate rect" (2 ops, Human) -> v66
-DEBUG src/document_bridge/mod.rs:492 applied "undo: duplicate rect" (7 ops, System) -> v67
-DEBUG src/document_bridge/mod.rs:492 applied "move mesh" (1 ops, Human) -> v68
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move mesh" (1 ops, System) -> v69
-DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Human) -> v70
-DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v71
-DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Human) -> v72
-DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v73
-DEBUG src/document_bridge/mod.rs:492 applied "import SVG" (4 ops, Model) -> v74
-DEBUG src/document_bridge/mod.rs:492 applied "undo: import SVG" (4 ops, System) -> v75
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v76
-DEBUG src/document_bridge/mod.rs:492 applied "detach instance" (6 ops, Human) -> v77
-DEBUG src/document_bridge/mod.rs:492 applied "undo: detach instance" (6 ops, System) -> v78
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v79
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v80
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v81
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v82
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v83
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v84
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (1 ops, System) -> v85
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v86
-DEBUG src/document_bridge/mod.rs:492 applied "make component component" (24 ops, Human) -> v87
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v88
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (2 ops, System) -> v89
-DEBUG src/document_bridge/mod.rs:492 applied "undo: make component component" (24 ops, System) -> v90
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (3 ops, Human) -> v91
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v92
-DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (2 ops, Human) -> v93
-DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (3 ops, Human) -> v94
-DEBUG src/document_bridge/mod.rs:492 applied "move use" (2 ops, Human) -> v95
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move use" (4 ops, System) -> v96
-DEBUG src/document_bridge/mod.rs:492 applied "undo: connect in to out" (10 ops, System) -> v97
-DEBUG src/document_bridge/mod.rs:492 applied "connect in to out" (3 ops, Human) -> v98
-DEBUG src/document_bridge/mod.rs:492 applied "undo: connect in to out" (3 ops, System) -> v99
-DEBUG src/document_bridge/mod.rs:492 applied "draw ellipse" (1 ops, Human) -> v100
-DEBUG src/document_bridge/mod.rs:492 applied "draw rectangle" (1 ops, Human) -> v101
-DEBUG src/document_bridge/mod.rs:492 applied "make component component" (9 ops, Human) -> v102
-DEBUG src/document_bridge/mod.rs:492 applied "add port" (2 ops, Human) -> v103
-DEBUG src/document_bridge/mod.rs:492 applied "wrap in empty" (4 ops, Human) -> v104
-DEBUG src/document_bridge/mod.rs:492 applied "bind transform2d.rot" (1 ops, Human) -> v105
-DEBUG src/document_bridge/mod.rs:492 applied "duplicate use" (3 ops, Human) -> v106
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (3 ops, Human) -> v107
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v108
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect in" (2 ops, Human) -> v109
-DEBUG src/document_bridge/mod.rs:492 applied "undo: disconnect in" (7 ops, System) -> v110
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (3 ops, Human) -> v111
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (2 ops, Human) -> v112
-DEBUG src/document_bridge/mod.rs:492 applied "disconnect out" (2 ops, Human) -> v113
-DEBUG src/document_bridge/mod.rs:492 applied "undo: disconnect out" (7 ops, System) -> v114
-DEBUG src/document_bridge/mod.rs:492 applied "move use" (2 ops, Human) -> v115
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move use" (2 ops, System) -> v116
-DEBUG src/document_bridge/mod.rs:492 applied "add slider" (8 ops, Human) -> v117
-DEBUG src/document_bridge/mod.rs:492 applied "add slider" (3 ops, Human) -> v118
-DEBUG src/document_bridge/mod.rs:492 applied "add laser" (7 ops, Human) -> v119
-DEBUG src/document_bridge/mod.rs:492 applied "add laser" (3 ops, Human) -> v120
-DEBUG src/document_bridge/mod.rs:492 applied "connect value to power" (3 ops, Human) -> v121
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v122
+DEBUG src/document_bridge/mod.rs:500 applied "open demo scene" (282 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:500 applied "resize rect" (2 ops, Human) -> v2
+DEBUG src/document_bridge/mod.rs:500 applied "rotate rect" (3 ops, Human) -> v3
+DEBUG src/document_bridge/mod.rs:500 applied "undo: rotate rect" (3 ops, System) -> v4
+DEBUG src/document_bridge/mod.rs:500 applied "undo: resize rect" (2 ops, System) -> v5
+DEBUG src/document_bridge/mod.rs:500 applied "nudge rect" (1 ops, Human) -> v6
+DEBUG src/document_bridge/mod.rs:500 applied "nudge rect" (1 ops, Human) -> v7
+DEBUG src/document_bridge/mod.rs:500 applied "delete group" (1 ops, Human) -> v8
+DEBUG src/document_bridge/mod.rs:500 applied "undo: delete group" (16 ops, System) -> v9
+DEBUG src/document_bridge/mod.rs:500 applied "draw path" (3 ops, Human) -> v10
+DEBUG src/document_bridge/mod.rs:500 applied "add point" (1 ops, Human) -> v11
+DEBUG src/document_bridge/mod.rs:500 applied "add point" (1 ops, Human) -> v12
+DEBUG src/document_bridge/mod.rs:500 applied "close path" (1 ops, Human) -> v13
+DEBUG src/document_bridge/mod.rs:500 applied "undo: close path" (1 ops, System) -> v14
+DEBUG src/document_bridge/mod.rs:500 applied "move point" (2 ops, Human) -> v15
+DEBUG src/document_bridge/mod.rs:500 applied "add point" (5 ops, Human) -> v16
+DEBUG src/document_bridge/mod.rs:500 applied "undo: add point" (5 ops, System) -> v17
+DEBUG src/document_bridge/mod.rs:500 applied "bend segment" (4 ops, Human) -> v18
+DEBUG src/document_bridge/mod.rs:500 applied "undo: bend segment" (4 ops, System) -> v19
+DEBUG src/document_bridge/mod.rs:500 applied "delete point" (1 ops, Human) -> v20
+DEBUG src/document_bridge/mod.rs:500 applied "undo: delete point" (1 ops, System) -> v21
+DEBUG src/document_bridge/mod.rs:500 applied "delete point" (1 ops, Human) -> v22
+DEBUG src/document_bridge/mod.rs:500 applied "undo: delete point" (1 ops, System) -> v23
+DEBUG src/document_bridge/mod.rs:500 applied "move points" (4 ops, Human) -> v24
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move points" (4 ops, System) -> v25
+DEBUG src/document_bridge/mod.rs:500 applied "move edge" (4 ops, Human) -> v26
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move edge" (4 ops, System) -> v27
+DEBUG src/document_bridge/mod.rs:500 applied "delete point" (1 ops, Human) -> v28
+DEBUG src/document_bridge/mod.rs:500 applied "undo: delete point" (1 ops, System) -> v29
+DEBUG src/document_bridge/mod.rs:500 applied "make corner" (4 ops, Human) -> v30
+DEBUG src/document_bridge/mod.rs:500 applied "move handle" (4 ops, Human) -> v31
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move handle" (4 ops, System) -> v32
+DEBUG src/document_bridge/mod.rs:500 applied "undo: make corner" (4 ops, System) -> v33
+DEBUG src/document_bridge/mod.rs:500 applied "move handle" (1 ops, Human) -> v34
+DEBUG src/document_bridge/mod.rs:500 applied "move handle" (1 ops, Human) -> v35
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move handle" (1 ops, System) -> v36
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move handle" (1 ops, System) -> v37
+DEBUG src/document_bridge/mod.rs:500 applied "set size.w" (1 ops, Human) -> v38
+DEBUG src/document_bridge/mod.rs:500 applied "set transform2d.x" (1 ops, Human) -> v39
+DEBUG src/document_bridge/mod.rs:500 applied "set slider" (1 ops, Human) -> v40
+DEBUG src/document_bridge/mod.rs:500 applied "resize rect" (1 ops, Human) -> v41
+DEBUG src/document_bridge/mod.rs:500 applied "set slider" (1 ops, Human) -> v42
+DEBUG src/document_bridge/mod.rs:500 applied "draw rectangle" (1 ops, Human) -> v43
+DEBUG src/document_bridge/mod.rs:500 applied "draw ellipse" (1 ops, Human) -> v44
+DEBUG src/document_bridge/mod.rs:500 applied "resize ellipse" (2 ops, Human) -> v45
+DEBUG src/document_bridge/mod.rs:500 applied "convert ellipse to path" (7 ops, Human) -> v46
+DEBUG src/document_bridge/mod.rs:500 applied "undo: convert ellipse to path" (7 ops, System) -> v47
+DEBUG src/document_bridge/mod.rs:500 applied "round corners" (1 ops, Human) -> v48
+DEBUG src/document_bridge/mod.rs:500 applied "add shadow" (1 ops, Human) -> v49
+DEBUG src/document_bridge/mod.rs:500 applied "edit arc" (1 ops, Human) -> v50
+DEBUG src/document_bridge/mod.rs:500 applied "duplicate 2 nodes" (7 ops, Human) -> v51
+DEBUG src/document_bridge/mod.rs:500 applied "paste 2 nodes" (7 ops, Human) -> v52
+DEBUG src/document_bridge/mod.rs:500 applied "cut 2 nodes" (2 ops, Human) -> v53
+DEBUG src/document_bridge/mod.rs:500 applied "paste 2 nodes" (4 ops, Human) -> v54
+DEBUG src/document_bridge/mod.rs:500 applied "undo: paste 2 nodes" (4 ops, System) -> v55
+DEBUG src/document_bridge/mod.rs:500 applied "undo: cut 2 nodes" (2 ops, System) -> v56
+DEBUG src/document_bridge/mod.rs:500 applied "undo: paste 2 nodes" (7 ops, System) -> v57
+DEBUG src/document_bridge/mod.rs:500 applied "undo: duplicate 2 nodes" (7 ops, System) -> v58
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (1 ops, Model) -> v59
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (1 ops, Model) -> v60
+DEBUG src/document_bridge/mod.rs:500 applied "move rect" (2 ops, Human) -> v61
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move rect" (2 ops, System) -> v62
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (1 ops, System) -> v63
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (1 ops, System) -> v64
+DEBUG src/document_bridge/mod.rs:500 applied "duplicate rect" (5 ops, Human) -> v65
+DEBUG src/document_bridge/mod.rs:500 applied "duplicate rect" (2 ops, Human) -> v66
+DEBUG src/document_bridge/mod.rs:500 applied "undo: duplicate rect" (7 ops, System) -> v67
+DEBUG src/document_bridge/mod.rs:500 applied "move mesh" (1 ops, Human) -> v68
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move mesh" (1 ops, System) -> v69
+DEBUG src/document_bridge/mod.rs:500 applied "import SVG" (4 ops, Human) -> v70
+DEBUG src/document_bridge/mod.rs:500 applied "undo: import SVG" (4 ops, System) -> v71
+DEBUG src/document_bridge/mod.rs:500 applied "import SVG" (4 ops, Human) -> v72
+DEBUG src/document_bridge/mod.rs:500 applied "undo: import SVG" (4 ops, System) -> v73
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (4 ops, Model) -> v74
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (4 ops, System) -> v75
+DEBUG src/document_bridge/mod.rs:500 applied "set slider" (1 ops, Human) -> v76
+DEBUG src/document_bridge/mod.rs:500 applied "detach instance" (6 ops, Human) -> v77
+DEBUG src/document_bridge/mod.rs:500 applied "undo: detach instance" (6 ops, System) -> v78
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (1 ops, Model) -> v79
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (1 ops, System) -> v80
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (2 ops, Model) -> v81
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (2 ops, System) -> v82
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (2 ops, Model) -> v83
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (1 ops, Model) -> v84
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (1 ops, System) -> v85
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (2 ops, System) -> v86
+DEBUG src/document_bridge/mod.rs:500 applied "make component component" (24 ops, Human) -> v87
+DEBUG src/document_bridge/mod.rs:500 applied "model edit" (2 ops, Model) -> v88
+DEBUG src/document_bridge/mod.rs:500 applied "undo: model edit" (2 ops, System) -> v89
+DEBUG src/document_bridge/mod.rs:500 applied "undo: make component component" (24 ops, System) -> v90
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect in" (3 ops, Human) -> v91
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect in" (2 ops, Human) -> v92
+DEBUG src/document_bridge/mod.rs:500 applied "connect in to out" (2 ops, Human) -> v93
+DEBUG src/document_bridge/mod.rs:500 applied "connect in to out" (3 ops, Human) -> v94
+DEBUG src/document_bridge/mod.rs:500 applied "move use" (2 ops, Human) -> v95
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move use" (4 ops, System) -> v96
+DEBUG src/document_bridge/mod.rs:500 applied "undo: connect in to out" (10 ops, System) -> v97
+DEBUG src/document_bridge/mod.rs:500 applied "connect in to out" (3 ops, Human) -> v98
+DEBUG src/document_bridge/mod.rs:500 applied "undo: connect in to out" (3 ops, System) -> v99
+DEBUG src/document_bridge/mod.rs:500 applied "draw ellipse" (1 ops, Human) -> v100
+DEBUG src/document_bridge/mod.rs:500 applied "draw rectangle" (1 ops, Human) -> v101
+DEBUG src/document_bridge/mod.rs:500 applied "make component component" (9 ops, Human) -> v102
+DEBUG src/document_bridge/mod.rs:500 applied "add port" (2 ops, Human) -> v103
+DEBUG src/document_bridge/mod.rs:500 applied "place control pivot" (4 ops, Human) -> v104
+DEBUG src/document_bridge/mod.rs:500 applied "bind transform2d.rot" (1 ops, Human) -> v105
+DEBUG src/document_bridge/mod.rs:500 applied "duplicate use" (3 ops, Human) -> v106
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect in" (3 ops, Human) -> v107
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect in" (2 ops, Human) -> v108
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect in" (2 ops, Human) -> v109
+DEBUG src/document_bridge/mod.rs:500 applied "undo: disconnect in" (7 ops, System) -> v110
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect out" (3 ops, Human) -> v111
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect out" (2 ops, Human) -> v112
+DEBUG src/document_bridge/mod.rs:500 applied "disconnect out" (2 ops, Human) -> v113
+DEBUG src/document_bridge/mod.rs:500 applied "undo: disconnect out" (7 ops, System) -> v114
+DEBUG src/document_bridge/mod.rs:500 applied "move use" (2 ops, Human) -> v115
+DEBUG src/document_bridge/mod.rs:500 applied "undo: move use" (2 ops, System) -> v116
+DEBUG src/document_bridge/mod.rs:500 applied "add slider" (8 ops, Human) -> v117
+DEBUG src/document_bridge/mod.rs:500 applied "add slider" (3 ops, Human) -> v118
+DEBUG src/document_bridge/mod.rs:500 applied "add laser" (10 ops, Human) -> v119
+DEBUG src/document_bridge/mod.rs:500 applied "add laser" (3 ops, Human) -> v120
+DEBUG src/document_bridge/mod.rs:500 applied "connect value to power" (3 ops, Human) -> v121
+DEBUG src/document_bridge/mod.rs:500 applied "set slider" (1 ops, Human) -> v122
 (no page errors)
 ```
 
@@ -1392,7 +1392,7 @@ cd -
 
 | command | what it does |
 |---|---|
-| `nav [url]` | open the app; default `http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog` (`&demo`: an unsaved demo, not the last scope; plans/specs/scopes.md D11) |
+| `nav [url]` | open the app; default `$URL`, else `http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog` (`&demo`: an unsaved demo, not the last scope; plans/specs/scopes.md D11). With `URL` set, a script's own `nav <url>` keeps its path and query but goes to URL's host, so a worktree's Vite on 5185 runs every script |
 | `ready` | wait until the `.loading` overlay leaves the DOM and the frame loop is cycling (cadence probe frame count advancing between polls), then read the viewer panel rect. About 6 s under SwiftShader |
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |
@@ -2025,12 +2025,12 @@ screenshot, `nav` and `ready` lines:
 ```
 {"enabled":false,"guides":[]}
 true
-["name=\"title\" x=\"12\" x.by=\"#3t\" y=\"12\"","name=\"body\" x=\"12\" x.by=\"#3t\" y=\"44.19921875\"","name=\"footer\" x=\"12\" x.by=\"#3t\" y=\"69.138671875\""]
+["name=\"title\" x=\"12\" x.by=\"#3x\" y=\"12\"","name=\"body\" x=\"12\" x.by=\"#3x\" y=\"44.19921875\"","name=\"footer\" x=\"12\" x.by=\"#3x\" y=\"69.138671875\""]
 true
 [" y=\"86.078125\""]
 [" y=\"69.138671875\""]
 true
-["name=\"stack\" x=\"510\" y=\"280\" mode=\"stack_x\" gap=\"20\"","name=\"a\" x=\"0\" x.by=\"#40\" y=\"0\"","name=\"b\" x=\"60\" x.by=\"#40\" y=\"0\"","name=\"c\" x=\"120\" x.by=\"#40\" y=\"0\""]
+["name=\"stack\" x=\"510\" y=\"280\" mode=\"stack_x\" gap=\"20\"","name=\"a\" x=\"0\" x.by=\"#44\" y=\"0\"","name=\"b\" x=\"60\" x.by=\"#44\" y=\"0\"","name=\"c\" x=\"120\" x.by=\"#44\" y=\"0\""]
 true
 ["name=\"b\" x=\"570\" y=\"280\""]
 applied "open demo scene" (282 ops, System) -> v1
@@ -2269,10 +2269,6 @@ applied "bring to front" (1 ops, Human) -> v4
 Native: `--test contexts` `commands_are_context_data` (the built-in menu and keys, a
 document's override, refusals) and `bring_to_front_and_send_to_back_restack_among_siblings`;
 `commands.rs`'s unit tests (chords, merging keymaps); `bun test tests/chords.test.ts`.
-
-**Known stale (2026-11-12):** `layout.txt` hard-codes node `#3v` and expect-versions
-from a demo of 298 ops; the demo now opens with 302, so its second edit fails and the
-rest cascades. Its Shift+A half passes when run with the ids found by name.
 
 ## Keyboard navigation by context (2026-10-27)
 
@@ -2564,7 +2560,7 @@ undefined
 "* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\nR2 N2 0 2 kΩ\n* P1 probes N2\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 6 V"
 [7,"9 V",true]
 [5,true]
-"<applied version=\"14\">\n  <circuit>placed V9 R8 R9 GND9 P9; 5 wires</circuit>\n</applied>\n<netlist sheet=\"circuit\">\n* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V\n</netlist>"
+"<applied version=\"14\">\n  <circuit>placed V9 R8 R9 GND9 P9; 5 wires</circuit>\n  <netlist sheet=\"circuit\">\n* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V\n  </netlist>\n</applied>"
 "* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V"
 applied "open demo scene" (282 ops, System) -> v1
 applied "open showcase" (1314 ops, System) -> v2

@@ -17,6 +17,15 @@ import { inflateSync } from "node:zlib";
 // `solve:`, drag locks) are DEBUG and off without it.
 // `showcase=0`: no contexts showcase, so scripts' ids follow the demo scene's.
 const DEFAULT_URL = process.env.URL ?? "http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog";
+// A script's `nav <url>` names :5173; with `URL` set (a worktree's own Vite),
+// it goes to the same path and query on URL's host instead.
+function navTarget(raw: string | undefined): string {
+  if (!raw) return DEFAULT_URL;
+  if (!process.env.URL) return raw;
+  const to = new URL(raw);
+  to.host = new URL(process.env.URL).host;
+  return to.toString();
+}
 const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const SHOTS = new URL("./screenshots/", import.meta.url).pathname;
 mkdirSync(SHOTS, { recursive: true });
@@ -139,8 +148,8 @@ async function run(line: string) {
     case "#":
       return;
     case "nav":
-      await page.goto(rest[0] ?? DEFAULT_URL);
-      return out(`nav ${rest[0] ?? DEFAULT_URL}`);
+      await page.goto(navTarget(rest[0]));
+      return out(`nav ${navTarget(rest[0])}`);
     case "ready": {
       // The engine exists when the loading overlay leaves the DOM, but under
       // SwiftShader the first frames take seconds to compile shaders, and a

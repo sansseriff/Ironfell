@@ -43,17 +43,6 @@ pub fn despawn_panel(app: &mut WorkerApp, id: String) {
     }
 }
 
-pub fn set_mouse_position(app: &mut WorkerApp, x: f32, y: f32) {
-    let position = app.to_physical_size(x, y);
-    let cursor_move = CursorMoved {
-        window: app.window,
-        position,
-        delta: None,
-    };
-    app.world_mut().write_message(cursor_move);
-    // Note: No activity trigger - this will be handled by enter_frame
-}
-
 pub fn mouse_move(app: &mut WorkerApp, x: f32, y: f32) {
     // 提前将逻辑像转换成物理像素
     let position = app.to_physical_size(x, y);
@@ -146,32 +135,6 @@ pub fn left_bt_up(app: &mut WorkerApp) {
     app.world_mut().write_message(event);
 
     // If you need to modify active_info again, get it again
-    if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
-        active_info.remaining_frames = 10;
-    }
-}
-
-pub fn right_bt_down(app: &mut WorkerApp) {
-    let event = MouseButtonInput {
-        button: MouseButton::Right,
-        state: ButtonState::Pressed,
-        window: app.window,
-    };
-    app.world_mut().write_message(event);
-    let mut active_info = app
-        .world_mut()
-        .get_resource_mut::<ActivityControl>()
-        .unwrap();
-    active_info.remaining_frames = 10;
-}
-
-pub fn right_bt_up(app: &mut WorkerApp) {
-    let event = MouseButtonInput {
-        button: MouseButton::Right,
-        state: ButtonState::Released,
-        window: app.window,
-    };
-    app.world_mut().write_message(event);
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
     }
@@ -581,7 +544,7 @@ pub fn document_timings(_app: &mut WorkerApp, reset: bool) -> String {
 /// Make a component of the selected pictures (component-model.md §5.5):
 /// `ids` is a JSON array of node ids. One transaction.
 pub fn document_make_component(app: &mut WorkerApp, ids: String, name: String) -> String {
-    let mut run = || -> Result<serde_json::Value, String> {
+    let run = || -> Result<serde_json::Value, String> {
         let ids: Vec<String> = serde_json::from_str(&ids).map_err(|e| e.to_string())?;
         let ids = ids.iter().map(|s| s.parse::<iron_document::NodeId>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;

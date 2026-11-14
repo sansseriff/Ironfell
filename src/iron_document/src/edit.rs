@@ -135,7 +135,7 @@ pub fn plan(store: &Store, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Fa
     // A plain verb's mistake is collected and planning goes on, so the
     // answer lists every one; a verb that reads the document stops it.
     let mut errors: Vec<VerbError> = Vec::new();
-    let mut run = |p: &mut Planner, i: usize, el: &El, errors: &mut Vec<VerbError>| -> Result<(), Failure> {
+    let run = |p: &mut Planner, i: usize, el: &El, errors: &mut Vec<VerbError>| -> Result<(), Failure> {
         match p.verb(i, el) {
             Err(Failure::Errors(es)) if PLAIN.contains(&el.name.as_str()) => {
                 errors.extend(es);

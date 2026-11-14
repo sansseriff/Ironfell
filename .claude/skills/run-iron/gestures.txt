@@ -76,7 +76,7 @@ eval (async () => { const v = await __iron.view({fidelity:'full'}); return /name
 tab Controls
 key p
 sleep 400
-eval document.querySelector('.toolbar button.active')?.title
+eval document.querySelector('.toolbar button[aria-pressed="true"]')?.title
 dclick 200 200
 ddrag 420 200 480 260
 dclick 300 380
@@ -260,10 +260,10 @@ eval window.shapeView = async (name) => { const v = await __iron.view({fidelity:
 # The toolbar floats over the canvas: a real click must reach it.
 clickel .toolbar button[aria-label="Rectangle"]
 sleep 300
-eval document.querySelector('.toolbar button.active')?.title
+eval document.querySelector('.toolbar button[aria-pressed="true"]')?.title
 ddrag 500 100 640 180
 sleep 600
-eval (async () => [await shapeView('rectangle'), document.querySelector('.toolbar button.active')?.title])()
+eval (async () => [await shapeView('rectangle'), document.querySelector('.toolbar button[aria-pressed="true"]')?.title])()
 key o
 keydown Shift
 ddrag 700 100 780 130
@@ -425,15 +425,15 @@ down
 sleep 200
 up
 sleep 800
-pmove assembly 510 269
+pmove assembly 520 242
 sleep 300
 down
 sleep 300
-pmove assembly 510 254
+pmove assembly 520 227
 sleep 300
-pmove assembly 510 224
+pmove assembly 520 197
 sleep 300
-pmove assembly 510 204
+pmove assembly 520 177
 sleep 300
 up
 sleep 800

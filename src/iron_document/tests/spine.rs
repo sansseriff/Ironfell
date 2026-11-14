@@ -403,7 +403,6 @@ fn a_bad_op_rejects_the_whole_batch_and_reports_every_error() {
     let Scene {
         rect,
         circle,
-        group,
         ..
     } = s;
     let mut store = s.store;

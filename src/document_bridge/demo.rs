@@ -1369,11 +1369,12 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 /// The gallery's pages (plans/specs/demo.md), in tab order, each an edit
 /// (plans/specs/markup.md); `#TIMELINE` stands for the timeline its clips
 /// go in. The RC page comes after them.
-const GALLERY: [&str; 8] = [
+const GALLERY: [&str; 9] = [
     include_str!("gallery/oscillator.xml"),
     include_str!("gallery/refraction.xml"),
     include_str!("gallery/interference.xml"),
     include_str!("gallery/wavepacket.xml"),
+    include_str!("gallery/fourier.xml"),
     include_str!("gallery/kepler.xml"),
     include_str!("gallery/lorenz.xml"),
     include_str!("gallery/blackbody.xml"),

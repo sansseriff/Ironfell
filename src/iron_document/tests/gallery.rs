@@ -6,11 +6,12 @@
 use iron_document::facet::Name;
 use iron_document::*;
 
-const PAGES: [(&str, &str); 9] = [
+const PAGES: [(&str, &str); 10] = [
     ("oscillator", include_str!("../../document_bridge/gallery/oscillator.xml")),
     ("refraction", include_str!("../../document_bridge/gallery/refraction.xml")),
     ("interference", include_str!("../../document_bridge/gallery/interference.xml")),
     ("wave packet", include_str!("../../document_bridge/gallery/wavepacket.xml")),
+    ("fourier", include_str!("../../document_bridge/gallery/fourier.xml")),
     ("kepler", include_str!("../../document_bridge/gallery/kepler.xml")),
     ("lorenz", include_str!("../../document_bridge/gallery/lorenz.xml")),
     ("blackbody", include_str!("../../document_bridge/gallery/blackbody.xml")),
@@ -128,7 +129,7 @@ fn a_plot_cursor_past_the_end_of_its_curve_stays_finite() {
 fn a_page_writes_its_relations_and_its_circuit() {
     let (mut store, timeline) = desk();
     page(&mut store, "wave packet", PAGES[3].1, timeline);
-    page(&mut store, "RC charging", PAGES[8].1, timeline);
+    page(&mut store, "RC charging", PAGES[9].1, timeline);
     let doc = store.document();
     let clip = find(&store, "play t");
     let t = find(&store, "t");

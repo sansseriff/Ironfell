@@ -109,6 +109,13 @@ fn set_takes_a_bare_field_against_the_nodes_type_or_path_and_value() {
     assert_eq!(slider.value.constant(), Some(&Value::Number(0.7)));
     assert_eq!(slider.min.constant(), Some(&Value::Number(0.1)));
     assert_eq!(number(&store, p.aliases["$r"], "stroke.width"), 2.0);
+    // <set> of a facet the node lacks adds it; on an entity a bare input
+    // name is its argument.
+    let p = apply(&mut store, &format!(r#"<edit><rect in="{c}" id="$q" w="5" h="5"/><set id="$q" appearance.opacity="0.5" stroke.width="3"/><place def="std:laser" in="{c}" id="$l"/></edit>"#));
+    assert_eq!(number(&store, p.aliases["$q"], "appearance.opacity"), 0.5);
+    let laser = composition::figure_of(store.document(), p.aliases["$l"]).map(|(_, e)| e).unwrap();
+    apply(&mut store, &format!(r#"<edit><set id="{laser}" power="7 mW"/></edit>"#));
+    assert_eq!(store.resolved(laser, "args.power".parse().unwrap()), Some(Value::parse_quantity("7 mW").unwrap()));
 }
 
 #[test]
@@ -275,4 +282,7 @@ fn a_connection_and_its_two_links_are_one_edit() {
     </edit>"#));
     let ends = store.document().relations_from(p.aliases["$w"]).filter(|r| r.rel == document::RelKind::Connects).count();
     assert_eq!(ends, 2);
+    // A store error found while planning names this edit's nodes as it did.
+    let es = errors(&store, &format!(r#"<edit><connection in="{model}" id="$v"><link from="$v" to="{out}" rel="connects" end="a"/></connection></edit>"#));
+    assert!(es[0].message.starts_with("$v "), "{es:?}");
 }

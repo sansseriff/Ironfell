@@ -17,7 +17,7 @@
       </group>
       <group name="inhibitor control">
         <text name="inhibitor label" transform2d.x="680" transform2d.y="520" text.content="Inhibitor [I] (mM)" font.size="14" fill.color="@ink-2"/>
-        <slider id="$inhibitor" name="inhibitor" transform2d.x="692" transform2d.y="540" size.w="196" size.h="24" slider.max="20" slider.step="0.5" slider.value="6"/>
+        <slider id="$inhibitor" name="inhibitor" transform2d.x="692" transform2d.y="540" size.w="196" size.h="24" slider.max="20" slider.step="0.5" slider.value="4"/>
         <text name="inhibitor readout" transform2d.x="920" transform2d.y="542" text.content="{= fmt($inhibitor.slider.value, 1) + ' mM'}" font.size="14" fill.color="@ink"/>
       </group>
     </group>
@@ -32,8 +32,8 @@
       <rect name="swatch no inhibitor" transform2d.x="60" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-1"/>
       <text name="legend no inhibitor" transform2d.x="88" transform2d.y="490" text.content="no inhibitor" font.size="12" fill.color="@ink-2"/>
       <rect name="swatch with inhibitor" transform2d.x="200" transform2d.y="497" size.w="20" size.h="4" fill.color="@series-2"/>
-      <text name="legend with inhibitor" transform2d.x="228" transform2d.y="490" text.content="with inhibitor" font.size="12" fill.color="@ink-2"/>
-      <text name="legend guides" transform2d.x="360" transform2d.y="490" text.content="dots: Vmax and Vmax/2 · dashed line: Km" font.size="12" fill.color="@muted"/>
+      <text name="legend with inhibitor" transform2d.x="228" transform2d.y="490" text.content="with inhibitor (dashed)" font.size="12" fill.color="@ink-2"/>
+      <text name="legend guides" transform2d.x="380" transform2d.y="490" text.content="dashed guides: Vmax, Vmax/2, Km, apparent Km · rings: v at 10 mM" font.size="12" fill.color="@muted"/>
     </group>
     <group name="cartoon">
       <text name="cartoon title" transform2d.x="640" transform2d.y="360" text.content="Substrate and inhibitor compete for the active site" font.size="13" fill.color="@ink-2"/>
@@ -44,7 +44,7 @@
       <text name="substrate label" transform2d.x="818" transform2d.y="468" text.content="substrate (S)" font.size="12" fill.color="@muted"/>
       <text name="inhibitor label" transform2d.x="906" transform2d.y="468" text.content="inhibitor (I)" font.size="12" fill.color="@muted"/>
     </group>
-    <place def="std:plot" name="rate plot" x="40" y="120" w="560" h="360" color="@series-1" color2="@series-2" color3="@axis" cursor="{= $k_m.slider.value}" style="smooth" style2="smooth" style3="scatter" title="Michaelis–Menten rate" x_label="[S] (mM)" x_max="50" x_min="0" xs="{= range(0, 50, 201)}" y_label="v (µM/s)" y_max="{= $v_max.slider.value * 1.1}" y_min="0" ys="{= $v_max.slider.value * $self.xs / ($k_m.slider.value + $self.xs)}" ys2="{= $v_max.slider.value * $self.xs / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + $self.xs)}" ys3="{= where(cos(pi * $self.xs) &gt; 0.95, $v_max.slider.value + 0 * $self.xs, where(cos(pi * $self.xs) &lt; -0.95, $v_max.slider.value / 2 + 0 * $self.xs, 0 * $self.xs / (0 * $self.xs)))}"/>
+    <place def="std:plot" name="rate plot" x="40" y="120" w="560" h="360" color="@series-1" color2="@series-2" color3="{= 0 / 0}" cursor="{= 0 / 0}" hlines="{= series($v_max.slider.value, $v_max.slider.value / 2)}" marks_label="{= $inhibitor.slider.value &gt; 0 ? list('v at 10 mM', 'with I') : list('v at 10 mM', '')}" marks_x="{= series(10, 10)}" marks_y="{= series($v_max.slider.value * 10 / ($k_m.slider.value + 10), $v_max.slider.value * 10 / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + 10))}" style="smooth" style2="dashed" style3="{= 0 / 0}" title="Michaelis–Menten rate" vlines="{= series($k_m.slider.value, $k_m.slider.value * (1 + $inhibitor.slider.value / 2))}" x_label="[S] (mM)" x_max="50" x_min="0" xs="{= range(0, 50, 201)}" y_label="v (µM/s)" y_max="{= $v_max.slider.value * 1.1}" y_min="0" ys="{= $v_max.slider.value * $self.xs / ($k_m.slider.value + $self.xs)}" ys2="{= $v_max.slider.value * $self.xs / ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) + $self.xs)}" ys3="{= series()}"/>
     <place def="std:plot" name="Lineweaver–Burk plot" x="640" y="120" w="360" h="220" color="@series-1" color2="@series-2" title="Lineweaver–Burk" x_label="1/[S] (1/mM)" x_max="1" x_min="{= -max(0.15, 1.25 / $k_m.slider.value)}" xs="{= range(-max(0.15, 1.25 / $k_m.slider.value), 1, 131)}" y_label="1/v (s/µM)" y_min="0" ys="{= where(($k_m.slider.value * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}" ys2="{= where(($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value &gt;= 0, ($k_m.slider.value * (1 + $inhibitor.slider.value / 2) * $self.xs + 1) / $v_max.slider.value, 0 * $self.xs / (0 * $self.xs))}"/>
   </composition>
 </edit>

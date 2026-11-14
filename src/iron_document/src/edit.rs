@@ -237,7 +237,27 @@ impl Planner<'_, '_> {
     fn error(&self, verb: usize, kind: &str, message: String) -> VerbError {
         // An id that names nothing reads as the store says it.
         let kind = if message.starts_with("no node #") { "unknown_node" } else { kind };
-        VerbError { op: Some(verb), kind: kind.into(), message, verb: self.verbs.get(verb).cloned() }
+        VerbError { op: Some(verb), kind: kind.into(), message: self.named(&message), verb: self.verbs.get(verb).cloned() }
+    }
+
+    /// `message` with each id this edit minted written as the name it gave.
+    fn named(&self, message: &str) -> String {
+        let mut by_id: BTreeMap<NodeId, String> = self.nodes.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, (id, _))| (*id, format!("${k}"))).collect();
+        by_id.extend(self.places.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, p)| (p.picture, format!("${k}"))));
+        let mut out = String::with_capacity(message.len());
+        let mut rest = message;
+        while let Some(i) = rest.find('#') {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i..];
+            let end = 1 + tail[1..].find(|c: char| !(c.is_alphanumeric() || c == '/' || c == '~')).unwrap_or(tail.len() - 1);
+            match tail[..end].parse::<NodeId>().ok().and_then(|id| by_id.get(&id)) {
+                Some(name) => out.push_str(name),
+                None => out.push_str(&tail[..end]),
+            }
+            rest = &tail[end..];
+        }
+        out.push_str(rest);
+        out
     }
 
     fn names(&self) -> Names<'_> {
@@ -606,12 +626,29 @@ impl Planner<'_, '_> {
                     return Err(fail(self, "parse", "nothing to set; give leaf attributes such as x=\"10\", or path=\"size.h\" value=\"10\"".into()));
                 }
                 let names = self.names();
+                let doc = self.scratch.document();
+                // A facet the node has, or that a verb before this one adds.
+                let has = |kind: crate::facet::FacetKind| {
+                    doc.facets_of(id).any(|f| f.kind() == kind)
+                        || self.pending.iter().any(|(op, _)| matches!(op, Op::AddFacet { id: n, facet } if *n == id && facet.kind() == kind))
+                };
+                // On an entity, a bare input name is its argument, as on <place>.
+                let inputs: Vec<String> = match ty.name() {
+                    "entity" => crate::expand::linked_definition(doc, id)
+                        .and_then(|d| crate::definition::inputs_of(doc, d).ok())
+                        .map(|v| v.iter().map(|i| i.name.to_owned()).collect())
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
                 let mut ops = Vec::new();
                 let mut added: Vec<crate::facet::Facet> = Vec::new();
                 for (k, raw) in &pairs {
-                    let (kind, field) = markup::leaf(ty, k).map_err(|e| fail(self, "parse", e))?;
+                    let k = if !k.contains('.') && markup::leaf(ty, k).is_err() && inputs.contains(k) { format!("args.{k}") } else { k.clone() };
+                    let (kind, field) = markup::leaf(ty, &k).map_err(|e| fail(self, "parse", e))?;
                     let slot = markup::slot(markup::kind_of(kind, &field), raw, &names).map_err(|e| fail(self, "parse", format!("{k}=\"{raw}\": {e}")))?;
-                    if el.name == "set" {
+                    // Setting a field of a facet the node lacks adds the facet
+                    // (its type allows it: leaf() checked), as <add> would.
+                    if el.name == "set" && has(kind) {
                         ops.push(Op::Set { id, path: LeafPath::new(kind, &field).map_err(|e| fail(self, "parse", format!("{k}: {e:?}")))?, slot });
                     } else {
                         if !added.iter().any(|f| f.kind() == kind) {

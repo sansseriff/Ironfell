@@ -40,34 +40,38 @@ affords-driven bars, so neither feature lost its demo. `document_showcase` now c
 
 ## 2. The gallery
 
-Each page is one composition written as node markup with `<place>`
-(`markup::compose`), `include_str!`d from `src/document_bridge/gallery/`:
+Each page is an edit (markup.md: node markup plus verbs, planned by
+`edit::transaction`), `include_str!`d from `src/document_bridge/gallery/`; `#TIMELINE`
+stands for the timeline its clips go in, and the showcase puts each page's composition
+among the gallery's tabs:
 
 | Page | Shows |
 |---|---|
 | Oscillator | Damped spring: a mass drawn by bindings, a spring as a bound path, two `std:plot`s (x(t) with its envelope and a cursor; the phase portrait), a marker placed on the portrait through the plot's derived axis ports (`$phase_portrait.x_lo`) |
-| Refraction | Snell's law: rays and angle arcs bound to three sliders, total internal reflection, the Fresnel reflectance as the reflected ray's opacity, θ₂ against θ₁ with a cursor |
+| Refraction | Snell's law: rays (`line()`) and angle arcs (`arc()`) bound to three sliders, the shared values as lets (θ₂ by `asin`, Rₛ by `with(…)`), total internal reflection, the Fresnel reflectance as the reflected ray's opacity, θ₂ against θ₁ with the critical angle as a reference line and the current ray as a labelled mark |
 | Interference | Young's double slit: wavefronts drawn from the sliders, the intensity on the screen (an area series), the pattern itself as a gradient band, the fringe spacing as a readout |
-| Wave packet | Group and phase velocity: ψ(x, t) with its envelope; a timeline clip sweeps `t` from 0 to 8 s, so Play on the timeline runs it |
+| Wave packet | Group and phase velocity: ψ(x, t) with its envelope, the envelope peak and a crest as the plot's labelled marks; a timeline clip (in the page's markup, `<clip>` + `<link>`) sweeps `t` from 0 to 8 s, so Play on the timeline runs it |
+| Fourier | A square or sawtooth wave from N harmonics: the partial sum against the target (dashed) with the Gibbs overshoot marked, the amplitudes as bars, the rotating phasors as a repeat of circles chained tip to tail, linked to the curve |
 | Kepler | An orbit drawn from a and e, the planet placed by its eccentric anomaly, the swept wedge (equal areas), vis-viva speed with a cursor, readouts of r, v, M and T |
 | Lorenz | The attractor integrated live by `accumulate` nodes, a Reset button (an `on` writing a `let`), the x–z projection and x against time |
 | Blackbody | Planck curves at three temperatures, the visible band with Wien's peak on it, a star in the colour of T with a glow, absolute or per-peak scale from two buttons |
-| Enzyme | Michaelis–Menten with a competitive inhibitor, the Lineweaver–Burk lines, a cartoon of the active site, a readout bar |
+| Enzyme | Michaelis–Menten with a competitive inhibitor (dashed), V_max, V_max/2 and both K_m as reference lines, the rates at 10 mM as marks, the Lineweaver–Burk lines, a cartoon of the active site, a readout bar |
 | RC charging | A capacitor charging: the circuit (an `embed` of `rc circuit`), V_C and I against t with τ marked, a table of V_C after n time constants |
 
 ### 2.1 RC charging
 
-The circuit is built in Rust (`parts::place_ops`, `wire_ops`) in a schematic composition
-of its own, `rc circuit`, because wires are relations and connections that markup does
-not write. The page embeds it (`embed.source="#CIRCUIT"`, replaced with its id), and the
-resistor's and capacitor's arguments are bound to the page's sliders (`built.named`). Its
+The page's edit makes a schematic composition of its own, `rc circuit`
+(`<composition id="$rc" notation="schematic"/>`), draws the circuit on it with a
+`<circuit sheet="$rc">` whose resistor and capacitor are bound to the page's sliders
+(`R="{= $r_slider.slider.value * 1 kΩ}"`), and embeds it (`embed.source="$rc"`). Until
+2026-11-14 this was Rust in `demo.rs`, because node markup wrote no relations. Its
 parts are named without numbers (`V`, `R`, `C`, `GND`, `P`), so designators elsewhere
 count as if it were not there (`schematic.txt` expects to place R3 and P2). The solve is a
 DC operating point: the probe reads 5 V, the charged state; the curves show the transient.
 
 ### 2.2 Markup that reads a placed component
 
-`markup::compose` (markup.rs) builds a page in one transaction: a `<place id="plot">`
+The edit planner (edit.rs; first `markup::compose`) builds a page in one transaction: a `<place id="$plot">`
 names the place, and another node may read it before it exists: `$plot.transform2d.x` (the
 `use`'s own leaf) or `$plot.x_lo` (an output port of the placed instance, an expanded
 node `#entity/spec`). Leaves that read a place are set after the places are composed
@@ -95,6 +99,10 @@ turns: build; look at the picture, critique and fix; move every slider, check, p
 | 22-39-23 | wave packet | 1 of 3: turns 2 and 3 failed at the provider (three runs at once) |
 | 22-39-25 | lorenz | 1 of 3, the same |
 | 22-39-27 | rc | 1 of 3, the same |
+| 2026-11-14 08-45-26 | refraction, refined in the new language | 2 of 2: lets for the shared values, `with(…)`, `asin`, `line()`/`arc()`, `vlines` for the critical angle, a labelled mark for the current ray; checked below, at and past θc |
+| 2026-11-14 08-45-31 | wave packet, marks | 2 of 2: the plot's marks replace the hand-placed markers and the five lets that copied the plot's margins |
+| 2026-11-14 08-47-29 | enzyme, guides | 2 of 2: `hlines`/`vlines` for V_max, V_max/2 and K_m, marks at 10 mM, the inhibited curve dashed; it fixed overlapping labels at [I] = 0 |
+| 2026-11-14 08-47-34 | fourier (new) | 3 of 3: built in the new language unprompted (nested nodes, a repeat of phasors, `with(…)`, marks, `hlines`); its own critique fixed a hidden link, the sawtooth overshoot measure and the bars' range |
 | 2026-11-14 04-07-19 | wave packet, refined | 2 of 2: a critique of the seeded page (its marker tracks read as stray rules): the crest and envelope markers moved onto the plot, a "the packet travels this way" note, the sliders realigned |
 
 All six complete runs came out polished; the second turn's self-critique fixed overlaps
@@ -129,16 +137,25 @@ became tokens, two compositions were renamed, the wave packet's clip moved to Ru
 
 ## 5. Limits found
 
-- `std:plot` has no dashed or reference-line series style: the enzyme page draws its V_max
-  guide as scatter dots.
+- ~~`std:plot` has no dashed or reference-line series style~~: since 2026-11-14 it has
+  `style="dashed"`, `hlines`/`vlines` and `marks_x`/`marks_y`/`marks_label` (plot.md
+  §4.1).
 - Every placed `std:plot` adds a `vis` row to the timeline (its Motion port), so the
   timeline lists thirteen plots below the clips.
-- Markup writes no relations: a page that needs a clip, a wire or a constraint gets it in
-  Rust. `demo_markup` warns about each.
+- ~~Markup writes no relations~~: since 2026-11-14 edits and pages are one language
+  with `<link>` and `<circuit>` (markup.md); the wave packet's clip and the RC circuit
+  are in their pages, and `demo_markup` writes relations as `<link>`.
 - The showcase takes about 4 s to apply in a dev build (thirteen plots expanded); the
   gallery tabs arrive after Main.
 - The Lorenz page, on screen, costs the most per frame (three 400-sample histories
   rebuilt each step): about 18 fps under SwiftShader.
 - The RC circuit's probe shows the DC operating point (5 V), not the charging transient.
+- `<set>` on a leaf a clip animates shows nothing: the clip wins (the wave packet's t).
+  The agent stepped t by moving the clip's first key, then put it back.
+- With the lesson narrative open, the probe's chat writes at the narrative's cursor, and
+  one turn added a paragraph to the lesson unasked (refraction, 2026-11-14); the seeded
+  pages take only the composition.
+- A NaN position (the refraction plot's cursor value past the critical angle) panicked
+  the spatial index; fixed 2026-11-14 (§4).
 - `schematic.txt` fails at its Space-to-turn step on master as well (checked against the
   main checkout's build, 2026-11-13); not caused by the demo.

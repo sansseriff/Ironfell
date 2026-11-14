@@ -1,0 +1,77 @@
+<edit>
+  <composition name="fourier">
+    <text name="title" transform2d.x="40" transform2d.y="30" text.content="Fourier series: building a wave from harmonics" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="70" text.content="Raise N to add harmonics, switch the waveform, and drag t to turn the phasors: the overshoot at each jump never falls below about 9 %." font.size="14" fill.color="@muted"/>
+    <let id="$waveform" name="waveform" let.value="square"/>
+    <let id="$n" name="N" let.value="{= round($n_slider.slider.value)}"/>
+    <let id="$is_square" name="is square" let.value="{= $waveform.let.value == 'square'}"/>
+    <let id="$harmonic_numbers" name="harmonic numbers" let.value="{= $is_square.let.value ? 2 * step(1, $n.let.value, 1) - 1 : step(1, $n.let.value, 1)}"/>
+    <let id="$coefficients_b_n" name="coefficients b_n" let.value="{= $is_square.let.value ? 4 / (pi * $harmonic_numbers.let.value) : 2 / (pi * $harmonic_numbers.let.value) * cos(pi * ($harmonic_numbers.let.value - 1))}"/>
+    <let id="$time_samples" name="time samples" let.value="{= range(0, 2, 801)}"/>
+    <let id="$partial_sum" name="partial sum" let.value="{= map($time_samples.let.value, x =&gt; sum($coefficients_b_n.let.value * sin(2 * pi * $harmonic_numbers.let.value * x)))}"/>
+    <let id="$target_wave" name="target wave" let.value="{= $is_square.let.value ? where(0.5 &gt; $time_samples.let.value - floor($time_samples.let.value), 1, -1) : 2 * ($time_samples.let.value + 0.5 - floor($time_samples.let.value + 0.5)) - 1}"/>
+    <let id="$gibbs_peak_t" name="Gibbs peak t" let.value="{= $is_square.let.value ? 1 / (4 * $n.let.value) : 0.5 - 1 / (2 * ($n.let.value + 1))}"/>
+    <let id="$gibbs_peak_value" name="Gibbs peak value" let.value="{= sum($coefficients_b_n.let.value * sin(2 * pi * $harmonic_numbers.let.value * $gibbs_peak_t.let.value))}"/>
+    <let id="$overshoot" name="overshoot %" let.value="{= ($gibbs_peak_value.let.value - ($is_square.let.value ? 1 : 2 * $gibbs_peak_t.let.value)) / 2 * 100}"/>
+    <let id="$phasor_angles" name="phasor angles" let.value="{= 2 * pi * $harmonic_numbers.let.value * $t_slider.slider.value}"/>
+    <let id="$sum_at_t" name="sum at t" let.value="{= sum($coefficients_b_n.let.value * sin($phasor_angles.let.value))}"/>
+    <let id="$phasor_scale_px" name="phasor scale px" let.value="{= ($partial_sum_plot.size.h - 70) / ($partial_sum_plot.y_hi - $partial_sum_plot.y_lo)}"/>
+    <let id="$phasor_centre_x" name="phasor centre x" let.value="200"/>
+    <let id="$phasor_centre_y" name="phasor centre y" let.value="{= $partial_sum_plot.transform2d.y + 30 + $partial_sum_plot.y_hi * $phasor_scale_px.let.value}"/>
+    <let id="$phasor_dx" name="phasor dx" let.value="{= $phasor_scale_px.let.value * $coefficients_b_n.let.value * cos($phasor_angles.let.value)}"/>
+    <let id="$phasor_dy" name="phasor dy" let.value="{= -$phasor_scale_px.let.value * $coefficients_b_n.let.value * sin($phasor_angles.let.value)}"/>
+    <let id="$phasor_indices" name="phasor indices" let.value="{= step(0, $n.let.value - 1, 1)}"/>
+    <let id="$tip_x" name="tip x" let.value="{= $phasor_centre_x.let.value + sum($phasor_dx.let.value)}"/>
+    <let id="$tip_y" name="tip y" let.value="{= $phasor_centre_y.let.value + sum($phasor_dy.let.value)}"/>
+    <let id="$plot_point_x" name="plot point x" let.value="{= $partial_sum_plot.transform2d.x + 54 + ($t_slider.slider.value - $partial_sum_plot.x_lo) / ($partial_sum_plot.x_hi - $partial_sum_plot.x_lo) * ($partial_sum_plot.size.w - 70)}"/>
+    <let id="$plot_point_y" name="plot point y" let.value="{= $partial_sum_plot.transform2d.y + 30 + ($partial_sum_plot.y_hi - $sum_at_t.let.value) / ($partial_sum_plot.y_hi - $partial_sum_plot.y_lo) * ($partial_sum_plot.size.h - 70)}"/>
+    <group name="phasors">
+      <rect name="phasor panel" transform2d.x="40" transform2d.y="120" size.w="320" size.h="300" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="@surface" stroke.color="@grid"/>
+      <path name="phasor axis" path.d="{= line(50, $phasor_centre_y.let.value, 350, $phasor_centre_y.let.value)}" fill.opacity="0" stroke.color="@grid"/>
+      <group id="$phasor_chain" name="phasor chain" transform2d.x="40" transform2d.y="120" group_clip.w="320" group_clip.h="300" group_clip.radius="6" repeat.each="NaN" repeat.count="{= $n.let.value}" repeat.key="NaN">
+        <let id="$circle_x" name="circle x" let.value="{= $phasor_centre_x.let.value - 40 + sum(where($phasor_chain.repeat.index &gt; $phasor_indices.let.value, $phasor_dx.let.value, 0))}"/>
+        <let id="$circle_y" name="circle y" let.value="{= $phasor_centre_y.let.value - 120 + sum(where($phasor_chain.repeat.index &gt; $phasor_indices.let.value, $phasor_dy.let.value, 0))}"/>
+        <ellipse name="harmonic circle" transform2d.x="{= $circle_x.let.value}" transform2d.y="{= $circle_y.let.value}" radius.rx="{= $phasor_scale_px.let.value * abs(at($coefficients_b_n.let.value, $phasor_chain.repeat.index))}" radius.ry="{= $phasor_scale_px.let.value * abs(at($coefficients_b_n.let.value, $phasor_chain.repeat.index))}" fill.opacity="0" stroke.color="@axis"/>
+        <path name="harmonic radius" path.d="{= line($circle_x.let.value, $circle_y.let.value, $circle_x.let.value + at($phasor_dx.let.value, $phasor_chain.repeat.index), $circle_y.let.value + at($phasor_dy.let.value, $phasor_chain.repeat.index))}" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
+      </group>
+      <ellipse name="centre dot" transform2d.x="{= $phasor_centre_x.let.value}" transform2d.y="{= $phasor_centre_y.let.value}" radius.rx="3" radius.ry="3" fill.color="@ink-2"/>
+      <ellipse name="tip dot" transform2d.x="{= $tip_x.let.value}" transform2d.y="{= $tip_y.let.value}" radius.rx="4.5" radius.ry="4.5" appearance.opacity="{= $tip_x.let.value &gt;= 44 &amp;&amp; $tip_x.let.value &lt;= 356 ? 1 : 0}" fill.color="@series-2" stroke.color="@surface" stroke.width="1.5"/>
+      <rect name="phasor title backing" transform2d.x="46" transform2d.y="124" size.w="124" size.h="22" corners.tl="4" corners.tr="4" corners.br="4" corners.bl="4" fill.color="@surface"/>
+      <text name="phasor note" transform2d.x="54" transform2d.y="400" text.content="radius |bₙ|, n turns per period" font.size="11" fill.color="@muted"/>
+      <text name="phasor title" transform2d.x="54" transform2d.y="128" text.content="Rotating phasors" font.size="13" font.weight="600" fill.color="@ink"/>
+    </group>
+    <group name="legend">
+      <path name="legend sum key" path.d="M 400 452 L 420 452" fill.opacity="0" stroke.color="@series-1" stroke.width="2"/>
+      <text name="legend sum" transform2d.x="428" transform2d.y="444" text.content="partial sum S_N(t)" font.size="13" fill.color="@ink-2"/>
+      <path name="legend target key" path.d="M 400 476 L 420 476" fill.opacity="0" stroke.color="@muted" stroke.width="2" stroke.dash="5 3"/>
+      <text name="legend target" transform2d.x="428" transform2d.y="468" text.content="target wave" font.size="13" fill.color="@ink-2"/>
+    </group>
+    <group name="overshoot readout">
+      <text name="overshoot label" transform2d.x="400" transform2d.y="500" text.content="Gibbs overshoot" font.size="13" fill.color="@muted"/>
+      <text name="overshoot readout" transform2d.x="400" transform2d.y="520" text.content="{= fmt($overshoot.let.value, 1) + ' %'}" font.size="28" font.weight="600" font.tabular="true" fill.color="@ink"/>
+      <text name="overshoot note" transform2d.x="400" transform2d.y="562" size.w="200" size.h="54" text.content="Peak above the target, as a share of the jump. The ripple narrows as N grows, but stays near 9 %." text.sizing="auto_height" font.size="13" fill.color="@muted"/>
+    </group>
+    <group name="controls">
+      <text name="waveform label" transform2d.x="40" transform2d.y="440" text.content="Waveform" font.size="14" fill.color="@ink-2"/>
+      <group name="square button">
+        <rect name="square face" transform2d.x="40" transform2d.y="460" size.w="120" size.h="28" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= $is_square.let.value ? mix(@surface, @accent, 0.14) : @surface}" stroke.color="{= $is_square.let.value ? @accent : @grid}"/>
+        <text name="square text" transform2d.x="40" transform2d.y="460" size.w="120" size.h="28" text.content="Square" text.sizing="fixed" font.size="13" font.align="center" font.valign="middle" fill.color="{= $is_square.let.value ? @ink : @ink-2}"/>
+        <on name="choose square" write.target="$waveform" write.to="{= 'square'}"/>
+      </group>
+      <group name="sawtooth button">
+        <rect name="sawtooth face" transform2d.x="180" transform2d.y="460" size.w="120" size.h="28" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= $is_square.let.value ? @surface : mix(@surface, @accent, 0.14)}" stroke.color="{= $is_square.let.value ? @grid : @accent}"/>
+        <text name="sawtooth text" transform2d.x="180" transform2d.y="460" size.w="120" size.h="28" text.content="Sawtooth" text.sizing="fixed" font.size="13" font.align="center" font.valign="middle" fill.color="{= $is_square.let.value ? @ink-2 : @ink}"/>
+        <on name="choose sawtooth" write.target="$waveform" write.to="{= 'sawtooth'}"/>
+      </group>
+      <text name="N label" transform2d.x="40" transform2d.y="520" text.content="Harmonics N" font.size="14" fill.color="@ink-2"/>
+      <slider id="$n_slider" name="N slider" transform2d.x="40" transform2d.y="540" size.w="260" size.h="24" slider.min="1" slider.max="25" slider.step="1" slider.value="9"/>
+      <text name="N readout" transform2d.x="320" transform2d.y="542" text.content="{= 'N = ' + fmt($n.let.value, 0)}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="t label" transform2d.x="40" transform2d.y="590" text.content="Time t" font.size="14" fill.color="@ink-2"/>
+      <slider id="$t_slider" name="t slider" transform2d.x="40" transform2d.y="610" size.w="260" size.h="24" slider.max="2" slider.step="0.005" slider.value="0.36"/>
+      <text name="t readout" transform2d.x="320" transform2d.y="612" text.content="{= 't = ' + fmt($t_slider.slider.value, 2) + ' s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    </group>
+    <place id="$partial_sum_plot" def="std:plot" name="partial sum plot" x="380" y="120" w="620" h="300" color="@series-1" color2="@muted" cursor="{= $t_slider.slider.value}" hlines="{= series(1, -1)}" marks_color="@series-2" marks_label="{= 'Gibbs +' + fmt($overshoot.let.value, 1) + ' %'}" marks_x="{= series($gibbs_peak_t.let.value, $gibbs_peak_t.let.value + 1)}" marks_y="{= series($gibbs_peak_value.let.value, $gibbs_peak_value.let.value)}" style2="dashed" title="Partial sum S_N(t) against the target" x_label="t (s)" x_max="2" x_min="0" xs="{= $time_samples.let.value}" y_label="f(t)" y_max="1.5" y_min="-1.5" ys="{= $partial_sum.let.value}" ys2="{= $target_wave.let.value}"/>
+    <place def="std:plot" name="amplitude plot" x="620" y="440" w="380" h="220" color="@series-1" style="bars" title="Harmonic amplitudes |bₙ|" x_label="harmonic number n" x_max="{= $is_square.let.value ? 50 : 26}" x_min="0" xs="{= step(1, $is_square.let.value ? 49 : 25, 1)}" y_label="amplitude |bₙ|" y_max="{= $is_square.let.value ? 1.4 : 0.7}" y_min="0" ys="{= with(n = $self.xs, a = $is_square.let.value ? (1 - cos(pi * n)) * 2 / (pi * n) : 2 / (pi * n), where(max($harmonic_numbers.let.value) &gt;= n, a, 0))}"/>
+    <path name="tip to plot" path.d="{= line($tip_x.let.value, $tip_y.let.value, $plot_point_x.let.value, $plot_point_y.let.value)}" appearance.opacity="{= $tip_x.let.value &gt;= 44 &amp;&amp; $tip_x.let.value &lt;= 356 ? 0.9 : 0}" fill.opacity="0" stroke.color="@series-2" stroke.width="1.25" stroke.dash="4 3"/>
+  </composition>
+</edit>

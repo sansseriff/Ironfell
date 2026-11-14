@@ -374,7 +374,7 @@
     group: SquareDashed, rect: Square, ellipse: Circle, text: Type, table: Table, path: Spline, mesh: Box,
     slider: SlidersHorizontal, embed: PictureInPicture2, camera: Video, empty: Locate,
   };
-  const iconOf = (r: Row) => (r.kind === "use" ? (r.entity ? ComponentIcon : Diamond) : (ICONS[r.kind] ?? Square));
+  const iconOf = (r: Row) => (r.kind === "use" ? (r.entity ? Diamond : ComponentIcon) : (ICONS[r.kind] ?? Square));
   const label = (r: Row) => r.name ?? `${r.kind} ${r.id}`;
 
   // The composition picker (the layout council, 2026-11-09): one row in the

@@ -1,6 +1,6 @@
 <script lang="ts" module>
   import type { Component } from "svelte";
-  export type Segment<V extends string> = { value: V; label: string; icon?: Component<any>; title?: string };
+  export type Segment<V extends string> = { value: V; label: string; icon?: Component<any>; title?: string; swatch?: string };
 </script>
 
 <script lang="ts" generics="T extends string">
@@ -27,6 +27,7 @@
   {#each items as item (item.value)}
     <ToggleGroup.Item class="ui-segment" value={item.value} aria-label={iconOnly ? item.label : undefined} title={item.title ?? (iconOnly ? item.label : undefined)}>
       {#if item.icon}<item.icon size={14} strokeWidth={1.75} />{/if}
+      {#if item.swatch}<i class="ui-swatch-dot" style:background={item.swatch}></i>{/if}
       {#if !iconOnly}<span>{item.label}</span>{/if}
     </ToggleGroup.Item>
   {/each}

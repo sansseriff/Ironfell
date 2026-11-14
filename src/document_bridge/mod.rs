@@ -387,7 +387,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>),
+    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>),
 ) {
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
@@ -408,6 +408,9 @@ pub(crate) fn sync_document(
         && !store.0.has_changes()
         && !store.0.has_derived_ops()
         && store.0.document().version() == synced.0
+        // The session alone changing counts: the timeline draws what is
+        // selected (a transition's picked slices).
+        && store.0.session_version() == *session_seen
         && !build_latency
     {
         return;
@@ -575,6 +578,7 @@ pub(crate) fn sync_document(
         Err(e) => warn!("timeline composition: {e}"),
     }
     synced.0 = store.0.document().version();
+    *session_seen = store.0.session_version();
     // Resolved values that moved: bindings re-evaluated, or a gesture
     // previewed. Their nodes are rewritten like any other change.
     for change in store.0.drain_changes() {

@@ -21,12 +21,12 @@
   import IconButton from "../../lib/ui/IconButton.svelte";
   import TimelineTransport from "./TimelineTransport.svelte";
   import StateEditor from "./StateEditor.svelte";
-  import { machines } from "../../lib/machines.svelte";
+  import { machines, STATE_HUES } from "../../lib/machines.svelte";
 
   let { panel }: { panel: string } = $props();
   const doc = controllerManager.docClient;
 
-  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; running: { name: string | null; progress: number; from?: string; to?: string } | null } | null; tween?: string | null; bars?: string[]; open?: boolean | null };
+  type Row = { kind: "object" | "property"; label: string; y: number; target: string; prop: string | null; clip: string | null; error: boolean; keyed: boolean; lane?: boolean; state?: { state: string | null; index: number; running: { name: string | null; progress: number; from?: string; to?: string } | null } | null; tween?: string | null; bars?: string[]; open?: boolean | null };
   /** Inside a transition (machines.md §6): the same timeline at a second
    *  level, under the state editor's header and beside its navigator. */
   type Inside = { from: string; to: string; own: boolean; secs: number; transition: string | null; cursor: number };
@@ -178,7 +178,7 @@
           <!-- A state lane's pill names its state; the row's "state" label would only crowd it. -->
           {#if !(row.lane && row.state)}<span class="prop" title={row.prop}>{row.label}</span>{/if}
           {#if row.lane && row.state}
-            <button class="now" title={row.state.running ? `${row.label} at the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : `${row.label} at the playhead. Click to edit this component's states`} onclick={() => openLane(row.target, layout.rows.find((x) => x.kind === "object" && x.target === row.target)?.label ?? "")}>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""}{:else}{row.state.state ?? ""}{/if}</button>
+            <button class="now" title={row.state.running ? `${row.label} at the playhead: ${row.state.running.from ?? ""} → ${row.state.running.to ?? ""}, ${Math.round(row.state.running.progress * 100)}%. Click to edit this component's states` : `${row.label} at the playhead. Click to edit this component's states`} onclick={() => openLane(row.target, layout.rows.find((x) => x.kind === "object" && x.target === row.target)?.label ?? "")}><span class="hue" style:background={STATE_HUES[row.state.index % STATE_HUES.length]}></span>{#if row.state.running}→ {row.state.running.to ?? row.state.running.name ?? ""}{:else}{row.state.state ?? ""}{/if}</button>
           {/if}
           <span class="keys">
             <IconButton icon={ChevronLeft} size={12} class="is-row" label="Previous key of {row.label}" title="Previous key" onclick={() => key("prev", row.clip)} data-key="prev" />
@@ -279,7 +279,7 @@
     font: inherit;
     font-size: var(--text-sm);
     cursor: pointer;
-    max-width: 76px;
+    max-width: 90px;
     padding: 1px 6px;
     border-radius: var(--radius-full);
     background: var(--hover);
@@ -287,6 +287,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .now .hue {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 5px;
+    border-radius: 2px;
   }
   .now:hover {
     background: var(--active);

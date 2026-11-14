@@ -248,6 +248,8 @@
 
   // ── The graph: the whole machine at a glance ──────────────────────────
   const GW = 640, GH = 340;
+  /** The transition under the pointer: its arrow and its label light together. */
+  let hot = $state<string | null>(null);
   function nodes(mm: Machine) {
     const ns = names(mm);
     const n = ns.length;
@@ -273,20 +275,15 @@
         const x1 = a.x + (dx / len) * 50 + nx * 12, y1 = a.y + (dy / len) * 22 + ny * 12;
         const x2 = b.x - (dx / len) * 50 + nx * 12, y2 = b.y - (dy / len) * 22 + ny * 12;
         const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
-        const u = 0.36;
+        const u = 0.3;
         const mine = own(t, q.from, q.to);
         const label = !t ? "snaps" : `${mine && titled(t) ? titled(t) + " · " : ""}${secs(q.ms)}`;
-        // The label is level, beside its own line on the side away from
-        // the pair's other arrow, a third of the way from its start.
         // With the two states' swatches before it, so it says which way
         // it goes without tracing its arrow.
         const w = label.length * 6.2 + 16 + 30;
-        // Beside a sloping line it moves sideways only (far enough for
-        // its corner to clear); above or below a level one.
-        const px = x1 + (x2 - x1) * u, py = y1 + (y2 - y1) * u;
-        const steep = Math.abs(nx) > 0.35;
-        const lx = steep ? px + Math.sign(nx) * (w / 2 + 6 + (9 * Math.abs(ny)) / Math.abs(nx)) : px;
-        const ly = steep ? py : py + Math.sign(ny) * 15;
+        // The label sits on its own line, nearer its start, so it reads
+        // as that arrow's and a pair's two never meet.
+        const lx = x1 + (x2 - x1) * u, ly = y1 + (y2 - y1) * u;
         return { key: `${q.from}>${q.to}`, from: q.from, to: q.to, own: mine, none: !t, label, d: `M${x1.toFixed(1)},${y1.toFixed(1)} Q${cx.toFixed(1)},${cy.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`, lx, ly, w };
       });
   }
@@ -376,11 +373,16 @@
       <section class="body graph-view canvas-ui" aria-label="States and transitions of {view.name ?? 'the component'}">
         <svg class="graph" viewBox="0 0 {GW} {GH}" preserveAspectRatio="xMidYMid meet" role="group" aria-label="States and transitions">
           <defs><marker id="se-arrow-{m.id}" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" class="arrowhead" /></marker></defs>
+          <!-- Every arrow, then every label over them: a label is never crossed. -->
           {#each edges(m) as e (e.key)}
-            <g class="edge" class:own={e.own} class:none={e.none} role="button" tabindex="0" aria-label="{e.from} to {e.to}: {e.label}" data-edge="{e.from}>{e.to}" onclick={() => timePair(m, e.from, e.to)} onkeydown={(ev) => keyActivate(ev, () => timePair(m, e.from, e.to))}>
-              <title>{e.from} → {e.to}</title>
+            <g class="edge" class:own={e.own} class:none={e.none} class:hot={hot === e.key} aria-hidden="true" onclick={() => timePair(m, e.from, e.to)} onpointerenter={() => (hot = e.key)} onpointerleave={() => (hot = null)}>
               <path d={e.d} class="hit" />
               <path d={e.d} class="line" marker-end="url(#se-arrow-{m.id})" />
+            </g>
+          {/each}
+          {#each edges(m) as e (e.key)}
+            <g class="edge" class:hot={hot === e.key} role="button" tabindex="0" aria-label="{e.from} to {e.to}: {e.label}" data-edge="{e.from}>{e.to}" onclick={() => timePair(m, e.from, e.to)} onkeydown={(ev) => keyActivate(ev, () => timePair(m, e.from, e.to))} onpointerenter={() => (hot = e.key)} onpointerleave={() => (hot = null)} onfocus={() => (hot = e.key)} onblur={() => (hot = null)}>
+              <title>{e.from} → {e.to}</title>
               <rect class="pill" x={e.lx - e.w / 2} y={e.ly - 9} width={e.w} height="18" rx="9" />
               <rect class="hue" x={e.lx - e.w / 2 + 8} y={e.ly - 4} width="8" height="8" rx="2" style:fill={hueOf(m, e.from)} />
               <ArrowRight class="to" x={e.lx - e.w / 2 + 16.5} y={e.ly - 4.5} size={9} strokeWidth={2} />
@@ -501,7 +503,7 @@
   .graph { flex: 1; width: 100%; min-height: 0; }
   .graph-view { background: var(--bg); }
   /* A transition's label is its button: raised, as buttons are. */
-  .pill { fill: var(--raised, var(--bg)); stroke: var(--border-strong); filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.12)); }
+  .pill { fill: var(--bg); stroke: var(--border-strong); filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.12)); }
   .node :global(.initial) { color: var(--fg-muted); }
   .default { position: absolute; left: 10px; bottom: 8px; display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); }
   .dash { width: 22px; height: 6px; }
@@ -526,9 +528,9 @@
   .edge .line { stroke: var(--fg-muted); stroke-width: 1.25; stroke-dasharray: 4 4; opacity: 0.7; }
   .edge.own .line { stroke-dasharray: none; opacity: 1; }
   .edge.none .line { opacity: 0.25; }
-  .edge:hover .pill, .edge:focus-visible .pill { fill: var(--accent-soft); stroke: var(--accent); }
-  .edge:hover .elabel { fill: var(--accent); }
-  .edge:hover .line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+  .edge.hot .pill { fill: color-mix(in srgb, var(--accent) 14%, var(--bg)); stroke: var(--accent); }
+  .edge.hot .elabel { fill: var(--accent); }
+  .edge.hot .line { stroke: var(--accent); stroke-width: 2; opacity: 1; }
   .elabel { fill: var(--fg); font-size: 10.5px; font-weight: 500; }
   .node:focus, .edge:focus { outline: none; }
   .arrowhead { fill: var(--fg-muted); }

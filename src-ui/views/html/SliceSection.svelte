@@ -98,7 +98,8 @@
     if (!even || Math.abs(steps[0]) < 1.5) return;
     order = steps[0] > 0 ? "down" : "up";
     staggerS = Math.round(Math.abs(steps[0]) / 10) / 100;
-    mode = "keep";
+    // Fitted bars end with the transition; any others kept their lengths.
+    mode = Math.abs(Math.max(...groups.flat().map((w) => (w.end ?? 1) * ms)) - ms) < 1.5 ? "fit" : "keep";
   });
   /** The staggered slices in ms from the transition's start. */
   const staggered = $derived.by((): Plan | null => {

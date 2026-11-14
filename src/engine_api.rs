@@ -2915,7 +2915,11 @@ pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
                         let name = doc.get::<iron_document::facet::Name>(t).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
                         Some(serde_json::json!({"name": name, "progress": p, "from": from, "to": to}))
                     });
-                    state = serde_json::json!({"state": now_state, "running": run});
+                    // The state's place among the machine's states: its hue.
+                    let names = iron_document::expand::linked_definition(doc, r.target).and_then(|def| iron_document::machine::machines(doc, def).into_iter().find(|(_, p)| p == port)).map(|(m, _)| iron_document::machine::state_names(doc, m)).unwrap_or_default();
+                    let shown = run.as_ref().and_then(|r| r.get("to").and_then(|v| v.as_str()).map(str::to_owned)).or_else(|| now_state.clone());
+                    let index = shown.and_then(|s| names.iter().position(|n| *n == s)).unwrap_or(0);
+                    state = serde_json::json!({"state": now_state, "running": run, "index": index});
                 }
                 // Inside a transition: the channel's slice, if it has one.
                 let tween = plan.objects.iter().flat_map(|o| &o.props).find(|p| Some(&p.prop) == r.prop.as_ref() && p.slice.is_some()).and_then(|p| p.slice.as_ref()).and_then(|s| s.tween).map(|w| w.to_string());

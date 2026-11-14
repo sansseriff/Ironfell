@@ -110,7 +110,7 @@
   .chip { display: inline-flex; align-items: center; height: var(--control-h); border: 1px solid var(--border); border-radius: var(--radius-full); background: var(--bg); overflow: hidden; }
   .chip:hover { border-color: var(--border-strong); }
   .chip.on { border-color: var(--hue); background: color-mix(in srgb, var(--hue) 22%, var(--bg)); box-shadow: 0 0 0 1px var(--hue); }
-  .chip.end { border-color: var(--accent); background: var(--accent-soft); }
+  .chip.end { border-color: var(--hue); background: color-mix(in srgb, var(--hue) 14%, var(--bg)); }
   .name { display: inline-flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; border: 0; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
   .chip.on .name { padding-right: 4px; font-weight: 600; }
   .nm { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }

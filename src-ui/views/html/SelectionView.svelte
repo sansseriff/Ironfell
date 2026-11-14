@@ -733,7 +733,7 @@
   .key-row :global(.key-state.on svg) { fill: currentColor; }
   .key-row .animated { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); }
   .key-row .animated :global(svg) { fill: currentColor; }
-  .running { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .running { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
   .states-door { display: flex; align-items: center; gap: 8px; min-height: var(--control-h); }
   .door-label { color: var(--fg-muted); font-size: var(--text-sm); }
   .door-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

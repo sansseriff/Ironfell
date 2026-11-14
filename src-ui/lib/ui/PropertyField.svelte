@@ -17,7 +17,7 @@
   import EasingField from "./EasingField.svelte";
   import ColorPicker from "./ColorPicker.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
-  import { machines, rootOf } from "../machines.svelte";
+  import { machines, rootOf, STATE_HUES } from "../machines.svelte";
   let { field: f, node, onSet, onRefresh, onError, compact = false, label, prefix, icon, channel, scrubLeaves, hideSwatch = false, colorDigits = 8, mixed = (channel === "alpha" ? f.mixedAlpha : f.kind === "color" && colorDigits === 6 ? f.mixedColor : f.mixed) ?? f.mixed ?? false, zeroLabel }: {
     field: Property; node: string;
     onSet: (field: Property, text: string) => void | Promise<void>;
@@ -210,7 +210,7 @@
       <!-- A curve: previews, and (where text is allowed) a cubic-bezier. -->
       <EasingField label={displayLabel} value={f.text} custom={f.kind === "str"} disabled={locked} onChange={(v) => onSet(f, v)} />
     {:else if options && segmented}
-      <Segmented class={f.group === "States" ? "is-strong" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: f.group === "States" ? v : v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />
+      <Segmented class={f.group === "States" ? "is-strong" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v, i) => ({ value: v, label: f.group === "States" ? v : v[0].toUpperCase() + v.slice(1), swatch: f.group === "States" ? STATE_HUES[i % STATE_HUES.length] : undefined }))} disabled={locked} onChange={(v) => onSet(f, v)} />
       {@render keyButton()}
     {:else if options}
       <Select placeholder={mixed ? "Mixed" : ""} label={displayLabel} value={mixed ? "" : f.text ?? options[0]} items={options.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) }))} disabled={locked} onChange={(v) => onSet(f, v)} />

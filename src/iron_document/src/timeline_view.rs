@@ -961,10 +961,9 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
                 if !open {
                     let (x0, x1) = (at(&format!("{first}.tween.start * {secs}")), at(&format!("({}) * {secs}", fold("max", &his))));
                     let wide = format!("(({x1}) - ({x0}) > 24 ? 1 : 0)");
-                    for (end, x) in [("start", format!("{x0} + 4")), ("end", format!("{x1} - 6"))] {
-                        let mut c = [1.0, 1.0, 1.0, 0.75];
-                        let _ = &mut c;
-                        push("overlay", format!("grip {end} {}", o.target), "rect", vec![place(&x, &ry(row.y + 8.0)), sized(&format!("2 * {wide}"), &lit(ROW_H - 16.0)), rounded(1.0), paint(c)], None, None);
+                    // Two ridges at each end, as a handle has.
+                    for (end, x) in [("start", format!("{x0} + 4")), ("start b", format!("{x0} + 8")), ("end", format!("{x1} - 6")), ("end b", format!("{x1} - 10"))] {
+                        push("overlay", format!("grip {end} {}", o.target), "rect", vec![place(&x, &ry(row.y + 7.0)), sized(&format!("2 * {wide}"), &lit(ROW_H - 14.0)), rounded(1.0), paint([1.0, 1.0, 1.0, 0.9])], None, None);
                     }
                 }
             }

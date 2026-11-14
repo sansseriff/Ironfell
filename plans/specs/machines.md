@@ -765,3 +765,18 @@ After the sixth round's first review (8.5):
 - Tests: `tests/authoring.rs`
   `a_pinned_state_opens_its_main_and_counts_edits_it_cannot_hold`; the flow by
   hand through the driver, by screenshot (`screenshots/tri5/`).
+
+After the sixth round's second review (8.4):
+
+- **Selected slices redraw at once.** `sync_document` also runs when only the session
+  changed (`session_version`), so the timeline's plan (`Inside.picked`) follows the
+  selection instead of waiting for the next document edit.
+- **Stagger reads Keep or Fit from the bars** (bars ending with the transition are Fit).
+- **Graph labels sit on their own arrows**, drawn after every line, at 0.3 of the way from
+  the arrow's start; an arrow and its label light together on hover.
+- **State swatches outside the editor:** the instance's State segments
+  (`Segmented` items take a `swatch`) and the lane's readout (`timeline_layout` rows carry
+  the state's `index`).
+- Two-ridge trim grips; a previewed transition's end chips in their own hues; Layers icons
+  match the canvas tags (main four-diamond, instance outline diamond); the running line is
+  muted; the transition Inspector no longer repeats the timing kind.

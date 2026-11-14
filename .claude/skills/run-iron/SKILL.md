@@ -2465,7 +2465,7 @@ undefined
 "90"
 ["0.90","north  | {= fmt(#4e.slider.value * 100, 0)}"]
 applied "open demo scene" (282 ops, System) -> v1
-applied "open showcase" (176 ops, System) -> v2
+applied "open showcase" (1036 ops, System) -> v2
 applied "set size.h" (1 ops, Human) -> v3
 applied "edit text" (1 ops, Human) -> v4
 (no page errors)
@@ -2556,7 +2556,7 @@ undefined
 "<applied version=\"14\">\n  <circuit>placed V9 R8 R9 GND9 P9; 5 wires</circuit>\n</applied>\n<netlist sheet=\"circuit\">\n* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V\n</netlist>"
 "* circuit (netlist from Iron)\nV1 N1 0 9 V\nR1 N1 N2 1 kΩ\n* P1 probes N2\n* P2 probes N1\nV9 N3 0 5 V\nR8 N3 N4 10 kΩ\nR9 N4 0 10 kΩ\n* P9 probes N4\n.end\n* 0 = 0 V\n* N1 = 9 V\n* N2 = 9 V\n* N3 = 5 V\n* N4 = 2.5 V"
 applied "open demo scene" (282 ops, System) -> v1
-applied "open showcase" (176 ops, System) -> v2
+applied "open showcase" (1036 ops, System) -> v2
 applied "set slider" (1 ops, Human) -> v3
 applied "place resistor" (9 ops, Human) -> v4
 applied "wire" (9 ops, Human) -> v5
@@ -2917,7 +2917,7 @@ clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
 "after delete: slide clip gone"
 "after undo: slide clip back"
 applied "open demo scene" (282 ops, System) -> v1
-applied "open showcase" (1026 ops, System) -> v2
+applied "open showcase" (1036 ops, System) -> v2
 applied "retime slide" (1 ops, Human) -> v3
 applied "undo: retime slide" (1 ops, System) -> v4
 applied "move key of slide" (1 ops, Human) -> v5

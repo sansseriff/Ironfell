@@ -1,5 +1,5 @@
 //! Node markup (plans/specs/repeat.md §8): nodes written as XML, the way the
-//! model reads a view and writes `<create>`. The element is the node type;
+//! model reads a view and writes an `<edit>` (edit.rs). The element is the node type;
 //! attributes are its leaves, `facet.field` or a bare field (the first of
 //! the type's facets, in the registry's order, that has it), with `name`
 //! the node's name; children are child nodes. A value is a constant of the
@@ -116,6 +116,9 @@ pub(crate) fn number(els: &[El], next: &mut u64, named: &mut BTreeMap<String, (N
 pub(crate) fn emit(el: &El, parent: Option<NodeId>, order: OrderKey, ids: &mut std::vec::IntoIter<NodeId>, names: &Names, out: &mut Vec<Op>) -> Result<(), String> {
     let id = ids.next().expect("numbered");
     let ty = TypeId::lookup(&el.name).expect("numbered");
+    if !el.text.trim().is_empty() {
+        return Err(format!("<{}>: text between its tags is not read; give it as an attribute (a <text>'s content=\"…\")", el.name));
+    }
     let facets = facets(el, ty, names).map_err(|e| format!("<{}{}>: {e}", el.name, el.attr("name").map(|n| format!(" name=\"{n}\"")).unwrap_or_default()))?;
     out.push(Op::Create { id, ty, parent, order, facets });
     let mut child = OrderKey::first();
@@ -182,7 +185,7 @@ pub(crate) fn facets(el: &El, ty: TypeId, names: &Names) -> Result<Vec<Facet>, S
     for (attr, raw) in leaf_attrs(el, &["id", "in", "after", "first"]) {
         // A leaf written later (edit.rs): its facet, at its default.
         if let Some(later) = attr.strip_prefix("__defer:") {
-            let (kind, _) = leaf(ty, later)?;
+            let (kind, _) = leaf(ty, later.strip_suffix(".bind").unwrap_or(later))?;
             if !out.iter().any(|f| f.kind() == kind) {
                 out.push(kind.default_facet());
             }
@@ -241,12 +244,26 @@ fn word(s: &str) -> usize {
 /// `$p.port` its instance's port; so is `#use.port` for an instance the
 /// document has.
 pub(crate) fn resolve(text: &str, names: &Names) -> Result<String, String> {
+    resolve_with(text, names, true)
+}
+
+/// [`resolve`], leaving a `$name` that `names` does not hold as written when
+/// not `strict` (`$self`, or a place a later step resolves).
+fn resolve_with(text: &str, names: &Names, strict: bool) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    let quoted = |at: usize| text[..at].matches('\'').count() % 2 == 1;
+    // Inside a string ('…' or "…") a `$` or `#` is text.
+    let mut quote: Option<char> = None;
     while i < text.len() {
         let c = text[i..].chars().next().expect("in range");
-        if (c != '$' && c != '#') || quoted(i) {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+        } else if c == '\'' || c == '"' {
+            quote = Some(c);
+        }
+        if (c != '$' && c != '#') || quote.is_some() {
             out.push(c);
             i += c.len_utf8();
             continue;
@@ -310,8 +327,66 @@ pub(crate) fn resolve(text: &str, names: &Names) -> Result<String, String> {
             }
             continue;
         }
-        return Err(format!("${name} names no node made in this edit"));
+        if strict {
+            return Err(format!("${name} names no node made in this edit"));
+        }
+        out.push('$');
+        out.push_str(name);
+        i = end;
     }
+    Ok(out)
+}
+
+/// An attribute value's names, as ids: a value that is `$name`s (and
+/// `#id`s) is those nodes' ids; inside a `{= … }` binding every `$name` `names` holds is
+/// resolved ([`resolve`]) and others are left for a later step. Words
+/// outside a binding are text and stay as written (`title="Cost $v"`).
+pub(crate) fn refs(value: &str, names: &Names) -> Result<String, String> {
+    // One id, or a list of them (`of="$a $b #c"`).
+    let ids = || value.split_whitespace().all(|w| w.starts_with('#') || w.strip_prefix('$').is_some_and(|n| !n.is_empty() && word(n) == n.len()));
+    if value.contains('$') && ids() {
+        let each: Vec<String> = value.split_whitespace().map(|w| match w.strip_prefix('$').and_then(|n| names.node(n)) {
+            Some(id) => id.to_string(),
+            None => w.to_owned(),
+        }).collect();
+        return Ok(each.join(" "));
+    }
+    bindings(value, names)
+}
+
+/// [`refs`] over markup source (a `<circuit>`'s): each binding, and each
+/// quoted attribute value that is one `$name`.
+pub(crate) fn src_refs(src: &str, names: &Names) -> Result<String, String> {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while let Some(q) = rest.find(['"', '\'']) {
+        let quote = rest[q..].chars().next().expect("found");
+        out.push_str(&rest[..=q]);
+        let body = &rest[q + 1..];
+        let Some(end) = body.find(quote) else {
+            out.push_str(body);
+            return Ok(out);
+        };
+        out.push_str(&refs(&body[..end], names)?);
+        out.push(quote);
+        rest = &body[end + 1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+/// The `{= … }` bindings in `text`, resolved leniently.
+pub(crate) fn bindings(text: &str, names: &Names) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("{=") {
+        let Some(close) = rest[i..].find('}') else { break };
+        out.push_str(&rest[..i + 2]);
+        out.push_str(&resolve_with(&rest[i + 2..i + close], names, false)?);
+        out.push('}');
+        rest = &rest[i + close + 1..];
+    }
+    out.push_str(rest);
     Ok(out)
 }
 

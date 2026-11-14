@@ -499,6 +499,40 @@ pub fn create_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [
     create_ops_after(doc, 0, parent, order, at, spec)
 }
 
+/// [`create_ops`], with a caption above the table when `caption` has words:
+/// a stack of the two (layout-and-tables.md §3.3), the caption small, spaced
+/// capitals in the muted ink.
+pub fn captioned_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec, caption: Option<&str>) -> Result<(Vec<Op>, NodeId), String> {
+    let Some(words) = caption.filter(|c| !c.trim().is_empty()) else {
+        return create_ops(doc, parent, order, at, spec);
+    };
+    let ids = doc.next_ids(2);
+    let mut stack = crate::facet::Layout::default();
+    stack.mode = Slot::Const(Value::Enum("stack_y".into()));
+    stack.gap = Slot::Const(Value::Number(10.0));
+    let mut place = Transform2d::default();
+    place.x = Slot::Const(Value::Number(at[0]));
+    place.y = Slot::Const(Value::Number(at[1]));
+    let mut name = Name::default();
+    name.text = Slot::Const(Value::Str("captioned table".into()));
+    let mut text = Text::default();
+    text.content = Slot::Const(Value::Str(words.to_uppercase()));
+    let mut font = Font::default();
+    font.size = Slot::Const(Value::Number(12.0));
+    font.weight = Slot::Const(Value::Number(500.0));
+    font.letter_spacing = Slot::Const(Value::Number(12.0));
+    let mut fill = crate::facet::Fill::default();
+    fill.color = Slot::Bound(crate::expr::Expr::parse("@muted").expect("token"));
+    let mut ops = vec![
+        Op::Create { id: ids[0], ty: TypeId::lookup("group").expect("registered"), parent, order, facets: vec![place.wrap(), stack.wrap(), name.wrap()] },
+        Op::Create { id: ids[1], ty: TypeId::lookup("text").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), text.wrap(), font.wrap(), fill.wrap()] },
+    ];
+    // The table's ids follow the two just taken.
+    let (more, t) = create_ops_after(doc, 2, Some(ids[0]), OrderKey::after(&OrderKey::first()), [0.0, 0.0], spec)?;
+    ops.extend(more);
+    Ok((ops, t))
+}
+
 /// [`create_ops`] in a transaction whose earlier ops create `taken` nodes
 /// first: the table's ids follow theirs.
 pub fn create_ops_after(doc: &Document, taken: usize, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {

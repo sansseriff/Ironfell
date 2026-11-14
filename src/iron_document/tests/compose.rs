@@ -50,7 +50,7 @@ fn desk() -> (Store, [NodeId; 6]) {
 }
 
 fn run(store: &mut Store, markup: &str) -> Result<String, String> {
-    let (ops, summary) = compose::compose_ops(store, markup)?;
+    let (ops, summary) = place_ops(store, markup)?;
     store
         .apply(TransactionInput { label: "compose".into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops, exact: false })
         .map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
@@ -71,8 +71,8 @@ fn a_component_from_shapes_is_pictured_in_two_compositions_in_one_transaction() 
     let summary = run(
         &mut store,
         &format!(
-            r#"<make-component of="{rect} {dot}" name="pump" as="$pump"/>
-               <place def="$pump" in="bench" x="300" y="80" name="P1" as="$p1"/>
+            r#"<make-component of="{rect} {dot}" name="pump" id="$pump"/>
+               <place def="$pump" in="bench" x="300" y="80" name="P1" id="$p1"/>
                <place entity="$p1" in="{overview}" x="40" y="40"/>"#
         ),
     )
@@ -103,7 +103,7 @@ fn a_standard_component_comes_in_once_and_takes_arguments() {
     let (mut store, [bench, overview, ..]) = desk();
     let summary = run(
         &mut store,
-        &format!(r#"<place def="std:laser" in="{bench}" x="40" y="200" power="5 mW" as="$l"/><place def="std:laser" in="{overview}" args.power="{{= 2 mW * 3}}"/>"#),
+        &format!(r#"<place def="std:laser" in="{bench}" x="40" y="200" power="5 mW" id="$l"/><place def="std:laser" in="{overview}" args.power="{{= 2 mW * 3}}"/>"#),
     )
     .unwrap();
     let doc = store.document();
@@ -125,7 +125,7 @@ fn refusals_say_what_to_do_instead() {
     assert!(err(&mut store, r#"<place entity="$nope" in="overview"/>"#).contains("not named by an earlier verb"));
     // A refused edit applies nothing, even when an earlier verb was fine.
     let version = store.document().version();
-    assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}"/><place def="std:laser" in="{scene}"/>"#)).starts_with("<place> 2"));
+    assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}"/><place def="std:laser" in="{scene}"/>"#)).starts_with("op 1 (place):"));
     assert_eq!(store.document().version(), version);
 }
 
@@ -137,34 +137,25 @@ fn the_schema_lists_each_standard_component_s_ports() {
     assert_eq!(ports, ["power in value \"10 mW\"", "pulse_hz in value \"0\"", "duty in value \"0.5\"", "out out optical_power null"]);
 }
 
-/// One edit that writes ops and places components (`compose_after`): the
-/// verbs see what the ops made, everything is one history entry, and a
-/// failing op is reported by its index among the ops.
+/// One edit that makes nodes and components: the verbs see what the nodes
+/// made, and everything is one history entry.
 #[test]
-fn ops_before_the_verbs_are_one_transaction_with_them() {
+fn nodes_and_component_verbs_are_one_transaction() {
     let (mut store, [bench, _, _, _, _, _]) = desk();
     let before = store.history().past().len();
-    let rect = store.document().next_id();
-    let mut size = Size::default();
-    size.w = Slot::Const(Value::Number(20.0));
-    size.h = Slot::Const(Value::Number(20.0));
-    let create = Op::Create { id: rect, ty: ty("rect"), parent: Some(bench), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), size.wrap(), named("cell")] };
-    let (ops, summary) = compose::compose_after(
+    let (ops, summary) = place_ops(
         &store,
-        vec![create],
-        &format!(r#"<make-component of="{rect}" name="cell" as="$cell"/><place def="$cell" in="bench" x="200" y="0"/>"#),
+        &format!(r#"<rect in="{bench}" id="$r" name="cell" w="20" h="20"/><make-component of="$r" name="cell" id="$cell"/><place def="$cell" in="bench" x="200" y="0"/>"#),
     )
     .unwrap();
-    assert!(matches!(ops.first(), Some(Op::Create { id, .. }) if *id == rect), "the ops come first");
     store.apply(TransactionInput { label: "mixed".into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
     assert_eq!(store.history().past().len(), before + 1, "one history entry");
     let def = field(&summary, "made", 0, "definition");
     assert!(store.document().is_live(def));
+}
 
-    // An op that fails names its index in `before`; nothing is built.
-    let bad = Op::Create { id: store.document().next_id(), ty: ty("rect"), parent: Some("#ZZZZ".parse().unwrap()), order: OrderKey::first(), facets: vec![] };
-    match compose::compose_after(&store, vec![bad], r#"<place def="std:laser" in="bench" x="0" y="0"/>"#) {
-        Err(compose::ComposeError::Ops(errors)) => assert!(!errors.is_empty() && errors.iter().all(|e| e.op == 0), "{errors:?}"),
-        other => panic!("expected an op error, got {other:?}"),
-    }
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

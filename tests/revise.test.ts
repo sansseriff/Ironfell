@@ -153,3 +153,11 @@ test('a streaming revise forms like an edit, not as prose', () => {
   assert.deepEqual(view.verbs, ['Change $a · x', 'Drop 4']);
   assert.equal(streamView('Fixing.\n<revi').prose, 'Fixing.\n');
 });
+
+test('revise counts verbs as the engine does: comments and declarations are skipped, raw bodies are text', () => {
+  const edit = `<edit><?xml-ish?><!-- a note --><write narrative="#N"><b>not a verb</b> &lt;</write><![CDATA[ ignored ]]><set id="#P" x="1"/></edit>`;
+  const r = revise(edit, `<revise><change op="1" x="2"/></revise>`);
+  assert.ok(r.ok, !r.ok ? r.error : '');
+  assert.match(r.edit, /<set id="#P" x="2"\/>/);
+  assert.match(r.edit, /<write narrative="#N"><b>not a verb<\/b> &lt;<\/write>/);
+});

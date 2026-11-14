@@ -173,3 +173,17 @@ test('every model call counts against the turn\'s budget', async () => {
   assert.equal(calls.filter(([n]) => n === 'apply').length, 20);
   assert.equal(result.ok, true, 'the last step applied');
 });
+
+test('a plan made before the document moved is made again, not applied stale', async () => {
+  // Planned at 2; the person's change made it 3 (the fake's view) before the apply.
+  let version = 2;
+  const plan = { ops: [{ t: 'create', id: '#N1' }], aliases: {}, op_verb: [0], verbs: ['create rect'], summary: [], expect_version: 0, exact: false };
+  const { api, calls } = fake(name => {
+    if (name === 'edit_plan') return { ok: true, version, plan };
+    if (name === 'apply') return calls.filter(([n]) => n === 'apply').length === 1 ? (version = 3, { ok: false, version: 3, errors: [{ op: null, kind: 'stale', message: 'stale' }] }) : { ok: true, version: 4 };
+    return { ok: true };
+  });
+  const out = await applyEdit(api, '<edit><rect in="#C"/></edit>');
+  assert.equal(out.ok, true);
+  assert.equal(calls.filter(([n]) => n === 'edit_plan').length, 2);
+});

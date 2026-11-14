@@ -110,7 +110,7 @@ fn card() -> Card {
     store
         .apply(tx("panel", vec![Op::Create { id: panel, ty: ty("rect"), parent: Some(template), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap(), op.wrap(), named("panel")] }]))
         .unwrap();
-    let (ops, summary) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    let (ops, summary) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let get = |a: &str| -> NodeId {
         let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
@@ -327,7 +327,7 @@ fn a_parents_transition_sequences_its_childrens_own() {
             Op::AddFacet { id: machine, facet: mf.wrap() },
         ]))
         .unwrap_or_else(|e| panic!("{e:?}"));
-    let (ops, _) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="40" y="0"/>"#)).unwrap();
+    let (ops, _) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="40" y="0"/>"#)).unwrap();
     store.apply(tx("second", ops)).unwrap();
     let ub = *store.document().children(bench).last().unwrap();
     let (made, input) = store.make_component(&[ua, ub], "pair", Actor::Human).unwrap();
@@ -430,4 +430,10 @@ fn a_parents_transition_sequences_its_childrens_own() {
     assert_eq!(fades(&store), [1.0, 0.5]);
     store.advance_machines(5.5);
     assert_eq!(fades(&store), [1.0, 0.0]);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

@@ -59,14 +59,24 @@ export interface EditOutcome {
 
 /** Plan and apply one edit as the model, answering in the model's terms. */
 export async function applyEdit(api: DocumentApi, xml: string, label = 'model edit'): Promise<EditOutcome> {
-  const planned = await api.plan(xml);
-  if (!planned.ok) {
-    if (planned.failure) return { ok: false, version: planned.version, failure: planned.failure };
-    return { ok: false, version: planned.version, failure: failed(planned.version ?? await api.version(), planned.errors ?? []) };
+  let planned: PlanResult;
+  let result: ApplyResult;
+  for (let tries = 0; ; tries++) {
+    planned = await api.plan(xml);
+    if (!planned.ok) {
+      if (planned.failure) return { ok: false, version: planned.version, failure: planned.failure };
+      return { ok: false, version: planned.version, failure: failed(planned.version ?? await api.version(), planned.errors ?? []) };
+    }
+    const { plan } = planned;
+    const tx = { label, actor: 'model', ts: Date.now(), ops: plan.ops, ...(plan.exact ? { exact: true } : {}) };
+    result = await api.apply(tx, plan.expect_version);
+    // The document moved after this plan was made (the person, mid-turn):
+    // its new ids, order keys and compound verbs were worked out against
+    // the version before, so plan again.
+    if (!result.ok && tries < 2 && (await api.version()) !== planned.version && (result.errors ?? []).some((e) => e.kind === 'stale')) continue;
+    break;
   }
   const { plan } = planned;
-  const tx = { label, actor: 'model', ts: Date.now(), ops: plan.ops, ...(plan.exact ? { exact: true } : {}) };
-  const result: ApplyResult = await api.apply(tx, plan.expect_version);
   if (!result.ok) {
     return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), inModelTerms(plan, result.errors ?? [])) };
   }

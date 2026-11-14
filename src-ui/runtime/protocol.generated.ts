@@ -72,7 +72,6 @@ export type DocumentCommand =
   | { op: 'render_inspector'; panel: string }
   | { op: 'render_inspector_options'; panel: string; options: string }
   | { op: 'set_run_mode'; source: string; mode: string }
-  | { op: 'next_ids'; n: number }
   | { op: 'schema' }
   | { op: 'commands' }
   | { op: 'inspect_bind'; node: string; leaf: string; expr: string }
@@ -156,7 +155,6 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'render_inspector': return { fn: command.op, args: [command.panel] };
     case 'render_inspector_options': return { fn: command.op, args: [command.panel, command.options] };
     case 'set_run_mode': return { fn: command.op, args: [command.source, command.mode] };
-    case 'next_ids': return { fn: command.op, args: [command.n] };
     case 'schema': return { fn: command.op, args: [] };
     case 'commands': return { fn: command.op, args: [] };
     case 'inspect_bind': return { fn: command.op, args: [command.node, command.leaf, command.expr] };

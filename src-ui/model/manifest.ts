@@ -96,8 +96,9 @@ COMPONENT VERBS  (place instances and pictures)
   <place def="$d"> may place a definition the same edit writes. A component verb's
   id="$p" names what it made for the whole edit: $p is its picture (a use), and a
   binding reads $p.facet.field (its picture's leaf, $p.transform2d.x) and $p.port (its
-  instance's port, $p.x_lo); #use.port does the same for an instance you saw. A
-  <place> may sit inside a new group, among its siblings, in= that group.
+  instance's port, $p.x_lo), in a node, a later place's arguments, a circuit or a
+  table cell; #use.port does the same for an instance you saw. A <place> may sit
+  inside a new group, among its siblings; it goes in that group (no in=).
   place def= puts a new linked instance of a definition (an id, std:<key>, or a $name
   this edit gave) under the model root, named name=, and its picture (a use)
   in= a 2D composition (id or name) or a group in one, at x, y (rot in degrees).
@@ -574,7 +575,9 @@ EDITS, inside <edit expect-version="N">  (N = the version you read)
   new node for the whole edit: any verb or binding may use $a where an id goes
   (h="{= $a.size.w * 2}"), before or after it is written. Leave id off a node
   nothing names. A bare $a in a binding is the value a let, port_spec, channel,
-  trace, accumulate or query holds; $a.facet.field is any leaf.
+  trace, accumulate or query holds; $a.facet.field is any leaf. Outside a binding or
+  an id a $ is just text. Every value is an attribute: text between a node's tags is
+  refused (write <text content="Hello"/>, not <text>Hello</text>).
   Verbs change what exists. New nodes and component verbs are made first, then the
   verbs in the order written, each seeing what came before it:
   <set id="#P" x="12" size.h="{= #O.slider.value * 200}"/>

@@ -74,7 +74,7 @@ fn a_state_made_by_hand_animates_its_instances() {
     store.apply(tx("rename", ops)).unwrap();
     assert_eq!(store.document().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default|dim)".into())));
     // An instance animates between them: 300 ms, Easy Ease.
-    let (ops, summary) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    let (ops, summary) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let get = |a: &str| -> NodeId {
@@ -171,7 +171,7 @@ fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
     assert!(opacity(&store) < 1.0);
     store.pin_state(None);
     // An instance, never keyed, has a state lane on the timeline.
-    let (ops, _) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    let (ops, _) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let clock = store.ensure_clock().unwrap();
     let plan = timeline_view::plan(&store, clock, None);
@@ -236,7 +236,7 @@ fn scrubbing_records_nothing_and_events_report_their_states() {
     store.pin_state(Some(machine::Pinned::state(def, m, "nope")));
     assert!(store.pinned_state().is_none());
     // An instance's state changed by an event reports its transition and states.
-    let (ops, summary) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
+    let (ops, summary) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let start = line.find("entity=\"").unwrap() + 8;
@@ -470,4 +470,10 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
     store.advance_machines(0.4);
     assert_eq!(store.resolved(dot, path("appearance.opacity")), Some(Value::Number(1.0)));
     assert!(machine::reset_value_ops(store.document(), alert, &opacity).is_err());
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

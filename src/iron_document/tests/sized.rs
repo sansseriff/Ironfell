@@ -80,7 +80,7 @@ fn bench() -> Bench {
 }
 
 fn place(store: &mut Store, markup: &str) -> NodeId {
-    let (ops, summary) = compose::compose_ops(store, markup).unwrap();
+    let (ops, summary) = place_ops(store, markup).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let start = line.find("use=\"").unwrap() + 5;
@@ -127,9 +127,15 @@ fn an_unsized_template_refuses_a_box() {
     let Bench { mut store, bench, def, .. } = bench();
     let template = store.document().children(def)[0];
     store.apply(tx("unsize", vec![Op::RemoveFacet { id: template, kind: FacetKind::Size }])).unwrap();
-    let err = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0" w="10"/>"#)).unwrap_err();
+    let err = place_ops(&store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0" w="10"/>"#)).unwrap_err();
     assert!(err.contains("has no size"), "{err}");
     // Without w, it places, unsized.
     let u = place(&mut store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0"/>"#));
     assert!(store.document().facet(u, FacetKind::Size).is_none());
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

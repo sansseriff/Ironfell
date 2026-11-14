@@ -286,3 +286,153 @@ fn a_connection_and_its_two_links_are_one_edit() {
     let es = errors(&store, &format!(r#"<edit><connection in="{model}" id="$v"><link from="$v" to="{out}" rel="connects" end="a"/></connection></edit>"#));
     assert!(es[0].message.starts_with("$v "), "{es:?}");
 }
+
+// Council round 1 (2026-11-14): each of these failed or panicked before.
+
+#[test]
+fn a_name_deleted_earlier_in_the_edit_is_an_error_not_a_panic() {
+    let (store, c, _) = desk();
+    let es = errors(&store, &format!(r#"<edit>
+      <rect in="{c}" id="$r" w="5" h="5"/>
+      <delete id="$r"/>
+      <table in="{c}">a | b</table>
+      <set id="$r" x="1"/>
+    </edit>"#));
+    assert!(es.iter().any(|e| e.op == Some(3) && e.kind == "unknown_node"), "{es:?}");
+}
+
+#[test]
+fn reparents_in_one_edit_see_each_others_moves() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a" name="a"/><rect id="$b" name="b"/><rect id="$c" name="c"/></group></edit>"#));
+    let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
+    apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
+    assert_eq!(store.document().children(g), &[cc, a, b]);
+}
+
+#[test]
+fn compound_verbs_read_the_edits_names() {
+    let (mut store, c, _) = desk();
+    // A place's argument reads an earlier place's port.
+    let p = apply(&mut store, &format!(r#"<edit>
+      <place def="std:plot" in="{c}" id="$p1" x="0" y="0" xs="0 1 2" ys="0 1 2" x_min="0" x_max="2"/>
+      <place def="std:plot" in="{c}" id="$p2" x="0" y="300" xs="0 1 2" ys="0 1 2" x_min="0" x_max="{{= $p1.x_hi * 2}}"/>
+      <rect in="{c}" name="reads" x="{{= $p2.x_hi}}" w="1" h="1"/>
+    </edit>"#));
+    assert!(p.aliases.contains_key("$p2"));
+    assert_eq!(number(&store, named(&store, "reads"), "transform2d.x"), 4.0);
+    // A table's cell and a narrative read names the edit gave.
+    let p = apply(&mut store, &format!(r#"<edit>
+      <let in="{c}" id="$v" name="v" value="7"/>
+      <table in="{c}">a | b
+      1 | {{= $v}}</table>
+      <narrative id="$n" name="notes"/>
+      <write narrative="$n">Hello.</write>
+    </edit>"#));
+    assert!(!serde_json::to_string(&p.ops).unwrap().contains("$v"));
+    assert_eq!(store.document().children(p.aliases["$n"]).len(), 1);
+}
+
+#[test]
+fn words_outside_a_binding_stay_as_written() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <let in="{c}" id="$v" name="v" value="1"/>
+      <place def="std:plot" in="{c}" id="$p" xs="0 1" ys="0 1" title="Cost $v°"/>
+    </edit>"#));
+    assert!(serde_json::to_string(&p.ops).unwrap().contains("Cost $v°"));
+}
+
+#[test]
+fn a_bind_attribute_may_read_a_place() {
+    let (mut store, c, _) = desk();
+    apply(&mut store, &format!(r#"<edit>
+      <group in="{c}">
+        <place def="std:plot" id="$plot" x="100" y="50" xs="0 1" ys="0 1"/>
+        <rect name="mark" x.bind="$plot.transform2d.x + 1" w="1" h="1"/>
+      </group>
+    </edit>"#));
+    assert_eq!(number(&store, named(&store, "mark"), "transform2d.x"), 101.0);
+}
+
+#[test]
+fn top_level_places_and_nodes_keep_the_order_written() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <place def="std:plot" in="{c}" id="$p" xs="0 1" ys="0 1"/>
+      <rect in="{c}" id="$over" w="5" h="5"/>
+    </edit>"#));
+    let kids: Vec<NodeId> = store.document().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
+    assert_eq!(&kids[kids.len() - 2..], &[p.aliases["$p"], p.aliases["$over"]]);
+}
+
+#[test]
+fn import_svg_hands_the_svg_over_as_written() {
+    let (store, c, _) = desk();
+    let seen = std::cell::RefCell::new(String::new());
+    let svg = |s: &str| -> Result<(iron_document::copy::Fragment, Vec<String>), String> {
+        *seen.borrow_mut() = s.to_owned();
+        Err("stop".into())
+    };
+    let xml = format!(r#"<edit><import-svg in="{c}" x="0" y="0"><svg xmlns="http://www.w3.org/2000/svg"><rect id="A&amp;B" width="1" height="1"/></svg></import-svg></edit>"#);
+    assert!(edit::plan(&store, &xml, Some(&svg)).is_err());
+    assert!(seen.borrow().contains(r#"id="A&amp;B""#), "{}", seen.borrow());
+}
+
+#[test]
+fn text_between_a_nodes_tags_is_refused() {
+    let (store, c, _) = desk();
+    let es = errors(&store, &format!(r#"<edit><text in="{c}" name="t">Hello world</text></edit>"#));
+    assert!(es[0].message.contains("content="), "{es:?}");
+}
+
+#[test]
+fn markdown_keeps_cdata_and_decodes_numeric_entities() {
+    let (mut store, _, _) = desk();
+    apply(&mut store, "<edit><narrative name=\"notes\"/></edit>");
+    let p = apply(&mut store, "<edit><write narrative=\"notes\">It&#39;s <![CDATA[a<b]]> &#x41;.</write></edit>");
+    let ops = serde_json::to_string(&p.ops).unwrap();
+    assert!(ops.contains("It's a<b A."), "{ops}");
+}
+
+#[test]
+fn malformed_names_and_places_are_refused_with_a_reason() {
+    let (store, c, _) = desk();
+    // An attribute given twice.
+    let es = errors(&store, &format!(r#"<edit><rect in="{c}" x="1" x="2"/></edit>"#));
+    assert!(es[0].message.contains("given twice"), "{es:?}");
+    // A place inside a node goes in that node.
+    let es = errors(&store, &format!(r#"<edit><group in="{c}"><place def="std:plot" in="{c}" xs="0 1" ys="0 1"/></group></edit>"#));
+    assert!(es[0].message.contains("goes in that node"), "{es:?}");
+    // `$__…` is the planner's own.
+    let es = errors(&store, &format!(r#"<edit><rect in="{c}" id="$__node_0"/></edit>"#));
+    assert!(es[0].message.contains("two _"), "{es:?}");
+}
+
+#[test]
+fn a_dollar_inside_a_string_is_text() {
+    let (mut store, c, _) = desk();
+    apply(&mut store, &format!(r#"<edit><let in="{c}" id="$v" name="v" value="3"/><text in="{c}" name="cost" content='{{= "cost $" + fmt($v, 0)}}'/></edit>"#));
+    let text = store.resolved(named(&store, "cost"), "text.content".parse().unwrap()).unwrap();
+    assert_eq!(text.as_str(), Some("cost $3"));
+}
+
+#[test]
+fn rewrite_replaces_a_block() {
+    let (mut store, _, _) = desk();
+    apply(&mut store, "<edit><narrative name=\"notes\"/></edit>");
+    apply(&mut store, "<edit><write narrative=\"notes\">First.</write></edit>");
+    let n = named(&store, "notes");
+    let block = store.document().children(n)[0];
+    let p = apply(&mut store, &format!("<edit><rewrite block=\"{block}\">Changed.\n\nAnd more.</rewrite></edit>"));
+    assert_eq!(store.document().children(n).len(), 2);
+    assert!(p.summary.iter().any(|l| l.starts_with("  <rewrite blocks=")));
+}
+
+#[test]
+fn a_store_error_at_a_batch_of_plain_verbs_names_its_own_verb() {
+    let (store, c, s) = desk();
+    // The reparent makes a cycle; the set before it is fine.
+    let es = errors(&store, &format!(r#"<edit><set id="{s}" x="1"/><reparent id="{c}" in="{s}"/></edit>"#));
+    assert!(es.iter().all(|e| e.op == Some(1)), "{es:?}");
+}

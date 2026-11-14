@@ -79,7 +79,7 @@ fn card() -> Card {
             ],
         ))
         .unwrap();
-    let (ops, summary) = compose::compose_ops(&store, &format!(r#"<place def="{def}" in="bench" x="100" y="100"/>"#)).unwrap();
+    let (ops, summary) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="100" y="100"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let start = line.find("use=\"").unwrap() + 5;
@@ -126,4 +126,10 @@ fn parts_follow_a_resized_instance_by_their_constraints() {
     // Undo puts the instance back at the template's size.
     store.undo(0).unwrap().unwrap();
     assert_eq!(at(&store, u, button, "transform2d.x"), 160.0);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

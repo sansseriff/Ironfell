@@ -57,9 +57,11 @@ function split(xml: string, root: string): { head: string; items: Item[]; tail: 
   while (pos < body.length) {
     const lt = body.indexOf('<', pos);
     if (lt < 0) break;
-    if (body.startsWith('<!--', lt)) {
-      const end = body.indexOf('-->', lt);
-      pos = end < 0 ? body.length : end + 3;
+    // Skipped as the engine's reader skips them (parts::elements).
+    const skip = body.startsWith('<!--', lt) ? '-->' : body.startsWith('<![CDATA[', lt) ? ']]>' : body.startsWith('<?', lt) ? '?>' : body.startsWith('<!', lt) ? '>' : null;
+    if (skip) {
+      const end = body.indexOf(skip, lt);
+      pos = end < 0 ? body.length : end + skip.length;
       continue;
     }
     const name = body.slice(lt + 1).match(/^[A-Za-z][\w-]*/)?.[0];
@@ -86,8 +88,16 @@ function tagEnd(s: string, lt: number): { end: number; selfClosing: boolean } {
   throw new Error(`tag "${s.slice(lt, lt + 40)}…" is not closed`);
 }
 
+/** Elements whose body is text, not markup (parts.rs `RAW`). */
+const RAW = ['write', 'rewrite', 'import-svg'];
+
 /** The end of `</name>` matching an element opened just before `from`. */
 function closeOf(s: string, from: number, name: string): number {
+  if (RAW.includes(name)) {
+    const at = s.indexOf(`</${name}>`, from);
+    if (at < 0) throw new Error(`<${name}> is not closed`);
+    return at + name.length + 3;
+  }
   let depth = 1;
   let pos = from;
   while (pos < s.length) {

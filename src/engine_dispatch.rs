@@ -83,7 +83,6 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "render_inspector" => { arity(args,1)?; crate::engine_api::document_render_inspector(app,argument::<String>(args,0)?) },
         "render_inspector_options" => { arity(args,2)?; crate::engine_api::document_render_inspector_options(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "set_run_mode" => { arity(args,2)?; crate::engine_api::document_set_run_mode(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
-        "next_ids" => { arity(args,1)?; crate::engine_api::document_next_ids(app,argument::<u32>(args,0)?) },
         "schema" => { arity(args,0)?; crate::engine_api::document_schema() },
         "commands" => { arity(args,0)?; crate::engine_api::commands() },
         "inspect_bind" => { arity(args,3)?; crate::engine_api::document_inspect_bind(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
@@ -107,8 +106,8 @@ mod tests {
         let window = engine.world_mut().spawn_empty().id();
         let mut app = WorkerApp::new(engine, window);
         assert_eq!(call(&mut app, "missing", &[]).unwrap_err(), "unknown document operation: missing");
-        assert_eq!(call(&mut app, "next_ids", &[]).unwrap_err(), "expected 1 arguments, got 0");
-        assert!(call(&mut app, "next_ids", &[json!("wrong type")]).unwrap_err().starts_with("argument 0:"));
+        assert_eq!(call(&mut app, "stress", &[]).unwrap_err(), "expected 1 arguments, got 0");
+        assert!(call(&mut app, "stress", &[json!("wrong type")]).unwrap_err().starts_with("argument 0:"));
         assert!(call(&mut app, "apply", &[json!("{}"), json!(-1)]).unwrap_err().starts_with("argument 1:"));
         assert!(call(&mut app, "load", &[json!("not json")]).is_err());
         // No document store is installed: bad arguments must be rejected before

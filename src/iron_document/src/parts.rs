@@ -82,7 +82,8 @@ pub(crate) struct El {
     pub(crate) attrs: Vec<(String, String)>,
     pub(crate) children: Vec<El>,
     /// Text between its tags, decoded; for a raw element ([`RAW`]), all of
-    /// its content as written, decoded.
+    /// its content as written, decoded (`<import-svg>`'s not: SVG decodes its
+    /// own), a CDATA section's unwrapped.
     pub(crate) text: String,
     /// The element as written, tags included.
     pub(crate) src: String,
@@ -108,9 +109,51 @@ impl El {
     }
 }
 
-/// XML's entities in text, decoded.
+/// XML's entities in text, decoded once: the five named ones and numeric
+/// references (`&#10;`, `&#x41;`). Anything else stays as written.
 pub(crate) fn unescape(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&#10;", "\n").replace("&amp;", "&")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let entity = tail[1..].find(';').filter(|&n| n <= 10).map(|n| &tail[1..1 + n]);
+        let decoded = entity.and_then(|e| match e {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "amp" => Some('&'),
+            _ => e.strip_prefix("#x").or_else(|| e.strip_prefix("#X")).map(|h| u32::from_str_radix(h, 16)).or_else(|| e.strip_prefix('#').map(|d| d.parse::<u32>())).and_then(|n| n.ok()).and_then(char::from_u32),
+        });
+        match (entity, decoded) {
+            (Some(e), Some(c)) => {
+                out.push(c);
+                rest = &tail[e.len() + 2..];
+            }
+            _ => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Markup text decoded ([`unescape`]), its CDATA sections kept as written.
+fn text_with_cdata(s: &str) -> Result<String, String> {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("<![CDATA[") {
+        out.push_str(&unescape(&rest[..i]));
+        let body = &rest[i + 9..];
+        let end = body.find("]]>").ok_or("unclosed CDATA")?;
+        out.push_str(&body[..end]);
+        rest = &body[end + 3..];
+    }
+    out.push_str(&unescape(rest));
+    Ok(out)
 }
 
 /// Elements in `src`, comments, `<?…?>` and `<!…>` declarations skipped.
@@ -200,7 +243,9 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
                 let body = &rest[..at];
                 own = match body.trim().strip_prefix("<![CDATA[").and_then(|b| b.strip_suffix("]]>")) {
                     Some(raw) => raw.to_owned(),
-                    None => unescape(body),
+                    // SVG is XML: its own parser decodes its entities, once.
+                    None if name == "import-svg" => body.to_owned(),
+                    None => text_with_cdata(body)?,
                 };
                 *rest = &rest[at + close.len()..];
                 Vec::new()

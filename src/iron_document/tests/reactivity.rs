@@ -121,7 +121,7 @@ fn nesting_past_sixteen_is_reported_and_still_drawn() {
 fn a_repeat_of_a_component_gives_each_item_its_own_instance() {
     let (mut store, _, _) = sheet(r#"<group name="spare"/>"#);
     // Copy std:meter's definition in by placing one.
-    let (ops, _) = compose::compose_ops(&store, r#"<place def="std:meter" in="sheet" x="400" y="0"/>"#).unwrap();
+    let (ops, _) = place_ops(&store, r#"<place def="std:meter" in="sheet" x="400" y="0"/>"#).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let def = standard::find(store.document(), "meter").unwrap();
     let comp = store.document().roots()[0];
@@ -325,7 +325,7 @@ fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
     let def = built.roots[0];
     store.apply(tx("define", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let place = format!(r#"<place def="{def}" in="sheet" x="0" y="0" name="A" title="One"/><place def="{def}" in="sheet" x="0" y="100" name="B" title="Two"/>"#);
-    let (ops, _) = compose::compose_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
+    let (ops, _) = place_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let uses: Vec<NodeId> = store.document().children(comp).iter().copied().filter(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "use")).collect();
     assert_eq!(uses.len(), 2);
@@ -468,7 +468,7 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
     store.apply(tx("define", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let (plain, wide) = (named_ids["plain"], named_ids["wide"]);
     let place = format!(r#"<place def="{def}" in="{plain}" name="A"/><place def="{def}" in="{wide}" name="B"/>"#);
-    let (ops, _) = compose::compose_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
+    let (ops, _) = place_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let box_x = |s: &Store, under: NodeId| x_of(s, named(s, under, "box")[0]);
     assert_eq!(box_x(&store, plain), 8.0, "the component's own default");
@@ -843,4 +843,10 @@ fn the_plot_pans_by_drag_and_zooms_by_wheel() {
     store.undo(0).unwrap().unwrap();
     store.undo(0).unwrap().unwrap();
     assert_eq!((out(&store, "x_lo"), out(&store, "x_hi")), (0.0, 10.0));
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

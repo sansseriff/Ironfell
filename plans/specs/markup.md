@@ -66,24 +66,36 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
   or a composition by name; none makes a root. `after="#x"` or `first="true"` places it
   among the parent's children (existing and earlier in this edit), else last.
 - **Names.** `id="$x"` names a new node, `id="$p"` a component verb's result, for the
-  whole edit. `$x` stands for the id anywhere an id goes; in a binding a bare `$x` reads
-  the value a `let`, `port_spec`, `channel`, `trace`, `accumulate` or `query` holds. A
-  place's `$p.facet.field` is its picture's leaf and `$p.port` its instance's port;
-  `#use.port` does the same for an instance the document has. An `id="#…"` on a new
-  node is refused ("change it with `<set>`").
+  whole edit. `$x` stands for the id anywhere an id goes (`in`, `def`, `of="$a $b"`,
+  `sheet`, `narrative`, `block`, `after`); in a binding a bare `$x` reads the value a
+  `let`, `port_spec`, `channel`, `trace`, `accumulate` or `query` holds. A place's
+  `$p.facet.field` is its picture's leaf and `$p.port` its instance's port, readable by
+  nodes, a later `<place>`'s arguments, circuit parts and table cells; `#use.port` does
+  the same for an instance the document has. Outside a binding or an id position a `$`
+  is text (`title="Cost $v"`). An `id="#…"` on a new node is refused ("change it with
+  `<set>`").
 - **Order.** Every new node is numbered first, so any name may be read before the node
   that has it is written. Nodes are made, then the component verbs (`<place>`,
   `<make-component>`, wherever written: inside a node they go `in=` it, and siblings are
-  put back in the order written, so a mark after a plot paints over it), then the leaves
-  that read a place, then every other verb in the order written, each seeing what came
-  before it.
+  put back in the order written, so a mark after a plot paints over it; so are top-level
+  nodes and places appended to one parent), then the leaves that read a place (`k="{= …}"`
+  or `k.bind="…"`), then every other verb in the order written, each seeing what came
+  before it. The plain verbs (`set`, `add`, `delete`, `reparent`, `link`, `unlink`) are
+  planned together until the next verb that reads the document, so a connection's two
+  links are checked as a pair and a `<reparent after=…>` sees the moves before it.
 - **Inside a node** every element is a node, except `<place>`, `<make-component>` and
-  `<link>`. At the top level `set`, `table` and `context` are verbs (they share names
+  `<link>`; a component verb there goes in that node (an `in=` on it is refused).
+  Every value is an attribute: text between a node's tags is refused, not dropped
+  (`<text content="Hi"/>`, not `<text>Hi</text>`). At the top level `set`, `table` and `context` are verbs (they share names
   with node types: `set` is one of an action's writes, always inside an `<on>`).
 - **No verb stands alone.** Every verb is ops in the one transaction; a circuit can be
   drawn on a sheet the same edit makes, its parts bound to sliders the edit makes.
-- **XML.** Single or double quotes, `&#10;` for a newline, comments, CDATA; `<write>`,
+- **XML.** Single or double quotes, the five named entities and numeric ones (`&#10;`
+  for a newline, `&#x41;`), comments, CDATA; an attribute given twice is refused; a
+  `$` or `#` inside a string in a binding (`'…'` or `"…"`) is text; `<write>`,
   `<rewrite>` and `<import-svg>` hold text (markdown, SVG) that is not read as markup.
+  Markdown's entities are decoded; SVG goes to its parser as written, which decodes its
+  own.
 
 ## 4. Planning and applying
 
@@ -100,11 +112,18 @@ verb, or a question (`<link-figures>` asking which entity to keep). `applyEdit`
 agent's merge with the person's changes (merge.ts) sees every op, now including those
 of verbs that used to be "store-built"; then it reads the store's errors back in the
 edit's terms (op → verb, minted id → `$name`) and wraps the summary in `<applied>`.
+If the document moved between planning and applying (the person, mid-turn), the
+agent's merging API refuses the plan as stale and `applyEdit` plans again, so new ids,
+order keys and compound verbs see the change; a node the person deleted is reported
+as "the person deleted #P while you worked", at plan time as at apply time.
 `edit::transaction` does the same for Rust callers (the demo's gallery).
 
 Removed with the TypeScript parser: `schema.ts`'s `coerce` and `resolveLeaf`,
 fast-xml-parser, and the engine calls only it used (`compose`, `circuit`, `context`,
 `place`, `next_relation_ids`, `import_svg_at`, `narrative_write`, `narrative_rewrite`).
+`compose::compose_ops` and `compose_after`, the component verbs' own entry with
+`as="$p"`, went in the council's first round: tests place components through
+`edit::plan` too.
 
 ## 5. Breaking changes
 

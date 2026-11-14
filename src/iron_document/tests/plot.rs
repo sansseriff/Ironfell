@@ -44,7 +44,7 @@ fn desk() -> (Store, NodeId) {
 /// Place a plot; answer (entity, use).
 fn place(store: &mut Store, attrs: &str) -> (NodeId, NodeId) {
     let markup = format!(r#"<place def="std:plot" in="bench" x="20" y="20" {attrs}/>"#);
-    let (ops, summary) = compose::compose_ops(store, &markup).unwrap_or_else(|e| panic!("{e}"));
+    let (ops, summary) = place_ops(store, &markup).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let get = |a: &str| -> NodeId {
@@ -265,4 +265,10 @@ fn marks_label_points_and_reference_lines_in_data_coordinates() {
     let y_hi = store.resolved(store.document().children(e).iter().copied().find(|&p| store.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("y_hi")).unwrap(), path("port.signal")).unwrap();
     assert!(y_hi.as_f64().unwrap() >= 20.0, "{y_hi:?}");
     assert_eq!(labels(&store, u, "mark label"), vec!["peak", "next"]);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

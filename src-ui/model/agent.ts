@@ -241,24 +241,38 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // The document may have changed while the agent worked: merge (merge.ts).
     let merged = 0;
     let unmergeable = false;
+    let plannedAt: number | undefined;
     const mergingApi = {
       ...api,
+      // A node the edit names that the person deleted meanwhile: say so,
+      // not only that it is missing.
+      plan: async (xml: string) => {
+        const planned = await api.plan(xml);
+        plannedAt = planned.version;
+        if (planned.ok || !planned.errors?.some((e) => e.kind === 'unknown_node') || (await api.version()) === since) return planned;
+        const changes = await changesSince(api, since);
+        const errors = planned.errors.map((e) => {
+          const id = e.kind === 'unknown_node' ? e.message.match(/#[\w/~]+/)?.[0] : undefined;
+          return id && changes.deleted.has(id) ? { ...e, message: `the person deleted ${id} while you worked` } : e;
+        });
+        return { ...planned, errors };
+      },
+      // Applied at the version it was planned against (applyEdit plans
+      // again when the document moved in between, so its ids, order keys and
+      // compound verbs see the person's change).
       apply: async (transaction: object) => {
-        for (let tries = 0; ; tries++) {
-          const current = await api.version();
-          if (current !== since) {
-            const changes = await changesSince(api, since);
-            if (changes.gap) { unmergeable = true; return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: UNMERGEABLE }] }; }
-            const found = conflicts((transaction as { ops: object[] }).ops, changes);
-            // Told now; a resend is judged against this version.
-            if (found.length) { since = current; return { ok: false, version: current, errors: found }; }
-          }
-          const result = await api.apply(transaction, current);
-          // Another change landed between the check and the apply: check again.
-          if (!result.ok && tries < 2 && result.errors?.some((e) => e.kind === 'stale')) continue;
-          if (result.ok) merged = current - cycleVersion;
-          return result;
+        const current = await api.version();
+        if (plannedAt !== undefined && current !== plannedAt) return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: 'the document changed after this edit was planned' }] };
+        if (current !== since) {
+          const changes = await changesSince(api, since);
+          if (changes.gap) { unmergeable = true; return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: UNMERGEABLE }] }; }
+          const found = conflicts((transaction as { ops: object[] }).ops, changes);
+          // Told now; a resend is judged against this version.
+          if (found.length) { since = current; return { ok: false, version: current, errors: found }; }
         }
+        const result = await api.apply(transaction, current);
+        if (result.ok) merged = current - cycleVersion;
+        return result;
       },
     };
     lastOutcome = await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);

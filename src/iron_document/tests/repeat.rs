@@ -96,7 +96,7 @@ fn a_wider_plot_gets_more_tick_labels_in_one_transaction() {
     let _ = named;
     let model = store.document().next_id();
     store.apply(tx("model", vec![Op::Create { id: model, ty: ty("model"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![] }])).unwrap();
-    let (ops, summary) = compose::compose_ops(&store, r#"<place def="std:plot" in="sheet" x="0" y="0"/>"#).unwrap();
+    let (ops, summary) = place_ops(&store, r#"<place def="std:plot" in="sheet" x="0" y="0"/>"#).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let start = summary.find("use=\"").unwrap() + 5;
     let u: NodeId = summary[start..start + summary[start..].find('"').unwrap()].parse().unwrap();
@@ -107,4 +107,10 @@ fn a_wider_plot_gets_more_tick_labels_in_one_transaction() {
     assert!(wide > narrow, "{narrow} → {wide}");
     store.undo(0).unwrap().unwrap();
     assert_eq!(count(&store), narrow);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

@@ -866,7 +866,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
 /// Returns the table's id.
 pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
-        use iron_document::{table, Actor, LeafStruct, NodeId, Op, OrderKey, Slot, TransactionInput, TypeId, Value};
+        use iron_document::{table, Actor, NodeId, Op, OrderKey, Slot, TransactionInput, Value};
         let v: serde_json::Value = serde_json::from_str(&spec).map_err(|e| e.to_string())?;
         let id_of = |k: &str| v.get(k).and_then(|p| p.as_str()).map(|p| p.parse::<NodeId>().map_err(|e| format!("{k}: {e}"))).transpose();
         let rows: Vec<Vec<String>> = match v.get("rows") {
@@ -911,38 +911,7 @@ pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
         };
         let order = siblings.iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
         let caption = v.get("caption").and_then(|c| c.as_str()).filter(|c| !c.trim().is_empty());
-        let (ops, made) = match caption {
-            None => table::create_ops(doc, parent, order, at, &spec)?,
-            Some(words) => {
-                // A stack: the caption above the table (layout-and-tables.md
-                // §3.3), small, spaced capitals in the muted ink.
-                let ids = doc.next_ids(2);
-                let mut stack = iron_document::facet::Layout::default();
-                stack.mode = Slot::Const(Value::Enum("stack_y".into()));
-                stack.gap = Slot::Const(Value::Number(10.0));
-                let mut place = iron_document::facet::Transform2d::default();
-                place.x = Slot::Const(Value::Number(at[0]));
-                place.y = Slot::Const(Value::Number(at[1]));
-                let mut name = iron_document::facet::Name::default();
-                name.text = Slot::Const(Value::Str("captioned table".into()));
-                let mut text = iron_document::facet::Text::default();
-                text.content = Slot::Const(Value::Str(words.to_uppercase()));
-                let mut font = iron_document::facet::Font::default();
-                font.size = Slot::Const(Value::Number(12.0));
-                font.weight = Slot::Const(Value::Number(500.0));
-                font.letter_spacing = Slot::Const(Value::Number(12.0));
-                let mut fill = iron_document::facet::Fill::default();
-                fill.color = Slot::Const(Value::Color([0.45, 0.48, 0.55, 1.0]));
-                let mut ops = vec![
-                    Op::Create { id: ids[0], ty: TypeId::lookup("group").expect("registered"), parent, order, facets: vec![place.wrap(), stack.wrap(), name.wrap()] },
-                    Op::Create { id: ids[1], ty: TypeId::lookup("text").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![iron_document::facet::Transform2d::default().wrap(), text.wrap(), font.wrap(), fill.wrap()] },
-                ];
-                // The table's ids follow the two just taken.
-                let (more, t) = table::create_ops_after(doc, 2, Some(ids[0]), OrderKey::after(&OrderKey::first()), [0.0, 0.0], &spec)?;
-                ops.extend(more);
-                (ops, t)
-            }
-        };
+        let (ops, made) = table::captioned_ops(doc, parent, order, at, &spec, caption)?;
         let applied = store.0.apply(tx("add table", ops)).map_err(err)?;
         Ok(serde_json::json!({"ok": true, "version": applied.version.0, "table": made.to_string()}))
     };
@@ -2083,15 +2052,6 @@ pub fn document_set_run_mode(app: &mut WorkerApp, source: String, mode: String) 
         Ok(a) => serde_json::json!({"ok": true, "version": a.version.0}).to_string(),
         Err(es) => fail(es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")),
     }
-}
-
-pub fn document_next_ids(app: &mut WorkerApp, n: u32) -> String {
-    let ids: Vec<String> = app
-        .world()
-        .get_resource::<crate::document_bridge::DocumentStore>()
-        .map(|s| s.0.document().next_ids(n as usize).iter().map(|i| i.to_string()).collect())
-        .unwrap_or_default();
-    serde_json::to_string(&ids).expect("strings serialise")
 }
 
 pub fn document_schema() -> String {

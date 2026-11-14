@@ -1007,6 +1007,9 @@ pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
             if key.is_empty() {
                 return Err(format!("expected name=\"value\" at \"{}\"", head(rest)));
             }
+            if out.iter().any(|(k, _)| *k == key) {
+                return Err(format!("{key} is given twice"));
+            }
             out.push((key, "true".to_owned()));
             rest = after;
             continue;
@@ -1016,6 +1019,9 @@ pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
         let r = &r[1..];
         let end = r.find(quote).ok_or_else(|| format!("{key}: unclosed value"))?;
         let value = crate::parts::unescape(&r[..end]);
+        if out.iter().any(|(k, _)| *k == key) {
+            return Err(format!("{key} is given twice"));
+        }
         out.push((key, value));
         rest = r[end + 1..].trim_start();
     }

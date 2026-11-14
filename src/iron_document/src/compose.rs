@@ -5,8 +5,8 @@
 //! (`parts::circuit_ops`); these are its counterpart outside schematics.
 //!
 //! ```xml
-//! <make-component of="#a #b" name="pump" as="$pump"/>
-//! <place def="$pump" in="#bench" x="300" y="80" name="P1" as="$p1" rate="2"/>
+//! <make-component of="#a #b" name="pump" id="$pump"/>
+//! <place def="$pump" in="#bench" x="300" y="80" name="P1" id="$p1" rate="2"/>
 //! <place entity="$p1" in="#overview" x="40" y="40"/>
 //! <place def="std:laser" in="#bench" x="40" y="200" power="5 mW"/>
 //! ```
@@ -21,6 +21,8 @@
 //! a `{= expr}` binding. A `make-component` makes a component of `of`
 //! (plain shapes become a definition shown by its main; uses of linked
 //! instances become one instance of a new definition that nests them).
+//! They run inside an `<edit>` (edit.rs), which hands each verb's `id="$p"`
+//! here as `as`.
 
 use crate::composition::{self, Dims};
 use crate::definition::{self, Placement};
@@ -28,7 +30,7 @@ use crate::expr::Expr;
 use crate::facet::{Composition, Facet, Name};
 use crate::id::NodeId;
 use crate::op::Op;
-use crate::parts::{elements, El};
+use crate::parts::El;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value, ValueKind};
 use std::collections::BTreeMap;
@@ -49,33 +51,12 @@ pub(crate) struct Named {
 /// Attributes of `<place>` that are not arguments.
 const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "as", "size.w", "size.h"];
 
-/// The ops for a model's component verbs (see the module doc), and a
-/// summary of what each made, one line per verb.
-pub fn compose_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, String), String> {
-    compose_after(store, Vec::new(), markup).map_err(|e| match e {
-        ComposeError::Ops(errors) => errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
-        ComposeError::Verb(message) => message,
-    })
-}
-
-/// Why [`compose_after`] failed: one of the ops before the verbs (each
+/// Why [`compose_els`] failed: one of the ops before the verbs (each
 /// error indexes `before`), or a verb.
 #[derive(Debug)]
 pub enum ComposeError {
     Ops(Vec<crate::ApplyError>),
     Verb(String),
-}
-
-/// One edit that both writes ops and places components: `before` applied
-/// first, then the verbs, each seeing what came before it, so a `<place>`
-/// can name a definition `before` creates. The ops returned start with
-/// `before` and make one transaction.
-pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Result<(Vec<Op>, String), ComposeError> {
-    let els = elements(markup).map_err(ComposeError::Verb)?;
-    if els.is_empty() {
-        return Err(ComposeError::Verb("no <place> or <make-component>".into()));
-    }
-    run_verbs(store, before, els).map(|c| (c.ops, c.lines.join("\n")))
 }
 
 /// What the component verbs made: every op (`before`'s first), one summary
@@ -87,7 +68,10 @@ pub(crate) struct Composed {
     pub(crate) named: BTreeMap<String, Named>,
 }
 
-/// [`compose_after`] on verbs already parsed (an edit's `<place>`s).
+/// The component verbs (an edit's `<place>`s and `<make-component>`s,
+/// edit.rs): `before` applied first, then each verb, seeing what came before
+/// it, so a `<place>` can name a definition `before` creates. The ops
+/// returned start with `before` and make one transaction.
 pub(crate) fn compose_els(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
     run_verbs(store, before, els)
 }
@@ -109,6 +93,16 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
     let mut ends = Vec::new();
     for (i, el) in els.iter().enumerate() {
         let at = |m: String| format!("<{}> {}: {m}", el.name, i + 1);
+        // An argument's binding may read an earlier place: `$plot.x_hi`.
+        let mut el = el.clone();
+        let names = crate::markup::Names { nodes: BTreeMap::new(), places: aliases.iter().map(|(k, v)| (k.trim_start_matches('$').to_owned(), *v)).collect(), doc: Some(scratch.document()) };
+        for (k, v) in el.attrs.iter_mut() {
+            if !PLACE_ATTRS.contains(&k.as_str()) {
+                *v = crate::markup::bindings(v, &names).map_err(at)?;
+            }
+        }
+        drop(names);
+        let el = &el;
         let (new, line, named) = match el.name.as_str() {
             "place" => place(&scratch, el, &aliases).map_err(at)?,
             "make-component" => make(&scratch, el, &aliases).map_err(at)?,

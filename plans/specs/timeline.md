@@ -636,3 +636,20 @@ composition drew at half its CSS size on Retina while the DOM beside it did not.
   (`track.min`, `track.max`, no upper end when `max` ≤ `min`) that a press or drag keeps
   its value in, and the ruler declares `min` 0; `clock::set` clamps `t` at 0 too.
 
+
+### Frontend refresh (2026-11-13)
+
+The light theme's column and ruler use `--bg-timeline` (#fafafa), with the same
+palette in the generated composition and DOM column. Object rows retain duration
+bars (pale blue in light mode). Numeric/property clips and transition-property
+slices render as thin timing lines with key/end diamonds; clip labels no longer
+fill the property rows. Slice easing previews use accent strokes so they remain
+legible on the background. State-machine state lanes retain their named state and
+transition pictures. The existing clip/slice retiming, key trimming, selection,
+delete and undo semantics continue through the same projected document nodes.
+
+The Timeline tab bar starts hidden; its grab menu restores it. Checks: 15 native
+`timeline_view` tests, `timeline.txt` (clip drag, key trim, key controls, auto-key,
+delete/undo), fast smoke and frontend check pass. `frontend-refresh.ts` checks the
+lighter surface and hidden-header recovery and captures light/dark screenshots at
+DPR 1 and 2. No native packaged-app or WebGPU validation was performed.

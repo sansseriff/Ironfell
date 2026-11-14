@@ -1,6 +1,6 @@
 /**
  * Light or dark, for the whole app: the system's appearance (so day/night
- * switching follows it), unless the Settings view forces one. The shell's
+ * switching follows it), unless the Settings dialog forces one. The shell's
  * colours are CSS tokens (app.css) keyed on the same media query and on
  * `data-theme` on <html>; the canvas, which CSS cannot reach, is told
  * through `onThemeChange` (PanelManager sends it to the app).

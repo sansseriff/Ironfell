@@ -13,7 +13,6 @@
   import SlidersHorizontal from "@lucide/svelte/icons/sliders-horizontal";
   import Bot from "@lucide/svelte/icons/bot";
   import BookOpen from "@lucide/svelte/icons/book-open";
-  import Settings from "@lucide/svelte/icons/settings";
   import Timer from "@lucide/svelte/icons/timer";
   import ChartGantt from "@lucide/svelte/icons/chart-gantt";
   import Layers from "@lucide/svelte/icons/layers";
@@ -71,7 +70,6 @@
     selection: SlidersHorizontal,
     conversation: Bot,
     narrative: BookOpen,
-    settings: Settings,
     latency: Timer,
   };
   // The timeline is a session composition, but reads as a timeline.

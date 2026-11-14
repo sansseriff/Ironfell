@@ -302,9 +302,7 @@ fn what_each_piece_affords_is_its_groups_context() {
         let v = values(k);
         assert!(v.is(Field::SELECT, "none") && v.source(Field::SELECT).is_some(), "{k} is declared no target");
     }
-    for k in [format!("bar label {clip} {rect}"), "playhead".to_owned()] {
-        assert!(values(&k).is(Field::SELECT, "inert"), "{k} is transparent to the pointer");
-    }
+    assert!(values("playhead").is(Field::SELECT, "inert"), "the playhead is transparent to the pointer");
     let ruler = node_named(&store, comp, "ruler bar");
     let ruler_group = store.document().live(ruler).unwrap().parent.unwrap();
     let chain = chain_of(store.document(), ruler_group);

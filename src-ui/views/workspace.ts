@@ -59,11 +59,13 @@ function baseLayout(api: DockviewApi) {
   // The timeline: the session's generated `timeline` composition
   // (plans/specs/timeline.md), drawn like any other, under the canvas.
   view('timeline', 'Timeline', { source: 'timeline', notation: 'composition' }, { referencePanel: 'viewer', direction: 'below' }, { initialHeight: below });
-  // The left side's views are switched by their strip (panel-primitives.md
-  // §5), so its tab bar starts hidden; its grab pill shows it again. The
-  // scope menu moves to the centre's tab bar, beside the compositions.
-  const leftGroup = api.getPanel('layers')?.group;
-  if (leftGroup) leftGroup.header.hidden = true;
+  // Side panels and the timeline start without tab chrome; their grab
+  // menus can restore it. The left views switch through their selector
+  // strip, and the scope menu sits beside the centre's composition tabs.
+  for (const id of ['layers', 'selection', 'timeline']) {
+    const group = api.getPanel(id)?.group;
+    if (group) group.header.hidden = true;
+  }
 }
 
 /** A readable view id from a name, unique among the open views. */
@@ -266,6 +268,7 @@ export function createWorkspace(el: HTMLElement): DockviewApi {
   applying++;
   baseLayout(api);
   applying--;
+  syncHiddenHeaders();
   api.onDidLayoutChange(scheduleSave);
   // A restored layout may hide some groups' tab bars.
   api.onDidLayoutChange(syncHiddenHeaders);

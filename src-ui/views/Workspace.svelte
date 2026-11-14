@@ -7,6 +7,7 @@
   import type { DockviewApi } from "dockview-core";
   import { createWorkspace, destroyWorkspace } from "./workspace";
   import { controllerManager } from "../controller-manager.svelte";
+  import GlobalSettings from "./GlobalSettings.svelte";
   import { dockState } from "./dock_state.svelte";
 
   let el: HTMLDivElement;
@@ -82,9 +83,13 @@
   });
 </script>
 
-<div bind:this={el} class="dock" class:dragging={dragging || dockState.dragging}></div>
+<div class="workspace">
+  <div bind:this={el} class="dock" class:dragging={dragging || dockState.dragging}></div>
+  <GlobalSettings />
+</div>
 
 <style>
+  .workspace { position: relative; width: 100%; height: 100%; }
   .dock {
     width: 100%;
     height: 100%;

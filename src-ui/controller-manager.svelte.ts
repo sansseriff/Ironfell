@@ -40,7 +40,7 @@ class ControllerManagerClass {
   /**
    * The GPU device was lost or wgpu reported an error, and the engine
    * stopped rendering (src/render_loss.rs): every view would stay blank.
-   * Restart as the Settings view does, keeping the document. A renderer
+   * Restart as the Settings dialog does, keeping the document. A renderer
    * that fails again and again (a real bug, not the browser dropping the
    * device) is left stopped after three tries a minute, with the error
    * shown, rather than restarting in a loop.

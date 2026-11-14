@@ -1,6 +1,6 @@
 # Panel primitives: panels from the same parts as everything else
 
-**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10.**
+**Status: written 2026-11-09; the view selector strip built the same day (§5); grab pill hover corrected 2026-11-10; global settings modal and quieter default panel chrome built 2026-11-13.**
 
 Iron's long-term rule for panels: a panel is not special shell code. It is a view (a
 source drawn in a notation, `views.ts`), and the parts that make it up are the parts the
@@ -127,3 +127,44 @@ arrangement (Settings → Reset layout gives the new one).
 - `std:tabs` as a document component (the strip is its HTML widget only).
 - The inspector's section strip; a view's own session leaves declared by data.
 - Workspace presets (Build, Write, Animate, Present) as saved layouts chosen on purpose.
+
+### Frontend refresh (2026-11-13)
+
+The selector uses a white rail in light mode, distinct from the gray composition
+tab background. One workspace-level Settings menu sits at its lower-left foot,
+remaining reachable when left views switch or close. It offers System/Light/Dark
+appearance and opens a Settings modal above the workspace. Its sidebar selects
+Appearance, Performance, Workspace or Developer, with controls on the right and
+independent content scrolling. Bits UI Dialog manages modal focus and dismissal;
+vertical Tabs provide keyboard section navigation. Close and Escape return focus
+to the lower-left settings button without changing the dock layout. Canvas and
+timeline shortcuts stay idle while the modal is open, including when focus is
+in a portalled select menu. At narrow
+widths, controls stack within the content column. The settings dock notation and
+its tab-opening path were removed. Tab groups no
+longer repeat the app-settings gear or offer duplicate Settings views in their
+add-view menus. Composition run/FPS/render-inspector menus and agent settings
+retain their contextual access.
+
+Fresh layouts hide the Inspector and Timeline tab bars as well as the left panel's.
+Existing saved layouts retain the person's choice; grab menus still switch views,
+drag panels and restore tab bars. Layout and app preferences remain session/browser
+state, without authored document edits.
+
+`frontend-refresh.ts` checks the menu, theme shortcuts, sectioned settings modal, keyboard dismissal, unchanged dock layout,
+narrow-window sizing, left-view switching and hidden-header recovery at DPR 1 and 2. Light/dark screenshots
+are saved under `.agents/frontend-refresh/dpr<N>/`. Frontend checking and fast smoke
+pass; timeline rendering verification is recorded in `timeline.md`.
+
+The modal follow-up passes the refreshed DPR 1/2 fixture, fast smoke and frontend
+checking (zero errors, 11 existing warnings) after rebasing onto the 2D transform
+controls work. The WebGL2 build and all 15 timeline Rust tests pass on that base.
+
+Settings visual polish: the dialog is 800×480 CSS px at full size, with a softly
+tinted sidebar, a raised selected section and consistent 16px header/sidebar
+insets. Section titles, setting labels and descriptions use a clear 20/14/13px
+hierarchy in the shared UI font. Settings use label/description rows without
+horizontal rules, aligned 32px controls, larger switches and concise help copy.
+Build details use a structured definition list. Light/dark and narrow-window
+screenshots pass at DPR 1/2; modal focus, section navigation and document/shortcut
+isolation remain covered.

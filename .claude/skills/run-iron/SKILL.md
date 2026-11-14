@@ -78,6 +78,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
 | `transform-controls.ts`, each DPR, warm | ~10–15 s (2026-11-13): pivot creation/relocation, tag and rotation drags, snapping, undo/refusals and scaled controls |
 | `multi-properties.ts`, each DPR, warm | ~5 s (4.48 s, 2026-11-11; selection-wide edits, paint picker, mixed values and undo) |
+| `frontend-refresh.ts`, each DPR, warm | ~5 s (2026-11-13; settings, theme, default panel headers and recovery) |
 | `composition-settings.ts`, each DPR, warm | ~12 s (2026-11-10) |
 | ⏱ shared-engine Rust lib suite, cold native `dev-opt` | ~5 min compiling; 9m 19s observed including waiting for the concurrent wasm build lock, 2026-11-10. Eight tests run in 0.21 s |
 | `bun run attachments.ts` | ~10 s (9.52 s, 2026-11-04) |
@@ -3489,6 +3490,7 @@ Mixed Fill offers "Click + to replace mixed content"; + makes one shared solid f
 and Selection colors sits below Effects and edits only the matching paints.
 
 
+
 ## 2D transform controls (2026-11-13)
 
 `transform-controls.ts` is the focused UI gate for component-authoring §8. After
@@ -3527,3 +3529,40 @@ bound readers, animated coordinates, singular transforms and instance overrides.
 The safe policy refuses origin edits of port anchors or attached controls that have
 coordinate readers, instead of baking/removing bindings or animation. See
 `plans/specs/component-authoring.md` §8 for the complete restrictions.
+
+### Frontend refresh — 2026-11-13
+
+With WebGL2 built and this worktree served on 5188:
+
+```sh
+DPR=1 bun .claude/skills/run-iron/frontend-refresh.ts
+DPR=2 bun .claude/skills/run-iron/frontend-refresh.ts
+```
+
+`URL` overrides the demo URL. Expected per DPR:
+`PASS frontend refresh DPR <n>: global settings, theme, sectioned modal, keyboard dismissal, default headers and grab recovery; no page errors`.
+Light/dark screenshots are under `.agents/frontend-refresh/dpr<n>/`. Fresh layouts
+hide Inspector and Timeline headers; use their grab menus or `__dock` to focus a
+view instead of clicking a hidden tab. App Settings now opens from the one lower-left
+Settings menu, not a gear per tab group. Settings opens a modal with sidebar
+sections; it never adds or changes a dock tab. The fixture also checks section
+controls, keyboard navigation, Escape/focus restoration and a narrow-window layout. Existing saved layouts retain header choices.
+
+The fast smoke expected output is unchanged: six `assertion passed` lines and
+`(no page errors)`. `timeline.txt` retains its expected retiming, key trim, auto-key,
+delete and undo outputs; property clip pictures are now thin lines with diamonds,
+object rows remain duration bars. Both checks pass on WebGL2. 15 native timeline
+Rust tests and frontend check pass (zero errors, 12 pre-existing warnings).
+
+`composition-settings.ts` now focuses the hidden Timeline through the dock instead
+of clicking its tab; its controls, grid/background pixels, theme, undo and reload
+checks pass at DPR 1 and 2 after the refresh.
+
+Modal follow-up: `frontend-refresh.ts` also verifies that Backspace and Shift+K
+leave the selected document and auto-keyframe mode unchanged while settings is
+open. Both DPRs pass, with zero frontend errors and 11 existing warnings.
+
+Settings polish: the focused fixture additionally captures Performance, Workspace
+and Developer sections as `settings-{performance,workspace,developer}.png` under
+each DPR directory, alongside light/dark Appearance and narrow-window captures.
+The expected output and fast-smoke assertions are unchanged.

@@ -42,7 +42,8 @@ try {
   await choose('Composition grid', 'Dots');
   await shot('dots');
   await page.screenshot({ path: resolve(out, 'grid-dots.png') });
-  await page.locator('.dv-tab', { hasText: /^\s*Timeline\s*$/ }).click(); await wait();
+  // Timeline starts with its tab bar hidden; focus it through the dock.
+  await page.evaluate(() => (window as any).__dock.getPanel('timeline').api.setActive()); await wait();
   assert((await section.locator('header span').textContent())?.trim() === 'controls', 'session view lost the followed document composition');
   await page.locator('.dv-tab', { hasText: /^\s*Main\s*$/ }).click(); await waitForComposition('main');
   assert((await page.getByLabel('Composition grid', { exact: true }).textContent())?.includes('Off'), 'grid leaked into Main');

@@ -235,6 +235,9 @@ export class InputManager {
         // Headless controls (menus, popovers, selects) consume their keys
         // before this window listener. Closing one must not also act on canvas.
         if (event.defaultPrevented) return;
+        // Modal settings own the keyboard, including controls portalled out
+        // of the dialog (select menus). Canvas shortcuts must stay idle.
+        if (document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]')) return;
         const target = event.target as HTMLElement | null;
         const editing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
         // Tool keys: whatever the views' keymaps bind (context data,

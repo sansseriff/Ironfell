@@ -262,6 +262,27 @@ fn a_leaf_edit_updates_its_entry_and_the_unions_above_it() {
 }
 
 #[test]
+fn a_leaf_at_a_nan_position_is_left_out_until_its_position_is_a_number() {
+    // A binding can compute NaN (a plot's cursor past the end of its curve):
+    // the scene must not panic, and the leaf comes back once it is finite.
+    let mut f = fixture(2, 3);
+    let mut scene = Scene::default();
+    scene.update(&mut f.store);
+    let roots = roots_of(&f.store, f.composition, f.loose);
+    let everything = Rect::new(-1e6, -1e6, 1e6, 1e6);
+    assert!(scene.candidates(&roots, None, everything).contains(&f.rects[5]));
+    f.store.apply(tx("nan", vec![set(f.rects[5], "transform2d.y", f64::NAN)])).unwrap();
+    scene.update(&mut f.store);
+    assert!(scene.bounds(f.rects[5]).is_none());
+    assert!(scene.painted(f.field).is_some_and(|r| r.is_finite()), "the field's union leaves it out");
+    assert!(!scene.candidates(&roots, None, everything).contains(&f.rects[5]));
+    f.store.apply(tx("back", vec![set(f.rects[5], "transform2d.y", 40.0)])).unwrap();
+    scene.update(&mut f.store);
+    assert!(scene.bounds(f.rects[5]).is_some());
+    assert!(scene.candidates(&roots, None, everything).contains(&f.rects[5]));
+}
+
+#[test]
 fn structure_rebuilds_and_deletion_drops_entries() {
     let mut f = fixture(2, 3);
     let mut scene = Scene::default();

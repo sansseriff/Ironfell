@@ -426,17 +426,20 @@ fn at(x: f64, y: f64, rot: f64) -> Facet {
     t.rot = Slot::Const(Value::Number(rot));
     t.wrap()
 }
-const INK: [f32; 4] = [0.12, 0.14, 0.2, 1.0];
-const LABEL: [f32; 4] = [0.3, 0.32, 0.4, 1.0];
+/// Parts draw in the theme's colour tokens (palette.rs), so a schematic
+/// reads in light and dark: symbols and wires in `@ink`, labels `@ink-2`.
+fn token(name: &str) -> Slot {
+    Slot::Bound(crate::Expr::parse(&format!("@{name}")).expect("a colour token"))
+}
 fn stroke(width: f64) -> Facet {
     let mut s = Stroke::default();
-    s.color = Slot::Const(Value::Color(INK));
+    s.color = token("ink");
     s.width = Slot::Const(Value::Number(width));
     s.wrap()
 }
-fn fill(c: [f32; 4]) -> Facet {
+fn fill(name: &str) -> Facet {
     let mut f = Fill::default();
-    f.color = Slot::Const(Value::Color(c));
+    f.color = token(name);
     f.wrap()
 }
 
@@ -509,7 +512,7 @@ pub fn definition_ops(part: &Part, library: NodeId, order: OrderKey, first: u64)
                 let mut rad = Radius::default();
                 rad.rx = Slot::Const(Value::Number(*r));
                 rad.ry = Slot::Const(Value::Number(*r));
-                let look = if matches!(m, Mark::Dot { .. }) { fill(INK) } else { stroke(2.0) };
+                let look = if matches!(m, Mark::Dot { .. }) { fill("ink") } else { stroke(2.0) };
                 let n = id();
                 mark(&mut ops, n, "ellipse", vec![at(c[0], c[1], 0.0), rad.wrap(), look]);
             }
@@ -522,7 +525,7 @@ pub fn definition_ops(part: &Part, library: NodeId, order: OrderKey, first: u64)
                 let mut f = Font::default();
                 f.size = Slot::Const(Value::Number(11.0));
                 let n = id();
-                mark(&mut ops, n, "text", vec![at(p[0], p[1], 0.0), words.wrap(), f.wrap(), fill(LABEL)]);
+                mark(&mut ops, n, "text", vec![at(p[0], p[1], 0.0), words.wrap(), f.wrap(), fill("ink-2")]);
             }
         }
     }
@@ -744,7 +747,7 @@ pub fn wire_ops(doc: &crate::document::Document, sheet: NodeId, a: End, b: End, 
     let (path, contour) = (ids[1], ids[2]);
     let rel = doc.next_relation_ids(3)[2];
     let mut s = Stroke::default();
-    s.color = Slot::Const(Value::Color(INK));
+    s.color = token("ink");
     s.width = Slot::Const(Value::Number(2.0));
     ops.push(Op::Create { id: path, ty: ty("path"), parent: Some(sheet), order: crate::standard::after_last(doc, Some(sheet)), facets: vec![at(0.0, 0.0, 0.0), PathShape::default().wrap(), s.wrap(), named("wire")] });
     ops.push(Op::Link { rel: Relation { id: rel, from: path, to: connection, rel: RelKind::Figures, data: Default::default() } });

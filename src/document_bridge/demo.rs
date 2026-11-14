@@ -1,5 +1,5 @@
-//! The demo scene, as a transaction: a draggable rect, a field of small
-//! rects, a circle, the torus and the rest. It is document content like any
+//! The demo scene, as a transaction: a draggable rect, a circle, the
+//! torus and the rest. It is document content like any
 //! other: the engine starts empty, and the shell asks for it (`engine_api::
 //! document_demo`) on a page that shows the demo, or a new scope is made
 //! from it (`template_snapshot("demo")`).
@@ -23,6 +23,23 @@ fn input_spec(default: Value) -> iron_document::facet::Port {
 
 fn n(v: f64) -> Slot {
     Slot::Const(Value::Number(v))
+}
+
+/// A colour as the nearest theme token (palette.rs), so the demo reads in
+/// light and dark: `@ink` for near-black, `@series-2` for an orange. A
+/// translucent colour is that token mixed into the surface.
+fn themed(c: [f32; 4]) -> Slot {
+    let distance = |h: &str| {
+        let t = iron_document::palette::hex(h);
+        (0..3).map(|i| (t[i] - c[i]).powi(2)).sum::<f32>()
+    };
+    let (name, _, _) = iron_document::palette::BUILT_IN
+        .iter()
+        .filter(|(name, _, _)| !matches!(*name, "surface" | "accent"))
+        .min_by(|a, b| distance(a.1).total_cmp(&distance(b.1)))
+        .expect("tokens");
+    let text = if c[3] < 1.0 { format!("mix(@surface, @{name}, {})", c[3]) } else { format!("@{name}") };
+    Slot::Bound(Expr::parse(&text).expect("a colour token"))
 }
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
@@ -50,31 +67,10 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     name.text = Slot::Const(Value::Str("scene".into()));
     ops.push(Op::Create { id: scene, ty: ty("composition"), parent: None, order: order(), facets: vec![name.wrap(), composition("2d")] });
 
-    // A field of small rects, deterministic positions.
-    let mut seed: u32 = 0x91E2_33AB;
-    let mut rnd = move || {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        (seed as f64) / (u32::MAX as f64)
-    };
+    // Twenty ids that once held a field of random rects, still drawn so
+    // every later node keeps the id the scripts know it by.
     for _ in 0..20 {
-        let mut t = Transform2d::default();
-        // Left of x≈790, so the main layout's 3D view at the right is clear.
-        t.x = n((rnd() * 760.0).round());
-        t.y = n((rnd() * 640.0).round());
-        let mut s = Size::default();
-        s.w = n(30.0);
-        s.h = n(30.0);
-        let mut f = Fill::default();
-        f.color = Slot::Const(Value::Color([rnd() as f32, rnd() as f32, rnd() as f32, 1.0]));
-        ops.push(Op::Create {
-            id: next(),
-            ty: ty("rect"),
-            parent: Some(scene),
-            order: order(),
-            facets: vec![t.wrap(), s.wrap(), f.wrap()],
-        });
+        next();
     }
 
     // The draggable square.
@@ -1370,6 +1366,21 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 /// double-click; and a column stack to reorder (drag, Alt+arrows) whose items
 /// glide. `pitch`: a notation with its own palette, keys and inspector
 /// sections. `dials`: controls made only of inline `affords` facets.
+/// The gallery's pages (plans/specs/demo.md), in tab order; the RC page,
+/// whose circuit the showcase builds, comes after them.
+const GALLERY: [&str; 8] = [
+    include_str!("gallery/oscillator.xml"),
+    include_str!("gallery/refraction.xml"),
+    include_str!("gallery/interference.xml"),
+    include_str!("gallery/wavepacket.xml"),
+    include_str!("gallery/kepler.xml"),
+    include_str!("gallery/lorenz.xml"),
+    include_str!("gallery/blackbody.xml"),
+    include_str!("gallery/enzyme.xml"),
+];
+/// The RC charging page; `#CIRCUIT` stands for the circuit it embeds.
+const RC_PAGE: &str = include_str!("gallery/rc.xml");
+
 pub fn showcase(store: &iron_document::Store) -> Result<iron_document::TransactionInput, String> {
     use iron_document::contexts;
     use iron_document::facet::{Affords, Font, Layout, Text};
@@ -1395,14 +1406,16 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         t.y = n(y);
         t
     };
-    // Text draws with its fill; dark unless a caption says otherwise.
+    // Colours are the theme's tokens (palette.rs), so light and dark both read.
+    let token = |name: &str| Slot::Bound(Expr::parse(&format!("@{name}")).expect("a colour token"));
+    // Text draws with its fill: the theme's ink unless a caption says otherwise.
     let words = |content: &str, size: f64| -> Vec<iron_document::Facet> {
         let mut t = Text::default();
         t.content = Slot::Const(Value::Str(content.into()));
         let mut f = Font::default();
         f.size = n(size);
         let mut ink = Fill::default();
-        ink.color = Slot::Const(Value::Color([0.1, 0.1, 0.12, 1.0]));
+        ink.color = token("ink");
         vec![t.wrap(), f.wrap(), ink.wrap()]
     };
     let affords = |style: &str| {
@@ -1411,9 +1424,9 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         a.wrap()
     };
     let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("showcase binding"));
-    let paint = |c: [f32; 4]| {
+    let paint = |name: &str| {
         let mut f = Fill::default();
-        f.color = Slot::Const(Value::Color(c));
+        f.color = token(name);
         f.wrap()
     };
     let after_roots = |s: &iron_document::Store| s.document().roots().iter().filter_map(|&r| s.document().live(r)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
@@ -1423,12 +1436,48 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         Op::Create { id, ty: ty("composition"), parent: None, order: after_roots(s), facets: vec![named(name), c.wrap()] }
     };
     let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
+    // The gallery's compositions go before every root the demo scene made,
+    // so their tabs come first, each after the one before.
+    let first_root = scratch.document().roots().iter().filter_map(|&r| scratch.document().live(r)).map(|n| n.order.clone()).min();
+    let mut gallery_last: Option<OrderKey> = None;
+    let mut gallery_key = move || {
+        let k = match (&gallery_last, &first_root) {
+            (None, Some(f)) => OrderKey::before(f),
+            (Some(l), Some(f)) => OrderKey::between(Some(l), Some(f)).expect("ordered keys"),
+            (Some(l), None) => OrderKey::after(l),
+            (None, None) => OrderKey::first(),
+        };
+        gallery_last = Some(k.clone());
+        k
+    };
     let caption = |id: NodeId, parent: NodeId, i: u32, x: f64, y: f64, text: &str| {
         let mut f: Vec<iron_document::Facet> = words(text, 14.0).into_iter().filter(|f| f.kind() != iron_document::FacetKind::Fill).collect();
         f.push(at(x, y).wrap());
-        f.push(paint([0.35, 0.37, 0.42, 1.0]));
+        f.push(paint("ink-2"));
         Op::Create { id, ty: ty("text"), parent: Some(parent), order: key(i), facets: f }
     };
+
+    // The scene's colours become the theme's tokens, so it reads in light
+    // and dark. Here rather than in the scene: a token joins the document
+    // as nodes of its own, which would move the ids the scripts know.
+    let mut recolour = Vec::new();
+    {
+        let doc = scratch.document();
+        for r in doc.roots().to_vec() {
+            for id in doc.descendants(r) {
+                if id.is_expanded() || !doc.is_live(id) {
+                    continue;
+                }
+                for leaf in ["fill.color", "stroke.color"] {
+                    let path: LeafPath = leaf.parse().expect("declared leaf");
+                    if let Some(Slot::Const(Value::Color(c))) = doc.leaf(id, path) {
+                        recolour.push(Op::Set { id, path, slot: themed(*c) });
+                    }
+                }
+            }
+        }
+    }
+    phase(&mut scratch, recolour)?;
 
     // Outline.
     let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n  <rule match=\"view\" chrome.hover=\"off\" chrome.grip=\"14\" tolerance.hit=\"2\"/>\n</context>")?;
@@ -1462,67 +1511,6 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         item(ids[4], 2, "Third point"),
         caption(ids[5], outline, 4, 60.0, 420.0, "Touch-like chrome, from the same context: nothing lights on hover, and grips are 14 px and reach twice as far."),
     ])?;
-
-    // Pitch.
-    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"pitch\" extends=\"std:free-2d\">\n  <rule match=\"view\" palette.tools=\"select text table\" keys.tools=\"v:select t:text b:table\" inspector.sections=\"position text fill\" chrome.accent=\"#e8711aff\" chrome.grip_shape=\"round\"/>\n</context>")?;
-    phase(&mut scratch, ops)?;
-    let pitch = scratch.document().next_id();
-    let op = composition(&scratch, pitch, "pitch", "pitch");
-    phase(&mut scratch, vec![op])?;
-    let ids = scratch.document().next_ids(3);
-    let mut size = Size::default();
-    size.w = n(220.0);
-    size.h = n(120.0);
-    // The card reads its own interaction state: it lights while hovered.
-    let mut card_fill = Fill::default();
-    card_fill.color = Slot::Const(Value::Color([0.95, 0.55, 0.2, 1.0]));
-    card_fill.opacity = bound(format!("{}.interaction.hovered ? 1 : 0.45", ids[2]));
-    let card_fill = card_fill.wrap();
-    let mut title = words("Pitch", 40.0);
-    title.push(at(60.0, 120.0).wrap());
-    phase(&mut scratch, vec![
-        caption(ids[0], pitch, 0, 60.0, 24.0, "The pitch notation's own tools (Move, Text, Table; B for a table) and an inspector of\nPosition, Text and Fill only, from one context in this document. Compare the toolbar with Main's.\nThe card lights while hovered: its fill reads its own interaction state.\nSelect something: the same context makes the chrome orange, with round grips."),
-        Op::Create { id: ids[1], ty: ty("text"), parent: Some(pitch), order: key(1), facets: title },
-        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(pitch), order: key(2), facets: vec![at(60.0, 200.0).wrap(), size.wrap(), card_fill, named("card"), iron_document::facet::Interaction::default().wrap()] },
-    ])?;
-
-    // Dials.
-    let dials = scratch.document().next_id();
-    let op = composition(&scratch, dials, "dials", "free");
-    phase(&mut scratch, vec![op])?;
-    let ids = scratch.document().next_ids(11);
-    let slider = ids[1];
-    let mut s = Slider::default();
-    s.value = n(0.5);
-    let rect = |w: f64, h: f64| {
-        let mut sz = Size::default();
-        sz.w = n(w);
-        sz.h = n(h);
-        sz
-    };
-    let mut needle_at = at(300.0, 200.0);
-    needle_at.rot = bound(format!("{slider}.slider.value * 3.14159265"));
-    let mut bar = rect(40.0, 0.0);
-    bar.h = bound(format!("{slider}.slider.value * 200"));
-    let control = |id: NodeId, i: u32, y: f64, text: &str, style: &str| {
-        let mut f = words(text, 22.0);
-        f.push(at(60.0, y).wrap());
-        f.push(affords(style));
-        Op::Create { id, ty: ty("text"), parent: Some(dials), order: key(i), facets: f }
-    };
-    phase(&mut scratch, vec![
-        caption(ids[0], dials, 0, 60.0, 16.0, "Controls made only of data (inline affords facets): turn the red needle, drag the blue bar's bottom,\nclick the three words. Each gesture drives its node's own leaf through its binding; one undo each."),
-        Op::Create { id: slider, ty: ty("slider"), parent: Some(dials), order: key(1), facets: vec![at(60.0, 60.0).wrap(), s.wrap(), named("level")] },
-        Op::Create { id: ids[2], ty: ty("rect"), parent: Some(dials), order: key(2), facets: vec![needle_at.wrap(), rect(80.0, 6.0).wrap(), paint([0.82, 0.19, 0.19, 1.0]), named("needle"), affords("drag: ring; drives: transform2d.rot; step: 0.2618; chrome.handle: dot")] },
-        Op::Create { id: ids[3], ty: ty("rect"), parent: Some(dials), order: key(3), facets: vec![at(500.0, 100.0).wrap(), bar.wrap(), paint([0.19, 0.44, 0.82, 1.0]), named("bar"), affords("drag: track; axis: y; drives: size.h")] },
-        control(ids[4], 4, 320.0, "Italic (click)", "activate: toggle; drives: font.italic"),
-        control(ids[5], 5, 380.0, "Bigger (click)", "activate: step; step: 4; drives: font.size"),
-        control(ids[6], 6, 440.0, "Align (click)", "activate: cycle; drives: font.align"),
-        caption(ids[7], dials, 7, 230.0, 300.0, "needle: rot = level × π (the dot is its pivot)"),
-        caption(ids[8], dials, 8, 470.0, 320.0, "bar: h = level × 200"),
-        caption(ids[9], dials, 9, 60.0, 90.0, "level"),
-    ])?;
-    let _ = ids[10];
 
     // Data (affordances.md demo 4): one dataset, three sliders, shown as a
     // table of bound readouts and as bars bound to it. Drag a bar's top and
@@ -1559,12 +1547,46 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         let mut sz = Size::default();
         sz.w = n(44.0);
         sz.h = bound(format!("{s}.slider.value * 250"));
-        ops.push(Op::Create { id: ids[i], ty: ty("rect"), parent: Some(data), order: key(5 + i as u32), facets: vec![place.wrap(), sz.wrap(), paint([0.19, 0.44, 0.82, 1.0]), named(&format!("{name} bar")), affords("drag: track; axis: -y; drives: size.h")] });
+        ops.push(Op::Create { id: ids[i], ty: ty("rect"), parent: Some(data), order: key(5 + i as u32), facets: vec![place.wrap(), sz.wrap(), paint("series-1"), named(&format!("{name} bar")), affords("drag: track; axis: -y; drives: size.h")] });
     }
     for (i, name) in names.iter().enumerate() {
         ops.push(caption(ids[3 + i], data, 8 + i as u32, 424.0 + 70.0 * i as f64, 390.0, name));
     }
     phase(&mut scratch, ops)?;
+
+    // The gallery: science pieces, one composition each, written in node
+    // markup with `<place>` (plans/specs/demo.md); their tabs come first.
+    for src in GALLERY {
+        let built = iron_document::markup::compose(&scratch, src, None, gallery_key())?;
+        let wave_t = src.starts_with("<composition name=\"wave packet\"").then(|| built.named["t"]);
+        phase(&mut scratch, built.ops)?;
+        // The wave packet's time plays on the timeline: a clip sweeping its
+        // `t` slider from 0 to 8 s (markup has no relations, so it is made here).
+        if let Some(t) = wave_t {
+            let doc = scratch.document();
+            let timeline = doc.nodes_of_type(ty("timeline")).find(|&n| doc.is_live(n)).ok_or("no timeline for the wave packet's clip")?;
+            let order = doc.children(timeline).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+            let ids = doc.next_ids(3);
+            let rel = doc.next_relation_ids(1)[0];
+            let mut timing = Timing::default();
+            timing.start = n(0.0);
+            let mut c = Clip::default();
+            c.prop = Slot::Const(Value::Str("slider.value".into()));
+            let key = |at: f64| {
+                let mut k = iron_document::facet::Key::default();
+                k.t = n(at);
+                k.value = n(at);
+                k.easing = Slot::Const(Value::Enum("linear".into()));
+                k.wrap()
+            };
+            phase(&mut scratch, vec![
+                Op::Create { id: ids[0], ty: ty("clip"), parent: Some(timeline), order, facets: vec![timing.wrap(), c.wrap(), named("play t")] },
+                Op::Create { id: ids[1], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![key(0.0)] },
+                Op::Create { id: ids[2], ty: ty("key"), parent: Some(ids[0]), order: OrderKey::after(&OrderKey::first()), facets: vec![key(8.0)] },
+                Op::Link { rel: Relation { id: rel, from: ids[0], to: t, rel: RelKind::Animates, data: BTreeMap::new() } },
+            ])?;
+        }
+    }
 
     // Circuit (schematic.md): a divider in the schematic notation, its parts
     // from the parts library, wired pin to pin, solved live; a probe reads
@@ -1604,6 +1626,44 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         Op::Set { id: r2.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{}.slider.value * 4 kΩ", s[0])) },
         Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("9 V").expect("quantity")) },
     ])?;
+    // The RC charging page's circuit (schematic.md): its parts from the
+    // parts library, wired pin to pin and solved live, in a schematic
+    // composition of its own that the page embeds; a probe reads the
+    // capacitor's node, and R and C follow the page's sliders.
+    let circuit = scratch.document().next_id();
+    let op = composition(&scratch, circuit, "rc circuit", "schematic");
+    phase(&mut scratch, vec![op])?;
+    let built = iron_document::markup::compose(&scratch, &RC_PAGE.replace("#CIRCUIT", &circuit.to_string()), None, gallery_key())?;
+    let (r_slider, c_slider) = (built.named["r_slider"], built.named["c_slider"]);
+    phase(&mut scratch, built.ops)?;
+    let mut placed = Vec::new();
+    // Named without numbers, so the divider's and any new part's
+    // designators (R3, P2, …) count as if this circuit were not here.
+    for (key, x, y, turns, name) in [("vsource", 120.0, 220.0, 0.0, "V"), ("resistor", 220.0, 160.0, 0.0, "R"), ("capacitor", 300.0, 220.0, 1.0, "C"), ("ground", 120.0, 300.0, 0.0, "GND"), ("probe", 250.0, 120.0, 0.0, "P")] {
+        let part = iron_document::parts::find(key).ok_or("no such part")?;
+        let (ops, p) = iron_document::parts::place_ops(scratch.document(), part, circuit, [x, y], turns * std::f64::consts::FRAC_PI_2, Some(name))?;
+        phase(&mut scratch, ops)?;
+        placed.push(p);
+    }
+    let [v1, r1, c1, gnd, probe] = placed[..] else { unreachable!() };
+    let pins = iron_document::parts::pins_on(&scratch, circuit);
+    let end = |p: iron_document::parts::Placed, name: &str| -> Result<(iron_document::parts::End, [f64; 2]), String> {
+        let pin = iron_document::parts::pin(scratch.document(), p.entity, name).ok_or("no pin")?;
+        pins.iter().find(|(e, _)| e.pin == pin).copied().ok_or_else(|| "pin not drawn".to_owned())
+    };
+    let wires = [(end(v1, "p")?, end(r1, "a")?, true), (end(r1, "b")?, end(c1, "a")?, false), (end(c1, "b")?, end(v1, "n")?, false), (end(v1, "n")?, end(gnd, "g")?, false), (end(r1, "b")?, end(probe, "t")?, false)];
+    for ((a, pa), (b, pb), vertical_first) in wires {
+        let mut pts = vec![pa];
+        pts.extend(iron_document::parts::elbow(pa, pb, vertical_first));
+        pts.push(pb);
+        let (ops, _) = iron_document::parts::wire_ops(scratch.document(), circuit, a, b, &pts)?;
+        phase(&mut scratch, ops)?;
+    }
+    phase(&mut scratch, vec![
+        Op::Set { id: r1.entity, path: "args.R".parse().expect("argument"), slot: bound(format!("{r_slider}.slider.value * 1 kΩ")) },
+        Op::Set { id: c1.entity, path: "args.C".parse().expect("argument"), slot: bound(format!("{c_slider}.slider.value * 1 µF")) },
+        Op::Set { id: v1.entity, path: "args.V".parse().expect("argument"), slot: Slot::Const(Value::parse_quantity("5 V").expect("quantity")) },
+    ])?;
     // A narrative about the demo (narrative-panel.md): mentions, live values
     // and view blocks over the scene, the pendulum and the assembly.
     if let Some(md) = lesson_markdown(scratch.document()) {
@@ -1611,7 +1671,32 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         let (_, ops) = iron_document::narrative::create_ops(scratch.document(), "lesson", &blocks);
         phase(&mut scratch, ops)?;
     }
+    // Titles, captions and labels for the demo scene's compositions, last
+    // in each: the scene's own ids, which the scripts know, never move.
+    for (name, src) in notes() {
+        let doc = scratch.document();
+        let Some(comp) = iron_document::composition::compositions(doc).into_iter().find(|&c| doc.get::<DocName>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)) else {
+            return Err(format!("notes for {name}: no such composition"));
+        };
+        let order = doc.children(comp).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+        let built = iron_document::markup::ops(src, Some(comp), order, doc.next_id()).map_err(|e| format!("notes for {name}: {e}"))?;
+        phase(&mut scratch, built.ops)?;
+    }
     Ok(iron_document::TransactionInput { label: "open showcase".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: out, exact: false })
+}
+
+/// `gallery/notes.xml`: each `<notes for="composition">` and the node
+/// markup inside it.
+fn notes() -> Vec<(&'static str, &'static str)> {
+    const NOTES: &str = include_str!("gallery/notes.xml");
+    NOTES
+        .split("<notes for=\"")
+        .skip(1)
+        .map(|part| {
+            let (name, rest) = part.split_once("\">").expect("a notes element");
+            (name, rest.split_once("</notes>").expect("closed notes").0)
+        })
+        .collect()
 }
 
 /// The demo's lesson, naming its nodes by id; `None` if the demo scene is

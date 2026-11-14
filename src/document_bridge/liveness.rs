@@ -47,6 +47,19 @@ fn panel_compositions(doc: &iron_document::Document, view: &super::PanelView) ->
     out
 }
 
+/// Which of `candidates` (compositions) some panel or open embed view
+/// reaches on an open path: the ones on screen, through any embeds.
+pub fn reached(doc: &iron_document::Document, views: &PanelViews, embeds: &EmbedViews, candidates: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+    let mut out = BTreeSet::new();
+    for view in &views.0 {
+        out.extend(composition::reach(doc, &panel_compositions(doc, view), candidates).running);
+    }
+    for e in embeds.0.iter().filter(|e| e.open) {
+        out.extend(composition::reach(doc, &[e.source], candidates).running);
+    }
+    out
+}
+
 pub fn compute_liveness(store: Res<DocumentStore>, views: Res<PanelViews>, embeds: Res<EmbedViews>, sources: Res<LiveSources>, mut out: ResMut<Liveness>) {
     let doc = store.0.document();
     let mut next = Liveness::default();

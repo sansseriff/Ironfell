@@ -1150,12 +1150,12 @@ pub fn document_demo(app: &mut WorkerApp) -> String {
 }
 
 /// Add the contexts showcase (`document_bridge::demo::showcase`): the
-/// outline, pitch and dials compositions, one transaction.
+/// gallery, outline, data and circuit compositions, one transaction.
 pub fn document_showcase(app: &mut WorkerApp) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         let doc = store.0.document();
-        if iron_document::composition::compositions(doc).iter().any(|&c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some("dials")) {
+        if iron_document::composition::compositions(doc).iter().any(|&c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some("circuit")) {
             return Ok(serde_json::json!({"ok": true, "already": true}));
         }
         let tx = crate::document_bridge::showcase(&store.0)?;

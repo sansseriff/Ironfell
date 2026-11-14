@@ -1,0 +1,47 @@
+<composition name="interference">
+  <text name="title" transform2d.x="40" transform2d.y="30" text.content="Young's double-slit interference" font.size="26" font.weight="600" fill.color="@ink"/>
+  <text name="caption" transform2d.x="40" transform2d.y="72" text.content="Drag the sliders: a shorter λ or a wider slit separation d packs the fringes closer; a narrower slit width a widens the envelope." font.size="14" fill.color="@muted"/>
+  <slider id="wavelength_slider" name="wavelength slider" transform2d.x="40" transform2d.y="584" size.w="200" size.h="24" slider.min="400" slider.max="700" slider.step="1" slider.value="633"/>
+  <slider id="separation_slider" name="separation slider" transform2d.x="360" transform2d.y="584" size.w="200" size.h="24" slider.min="50" slider.max="500" slider.step="10" slider.value="250"/>
+  <slider id="width_slider" name="width slider" transform2d.x="680" transform2d.y="584" size.w="200" size.h="24" slider.min="10" slider.max="100" slider.step="1" slider.value="60"/>
+  <let id="crest_spacing_px" name="crest spacing px" let.value="{= $wavelength_slider.slider.value / 550 * 30}"/>
+  <let id="half_separation_px" name="half separation px" let.value="{= 10 + $separation_slider.slider.value / 500 * 40}"/>
+  <let id="slit_gap_px" name="slit gap px" let.value="{= 4 + $width_slider.slider.value / 100 * 8}"/>
+  <group name="controls">
+    <text name="wavelength label" transform2d.x="40" transform2d.y="560" text.content="Wavelength λ" font.size="14" fill.color="@ink-2"/>
+    <text name="wavelength readout" transform2d.x="260" transform2d.y="587" text.content="{= fmt($wavelength_slider.slider.value, 0) + ' nm'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="separation label" transform2d.x="360" transform2d.y="560" text.content="Slit separation d" font.size="14" fill.color="@ink-2"/>
+    <text name="separation readout" transform2d.x="580" transform2d.y="587" text.content="{= fmt($separation_slider.slider.value, 0) + ' µm'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="width label" transform2d.x="680" transform2d.y="560" text.content="Slit width a" font.size="14" fill.color="@ink-2"/>
+    <text name="width readout" transform2d.x="900" transform2d.y="587" text.content="{= fmt($width_slider.slider.value, 0) + ' µm'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+  </group>
+  <group name="schematic">
+    <text name="setup heading" transform2d.x="40" transform2d.y="120" text.content="Setup (not to scale)" font.size="14" font.weight="600" fill.color="@ink-2"/>
+    <rect name="source" transform2d.x="60" transform2d.y="280" size.w="40" size.h="40" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}"/>
+    <text name="source label" transform2d.x="56" transform2d.y="332" text.content="source" font.size="12" fill.color="@muted"/>
+    <group id="incident_crests" name="incident crests" repeat.each="NaN" repeat.count="{= floor(66 / $crest_spacing_px.let.value) + 1}" repeat.key="NaN">
+      <rect name="plane crest" transform2d.x="{= 170 - $incident_crests.repeat.index * $crest_spacing_px.let.value}" transform2d.y="240" size.w="2" size.h="120" appearance.opacity="0.8" fill.color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}"/>
+    </group>
+    <rect name="barrier top" transform2d.x="196" transform2d.y="160" size.w="8" size.h="{= 300 - $half_separation_px.let.value - $slit_gap_px.let.value / 2 - 160}" fill.color="@ink-2"/>
+    <rect name="barrier middle" transform2d.x="196" transform2d.y="{= 300 - $half_separation_px.let.value + $slit_gap_px.let.value / 2}" size.w="8" size.h="{= 2 * $half_separation_px.let.value - $slit_gap_px.let.value}" fill.color="@ink-2"/>
+    <rect name="barrier bottom" transform2d.x="196" transform2d.y="{= 300 + $half_separation_px.let.value + $slit_gap_px.let.value / 2}" size.w="8" size.h="{= 140 - $half_separation_px.let.value - $slit_gap_px.let.value / 2}" fill.color="@ink-2"/>
+    <text name="slits label" transform2d.x="172" transform2d.y="140" text.content="double slit" font.size="12" fill.color="@muted"/>
+    <group id="wave_crests" name="wave crests" repeat.each="NaN" repeat.count="{= floor(210 / $crest_spacing_px.let.value)}" repeat.key="NaN">
+      <path name="crest upper" path.d="{= 'M ' + points(200 + ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value * cos(range(-min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), 25)), 300 - $half_separation_px.let.value + ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value * sin(range(-min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), 25)))}" appearance.opacity="{= 0.9 - $wave_crests.repeat.index * 0.06}" stroke.color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}" stroke.width="1.5"/>
+      <path name="crest lower" path.d="{= 'M ' + points(200 + ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value * cos(range(-min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), 25)), 300 + $half_separation_px.let.value + ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value * sin(range(-min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), min(0.55, atan2(135 - $half_separation_px.let.value, ($wave_crests.repeat.index + 1) * $crest_spacing_px.let.value)), 25)))}" appearance.opacity="{= 0.9 - $wave_crests.repeat.index * 0.06}" stroke.color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}" stroke.width="1.5"/>
+    </group>
+    <rect name="screen" transform2d.x="416" transform2d.y="160" size.w="8" size.h="280" fill.color="@axis"/>
+    <text name="screen label" transform2d.x="400" transform2d.y="140" text.content="screen" font.size="12" fill.color="@muted"/>
+    <path name="L dimension" path.d="M 204 470 L 416 470 M 204 464 L 204 476 M 416 464 L 416 476" stroke.color="@axis"/>
+    <text name="L label" transform2d.x="286" transform2d.y="478" text.content="L = 1 m" font.size="12" fill.color="@muted"/>
+  </group>
+  <group name="screen view">
+    <text name="strip label" transform2d.x="554" transform2d.y="396" text.content="Screen pattern (y from −10 to 10 mm)" font.size="14" font.weight="600" fill.color="@ink-2"/>
+    <rect name="strip backdrop" transform2d.x="554" transform2d.y="420" size.w="410" size.h="36" fill.color="@ink"/>
+    <group id="screen_strip" name="screen strip" transform2d.x="554" transform2d.y="420" repeat.each="NaN" repeat.count="205" repeat.key="NaN">
+      <rect name="strip cell" transform2d.x="{= $screen_strip.repeat.index * 2}" size.w="2" size.h="36" appearance.opacity="{= pow(cos(pi * $separation_slider.slider.value * (-10 + ($screen_strip.repeat.index + 0.5) * 20 / 205) / $wavelength_slider.slider.value), 2) * pow(sinc(pi * $width_slider.slider.value * (-10 + ($screen_strip.repeat.index + 0.5) * 20 / 205) / $wavelength_slider.slider.value), 2)}" fill.color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}"/>
+    </group>
+    <text name="fringe spacing readout" transform2d.x="554" transform2d.y="476" text.content="{= 'Fringe spacing Δy = λL / d = ' + fmt($wavelength_slider.slider.value / $separation_slider.slider.value, 2) + ' mm'}" font.size="16" font.tabular="true" fill.color="@ink-2"/>
+  </group>
+  <place def="std:plot" name="intensity plot" x="500" y="120" w="480" h="260" color="{= spectrum($wavelength_slider.slider.value * 0.000000001 m)}" style="area" title="Intensity on the screen" x_label="screen position y (mm)" xs="{= range(-10, 10, 400)}" y_label="intensity I / I₀" y_max="1" y_min="0" ys="{= pow(cos(pi * $separation_slider.slider.value * $self.xs / $wavelength_slider.slider.value), 2) * pow(sinc(pi * $width_slider.slider.value * $self.xs / $wavelength_slider.slider.value), 2)}"/>
+</composition>

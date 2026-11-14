@@ -187,10 +187,11 @@ pub(crate) fn facets(el: &El, ty: TypeId, names: &Names) -> Result<Vec<Facet>, S
         // One leaf, one value: `x` and `transform2d.x` together are refused.
         let named = attr.strip_prefix("__defer:").map(|l| l.strip_suffix(".bind").unwrap_or(l)).unwrap_or(&attr);
         let (kind, field) = leaf(ty, named)?;
+        let shown = named.to_owned();
         if let Some((.., first)) = seen.iter().find(|(k, f, _)| *k == kind && *f == field) {
-            return Err(format!("{first} and {attr} name one leaf; give it once"));
+            return Err(format!("{first} and {shown} name one leaf; give it once"));
         }
-        seen.push((kind, field, attr.clone()));
+        seen.push((kind, field, shown));
         // A leaf written later (edit.rs): its facet, at its default.
         if let Some(later) = attr.strip_prefix("__defer:") {
             let (kind, _) = leaf(ty, later.strip_suffix(".bind").unwrap_or(later))?;

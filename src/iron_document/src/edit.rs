@@ -450,6 +450,8 @@ impl Planner<'_, '_> {
                 }
                 let local = el.attr("id").and_then(|i| i.strip_prefix('$')).map(str::to_owned);
                 if defers {
+                    // A deferred `k.bind` still wins over a plain `k` beside it.
+                    el.attrs.retain(|(k, _)| !deferred.iter().any(|d| d.strip_suffix(".bind") == Some(k.as_str())));
                     let local = local.clone().expect("named above");
                     for (k, v) in el.attrs.iter_mut() {
                         if deferred.contains(k) {
@@ -721,9 +723,14 @@ impl Planner<'_, '_> {
                 };
                 let mut ops = Vec::new();
                 let mut added: Vec<crate::facet::Facet> = Vec::new();
+                let mut seen: Vec<(crate::facet::FacetKind, String, String)> = Vec::new();
                 for (k, raw) in &pairs {
                     let k = if !k.contains('.') && markup::leaf(ty, k).is_err() && inputs.contains(k) { format!("args.{k}") } else { k.clone() };
                     let (kind, field) = markup::leaf(ty, &k).map_err(|e| fail(self, "parse", e))?;
+                    if let Some((.., first)) = seen.iter().find(|(sk, sf, _)| *sk == kind && *sf == field) {
+                        return Err(fail(self, "parse", format!("{first} and {k} name one leaf; give it once")));
+                    }
+                    seen.push((kind, field.clone(), k.clone()));
                     let slot = markup::slot(markup::kind_of(kind, &field), raw, &names).map_err(|e| fail(self, "parse", format!("{k}=\"{raw}\": {e}")))?;
                     // Setting a field of a facet the node lacks adds the facet
                     // (its type allows it: leaf() checked), as <add> would.
@@ -807,12 +814,18 @@ impl Planner<'_, '_> {
                 // Its names as ids, written back as markup for parts.rs.
                 let names = self.names();
                 fn written(el: &El, names: &Names) -> Result<String, String> {
+                    if !el.text.trim().is_empty() {
+                        return Err(format!("<{}>: text inside a circuit is not read", el.name));
+                    }
                     let attrs = el.attrs.iter().map(|(k, v)| markup::refs(k, v, names).map(|v| format!(" {k}=\"{}\"", escape(&v).replace('"', "&quot;")))).collect::<Result<String, String>>()?;
                     let children = el.children.iter().map(|c| written(c, names)).collect::<Result<String, String>>()?;
                     Ok(if children.is_empty() { format!("<{}{attrs}/>", el.name) } else { format!("<{}{attrs}>{children}</{}>", el.name, el.name) })
                 }
                 let markup = written(el, &names).map_err(|e| fail(self, "circuit", e))?;
                 let sheet = markup::refs("sheet", el.attr("sheet").unwrap_or(""), &names).map_err(|e| fail(self, "circuit", e))?;
+                if sheet.starts_with('#') {
+                    self.node(&sheet).map_err(|e| fail(self, "circuit", e))?;
+                }
                 drop(names);
                 let (ops, summary) = crate::parts::circuit_ops(&self.scratch, &markup).map_err(|e| fail(self, "circuit", e))?;
                 self.push(i, ops).map_err(Failure::Errors)?;
@@ -916,7 +929,7 @@ impl Planner<'_, '_> {
         // A `$name` this edit gave, as its id.
         let id_of = |k: &str| -> Result<Option<String>, String> {
             match el.attr(k) {
-                Some(v) if v.trim().starts_with('$') => self.node(v).map(|id| Some(id.to_string())),
+                Some(v) if v.trim().starts_with('$') || v.trim().starts_with('#') => self.node(v).map(|id| Some(id.to_string())),
                 v => Ok(v.map(str::to_owned)),
             }
         };

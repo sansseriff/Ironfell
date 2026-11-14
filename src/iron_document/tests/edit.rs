@@ -578,3 +578,25 @@ fn a_contexts_entities_survive_planning() {
     let (store, _, _) = desk();
     plan(&store, r#"<edit><context name="A&gt;B"><rule match="all" affords.select="target"/></context></edit>"#);
 }
+
+// Council round 3 (2026-11-14).
+
+#[test]
+fn the_views_value_and_bind_form_may_read_a_place() {
+    let (mut store, c, s) = desk();
+    apply(&mut store, &format!(r#"<edit><group in="{c}"><place def="std:plot" id="$p" x="100" xs="0 1" ys="0 1"/><rect name="m" x="40" x.bind="$p.transform2d.x + 1" w="1" h="1"/></group></edit>"#));
+    assert_eq!(number(&store, named(&store, "m"), "transform2d.x"), 101.0);
+    let es = errors(&store, &format!(r#"<edit><group in="{c}"><place def="std:plot" id="$q" xs="0 1" ys="0 1"/><rect x="{{= $q.x_hi}}" transform2d.x="4"/></group></edit>"#));
+    assert!(es[0].message.contains("x and transform2d.x name one leaf"), "{es:?}");
+    let es = errors(&store, &format!(r#"<edit><set id="{s}" x="1" transform2d.x="2"/></edit>"#));
+    assert!(es[0].message.contains("name one leaf"), "{es:?}");
+}
+
+#[test]
+fn a_verbs_missing_target_is_an_unknown_node() {
+    let (store, _, _) = desk();
+    for xml in [r##"<edit><circuit sheet="#zz4"><place part="ground" name="G" x="0" y="0"/></circuit></edit>"##, r##"<edit><write narrative="#zz5">Hi.</write></edit>"##, r##"<edit><rewrite block="#zz6">Hi.</rewrite></edit>"##] {
+        let es = errors(&store, xml);
+        assert_eq!(es[0].kind, "unknown_node", "{xml}: {es:?}");
+    }
+}

@@ -10,7 +10,7 @@ for (const asynchronous of [false, true]) {
       const { fn: name, args } = documentArguments(command);
       calls.push([name, args]);
       const result = name === 'view' ? '<document version="12"/>'
-        : JSON.stringify(name === 'schema' ? { types: [] } : { ok: true });
+        : JSON.stringify(name === 'schema' ? { types: [] } : name === 'version' ? { version: 12 } : { ok: true });
       return asynchronous ? Promise.resolve(result) : result;
     });
     const [schema, again] = await Promise.all([api.schema(), api.schema()]);
@@ -21,14 +21,18 @@ for (const asynchronous of [false, true]) {
     await api.plan('<edit/>');
     assert.deepEqual(await api.apply({ ops: [] }, 12), { ok: true });
     await api.selection();
-    await api.netlist('circuit');
+    await api.netlists();
+    await api.reply('<edit/>');
+    await api.stream('<ed');
+    await api.revise('<edit/>', '<revise/>');
     assert.deepEqual(calls, [
       ['schema', []],
-      ['view', ['{"scope":null,"fidelity":"skeleton","depth":0}']],
+      ['version', []],
       ['view', ['{"scope":null,"depth":null,"fidelity":"full","relation":"model"}']],
       ['edit_plan', ['<edit/>']],
       ['apply', ['{"ops":[]}', 12]],
-      ['selection', []], ['netlist', ['circuit']],
+      ['selection', []], ['netlists', []],
+      ['reply_read', ['<edit/>']], ['reply_stream', ['<ed']], ['edit_revise', ['<edit/>', '<revise/>']],
     ]);
   });
 }

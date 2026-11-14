@@ -516,12 +516,6 @@ export function topicText(schema: Schema, name: string): string | null {
   return t ? t.text(parts(schema)) : null;
 }
 
-/** The names a reply's <topic name="…"/> asks for (several space-separated). */
-export function topicRequest(text: string): string[] | null {
-  const names = [...text.matchAll(/<topic\s[^>]*?name="([^"]*)"[^>]*\/?>/g)].flatMap((m) => m[1].split(/[\s,]+/)).filter(Boolean);
-  return names.length ? [...new Set(names)] : null;
-}
-
 /** The prompt: the core, the topics given (all of them when `topics` is
  *  omitted), and an index of the rest. */
 export function manifest(schema: Schema, conversation = false, topics: readonly TopicName[] = ALL): string {

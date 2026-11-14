@@ -177,7 +177,8 @@ first that changes `iron_document`.
 - **UI:** `ChatProgress.svelte` (work log: current step, elapsed, Stop; steps
   with reasoning; "Worked for …" folded once done), streamed prose through
   `ChatMarkdown`, and "Writing the edit · N commands" with the last six verbs
-  and the markup so far (`streamView`, `editVerbs` in `chat/conversation.ts`).
+  and the markup so far (read by the engine, `iron_document::reply::stream`, sent as
+  `stream` events; `describeVerb` in `chat/conversation.ts` words each verb).
   A stopped turn reads "Stopped. Nothing was changed." and restores the prompt.
 
 - **Tokens (added the same day):** two more events, `thinking-tokens` (Claude
@@ -253,7 +254,7 @@ Fixed:
   column; identical errors are one line, `ops="…"` and "(N times)".
 - The manifest says `id` is optional on `<create>` and aliases work in
   bindings.
-- **`<revise>`** (`src-ui/model/revise.ts`): a repair names only what changes
+- **`<revise>`** (now `iron_document::reply::revise`, markup.md §4): a repair names only what changes
   in the rejected edit, kept by `ask` as written: `<change op>` (set or add
   attributes), `<replace op>`, `<drop op>`, `<insert after|before>`, and
   `<text old new all>` (exact text, once unless `all`; runs last). `op` is an

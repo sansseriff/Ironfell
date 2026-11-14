@@ -961,6 +961,46 @@ pub fn document_edit_plan(app: &mut WorkerApp, xml: String) -> String {
     .to_string()
 }
 
+/// Apply a `<revise>` to the edit the store rejected (iron_document::reply):
+/// `{"ok": true, "edit": markup}` or `{"ok": false, "error": message}`.
+pub fn document_edit_revise(rejected: String, patch: String) -> String {
+    match iron_document::reply::revise(&rejected, &patch) {
+        Ok(edit) => serde_json::json!({"ok": true, "edit": edit}),
+        Err(error) => serde_json::json!({"ok": false, "error": error}),
+    }
+    .to_string()
+}
+
+/// What a model's reply asks for: its edit or revise, looks, topics,
+/// `<continue/>` and its note (iron_document::reply::read).
+pub fn document_reply_read(text: String) -> String {
+    serde_json::to_string(&iron_document::reply::read(&text)).expect("a reply serialises")
+}
+
+/// A reply as far as it has streamed: prose, the edit forming and its verbs
+/// (iron_document::reply::stream).
+pub fn document_reply_stream(text: String) -> String {
+    serde_json::to_string(&iron_document::reply::stream(&text)).expect("a stream serialises")
+}
+
+/// Every schematic sheet's netlist (`parts::netlist`), by name:
+/// `{"ok": true, "netlists": [{"sheet", "netlist"}]}`.
+pub fn document_netlists(app: &mut WorkerApp) -> String {
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
+    };
+    let doc = store.0.document();
+    let netlists: Vec<serde_json::Value> = doc
+        .nodes_of_type(iron_document::TypeId::lookup("composition").expect("registered"))
+        .filter(|&c| doc.is_live(c) && iron_document::composition::notation(doc, c).as_deref() == Some(iron_document::parts::NOTATION))
+        .map(|c| {
+            let sheet = doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_else(|| c.to_string());
+            serde_json::json!({"sheet": sheet, "netlist": iron_document::parts::netlist(&store.0, c)})
+        })
+        .collect();
+    serde_json::json!({"ok": true, "netlists": netlists}).to_string()
+}
+
 /// A sheet's netlist, SPICE-like, with each net's solved voltage
 /// (schematic.md §5; `parts::netlist`). `sheet` is a composition's id or
 /// name.
@@ -1242,6 +1282,12 @@ pub fn document_focus(app: &mut WorkerApp, node: String) -> String {
         active_info.remaining_frames = 10;
     }
     serde_json::json!({"ok": true}).to_string()
+}
+
+/// The document's version: `{"version": N}` (0 before a store exists).
+pub fn document_version(app: &mut WorkerApp) -> String {
+    let version = app.world().get_resource::<crate::document_bridge::DocumentStore>().map_or(0, |s| s.0.document().version().0);
+    serde_json::json!({"version": version}).to_string()
 }
 
 pub fn document_selection(app: &mut WorkerApp) -> String {

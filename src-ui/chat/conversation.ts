@@ -3,6 +3,8 @@ import { marked } from 'marked';
 import type { AskResult } from '../model/agent';
 import { boundedHistory, type ConversationMessage } from '../model/conversation';
 import type { AgentEvent, AgentPhase, AskLive } from '../model/progress';
+import type { StreamVerb, StreamView } from '../model/api';
+import type { EditOutcome } from '../model/edit';
 
 export type NarrativeMode = 'authoring' | 'hybrid' | 'exploration';
 export type ContentPart = { kind: 'markdown'; text: string } | { kind: 'view'; show: string; focus: string };
@@ -46,6 +48,8 @@ export interface TurnProgress {
   steps: WorkStep[];
   /** The current model reply as it streams; a new model step starts it afresh. */
   text: string;
+  /** That reply as the engine read it, once it has (iron_document::reply::stream). */
+  view?: StreamView;
 }
 
 /** Fold a running turn's events into its progress, in place (it may be a
@@ -56,7 +60,7 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
     if (event.kind === 'phase') {
       if (step && step.endedAt === undefined) step.endedAt = now;
       progress.steps.push({ phase: event.phase, attempt: event.attempt, startedAt: now, reasoning: '' });
-      if (event.phase === 'thinking') progress.text = '';
+      if (event.phase === 'thinking') { progress.text = ''; progress.view = undefined; }
     } else if (event.kind === 'usage') {
       if (step) {
         step.usage = { output: event.output, ...(event.thinking !== undefined ? { thinking: event.thinking } : {}) };
@@ -67,13 +71,14 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
       if (step) { step.thinkingTokens = event.estimated; step.firstTokenAt ??= now; }
     } else if (event.kind === 'reasoning') {
       if (step) { step.reasoning += event.delta; step.reasoningChars = (step.reasoningChars ?? 0) + event.delta.length; step.firstTokenAt ??= now; }
+    } else if (event.kind === 'stream') {
+      progress.view = event.view;
+      const formed = event.view.edit;
+      if (step && formed !== null) step.wrote = formed.startsWith('<revise') ? 'revise' : 'edit';
     } else {
       progress.text += event.delta;
       if (step) { step.textChars = (step.textChars ?? 0) + event.delta.length; step.firstTokenAt ??= now; }
-      if (step) {
-        const formed = streamView(progress.text).edit;
-        step.wrote = formed !== null ? (formed.startsWith('<revise') ? 'revise' : 'edit') : progress.text.trim() ? 'prose' : step.wrote;
-      }
+      if (step && step.wrote !== 'edit' && step.wrote !== 'revise' && progress.text.trim()) step.wrote = 'prose';
     }
   }
   return progress;
@@ -135,62 +140,9 @@ export function stepLabel(step: WorkStep, done: boolean): string {
   }
 }
 
-/** A streaming reply split for display: the prose so far (with any
- *  half-written `<edit`, `<look` or `::view` held back so markup never
- *  flashes as text), the edit markup if one has begun, and its verbs that
- *  have closed. */
-export interface StreamView { prose: string; edit: string | null; verbs: string[] }
-
-export function streamView(text: string): StreamView {
-  let start = -1;
-  for (const match of text.matchAll(/<(?:edit|look|revise)[\s>/]/g)) {
-    // An edit inside a fenced code block is an example, not the edit.
-    if ((text.slice(0, match.index).match(/```/g)?.length ?? 0) % 2 === 0) { start = match.index!; break; }
-  }
-  if (start < 0) return { prose: holdBack(text), edit: null, verbs: [] };
-  if (text.startsWith('<look', start)) {
-    // A look asks to see inside instances; it is not shown as prose or an edit.
-    const gt = text.indexOf('>', start);
-    return { prose: text.slice(0, start) + (gt < 0 ? '' : holdBack(text.slice(gt + 1))), edit: null, verbs: [] };
-  }
-  // A <revise> patches the rejected edit; it forms like an edit.
-  const closeTag = text.startsWith('<revise', start) ? '</revise>' : '</edit>';
-  const close = text.indexOf(closeTag, start);
-  const end = close < 0 ? text.length : close + closeTag.length;
-  const edit = text.slice(start, end);
-  const after = close < 0 ? '' : holdBack(text.slice(end));
-  const prose = text.slice(0, start) + after;
-  return { prose: prose.trim() ? prose : '', edit, verbs: editVerbs(edit) };
-}
-
-function holdBack(text: string): string {
-  const lt = text.lastIndexOf('<');
-  if (lt >= 0 && !text.slice(lt).includes('>')) {
-    const tail = text.slice(lt);
-    if (['<edit', '<look', '<revise'].some(tag => tag.startsWith(tail) || tail.startsWith(tag))) text = text.slice(0, lt);
-  }
-  const line = text.slice(text.lastIndexOf('\n') + 1);
-  if (line.startsWith(':')) text = text.slice(0, text.length - line.length);
-  return text;
-}
-
-/** The top-level verbs of edit markup whose tags have closed, described. */
-export function editVerbs(edit: string): string[] {
-  const verbs: string[] = [];
-  let depth = 0;
-  for (const tag of edit.matchAll(/<(\/?)([a-zA-Z][\w-]*)((?:\s+[\w.:-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g)) {
-    const [, closing, name, attrText, selfClosing] = tag;
-    if (name === 'edit' || name === 'revise') continue;
-    if (closing) { depth = Math.max(0, depth - 1); continue; }
-    if (depth === 0) verbs.push(describeVerb(name, attrText));
-    if (!selfClosing) depth++;
-  }
-  return verbs;
-}
-
-function describeVerb(verb: string, attrText: string): string {
-  const a: Record<string, string> = {};
-  for (const m of attrText.matchAll(/([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) a[m[1]] = m[2] ?? m[3];
+/** A verb of the edit forming, in a few words. */
+export function describeVerb({ name: verb, attrs }: StreamVerb): string {
+  const a: Record<string, string> = Object.fromEntries(attrs);
   const named = a.name ? ` "${a.name}"` : '';
   switch (verb) {
     case 'set': case 'add': {
@@ -289,22 +241,18 @@ export function turnLog(turn: ChatTurn, now = Date.now()) {
   };
 }
 
-/** A rejected edit's `<edit-failed>` markup as a sentence: its errors' text,
- *  unescaped; the markup itself stays in the edit details. */
 /** The edits a turn applied before it ended, whatever its status: a stopped
  *  or failed turn can have applied earlier ones (a picture refinement). */
 export function appliedEdits(turn: Pick<ChatTurn, 'result'>): { summary?: string }[] {
   return (turn.result?.trace ?? []).filter(step => step.kind === 'edit' && step.ok) as { summary?: string }[];
 }
 
-/** `applied`: earlier edits in the turn went in, so only the last was rejected. */
-export function failureSummary(failure: string, attempts = 1, applied = false): string {
-  const errors = [...failure.matchAll(/<error\b[^>]*>([\s\S]*?)<\/error>/g)]
-    .map(m => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&').trim())
-    .filter(Boolean);
-  const revise = failure.match(/<revise-failed>([\s\S]*?)<\/revise-failed>/);
-  if (!errors.length && revise) errors.push(`the revise could not be applied: ${revise[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').trim()}`);
-  if (!errors.length) return failure.trim() || 'The request could not be completed.';
+/** A rejected edit as a sentence for the person: its errors (the markup
+ *  stays in the edit details). `applied`: earlier edits in the turn went
+ *  in, so only the last was rejected. */
+export function failureSummary(outcome: Pick<EditOutcome, 'failure' | 'errors'>, attempts = 1, applied = false): string {
+  const errors = outcome.errors ?? [];
+  if (!errors.length) return outcome.failure?.trim() || 'The request could not be completed.';
   const tries = attempts > 1 ? ` after ${attempts} attempts` : '';
   return applied
     ? `Earlier edits in this turn remain applied; the next edit was rejected${tries}, so that edit was not applied: ${errors.join('; ')}`

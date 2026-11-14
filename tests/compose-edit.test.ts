@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { documentArguments } from '../src-ui/runtime/protocol.generated';
 import { makeDocumentApi } from '../src-ui/model/api';
 import { applyEdit } from '../src-ui/model/edit';
-import { ask, lookRequest } from '../src-ui/model/agent';
-import { manifest, topicRequest, topicsFor } from '../src-ui/model/manifest';
-import { fakePlanner } from './fixtures/plan';
+import { ask } from '../src-ui/model/agent';
+import { manifest, topicsFor } from '../src-ui/model/manifest';
+import { fakePlanner, plan as planOf, planned, reader, said } from './fixtures/plan';
 
 /** A document API whose engine records each call and answers from `answer`. */
 function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: true })) {
@@ -19,6 +19,11 @@ function fake(answer: (name: string, args: unknown[]) => unknown = () => ({ ok: 
     if (name === 'view') return scope ? `<document version="3">\n  <rect id="${scope}"/>\n</document>` : `<document version="3"/>${JSON.stringify(args)}`;
     if (name === 'schema') return JSON.stringify({ types: { rect: { facets: [{ kind: 'transform2d', required: true }], default_host: '2d', children: 'any' } }, facets: { transform2d: { x: 'number', y: 'number' }, on: { x: 'number' } }, standard: [{ key: 'laser', ports: [{ name: 'power', dir: 'in', kind: 'value', default: '10 mW' }] }] });
     if (name === 'selection') return '[]';
+    if (name === 'version') return JSON.stringify({ version: 3 });
+    if (name === 'reply_read') return JSON.stringify(reader.reply(String(args[0])));
+    if (name === 'reply_stream') return JSON.stringify(reader.stream(String(args[0])));
+    if (name === 'edit_revise') return JSON.stringify(reader.revise(String(args[0]), String(args[1])));
+    if (name === 'netlists') return JSON.stringify(reader.netlists());
     if (name === 'edit_plan') {
       // A test's own answer, or the fake planner's.
       const canned = answer(name, args) as object | undefined;
@@ -59,7 +64,7 @@ test('errors read as the model wrote the edit: the verb that wrote each op, the 
 
 test('a look shows the named instances expanded, and is not a repair attempt', async () => {
   const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
-  const replies = ['<look expand="#u #3B"/>', '<edit><place entity="#3B" in="#C"/></edit>'];
+  const replies = [said({ expand: ['#u', '#3B'] }), said({ edit: planned('<edit><place entity="#3B" in="#C"/></edit>', planOf([['place #3B', []]])) })];
   const seen: string[] = [];
   const transport = {
     name: 'script',
@@ -74,8 +79,6 @@ test('a look shows the named instances expanded, and is not a repair attempt', a
   const looked = calls.filter(([n, a]) => n === 'view' && String(a[0]).includes('"expand"')).map(([, a]) => JSON.parse(String(a[0])));
   assert.deepEqual(looked.map(q => [q.scope, q.expand]), [['#u', ['#u']], ['#3B', ['#3B']]]);
   assert.match(seen[1], /^LOOK\n/);
-  assert.deepEqual(lookRequest('<look expand="u7"/>'), ['#u7']);
-  assert.equal(lookRequest('no look here'), null);
 });
 
 test('the prompt comes in topics: a core, the relevant ones, an index of the rest', () => {
@@ -94,13 +97,11 @@ test('the prompt comes in topics: a core, the relevant ones, an index of the res
   assert.deepEqual(topicsFor('<document><rect id="#1"/></document>', 'make it red'), []);
   assert.deepEqual(topicsFor('<composition id="#c" name="sheet" notation="schematic">', 'make it red'), ['schematic']);
   assert.deepEqual(topicsFor('<document/>', 'add a table of the results'), ['tables']);
-  assert.deepEqual(topicRequest('<topic name="tables layout"/>'), ['tables', 'layout']);
-  assert.equal(topicRequest('nothing'), null);
 });
 
 test('a topic request is answered with that topic, and is not a repair attempt', async () => {
   const { api } = fake(name => (name === 'apply' ? { ok: true, version: 4 } : { ok: true }));
-  const replies = ['<topic name="tables"/>', '<edit><table in="#C" x="0" y="0">a | b</table></edit>'];
+  const replies = [said({ topics: ['tables'] }), said({ edit: planned('<edit><table in="#C" x="0" y="0">a | b</table></edit>', planOf([['table', []]])) })];
   const seen: string[] = [];
   let system = '';
   const transport = {
@@ -125,6 +126,10 @@ test('the manifest lists the standard components from the schema', () => {
   assert.doesNotMatch(text, /only when asked/);
 });
 
+/** One step of several: a set, and <continue/>. */
+const stepEdit = planned('<edit><set id="#N1" x="5"/></edit>', planOf([['set #N1', [{ t: 'set', id: '#N1', path: 'transform2d.x', slot: 5 }]]]));
+const step = said({ edit: stepEdit }, { continue: true });
+
 /** A transport that answers from a list, recording what it was sent last. */
 function scripted(replies: string[] | (() => string)) {
   const seen: string[] = [];
@@ -141,8 +146,8 @@ test('<continue/> after an applied edit asks for the next step, told what the fi
   let version = 3;
   const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: ++version } : { ok: true }));
   const { seen, transport } = scripted([
-    '<edit><rect in="#1" id="$a" x="0" y="0"/></edit><continue/>',
-    '<edit><set id="#N1" x="5"/></edit>',
+    said({ edit: planned('<edit><rect in="#1" id="$a" x="0" y="0"/></edit>', planOf([['create $a', [{ t: 'create', id: '#N1', ty: 'rect', parent: '#1', order: 'a0', facets: [] }]]], { $a: '#N1' })) }, { continue: true }),
+    said({ edit: stepEdit }),
   ]);
   const result = await ask(api, transport, 'two steps');
   assert.equal(result.ok, true);
@@ -158,7 +163,7 @@ test('repairs in a row are bounded, and a stuck turn says the earlier steps are 
     applies++;
     return applies === 1 ? { ok: true, version: 4 } : { ok: false, version: 4, errors: [{ op: 0, kind: 'bad', message: 'no' }] };
   });
-  const { transport } = scripted(() => '<edit><set id="#N1" x="5"/></edit><continue/>');
+  const { transport } = scripted(() => step);
   const result = await ask(api, transport, 'stuck');
   assert.equal(result.ok, false);
   assert.equal(applies, 1 + 4, 'one applied step, then an edit and three repairs');
@@ -168,7 +173,7 @@ test('repairs in a row are bounded, and a stuck turn says the earlier steps are 
 test('every model call counts against the turn\'s budget', async () => {
   let version = 3;
   const { api, calls } = fake(name => (name === 'apply' ? { ok: true, version: ++version } : { ok: true }));
-  const { transport } = scripted(() => '<edit><set id="#N1" x="5"/></edit><continue/>');
+  const { transport } = scripted(() => step);
   const result = await ask(api, transport, 'forever');
   assert.equal(calls.filter(([n]) => n === 'apply').length, 20);
   assert.equal(result.ok, true, 'the last step applied');

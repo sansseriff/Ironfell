@@ -75,8 +75,8 @@ pub fn find(key: &str) -> Option<&'static Part> {
 }
 
 /// An element of the markup: its name, attributes and children, the text
-/// it holds (entities decoded), and its own source.
-#[derive(Debug, Clone)]
+/// it holds (entities decoded), and where it lies in its source.
+#[derive(Debug, Clone, Default)]
 pub(crate) struct El {
     pub(crate) name: String,
     pub(crate) attrs: Vec<(String, String)>,
@@ -87,6 +87,14 @@ pub(crate) struct El {
     pub(crate) text: String,
     /// What lies between its tags, as written.
     pub(crate) inner: String,
+    /// Its source, from its `<` to the end of its closing tag (of the
+    /// opening tag, for an empty element), as offsets into what was read.
+    pub(crate) span: std::ops::Range<usize>,
+    /// The end of its opening tag, after the `>`.
+    pub(crate) open: usize,
+    /// Read to its closing tag: false only for the element a [`partial`]
+    /// read stopped inside.
+    pub(crate) closed: bool,
 }
 
 /// Elements whose content is text, not elements: markdown and SVG.
@@ -158,85 +166,135 @@ fn text_with_cdata(s: &str) -> Result<String, String> {
 /// Text between tags is the element's `text`; the elements in [`RAW`]
 /// hold text only, so markdown or SVG inside them is not read as markup.
 pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
-    fn level(all: &str, rest: &mut &str, closing: Option<&str>, text: &mut String) -> Result<Vec<El>, String> {
-        let mut out = Vec::new();
-        loop {
-            let t = rest.find('<').unwrap_or(rest.len());
-            if !rest[..t].trim().is_empty() {
-                if closing.is_none() {
-                    return Err(format!("text outside an element: \"{}\"", rest[..t].trim().chars().take(40).collect::<String>()));
+    let mut rest = src;
+    Ok(level(src, &mut rest, None, &mut String::new(), false)?.0)
+}
+
+/// The elements of markup still being written (a model's reply as it
+/// streams), read as [`elements`] reads them as far as they go: each
+/// complete element, then the one the text stops inside, `closed: false`,
+/// with the children read so far. A tag not yet ended is left out, and the
+/// read ends where the markup stops being well-formed.
+pub(crate) fn partial(src: &str) -> Vec<El> {
+    let mut rest = src;
+    level(src, &mut rest, None, &mut String::new(), true).map(|(els, _)| els).unwrap_or_default()
+}
+
+/// One level of elements, up to `closing`'s end tag (or the end of `all`
+/// at the top). Also whether a partial read stopped inside it.
+fn level(all: &str, rest: &mut &str, closing: Option<&str>, text: &mut String, partial: bool) -> Result<(Vec<El>, bool), String> {
+    let mut out = Vec::new();
+    loop {
+        match next(all, rest, closing, text, partial) {
+            Ok(Next::El(el)) => {
+                let stopped = !el.closed;
+                out.push(el);
+                if stopped {
+                    return Ok((out, true));
                 }
-                text.push_str(&unescape(&rest[..t]));
             }
-            *rest = &rest[t..];
-            if rest.is_empty() {
+            Ok(Next::Skipped) => {}
+            Ok(Next::Closed) => return Ok((out, false)),
+            Ok(Next::End) => {
                 return match closing {
+                    Some(_) if partial => Ok((out, true)),
                     Some(n) => Err(format!("<{n}> is not closed")),
-                    None => Ok(out),
-                };
-            }
-            // A `<` that starts no tag is text (a table's merge mark, `a < b`).
-            if !rest[1..].starts_with(|c: char| c.is_alphabetic() || matches!(c, '/' | '!' | '?')) {
-                if closing.is_none() {
-                    return Err(format!("text outside an element: \"{}\"", rest.chars().take(40).collect::<String>()));
+                    None => Ok((out, false)),
                 }
-                text.push('<');
-                *rest = &rest[1..];
-                continue;
             }
-            if let Some(r) = rest.strip_prefix("<!--") {
-                let end = r.find("-->").ok_or("unclosed comment")?;
-                *rest = &r[end + 3..];
-                continue;
-            }
-            if let Some(r) = rest.strip_prefix("<![CDATA[") {
-                let end = r.find("]]>").ok_or("unclosed CDATA")?;
-                text.push_str(&r[..end]);
-                *rest = &r[end + 3..];
-                continue;
-            }
-            if rest.starts_with("<?") || rest.starts_with("<!") {
-                let end = rest.find('>').ok_or("unclosed declaration")?;
-                *rest = &rest[end + 1..];
-                continue;
-            }
-            if let Some(r) = rest.strip_prefix("</") {
-                let end = r.find('>').ok_or("unclosed tag")?;
-                let name = r[..end].trim();
-                if Some(name) != closing {
-                    return Err(format!("</{name}> does not close {}", closing.map_or("anything".to_owned(), |c| format!("<{c}>"))));
-                }
-                *rest = &r[end + 1..];
-                return Ok(out);
-            }
-            let r = &rest[1..];
-            // The tag ends at the first `>` outside a quoted value.
-            let mut quote: Option<char> = None;
-            let end = r.char_indices().find(|&(_, c)| {
-                match quote {
-                    Some(q) if c == q => quote = None,
-                    None if c == '"' || c == '\'' => quote = Some(c),
-                    _ => {}
-                }
-                c == '>' && quote.is_none()
-            }).map(|(i, _)| i).ok_or("unclosed tag")?;
-            let (tag, empty) = match r[..end].strip_suffix('/') {
-                Some(t) => (t, true),
-                None => (&r[..end], false),
-            };
-            *rest = &r[end + 1..];
-            let (name, attrs) = tag.trim().split_once(char::is_whitespace).unwrap_or((tag.trim(), ""));
-            if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_alphabetic()) {
-                return Err(format!("expected a tag at \"<{}\"", tag.chars().take(20).collect::<String>()));
-            }
-            let attrs = crate::contexts::attributes(attrs).map_err(|e| format!("<{name}>: {e}"))?;
-            let inner_start = all.len() - rest.len();
-            let mut own = String::new();
-            let children = if empty {
-                Vec::new()
-            } else if RAW.contains(&name) {
-                let close = format!("</{name}>");
-                let at = rest.find(&close).ok_or_else(|| format!("<{name}> is not closed"))?;
+            Err(_) if partial => return Ok((out, true)),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+enum Next {
+    El(El),
+    /// Text, a comment, CDATA or a declaration.
+    Skipped,
+    /// `closing`'s end tag.
+    Closed,
+    End,
+}
+
+fn next(all: &str, rest: &mut &str, closing: Option<&str>, text: &mut String, partial: bool) -> Result<Next, String> {
+    let at = |rest: &str| all.len() - rest.len();
+    let t = rest.find('<').unwrap_or(rest.len());
+    if !rest[..t].trim().is_empty() {
+        if closing.is_none() {
+            return Err(format!("text outside an element: \"{}\"", rest[..t].trim().chars().take(40).collect::<String>()));
+        }
+        text.push_str(&unescape(&rest[..t]));
+    }
+    *rest = &rest[t..];
+    if rest.is_empty() {
+        return Ok(Next::End);
+    }
+    // A `<` that starts no tag is text (a table's merge mark, `a < b`).
+    if !rest[1..].starts_with(|c: char| c.is_alphabetic() || matches!(c, '/' | '!' | '?')) {
+        if closing.is_none() {
+            return Err(format!("text outside an element: \"{}\"", rest.chars().take(40).collect::<String>()));
+        }
+        text.push('<');
+        *rest = &rest[1..];
+        return Ok(Next::Skipped);
+    }
+    if let Some(r) = rest.strip_prefix("<!--") {
+        let end = r.find("-->").ok_or("unclosed comment")?;
+        *rest = &r[end + 3..];
+        return Ok(Next::Skipped);
+    }
+    if let Some(r) = rest.strip_prefix("<![CDATA[") {
+        let end = r.find("]]>").ok_or("unclosed CDATA")?;
+        text.push_str(&r[..end]);
+        *rest = &r[end + 3..];
+        return Ok(Next::Skipped);
+    }
+    if rest.starts_with("<?") || rest.starts_with("<!") {
+        let end = rest.find('>').ok_or("unclosed declaration")?;
+        *rest = &rest[end + 1..];
+        return Ok(Next::Skipped);
+    }
+    if let Some(r) = rest.strip_prefix("</") {
+        let end = r.find('>').ok_or("unclosed tag")?;
+        let name = r[..end].trim();
+        if Some(name) != closing {
+            return Err(format!("</{name}> does not close {}", closing.map_or("anything".to_owned(), |c| format!("<{c}>"))));
+        }
+        *rest = &r[end + 1..];
+        return Ok(Next::Closed);
+    }
+    let start = at(rest);
+    let r = &rest[1..];
+    // The tag ends at the first `>` outside a quoted value.
+    let mut quote: Option<char> = None;
+    let end = r.char_indices().find(|&(_, c)| {
+        match quote {
+            Some(q) if c == q => quote = None,
+            None if c == '"' || c == '\'' => quote = Some(c),
+            _ => {}
+        }
+        c == '>' && quote.is_none()
+    }).map(|(i, _)| i).ok_or("unclosed tag")?;
+    let (tag, empty) = match r[..end].strip_suffix('/') {
+        Some(t) => (t, true),
+        None => (&r[..end], false),
+    };
+    *rest = &r[end + 1..];
+    let (name, attrs) = tag.trim().split_once(char::is_whitespace).unwrap_or((tag.trim(), ""));
+    if name.is_empty() || !name.chars().next().is_some_and(|c| c.is_alphabetic()) {
+        return Err(format!("expected a tag at \"<{}\"", tag.chars().take(20).collect::<String>()));
+    }
+    let attrs = crate::contexts::attributes(attrs).map_err(|e| format!("<{name}>: {e}"))?;
+    let open = at(rest);
+    let mut own = String::new();
+    let mut closed = true;
+    let children = if empty {
+        Vec::new()
+    } else if RAW.contains(&name) {
+        let close = format!("</{name}>");
+        match rest.find(&close) {
+            Some(at) => {
                 let body = &rest[..at];
                 own = if name == "import-svg" {
                     // SVG is XML: its own parser decodes its entities, once;
@@ -249,18 +307,26 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
                     text_with_cdata(body)?
                 };
                 *rest = &rest[at + close.len()..];
-                Vec::new()
-            } else {
-                level(all, rest, Some(name), &mut own)?
-            };
-            let end_at = all.len() - rest.len();
-            let inner = if empty { String::new() } else { all[inner_start..end_at].rsplit_once("</").map_or(String::new(), |(i, _)| i.to_owned()) };
-            out.push(El { name: name.to_owned(), attrs, children, text: own, inner });
+            }
+            None if partial => {
+                closed = false;
+                *rest = "";
+            }
+            None => return Err(format!("<{name}> is not closed")),
         }
-    }
-    let mut rest = src;
-    let mut stray = String::new();
-    level(src, &mut rest, None, &mut stray)
+        Vec::new()
+    } else {
+        let (children, stopped) = level(all, rest, Some(name), &mut own, partial)?;
+        closed = !stopped;
+        children
+    };
+    let end_at = at(rest);
+    let inner = match (empty, closed) {
+        (true, _) => String::new(),
+        (false, true) => all[open..end_at].rsplit_once("</").map_or(String::new(), |(i, _)| i.to_owned()),
+        (false, false) => all[open..end_at].to_owned(),
+    };
+    Ok(Next::El(El { name: name.to_owned(), attrs, children, text: own, inner, span: start..end_at, open, closed }))
 }
 
 /// Parse parts markup.

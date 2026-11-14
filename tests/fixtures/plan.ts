@@ -1,72 +1,119 @@
 /**
- * A stand-in for the engine's edit planner (iron_document::edit, the
- * `edit_plan` call) in tests of the agent loop, merging and revising. The
- * real planner is tested in Rust (src/iron_document/tests/edit.rs); this one
- * makes just enough of a plan: a top-level node is a create (ids #N1, #N2 …,
- * its `id="$x"` an alias), a <set>'s attributes are sets (a bare x, y read as
- * transform2d, w, h as size), a <delete> a delete; other verbs write nothing.
+ * Stand-ins for the engine's markup reader and planner (iron_document::reply
+ * and iron_document::edit) in tests of the agent loop, merging and the chat.
+ * Bun cannot run the engine, and these read no markup: a test scripts each
+ * model reply with what the engine reads in it (`said`, `scripted`), each
+ * edit with the plan the engine makes of it (`planned`), and each revise
+ * with the edit it makes (`revised`). The reader and the planner are tested
+ * in Rust (src/iron_document/tests/reply.rs, edit.rs).
  */
+import type { Reply, StreamView } from '../../src-ui/model/api';
 import type { Plan, PlanResult } from '../../src-ui/model/edit';
+import { executableReply } from '../../src-ui/model/conversation';
 
-const VERBS = ['set', 'add', 'delete', 'reparent', 'link', 'unlink', 'place', 'make-component', 'circuit', 'table', 'context', 'import-svg', 'link-figures', 'write', 'rewrite'];
-/** Node types the fake knows; any other element is refused, as the engine refuses one. */
-const TYPES = ['group', 'rect', 'ellipse', 'text', 'path', 'slider', 'let', 'composition', 'definition', 'template', 'port_spec', 'library', 'model', 'timeline', 'clip', 'key', 'narrative', 'embed', 'empty', 'mesh'];
-const BARE: Record<string, string> = { x: 'transform2d.x', y: 'transform2d.y', w: 'size.w', h: 'size.h', name: 'name.text' };
+/** A part of a scripted reply: prose, or what its markup asks for. */
+export type Part = string | { edit: string } | { revise: string } | { picture: string } | { expand: string[] } | { topics: string[] } | { continue: true };
 
-/** The edit's top-level elements, with their attributes. */
-function verbs(xml: string): { name: string; attrs: Record<string, string> }[] {
-  const out: { name: string; attrs: Record<string, string> }[] = [];
-  let depth = 0;
-  for (const m of xml.matchAll(/<(\/?)([\w:-]+)((?:\s+[\w.:-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'))?)*)\s*(\/?)>/g)) {
-    const [, close, name, attrText, self] = m;
-    if (close) { depth--; continue; }
-    if (depth === 1) {
-      const attrs: Record<string, string> = {};
-      for (const a of attrText.matchAll(/([\w.:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) attrs[a[1]] = a[2] ?? a[3];
-      out.push({ name, attrs });
-    }
-    if (!self) depth++;
+const replies = new Map<string, Reply>();
+const plans = new Map<string, { ok: true; plan: Plan } | { ok: false; errors?: { op: number | null; kind: string; message: string; verb?: string }[]; failure?: string }>();
+const revisions = new Map<string, { ok: true; edit: string } | { ok: false; error: string }>();
+
+const prose = (text: string): Reply => ({ edit: null, revise: null, picture: null, expand: [], topics: [], continue: false, note: text.trim(), bare: text.trim() });
+
+function markup(part: Part): string {
+  if (typeof part === 'string') return part;
+  if ('edit' in part) return part.edit;
+  if ('revise' in part) return part.revise;
+  if ('picture' in part) return `<look picture="${part.picture}"/>`;
+  if ('expand' in part) return `<look expand="${part.expand.join(' ')}"/>`;
+  if ('topics' in part) return `<topic name="${part.topics.join(' ')}"/>`;
+  return '<continue/>';
+}
+
+/** A model reply of `parts`, each on its own line, scripted with what the
+ *  engine reads in it. */
+export function said(...parts: Part[]): string {
+  const text = parts.map(markup).join('\n');
+  const reading = prose('');
+  for (const part of parts) {
+    if (typeof part === 'string') continue;
+    if ('edit' in part) reading.edit ??= part.edit;
+    else if ('revise' in part) reading.revise ??= part.revise;
+    else if ('picture' in part) reading.picture ??= part.picture;
+    else if ('expand' in part) reading.expand = reading.expand.length ? reading.expand : part.expand.map((id) => (id.startsWith('#') ? id : `#${id}`));
+    else if ('topics' in part) for (const t of part.topics) { if (!reading.topics.includes(t)) reading.topics.push(t); }
+    else reading.continue = true;
   }
-  return out;
+  const block = parts.find((p) => typeof p === 'object' && 'edit' in p) ?? parts.find((p) => typeof p === 'object' && 'revise' in p);
+  const picture = (p: Part) => typeof p === 'object' && 'picture' in p;
+  reading.note = parts.filter((p) => p !== block && !picture(p)).map(markup).join('\n').trim();
+  reading.bare = parts.filter((p) => !picture(p)).map(markup).join('\n').trim();
+  replies.set(text, reading);
+  // The agent reads the reply's executable part too: here, all of it.
+  replies.set(executableReply(text), reading);
+  return text;
 }
 
-function slot(raw: string): unknown {
-  const bind = raw.trim().match(/^\{=([\s\S]*)\}$/);
-  if (bind) return { bind: bind[1].trim() };
-  const n = Number(raw);
-  return raw.trim() !== '' && !Number.isNaN(n) ? n : raw;
+/** A reply written out, with what the engine reads in it as written, and
+ *  in its executable part (`executableReply`: without code examples), the
+ *  same unless given. */
+export function scripted(text: string, reading: Partial<Reply>, executable: Partial<Reply> = reading): string {
+  replies.set(executableReply(text), { ...prose(executableReply(text)), ...executable });
+  replies.set(text, { ...prose(text), ...reading });
+  return text;
 }
 
-/** A planner minting ids (#N1, #N2 …, or `mint`'s): call it with an edit's markup. */
-export function fakePlanner(version: () => number = () => 0, mint?: () => string) {
-  let next = 0;
-  const fresh = mint ?? (() => `#N${++next}`);
-  return (xml: string): PlanResult => {
-    if (!/<edit[\s>/]/.test(xml)) return { ok: false, version: version(), errors: [{ op: null, kind: 'parse', message: 'expected one <edit> element' }] };
-    const expect = Number(xml.match(/<edit[^>]*expect-version="(\d+)"/)?.[1] ?? 0);
-    const plan: Plan = { ops: [], aliases: {}, op_verb: [], verbs: [], summary: [], expect_version: expect, exact: /<edit[^>]*exact="true"/.test(xml) };
-    const els = verbs(xml);
-    const unknown = els.findIndex((el) => !VERBS.includes(el.name) && !TYPES.includes(el.name));
-    if (unknown >= 0) return { ok: false, version: version(), errors: [{ op: unknown, kind: 'parse', message: `<${els[unknown].name}> is not a verb or a node type`, verb: `create ${els[unknown].name}` }] };
-    // Ids first, so any verb may name a node the edit makes.
-    const minted = els.map((el) => (VERBS.includes(el.name) ? null : fresh()));
-    els.forEach((el, i) => { if (minted[i] && el.attrs.id?.startsWith('$')) plan.aliases[el.attrs.id] = minted[i]!; });
-    const id = (raw: string) => plan.aliases[raw] ?? raw;
-    els.forEach((el, i) => {
-      const push = (op: object) => { plan.ops.push(op); plan.op_verb.push(i); };
-      if (minted[i]) {
-        plan.verbs.push(el.attrs.id ? `create ${el.attrs.id}` : `create ${el.name}${el.attrs.in ? ` in ${el.attrs.in}` : ''}`);
-        push({ t: 'create', id: minted[i], ty: el.name, parent: el.attrs.in ? id(el.attrs.in) : null, order: `a${i}`, facets: [] });
-        return;
-      }
-      plan.verbs.push(`${el.name} ${el.attrs.id ?? el.attrs.in ?? ''}`.trim());
-      if (el.name === 'set') {
-        for (const [k, v] of Object.entries(el.attrs)) if (k !== 'id') push({ t: 'set', id: id(el.attrs.id), path: k.includes('.') ? k : BARE[k] ?? k, slot: slot(v) });
-      } else if (el.name === 'delete') {
-        push({ t: 'delete', id: id(el.attrs.id) });
-      }
-    });
-    plan.summary = Object.entries(plan.aliases).map(([a, n]) => `  <created alias="${a}" id="${n}"/>`);
-    return { ok: true, version: version(), plan };
+/** `edit`, scripted with the plan the engine makes of it (or its errors). */
+export function planned(edit: string, result: Plan | { ok: false; errors?: { op: number | null; kind: string; message: string; verb?: string }[]; failure?: string }): string {
+  plans.set(edit, 'ops' in result ? { ok: true, plan: result } : result);
+  return edit;
+}
+
+/** `patch` of `rejected`, scripted with the edit it makes (or its error). */
+export function revised(rejected: string, patch: string, result: string | { error: string }): string {
+  revisions.set(`${rejected}\u0000${patch}`, typeof result === 'string' ? { ok: true, edit: result } : { ok: false, error: result.error });
+  return patch;
+}
+
+/** A plan: its verbs in order, each with the ops it writes; `aliases` are
+ *  the `$names` the edit gave and the ids they became. */
+export function plan(verbs: [string, object[]][], aliases: Record<string, string> = {}, extra: Partial<Plan> = {}): Plan {
+  return {
+    ops: verbs.flatMap(([, ops]) => ops),
+    aliases,
+    op_verb: verbs.flatMap(([, ops], i) => ops.map(() => i)),
+    verbs: verbs.map(([verb]) => verb),
+    summary: Object.entries(aliases).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`),
+    expect_version: 0,
+    exact: false,
+    ...extra,
   };
 }
+
+/** The engine's planner, as scripted (`planned`), at `version()`. */
+export function fakePlanner(version: () => number = () => 0) {
+  return (xml: string): PlanResult => {
+    const result = plans.get(xml);
+    if (!result) return { ok: false, version: version(), errors: [{ op: null, kind: 'parse', message: `edit not scripted: ${xml.slice(0, 80)}` }] };
+    return { ...result, version: version() } as PlanResult;
+  };
+}
+
+/** The engine's reply reader, as scripted. A reply never scripted reads as
+ *  prose, unless it has markup in it, which the test forgot to script. */
+export const reader = {
+  reply(text: string): Reply {
+    const reading = replies.get(text);
+    if (reading) return reading;
+    if (text.includes('<')) throw new Error(`reply not scripted: ${text.slice(0, 120)}`);
+    return prose(text);
+  },
+  /** The chat's stream view is the engine's (tested in Rust); here the text as prose. */
+  stream(text: string): StreamView {
+    return { prose: text, edit: null, verbs: [] };
+  },
+  revise(rejected: string, patch: string): { ok: true; edit: string } | { ok: false; error: string } {
+    return revisions.get(`${rejected}\u0000${patch}`) ?? { ok: false, error: `revise not scripted: ${patch.slice(0, 80)}` };
+  },
+  netlists: () => ({ ok: true, netlists: [] }),
+};

@@ -38,18 +38,14 @@ export type PlanResult =
   | { ok: true; version: number; plan: Plan }
   | { ok: false; version?: number; errors?: EditErrorLine[]; failure?: string };
 
-/** Pull the `<edit>…</edit>` block out of a model reply that may say more. */
-export function extractEdit(text: string): string | null {
-  const m = text.match(/<edit[\s>][\s\S]*?<\/edit>|<edit\s*\/>/);
-  return m ? m[0] : null;
-}
-
 export interface EditOutcome {
   ok: boolean;
   version?: number;
   aliases?: Record<string, string>;
   /** Markup the model can act on (doc 04 §9.5). Present when `ok` is false. */
   failure?: string;
+  /** The failure's errors, one sentence each, for the person (the chat). */
+  errors?: string[];
   /** What the solver did, when constraints were involved. */
   solver?: SolverSummary;
   /** Markup for the model about an applied edit: what it created, placed and
@@ -65,7 +61,7 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
     planned = await api.plan(xml);
     if (!planned.ok) {
       if (planned.failure) return { ok: false, version: planned.version, failure: planned.failure };
-      return { ok: false, version: planned.version, failure: failed(planned.version ?? await api.version(), planned.errors ?? []) };
+      return rejected(planned.version ?? await api.version(), planned.errors ?? []);
     }
     const { plan } = planned;
     const tx = { label, actor: 'model', ts: Date.now(), ops: plan.ops, ...(plan.exact ? { exact: true } : {}) };
@@ -78,7 +74,7 @@ export async function applyEdit(api: DocumentApi, xml: string, label = 'model ed
   }
   const { plan } = planned;
   if (!result.ok) {
-    return { ok: false, version: result.version, failure: failed(result.version ?? await api.version(), inModelTerms(plan, result.errors ?? [])) };
+    return rejected(result.version ?? await api.version(), inModelTerms(plan, result.errors ?? []));
   }
   const lines = [...plan.summary, ...(result.solver ? solverLines(result.solver) : [])];
   return {
@@ -109,6 +105,11 @@ function solverLines(s: SolverSummary): string[] {
     `  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>`,
     ...(s.unmet ?? []).map((u) => `  <unmet leaf="${u.leaf}" requested="${u.requested}" solved="${u.solved}">${escapeXml(u.reason)}</unmet>`),
   ];
+}
+
+/** A rejected edit: its `<edit-failed>` markup for the model, its errors for the person. */
+function rejected(version: number, errors: EditErrorLine[]): EditOutcome {
+  return { ok: false, version, failure: failed(version, errors), errors: [...new Set(errors.map((e) => e.message.trim()).filter(Boolean))] };
 }
 
 /** `<edit-failed>` markup. Errors that say the same thing are one line

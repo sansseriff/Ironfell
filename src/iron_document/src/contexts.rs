@@ -996,33 +996,50 @@ fn types(s: &str) -> Result<Vec<TypeId>, String> {
 }
 
 pub(crate) fn attributes(s: &str) -> Result<Vec<(String, String)>, String> {
-    let mut out = Vec::new();
-    let mut rest = s.trim();
+    Ok(attribute_spans(s)?.into_iter().map(|a| {
+        let value = a.value.map_or_else(|| "true".to_owned(), |v| crate::parts::unescape(&s[v.start + 1..v.end - 1]));
+        (a.key, value)
+    }).collect())
+}
+
+/// An attribute as written: its name, where the name ends, and where its
+/// quoted value lies (quotes included), as offsets into what was read.
+pub(crate) struct AttrSpan {
+    pub(crate) key: String,
+    pub(crate) key_end: usize,
+    /// None for a bare attribute, which reads as true.
+    pub(crate) value: Option<std::ops::Range<usize>>,
+}
+
+/// The attributes of a tag (what follows its name), as written.
+pub(crate) fn attribute_spans(s: &str) -> Result<Vec<AttrSpan>, String> {
+    let mut out: Vec<AttrSpan> = Vec::new();
+    let base = s.trim_end();
+    let mut rest = base.trim_start();
+    let at = |rest: &str| base.len() - rest.len();
     while !rest.is_empty() {
         let name_end = rest.find(|c: char| c == '=' || c.is_whitespace()).unwrap_or(rest.len());
         let key = rest[..name_end].trim().to_owned();
+        let key_end = at(rest) + name_end;
         let after = rest[name_end..].trim_start();
+        if out.iter().any(|a| a.key == key) {
+            return Err(format!("{key} is given twice"));
+        }
         let Some(r) = after.strip_prefix('=') else {
             // A bare attribute, as HTML writes one: true.
             if key.is_empty() {
                 return Err(format!("expected name=\"value\" at \"{}\"", head(rest)));
             }
-            if out.iter().any(|(k, _)| *k == key) {
-                return Err(format!("{key} is given twice"));
-            }
-            out.push((key, "true".to_owned()));
+            out.push(AttrSpan { key, key_end, value: None });
             rest = after;
             continue;
         };
         let r = r.trim_start();
         let quote = r.chars().next().filter(|&c| c == '"' || c == '\'').ok_or_else(|| format!("{key}: expected a quoted value"))?;
+        let start = at(r);
         let r = &r[1..];
         let end = r.find(quote).ok_or_else(|| format!("{key}: unclosed value"))?;
-        let value = crate::parts::unescape(&r[..end]);
-        if out.iter().any(|(k, _)| *k == key) {
-            return Err(format!("{key} is given twice"));
-        }
-        out.push((key, value));
+        out.push(AttrSpan { key, key_end, value: Some(start..at(r) + end + 1) });
         rest = r[end + 1..].trim_start();
     }
     Ok(out)

@@ -3,6 +3,7 @@
  * the step `ask` is on, and the reply's text and reasoning as the runtime
  * produces them. Events are plain data so they cross the worker boundary.
  */
+import type { StreamView } from './api';
 
 /** reading: gathering the document; thinking: waiting on the model (attempt > 1
  *  is a repair); looking: answering a `<look>`; applying: the edit's transaction. */
@@ -16,7 +17,9 @@ export type AgentEvent =
    *  (Claude Code reports one while the thinking itself stays hidden). */
   | { kind: 'thinking-tokens'; estimated: number }
   /** This model call's exact output tokens, thinking included, once it ends. */
-  | { kind: 'usage'; output: number; thinking?: number };
+  | { kind: 'usage'; output: number; thinking?: number }
+  /** The reply so far as the engine read it (iron_document::reply::stream). */
+  | { kind: 'stream'; view: StreamView };
 
 /** What a live caller passes beside the request: where events go, and how to stop. */
 export interface AskLive {
@@ -30,7 +33,7 @@ export function mergeEvents(events: AgentEvent[]): AgentEvent[] {
   for (const event of events) {
     const last = out[out.length - 1];
     if (last && (event.kind === 'text' || event.kind === 'reasoning') && last.kind === event.kind) out[out.length - 1] = { kind: event.kind, delta: last.delta + event.delta };
-    else if (last && event.kind === 'thinking-tokens' && last.kind === event.kind) out[out.length - 1] = event;
+    else if (last && (event.kind === 'thinking-tokens' || event.kind === 'stream') && last.kind === event.kind) out[out.length - 1] = event;
     else out.push(event);
   }
   return out;

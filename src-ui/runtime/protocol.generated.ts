@@ -48,6 +48,10 @@ export type DocumentCommand =
   | { op: 'picture_poll'; ticket: number; cancel: boolean }
   | { op: 'edit_plan'; xml: string }
   | { op: 'netlist'; sheet: string }
+  | { op: 'netlists' }
+  | { op: 'edit_revise'; rejected: string; patch: string }
+  | { op: 'reply_read'; text: string }
+  | { op: 'reply_stream'; text: string }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
   | { op: 'layers'; source: string; open_json: string }
@@ -59,6 +63,7 @@ export type DocumentCommand =
   | { op: 'import_svg_flat'; text: string }
   | { op: 'focus'; node: string }
   | { op: 'selection' }
+  | { op: 'version' }
   | { op: 'inspect'; node: string }
   | { op: 'component'; node: string; kind: string; add: boolean }
   | { op: 'inspect_patch'; node: string; patch: string }
@@ -131,6 +136,10 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'picture_poll': return { fn: command.op, args: [command.ticket, command.cancel] };
     case 'edit_plan': return { fn: command.op, args: [command.xml] };
     case 'netlist': return { fn: command.op, args: [command.sheet] };
+    case 'netlists': return { fn: command.op, args: [] };
+    case 'edit_revise': return { fn: command.op, args: [command.rejected, command.patch] };
+    case 'reply_read': return { fn: command.op, args: [command.text] };
+    case 'reply_stream': return { fn: command.op, args: [command.text] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };
     case 'layers': return { fn: command.op, args: [command.source, command.open_json] };
@@ -142,6 +151,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'import_svg_flat': return { fn: command.op, args: [command.text] };
     case 'focus': return { fn: command.op, args: [command.node] };
     case 'selection': return { fn: command.op, args: [] };
+    case 'version': return { fn: command.op, args: [] };
     case 'inspect': return { fn: command.op, args: [command.node] };
     case 'component': return { fn: command.op, args: [command.node, command.kind, command.add] };
     case 'inspect_patch': return { fn: command.op, args: [command.node, command.patch] };

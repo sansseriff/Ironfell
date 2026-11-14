@@ -21,6 +21,34 @@ export interface ApplyResult {
 
 type MaybePromise<T> = T | Promise<T>;
 
+/** What a model's reply asks for, read by the engine (iron_document::reply::read). */
+export interface Reply {
+  /** The first `<edit>` block, as written. */
+  edit: string | null;
+  /** The first `<revise>` block, as written. */
+  revise: string | null;
+  /** A `<look picture="…"/>`'s composition. */
+  picture: string | null;
+  /** The instances a `<look expand="…"/>` names, as `#id`s. */
+  expand: string[];
+  /** What `<topic name="…"/>` asks for. */
+  topics: string[];
+  /** `<continue/>`: more steps follow this edit. */
+  continue: boolean;
+  /** The reply without its edit (or revise) and picture looks, trimmed. */
+  note: string;
+  /** The reply without its picture looks only: what it said when its edit is not acted on. */
+  bare: string;
+}
+
+/** A verb of an edit being written (or a step of a revise). */
+export interface StreamVerb { name: string; attrs: [string, string][]; closed: boolean }
+
+/** A reply as far as it has streamed (iron_document::reply::stream): its
+ *  prose (half-written markup held back), the edit or revise forming, and
+ *  its verbs whose opening tags have ended. */
+export interface StreamView { prose: string; edit: string | null; verbs: StreamVerb[] }
+
 export interface DocumentApi {
   /** A content-only GPU picture of a 2D composition, and the composition's id
    *  (`#…`) when the engine resolved it. */
@@ -48,9 +76,14 @@ export interface DocumentApi {
   logSince?(since: number): MaybePromise<{ gap: boolean; ndjson: string; version: number }>;
   /** What the person has selected, in pick order (the session tier). */
   selection(): MaybePromise<{ node: string; type: string | null; name: string | null }[]>;
-  /** A schematic sheet's netlist, SPICE-like, with each net's solved
-   *  voltage; `sheet` is a composition's id or name. */
-  netlist(sheet: string): MaybePromise<{ ok: boolean; netlist?: string; error?: string }>;
+  /** Every schematic sheet's netlist, SPICE-like, with each net's solved voltage. */
+  netlists(): MaybePromise<{ ok: boolean; netlists?: { sheet: string; netlist: string }[]; error?: string }>;
+  /** Read a model's reply (the engine's markup reader; plans/specs/markup.md). */
+  reply(text: string): MaybePromise<Reply>;
+  /** Read a reply as far as it has streamed. */
+  stream(text: string): MaybePromise<StreamView>;
+  /** Apply a `<revise>` to the edit the store rejected. */
+  revise(rejected: string, patch: string): MaybePromise<{ ok: true; edit: string } | { ok: false; error: string }>;
 }
 
 /** A host supplies only transport; operation names and decoding live here. */
@@ -83,10 +116,7 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
       throw error;
     })),
     view: q => call({ op: 'view', query_json: JSON.stringify({ scope: null, depth: null, ...q }) }),
-    version: async () => {
-      const text = await call({ op: 'view', query_json: JSON.stringify({ scope: null, fidelity: 'skeleton', depth: 0 }) });
-      return Number(text.match(/version="(\d+)"/)?.[1] ?? 0);
-    },
+    version: async () => (await json<{ version: number }>({ op: 'version' })).version,
     plan: xml => json({ op: 'edit_plan', xml }),
     apply: (tx, expect) => json({ op: 'apply', transaction_json: JSON.stringify(tx), expect_version: expect }),
     logSince: async since => {
@@ -94,6 +124,9 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
       return { gap: !!r.pending || !!r.gap, ndjson: r.ndjson ?? '', version: r.version ?? 0 };
     },
     selection: () => json({ op: 'selection' }),
-    netlist: sheet => json({ op: 'netlist', sheet }),
+    netlists: () => json({ op: 'netlists' }),
+    reply: text => json({ op: 'reply_read', text }),
+    stream: text => json({ op: 'reply_stream', text }),
+    revise: (rejected, patch) => json({ op: 'edit_revise', rejected, patch }),
   };
 }

@@ -489,7 +489,7 @@ impl Planner<'_, '_> {
         }
         let mut l = Lift { places: Vec::new(), links: Vec::new(), deferred: Vec::new(), sequences: Vec::new(), synthetic: 0, place_names: &place_names };
         for (verb, el) in trees.iter_mut() {
-            let mut one_tree = vec![std::mem::replace(el, El { name: String::new(), attrs: Vec::new(), children: Vec::new(), text: String::new(), inner: String::new() })];
+            let mut one_tree = vec![std::mem::replace(el, El::default())];
             lift(&mut one_tree, None, *verb, true, &mut l);
             *el = one_tree.pop().expect("one");
         }

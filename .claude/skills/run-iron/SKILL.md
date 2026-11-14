@@ -409,6 +409,11 @@ PASS FIXTURE COMPONENTS main: make, place in two compositions, std:laser with an
 Both pass 2026-11-06 on a fresh webgl2 build. Evidence: `.agents/agent-runtime/components-fixture-*.json`.
 On the same day `chat-ui.ts` times out waiting for the Lesson tab, with or without this
 change (it predates it; not yet investigated).
+On 2026-11-14 it gets past the Lesson tab but fails at its streaming step, on both
+runtimes and with the frontend from before the reply reader moved to Rust (a8430f9) as
+well as after: after the lesson steps the forming verbs show late (worker: only as the
+edit finishes, so "Writing the edit" has become "Applying"; main: not within 15 s). Run
+alone, a `chat-test-stream` turn lists each verb as it closes on both runtimes.
 
 ## Agent probe: prompt the in-app agent, read what it did
 

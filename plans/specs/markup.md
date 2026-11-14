@@ -124,6 +124,31 @@ order keys and compound verbs see the change; a node the person deleted is repor
 as "the person deleted #P while you worked", at plan time as at apply time.
 `edit::transaction` does the same for Rust callers (the demo's gallery).
 
+**The model's reply is read in Rust too** (`iron_document::reply`), in the same reader
+(`parts::elements`, whose elements carry their source spans):
+
+- `reply::read` finds what a reply asks for: its `<edit>` (or a `<revise>` of the
+  rejected edit), `<look picture>`/`<look expand>`, `<topic name>` and `<continue/>`,
+  and its note (the reply without the edit and picture looks). An edit never closed
+  goes to the planner whole, which says what is wrong. Markdown stays in TypeScript:
+  `executableReply` drops code examples before a chat reply's edit is looked for.
+- `reply::revise` applies a `<revise>` to the rejected edit as written, counting its
+  verbs as the planner does (the TypeScript `revise.ts`, a second reader that had to
+  agree with this one by hand, is gone). A changed value is written escaped once.
+- `reply::stream` reads a reply as it streams, for the chat: its prose with half-written
+  markup held back, the edit or revise forming, and its verbs whose opening tags have
+  ended (`closed` when written to their end). `parts::partial` reads markup still being
+  written as far as it goes. The agent sends each view as a `stream` event after the
+  text it read, one engine read at a time; drawing an edit as it forms can start from it.
+
+The engine calls are `reply_read`, `reply_stream` and `edit_revise`, with `version` and
+`netlists` (every schematic sheet's), so the agent reads none of the engine's XML either.
+A rejected edit's errors reach the chat as data (`EditOutcome.errors`), not parsed back
+out of its `<edit-failed>` markup. The bun tests' fakes read no markup: each test
+scripts a reply with what the engine reads in it and an edit with its plan
+(`tests/fixtures/plan.ts`); the reader and planner are tested in Rust (`tests/reply.rs`,
+`tests/edit.rs`).
+
 Removed with the TypeScript parser: `schema.ts`'s `coerce` and `resolveLeaf`,
 fast-xml-parser, and the engine calls only it used (`compose`, `circuit`, `context`,
 `place`, `next_relation_ids`, `import_svg_at`, `narrative_write`, `narrative_rewrite`).

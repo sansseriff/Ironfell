@@ -49,7 +49,7 @@ impl Bounds {
         Self { geometry: self.geometry.union(other.geometry), painted: self.painted.union(other.painted), interaction: self.interaction.union(other.interaction) }
     }
     fn indexed(self) -> Rect { self.painted.union(self.interaction) }
-    fn finite(self) -> bool {
+    pub fn finite(self) -> bool {
         [self.geometry, self.painted, self.interaction].iter()
             .all(|r| [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) && r.x0 <= r.x1 && r.y0 <= r.y1)
     }
@@ -89,8 +89,15 @@ impl BoundsIndex {
     pub fn begin_changes(&mut self) { self.damage.clear(); }
     pub fn damage(&self) -> &[Rect] { &self.damage }
 
+    /// Index `id` at `record`. Bounds that are not finite (a binding that
+    /// computed NaN for a position or a size) leave it out of the index
+    /// until they are again: it cannot be hit or culled in, and paints
+    /// nothing a box could hold.
     pub fn upsert(&mut self, id: NodeId, record: Record) {
-        assert!(record.bounds.finite(), "non-finite spatial bounds for {id}");
+        if !record.bounds.finite() {
+            self.remove(id);
+            return;
+        }
         if let Some(e) = self.entries.get_mut(&id) {
             self.damage.push(e.record.bounds.painted);
             if e.record.bounds.indexed() != record.bounds.indexed() {
@@ -176,6 +183,17 @@ mod tests {
         index.begin_changes(); index.remove(id(1)); index.upsert(id(2), record(0.0, 2)); index.commit();
         assert_eq!(index.at_point(Point::new(5.0,5.0)), vec![id(2)]);
         assert!(index.record(id(1)).is_none());
+    }
+    #[test]
+    fn non_finite_bounds_leave_the_index_until_they_are_finite_again() {
+        let mut index = BoundsIndex::default();
+        index.upsert(id(1), record(0.0, 1)); index.commit();
+        index.begin_changes(); index.upsert(id(1), record(f64::NAN, 1)); index.commit();
+        assert!(index.record(id(1)).is_none());
+        assert!(index.at_point(Point::new(5.0,5.0)).is_empty());
+        assert!(index.damage()[0].contains(Point::new(5.0,5.0)), "where it was is repainted");
+        index.begin_changes(); index.upsert(id(1), record(100.0, 1)); index.commit();
+        assert_eq!(index.at_point(Point::new(105.0,5.0)), vec![id(1)]);
     }
     #[test]
     fn paint_and_hit_bounds_are_distinct_and_results_preserve_painter_order() {

@@ -97,3 +97,34 @@ fn a_node_reads_a_placed_plots_ports() {
     let last_use = kids.iter().copied().filter(|&k| doc.live(k).is_some_and(|n| n.ty.name() == "use")).map(at).max().unwrap();
     assert!(at(marker) > last_use, "the marker sits above the plots");
 }
+
+/// Past the critical angle the refraction plot's curve is NaN (the line
+/// ends there), and so is its value at the cursor. The cursor's dot and
+/// readout must then hide, not sit at a NaN position: a NaN transform
+/// panicked the spatial index.
+#[test]
+fn a_plot_cursor_past_the_end_of_its_curve_stays_finite() {
+    let (mut store, _) = desk();
+    let order = last_root(&store);
+    let built = markup::compose(&store, PAGES[1].1, None, order).unwrap_or_else(|e| panic!("{e}"));
+    store.apply(tx("refraction", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let set = |id: NodeId, v: f64| Op::Set { id, path: "slider.value".parse().unwrap(), slot: Slot::Const(Value::Number(v)) };
+    let (n1, n2, theta1) = (find(&store, "n1"), find(&store, "n2"), find(&store, "theta1"));
+    // n₁ = 2 over n₂ = 1: the critical angle is 30°; θ₁ = 60° is past it.
+    store.apply(tx("tir", vec![set(n1, 2.0), set(n2, 1.0), set(theta1, 60.0)])).unwrap();
+    let doc = store.document();
+    let mut checked = 0;
+    for id in doc.expanded_ids().collect::<Vec<_>>() {
+        for leaf in ["transform2d.x", "transform2d.y"] {
+            if let Some(v) = store.resolved(id, leaf.parse().unwrap()).and_then(|v| v.as_f64()) {
+                assert!(v.is_finite(), "{id} ({:?}): {leaf} = {v}", doc.get::<Name>(id).and_then(|n| n.text.constant()));
+                checked += 1;
+            }
+        }
+        if let Some(d) = store.resolved(id, "path.d".parse().unwrap()) {
+            let d = format!("{d:?}");
+            assert!(!d.contains("NaN"), "{id}: path {d}");
+        }
+    }
+    assert!(checked > 0);
+}

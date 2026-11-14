@@ -116,6 +116,13 @@ became tokens, two compositions were renamed, the wave packet's clip moved to Ru
 - **A simulation in a hidden tab holds still:** an `accumulate` in a composition no open
   view reaches does not step (`Store::advance_steps(now, paused)`, `liveness::reached`).
   With the Lorenz page in the background the page ran at 24 fps instead of 60.
+- **A NaN position no longer panics the spatial index.** Past the critical angle the
+  refraction plot's curve is NaN (the line ends there), so `std:plot`'s value at the
+  cursor was too, and its readout's `y` became NaN: `BoundsIndex::upsert` asserted
+  finite bounds and took the app down. The index now leaves a node with non-finite
+  bounds out until they are finite again (`Scene::bounds` is `None` meanwhile), and the
+  plot hides its cursor dot and value where the curve has no value
+  (`a_plot_cursor_past_the_end_of_its_curve_stays_finite`).
 - **`&#10;`** in a markup attribute is a newline.
 - **Drivers wait for the whole document:** `ready` (drive.ts) waits for
   `__documentOpened`, set once the demo and its showcase are in.

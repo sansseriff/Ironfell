@@ -436,3 +436,145 @@ fn a_store_error_at_a_batch_of_plain_verbs_names_its_own_verb() {
     let es = errors(&store, &format!(r#"<edit><set id="{s}" x="1"/><reparent id="{c}" in="{s}"/></edit>"#));
     assert!(es.iter().all(|e| e.op == Some(1)), "{es:?}");
 }
+
+// Council round 2 (2026-11-14).
+
+#[test]
+fn siblings_put_back_in_order_never_share_a_key() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <group in="{c}" id="$g"><rect id="$a"/><place def="std:plot" id="$p" xs="0 1" ys="0 1"/><rect id="$b"/></group>
+      <rect in="$g" id="$z"/>
+    </edit>"#));
+    let doc = store.document();
+    let g = p.aliases["$g"];
+    let kids: Vec<NodeId> = doc.children(g).iter().copied().filter(|k| !k.is_expanded()).collect();
+    assert_eq!(kids, vec![p.aliases["$a"], p.aliases["$p"], p.aliases["$b"], p.aliases["$z"]]);
+    let mut keys: Vec<_> = kids.iter().map(|&k| doc.live(k).unwrap().order.clone()).collect();
+    keys.dedup();
+    assert_eq!(keys.len(), 4, "distinct order keys");
+    // A later edit can place after any of them.
+    apply(&mut store, &format!(r#"<edit><rect in="{g}" after="{}"/></edit>"#, p.aliases["$b"]));
+}
+
+#[test]
+fn top_level_siblings_keep_order_however_in_is_spelled() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <place def="std:plot" in="scene" id="$p" xs="0 1" ys="0 1"/>
+      <rect in="{c}" id="$over" w="5" h="5"/>
+    </edit>"#));
+    let kids: Vec<NodeId> = store.document().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
+    assert_eq!(&kids[kids.len() - 2..], &[p.aliases["$p"], p.aliases["$over"]]);
+}
+
+#[test]
+fn a_comment_in_a_circuit_does_not_hide_its_names() {
+    let (mut store, _, s) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <composition id="$sheet" name="sheet" notation="schematic"/>
+      <let in="$sheet" id="$k" name="k" value="2"/>
+      <circuit sheet="$sheet">
+        <!-- don't forget the ground -->
+        <place part="vsource" name="V9" x="120" y="220" V="{{= {s}.slider.value * $k * 1 V}}"/>
+        <place part="ground" name="G9" x="120" y="300"/>
+        <wire from="V9.n" to="G9.g"/>
+      </circuit>
+    </edit>"#));
+    assert!(p.summary.iter().any(|l| l.contains("<netlist")), "{:?}", p.summary);
+}
+
+#[test]
+fn a_dollar_is_text_outside_bindings_and_id_attributes() {
+    let (mut store, c, _) = desk();
+    // On a place: a title, not an id.
+    let p = apply(&mut store, &format!(r#"<edit>
+      <let in="{c}" id="$v" name="v" value="1"/>
+      <group in="{c}"><place def="std:plot" id="$plot" xs="0 1" ys="0 1" title="$v"/><text name="note" content="see $plot above"/></group>
+    </edit>"#));
+    let ops = serde_json::to_string(&p.ops).unwrap();
+    assert!(ops.contains(r#""$v""#), "{ops}");
+    let note = store.resolved(named(&store, "note"), "text.content".parse().unwrap()).unwrap();
+    assert_eq!(note.as_str(), Some("see $plot above"));
+    // A name for a node and a place is refused as that.
+    let es = errors(&store, &format!(r#"<edit><group in="{c}"><rect id="$x"/><place def="std:plot" id="$x" xs="0 1" ys="0 1"/></group></edit>"#));
+    assert!(es[0].message.contains("names a node and a place"), "{es:?}");
+}
+
+#[test]
+fn what_a_verb_does_not_read_is_refused() {
+    let (store, c, s) = desk();
+    let es = errors(&store, &format!(r#"<edit><set id="{s}" x="3"><rect w="1" h="1"/></set></edit>"#));
+    assert!(es[0].message.contains("holds nothing"), "{es:?}");
+    let es = errors(&store, &format!(r#"<edit>Here is my change: <rect in="{c}"/></edit>"#));
+    assert!(es[0].message.contains("not read"), "{es:?}");
+    let es = errors(&store, &format!(r#"<edit><rect in="{c}" x="1" transform2d.x="2"/></edit>"#));
+    assert!(es[0].message.contains("name one leaf"), "{es:?}");
+    let es = errors(&store, &format!(r#"<edit><rect in="{c}" id="$self"/></edit>"#));
+    assert!(es[0].message.contains("planner's own"), "{es:?}");
+}
+
+#[test]
+fn a_missing_parent_is_an_unknown_node() {
+    let (store, _, _) = desk();
+    let es = errors(&store, r##"<edit><rect in="#zz9"/></edit>"##);
+    assert_eq!(es[0].kind, "unknown_node", "{es:?}");
+    let es = errors(&store, r##"<edit><place def="std:plot" in="#zz9" xs="0 1" ys="0 1"/></edit>"##);
+    assert_eq!(es[0].kind, "unknown_node", "{es:?}");
+}
+
+#[test]
+fn a_brace_inside_a_string_does_not_end_a_binding() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit>
+      <let in="{c}" id="$v" name="v" value="7"/>
+      <table in="{c}">a
+      {{= "}}" + fmt($v, 0)}}</table>
+    </edit>"#));
+    assert!(!serde_json::to_string(&p.ops).unwrap().contains("$v"));
+}
+
+#[test]
+fn a_node_id_that_is_not_a_name_is_an_error_not_a_panic() {
+    let (store, c, _) = desk();
+    let es = errors(&store, &format!(r##"<edit><group in="{c}"><place def="std:plot" xs="0 1" ys="0 1"/><rect id="#1"/></group></edit>"##));
+    assert!(es[0].message.contains("<set"), "{es:?}");
+}
+
+#[test]
+fn a_node_moved_twice_is_where_its_last_move_put_it() {
+    let (mut store, c, _) = desk();
+    let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a"/><rect id="$b"/><rect id="$c"/></group></edit>"#));
+    let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
+    apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{b}"/><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
+    assert_eq!(store.document().children(g), &[cc, a, b]);
+}
+
+#[test]
+fn a_bind_beside_a_value_wins_even_when_the_value_reads_a_place() {
+    let (mut store, c, _) = desk();
+    apply(&mut store, &format!(r#"<edit><group in="{c}"><place def="std:plot" id="$p" xs="0 1" ys="0 1" x_min="0" x_max="3"/><rect name="m" x="{{= $p.x_hi}}" x.bind="5" w="1" h="1"/></group></edit>"#));
+    assert_eq!(number(&store, named(&store, "m"), "transform2d.x"), 5.0);
+}
+
+#[test]
+fn strings_in_bindings_follow_the_expression_lexer() {
+    let (mut store, c, _) = desk();
+    apply(&mut store, &format!(r#"<edit><let in="{c}" id="$cash" name="cash" value="1"/><text in="{c}" name="say" content='{{= "say \"$cash\"" }}'/></edit>"#));
+    let text = store.resolved(named(&store, "say"), "text.content".parse().unwrap()).unwrap();
+    assert_eq!(text.as_str(), Some("say \"$cash\""));
+}
+
+#[test]
+fn several_cdata_sections_and_entities_make_one_text() {
+    let (mut store, _, _) = desk();
+    apply(&mut store, "<edit><narrative name=\"notes\"/></edit>");
+    let p = apply(&mut store, "<edit><write narrative=\"notes\"><![CDATA[A]]>&amp;<![CDATA[B]]></write></edit>");
+    assert!(serde_json::to_string(&p.ops).unwrap().contains("A&B"));
+}
+
+#[test]
+fn a_contexts_entities_survive_planning() {
+    let (store, _, _) = desk();
+    plan(&store, r#"<edit><context name="A&gt;B"><rule match="all" affords.select="target"/></context></edit>"#);
+}

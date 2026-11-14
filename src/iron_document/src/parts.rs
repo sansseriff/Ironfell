@@ -85,8 +85,6 @@ pub(crate) struct El {
     /// its content as written, decoded (`<import-svg>`'s not: SVG decodes its
     /// own), a CDATA section's unwrapped.
     pub(crate) text: String,
-    /// The element as written, tags included.
-    pub(crate) src: String,
     /// What lies between its tags, as written.
     pub(crate) inner: String,
 }
@@ -211,7 +209,6 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
                 *rest = &r[end + 1..];
                 return Ok(out);
             }
-            let start = all.len() - rest.len();
             let r = &rest[1..];
             // The tag ends at the first `>` outside a quoted value.
             let mut quote: Option<char> = None;
@@ -241,11 +238,15 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
                 let close = format!("</{name}>");
                 let at = rest.find(&close).ok_or_else(|| format!("<{name}> is not closed"))?;
                 let body = &rest[..at];
-                own = match body.trim().strip_prefix("<![CDATA[").and_then(|b| b.strip_suffix("]]>")) {
-                    Some(raw) => raw.to_owned(),
-                    // SVG is XML: its own parser decodes its entities, once.
-                    None if name == "import-svg" => body.to_owned(),
-                    None => text_with_cdata(body)?,
+                own = if name == "import-svg" {
+                    // SVG is XML: its own parser decodes its entities, once;
+                    // a body that is one CDATA section is unwrapped.
+                    match body.trim().strip_prefix("<![CDATA[").and_then(|b| b.strip_suffix("]]>")).filter(|b| !b.contains("]]>")) {
+                        Some(raw) => raw.to_owned(),
+                        None => body.to_owned(),
+                    }
+                } else {
+                    text_with_cdata(body)?
                 };
                 *rest = &rest[at + close.len()..];
                 Vec::new()
@@ -254,7 +255,7 @@ pub(crate) fn elements(src: &str) -> Result<Vec<El>, String> {
             };
             let end_at = all.len() - rest.len();
             let inner = if empty { String::new() } else { all[inner_start..end_at].rsplit_once("</").map_or(String::new(), |(i, _)| i.to_owned()) };
-            out.push(El { name: name.to_owned(), attrs, children, text: own, src: all[start..end_at].to_owned(), inner });
+            out.push(El { name: name.to_owned(), attrs, children, text: own, inner });
         }
     }
     let mut rest = src;

@@ -325,12 +325,9 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   return { ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, ...(error ? { error } : {}), ...(mergedWith ? { merged: mergedWith } : {}) };
 }
 
-/** An applied edit for the model: its summary, and the ids its aliases became. */
+/** An applied edit for the model: its summary, which names the ids its aliases became. */
 function appliedMarkup(outcome: EditOutcome): string {
-  const created = Object.entries(outcome.aliases ?? {}).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`);
-  const summary = outcome.summary ?? `<applied version="${outcome.version}">\n</applied>`;
-  const missing = created.filter((line) => !summary.includes(line));
-  return missing.length ? summary.replace(/<\/applied>/, `${missing.join('\n')}\n</applied>`) : summary;
+  return outcome.summary ?? `<applied version="${outcome.version}">\n</applied>`;
 }
 
 /** A reply's `<continue/>`: more steps follow its edit. */

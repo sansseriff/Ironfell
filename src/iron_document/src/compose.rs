@@ -21,8 +21,7 @@
 //! a `{= expr}` binding. A `make-component` makes a component of `of`
 //! (plain shapes become a definition shown by its main; uses of linked
 //! instances become one instance of a new definition that nests them).
-//! They run inside an `<edit>` (edit.rs), which hands each verb's `id="$p"`
-//! here as `as`.
+//! They run inside an `<edit>` (edit.rs), which names each one (`id="$p"`).
 
 use crate::composition::{self, Dims};
 use crate::definition::{self, Placement};
@@ -39,7 +38,7 @@ fn ty(n: &str) -> TypeId {
     TypeId::lookup(n).expect("registered type")
 }
 
-/// What an `as="$alias"` names: the definition a verb made or placed, the
+/// What a component verb's `id="$p"` names: the definition a verb made or placed, the
 /// entity it placed (or made), and that entity's picture.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Named {
@@ -49,7 +48,7 @@ pub(crate) struct Named {
 }
 
 /// Attributes of `<place>` that are not arguments.
-const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "as", "size.w", "size.h"];
+const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "id", "size.w", "size.h"];
 
 /// Why [`compose_els`] failed: one of the ops before the verbs (each
 /// error indexes `before`), or a verb.
@@ -112,10 +111,7 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
             .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: new.clone(), exact: false })
             .map_err(|e| at(e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")))?;
         ops.extend(new);
-        if let Some(a) = el.attr("as") {
-            if !a.starts_with('$') {
-                return Err(at(format!("as=\"{a}\": an alias starts with $")));
-            }
+        if let Some(a) = el.attr("id") {
             aliases.insert(a.to_owned(), named);
         }
         lines.push(line);
@@ -127,7 +123,7 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
 /// A node id as written: `#3F`, or an earlier verb's `$alias` through `pick`.
 fn node(doc: &crate::document::Document, raw: &str, aliases: &BTreeMap<String, Named>, pick: impl Fn(&Named) -> Option<NodeId>, what: &str) -> Result<NodeId, String> {
     if raw.starts_with('$') {
-        let named = aliases.get(raw).ok_or_else(|| format!("{raw} is not named by an earlier verb's as=\"{raw}\""))?;
+        let named = aliases.get(raw).ok_or_else(|| format!("{raw} is not named by an earlier component verb (id=\"{raw}\"); place what you name after it"))?;
         return pick(named).ok_or_else(|| format!("{raw} names no {what}"));
     }
     let id: NodeId = raw.parse().map_err(|_| format!("{raw:?} is not a node id"))?;

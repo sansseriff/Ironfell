@@ -66,8 +66,9 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
   or a composition by name; none makes a root. `after="#x"` or `first="true"` places it
   among the parent's children (existing and earlier in this edit), else last.
 - **Names.** `id="$x"` names a new node, `id="$p"` a component verb's result, for the
-  whole edit. `$x` stands for the id anywhere an id goes (`in`, `def`, `of="$a $b"`,
-  `sheet`, `narrative`, `block`, `after`); in a binding a bare `$x` reads the value a
+  whole edit (`$self` and names starting `__` are the planner's own). `$x` stands for
+  the id in an attribute that names nodes (`in`, `def`, `entity`, `of="$a $b"`,
+  `sheet`, `narrative`, `block`, `after`, `from`, `to`, `a`, `b`, `keep`); in a binding a bare `$x` reads the value a
   `let`, `port_spec`, `channel`, `trace`, `accumulate` or `query` holds. A place's
   `$p.facet.field` is its picture's leaf and `$p.port` its instance's port, readable by
   nodes, a later `<place>`'s arguments, circuit parts and table cells; `#use.port` does
@@ -77,8 +78,9 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
 - **Order.** Every new node is numbered first, so any name may be read before the node
   that has it is written. Nodes are made, then the component verbs (`<place>`,
   `<make-component>`, wherever written: inside a node they go `in=` it, and siblings are
-  put back in the order written, so a mark after a plot paints over it; so are top-level
-  nodes and places appended to one parent), then the leaves that read a place (`k="{= …}"`
+  put back in the order written, between the siblings around them, so a mark after a
+  plot paints over it and no two siblings share a key; so are top-level nodes and
+  places appended to one parent, however its `in=` is spelled), then the leaves that read a place (`k="{= …}"`
   or `k.bind="…"`), then every other verb in the order written, each seeing what came
   before it. The plain verbs (`set`, `add`, `delete`, `reparent`, `link`, `unlink`) are
   planned together until the next verb that reads the document, so a connection's two
@@ -86,13 +88,17 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
 - **Inside a node** every element is a node, except `<place>`, `<make-component>` and
   `<link>`; a component verb there goes in that node (an `in=` on it is refused).
   Every value is an attribute: text between a node's tags is refused, not dropped
-  (`<text content="Hi"/>`, not `<text>Hi</text>`). At the top level `set`, `table` and `context` are verbs (they share names
+  (`<text content="Hi"/>`, not `<text>Hi</text>`); so are elements or text inside a
+  verb that reads none (`set`, `add`, `delete`, `reparent`, `link`, `unlink`,
+  `link-figures`), prose inside `<edit>`, and one leaf given under two spellings
+  (`x` and `transform2d.x`). At the top level `set`, `table` and `context` are verbs (they share names
   with node types: `set` is one of an action's writes, always inside an `<on>`).
 - **No verb stands alone.** Every verb is ops in the one transaction; a circuit can be
   drawn on a sheet the same edit makes, its parts bound to sliders the edit makes.
 - **XML.** Single or double quotes, the five named entities and numeric ones (`&#10;`
   for a newline, `&#x41;`), comments, CDATA; an attribute given twice is refused; a
-  `$` or `#` inside a string in a binding (`'…'` or `"…"`) is text; `<write>`,
+  `$` or `#` inside a string in a binding (`'…'` or `"…"`, `\` escaping) is text, and
+  so is a `}`; `<write>`,
   `<rewrite>` and `<import-svg>` hold text (markdown, SVG) that is not read as markup.
   Markdown's entities are decoded; SVG goes to its parser as written, which decodes its
   own.

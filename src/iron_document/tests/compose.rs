@@ -1,4 +1,4 @@
-//! The model's component verbs (`compose::compose_ops`): make a component
+//! The model's component verbs, planned in an edit (`edit::plan`): make a component
 //! from shapes, place an instance of it in one 2D composition and picture
 //! the same entity in a second, as one transaction; standard components by
 //! `std:<key>`, with arguments; and the refusals a model can act on.
@@ -122,7 +122,7 @@ fn refusals_say_what_to_do_instead() {
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}" wattage="3"/>"#)).contains("no input \"wattage\" (power, pulse_hz, duty)"));
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}" notation="schematic"/>"#)).contains("it has free"));
     assert!(err(&mut store, &format!(r#"<place def="std:lamp" in="{overview}"/>"#)).contains("std:laser"));
-    assert!(err(&mut store, r#"<place entity="$nope" in="overview"/>"#).contains("not named by an earlier verb"));
+    assert!(err(&mut store, r#"<place entity="$nope" in="overview"/>"#).contains("not named by an earlier component verb"));
     // A refused edit applies nothing, even when an earlier verb was fine.
     let version = store.document().version();
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}"/><place def="std:laser" in="{scene}"/>"#)).starts_with("op 1 (place):"));

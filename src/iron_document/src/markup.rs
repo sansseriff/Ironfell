@@ -182,7 +182,15 @@ pub(crate) fn leaf_attrs<'a>(el: &'a El, skip: &[&str]) -> Vec<(String, std::bor
 /// ones it lacks, at their defaults.
 pub(crate) fn facets(el: &El, ty: TypeId, names: &Names) -> Result<Vec<Facet>, String> {
     let mut out: Vec<Facet> = Vec::new();
+    let mut seen: Vec<(FacetKind, String, String)> = Vec::new();
     for (attr, raw) in leaf_attrs(el, &["id", "in", "after", "first"]) {
+        // One leaf, one value: `x` and `transform2d.x` together are refused.
+        let named = attr.strip_prefix("__defer:").map(|l| l.strip_suffix(".bind").unwrap_or(l)).unwrap_or(&attr);
+        let (kind, field) = leaf(ty, named)?;
+        if let Some((.., first)) = seen.iter().find(|(k, f, _)| *k == kind && *f == field) {
+            return Err(format!("{first} and {attr} name one leaf; give it once"));
+        }
+        seen.push((kind, field, attr.clone()));
         // A leaf written later (edit.rs): its facet, at its default.
         if let Some(later) = attr.strip_prefix("__defer:") {
             let (kind, _) = leaf(ty, later.strip_suffix(".bind").unwrap_or(later))?;
@@ -247,23 +255,48 @@ pub(crate) fn resolve(text: &str, names: &Names) -> Result<String, String> {
     resolve_with(text, names, true)
 }
 
+/// Where a character falls among an expression's strings (`'…'` or `"…"`,
+/// `\` escaping the next character, as expr.rs lexes them).
+#[derive(Default)]
+struct Strings {
+    quote: Option<char>,
+    escaped: bool,
+}
+
+impl Strings {
+    /// Step over `c`: whether it is part of a string, its quotes included.
+    fn step(&mut self, c: char) -> bool {
+        match self.quote {
+            Some(q) => {
+                if self.escaped {
+                    self.escaped = false;
+                } else if c == '\\' {
+                    self.escaped = true;
+                } else if c == q {
+                    self.quote = None;
+                }
+                true
+            }
+            None if c == '\'' || c == '"' => {
+                self.quote = Some(c);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// [`resolve`], leaving a `$name` that `names` does not hold as written when
 /// not `strict` (`$self`, or a place a later step resolves).
 fn resolve_with(text: &str, names: &Names, strict: bool) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    // Inside a string ('…' or "…") a `$` or `#` is text.
-    let mut quote: Option<char> = None;
+    // Inside a string a `$` or `#` is text.
+    let mut strings = Strings::default();
     while i < text.len() {
         let c = text[i..].chars().next().expect("in range");
-        if let Some(q) = quote {
-            if c == q {
-                quote = None;
-            }
-        } else if c == '\'' || c == '"' {
-            quote = Some(c);
-        }
-        if (c != '$' && c != '#') || quote.is_some() {
+        let in_string = strings.step(c);
+        if (c != '$' && c != '#') || in_string {
             out.push(c);
             i += c.len_utf8();
             continue;
@@ -337,14 +370,18 @@ fn resolve_with(text: &str, names: &Names, strict: bool) -> Result<String, Strin
     Ok(out)
 }
 
-/// An attribute value's names, as ids: a value that is `$name`s (and
-/// `#id`s) is those nodes' ids; inside a `{= … }` binding every `$name` `names` holds is
-/// resolved ([`resolve`]) and others are left for a later step. Words
-/// outside a binding are text and stay as written (`title="Cost $v"`).
-pub(crate) fn refs(value: &str, names: &Names) -> Result<String, String> {
-    // One id, or a list of them (`of="$a $b #c"`).
+/// Attributes that name nodes (verbs' and component verbs'), where a value
+/// of `$name`s is those nodes' ids.
+pub(crate) const ID_ATTRS: &[&str] = &["in", "def", "entity", "of", "sheet", "after", "narrative", "block", "a", "b", "keep", "from", "to"];
+
+/// Attribute `key`'s names, as ids: in an id position ([`ID_ATTRS`]) a value
+/// of `$name`s (and `#id`s) is those nodes' ids; anywhere, inside a `{= … }`
+/// binding every `$name` `names` holds is resolved ([`resolve`]) and others
+/// are left for a later step. Words outside a binding are text and stay as
+/// written (`title="Cost $v"`).
+pub(crate) fn refs(key: &str, value: &str, names: &Names) -> Result<String, String> {
     let ids = || value.split_whitespace().all(|w| w.starts_with('#') || w.strip_prefix('$').is_some_and(|n| !n.is_empty() && word(n) == n.len()));
-    if value.contains('$') && ids() {
+    if ID_ATTRS.contains(&key) && value.contains('$') && ids() {
         let each: Vec<String> = value.split_whitespace().map(|w| match w.strip_prefix('$').and_then(|n| names.node(n)) {
             Some(id) => id.to_string(),
             None => w.to_owned(),
@@ -354,33 +391,15 @@ pub(crate) fn refs(value: &str, names: &Names) -> Result<String, String> {
     bindings(value, names)
 }
 
-/// [`refs`] over markup source (a `<circuit>`'s): each binding, and each
-/// quoted attribute value that is one `$name`.
-pub(crate) fn src_refs(src: &str, names: &Names) -> Result<String, String> {
-    let mut out = String::with_capacity(src.len());
-    let mut rest = src;
-    while let Some(q) = rest.find(['"', '\'']) {
-        let quote = rest[q..].chars().next().expect("found");
-        out.push_str(&rest[..=q]);
-        let body = &rest[q + 1..];
-        let Some(end) = body.find(quote) else {
-            out.push_str(body);
-            return Ok(out);
-        };
-        out.push_str(&refs(&body[..end], names)?);
-        out.push(quote);
-        rest = &body[end + 1..];
-    }
-    out.push_str(rest);
-    Ok(out)
-}
-
 /// The `{= … }` bindings in `text`, resolved leniently.
 pub(crate) fn bindings(text: &str, names: &Names) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(i) = rest.find("{=") {
-        let Some(close) = rest[i..].find('}') else { break };
+        // The binding's own `}`: one inside a string is text.
+        let mut strings = Strings::default();
+        let close = rest[i..].char_indices().find(|&(_, c)| !strings.step(c) && c == '}');
+        let Some((close, _)) = close else { break };
         out.push_str(&rest[..i + 2]);
         out.push_str(&resolve_with(&rest[i + 2..i + close], names, false)?);
         out.push('}');

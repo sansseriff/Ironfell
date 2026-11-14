@@ -126,10 +126,13 @@ pub fn plan(store: &Store, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Fa
     let exact = root.attr("exact").is_some_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1"));
     // `$__…` is the planner's own (an unnamed place or node it must name).
     fn own_names(els: &[El]) -> Option<String> {
-        els.iter().find_map(|e| e.attr("id").filter(|v| v.starts_with("$__")).map(str::to_owned).or_else(|| own_names(&e.children)))
+        els.iter().find_map(|e| e.attr("id").filter(|v| v.starts_with("$__") || *v == "$self").map(str::to_owned).or_else(|| own_names(&e.children)))
     }
     if let Some(v) = own_names(&root.children) {
-        return Err(parse(format!("id=\"{v}\": a name may not start with two _")));
+        return Err(parse(format!("id=\"{v}\": $self and names starting with two _ are the planner's own")));
+    }
+    if !root.text.trim().is_empty() {
+        return Err(parse(format!("text inside <edit> is not read ({:?}); write prose outside the <edit>", root.text.trim().chars().take(40).collect::<String>())));
     }
     let verbs: Vec<String> = root.children.iter().map(describe).collect();
     let mut p = Planner { store, svg, verbs: &verbs, scratch: Store::with_document(store.document().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
@@ -242,8 +245,14 @@ struct Lifted {
 
 impl Planner<'_, '_> {
     fn error(&self, verb: usize, kind: &str, message: String) -> VerbError {
-        // An id that names nothing reads as the store says it.
-        let kind = if message.starts_with("no node #") { "unknown_node" } else { kind };
+        // An id that names nothing reads as the store says it, wherever the
+        // message names it (`in="#P": no node #P`).
+        let kind = if message.contains("no node #") || message.contains("is not a live node") { "unknown_node" } else { kind };
+        // A node this edit deleted: the version the store names is the plan's own.
+        let message = match message.split_once(" was deleted at version ") {
+            Some((id, v)) if v.trim().parse::<u64>().is_ok_and(|v| v > self.store.document().version().0) => format!("{id} was deleted earlier in this edit"),
+            _ => message,
+        };
         VerbError { op: Some(verb), kind: kind.into(), message: self.named(&message), verb: self.verbs.get(verb).cloned() }
     }
 
@@ -314,7 +323,7 @@ impl Planner<'_, '_> {
         let (mut lo, hi) = if first {
             (None, keys.first().map(|k| k.1.clone()))
         } else if let Some(a) = after {
-            let a = self.node(a).or_else(|e| a.strip_prefix('$').and_then(|n| self.nodes.get(n)).map(|(id, _)| *id).ok_or(e))?;
+            let a = self.node(a)?;
             let at = keys.iter().position(|k| k.0 == a).ok_or_else(|| format!("{a} is not a child of {}", parent.map_or("the document".to_owned(), |p| p.to_string())))?;
             (Some(keys[at].1.clone()), keys.get(at + 1).map(|k| k.1.clone()))
         } else {
@@ -329,35 +338,48 @@ impl Planner<'_, '_> {
         Ok(out)
     }
 
+    /// `ids` (children of `parent`) one after another in that order, where
+    /// the first of them sits: between the siblings around it, so none of
+    /// them moves and no two share a key.
+    fn restack(&self, parent: NodeId, ids: &[NodeId]) -> Result<Vec<Op>, String> {
+        let doc = self.scratch.document();
+        let keys: Vec<OrderKey> = ids.iter().filter_map(|&id| doc.live(id)).map(|n| n.order.clone()).collect();
+        let Some(start) = keys.iter().min().cloned() else { return Ok(Vec::new()) };
+        let others: Vec<OrderKey> = doc.children(parent).iter().filter(|c| !c.is_expanded() && !ids.contains(c)).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).collect();
+        let mut lo = others.iter().filter(|k| **k < start).max().cloned();
+        let hi = others.iter().filter(|k| **k > start).min().cloned();
+        let mut ops = Vec::new();
+        for &id in ids {
+            let key = OrderKey::between(lo.as_ref(), hi.as_ref()).map_err(|e| format!("{e:?}"))?;
+            ops.push(Op::Reparent { id, parent: Some(parent), order: key.clone() });
+            lo = Some(key);
+        }
+        Ok(ops)
+    }
+
     /// The nodes and component verbs, as markup builds them: every node,
     /// then the places, then the leaves that read a place. Returns the
     /// `<link>`s found inside nodes, each with its verb.
     fn build(&mut self, children: &[El]) -> Result<Vec<(usize, El)>, Vec<VerbError>> {
         let one = |p: &Self, verb: usize, m: String| vec![p.error(verb, "parse", m)];
-        // The component verbs' names: `id="$p"` becomes compose.rs's `as`.
+        // The component verbs' names: an unnamed one is named here.
         let mut trees: Vec<(usize, El)> = Vec::new();
         let mut top: Vec<Lifted> = Vec::new();
         let mut place_count = 0;
         let mut place_names: Vec<String> = Vec::new();
         fn name_places(el: &mut El, count: &mut usize, names: &mut Vec<String>) -> Result<(), String> {
             if matches!(el.name.as_str(), "place" | "make-component") {
-                if el.attr("as").is_some() {
-                    return Err(format!("<{}> is named by id=\"$p\", not as=", el.name));
-                }
-                let alias = match el.attrs.iter().position(|(k, _)| k == "id") {
-                    Some(pos) => {
-                        let (_, v) = el.attrs.remove(pos);
-                        let local = v.strip_prefix('$').filter(|l| !l.is_empty() && !l.starts_with("__")).ok_or_else(|| format!("<{} id=\"{v}\">: a name is a $ then letters, digits or _ (not two _ first)", el.name))?;
+                match el.attr("id") {
+                    Some(v) => {
+                        let local = v.strip_prefix('$').filter(|l| !l.is_empty() && !l.starts_with("__") && l.chars().all(|c| c.is_alphanumeric() || c == '_')).ok_or_else(|| format!("<{} id=\"{v}\">: a name is a $ then letters, digits or _ (not two _ first)", el.name))?;
                         if names.iter().any(|n| n == local) {
                             return Err(format!("id=\"{v}\" names two places"));
                         }
                         names.push(local.to_owned());
-                        v
                     }
-                    None => format!("$__place_{count}"),
-                };
+                    None => el.attrs.push(("id".into(), format!("$__place_{count}"))),
+                }
                 *count += 1;
-                el.attrs.push(("as".into(), alias));
                 return Ok(());
             }
             for c in el.children.iter_mut() {
@@ -394,13 +416,24 @@ impl Planner<'_, '_> {
             Node(String),
             Place(String),
         }
+        /// A leaf written after the places: a binding that reads one.
+        fn defers_to_place(k: &str, v: &str, places: &[String]) -> bool {
+            !matches!(k, "id" | "in" | "after" | "first") && (k.ends_with(".bind") || v.trim_start().starts_with("{=")) && markup::reads_place(v, places)
+        }
+        /// [`defers_to_place`] for an element's attribute, where `k.bind`
+        /// beside a plain `k` wins (markup::leaf_attrs): the plain one is
+        /// never read, so never deferred.
+        fn defers(el: &El, k: &str, v: &str, places: &[String]) -> bool {
+            let shadowed = !k.ends_with(".bind") && el.attrs.iter().any(|(b, _)| b.strip_suffix(".bind") == Some(k));
+            !shadowed && defers_to_place(k, v, places)
+        }
         fn lift(els: &mut Vec<El>, owner: Option<&str>, verb: usize, top: bool, l: &mut Lift) {
             let has_place = !top && els.iter().any(|e| matches!(e.name.as_str(), "place" | "make-component"));
             let mut sequence = Vec::new();
             let mut kept = Vec::with_capacity(els.len());
             for mut el in els.drain(..) {
                 if matches!(el.name.as_str(), "place" | "make-component") {
-                    sequence.push(Sibling::Place(el.attr("as").expect("named above").to_owned()));
+                    sequence.push(Sibling::Place(el.attr("id").expect("named above").to_owned()));
                     l.places.push(Lifted { verb, owner: owner.map(str::to_owned), el });
                     continue;
                 }
@@ -408,7 +441,8 @@ impl Planner<'_, '_> {
                     l.links.push((verb, el));
                     continue;
                 }
-                let defers = el.attrs.iter().any(|(_, v)| markup::reads_place(v, l.place_names));
+                let deferred: Vec<String> = el.attrs.iter().filter(|(k, v)| defers(&el, k, v, l.place_names)).map(|(k, _)| k.clone()).collect();
+                let defers = !deferred.is_empty();
                 let holds = el.children.iter().any(|c| matches!(c.name.as_str(), "place" | "make-component" | "link"));
                 if (defers || has_place || holds) && el.attr("id").is_none() {
                     el.attrs.push(("id".into(), format!("$__node_{}", l.synthetic)));
@@ -418,7 +452,7 @@ impl Planner<'_, '_> {
                 if defers {
                     let local = local.clone().expect("named above");
                     for (k, v) in el.attrs.iter_mut() {
-                        if markup::reads_place(v, l.place_names) {
+                        if deferred.contains(k) {
                             // `k.bind="e"` is `k="{= e}"`.
                             let (key, raw) = match k.strip_suffix(".bind") {
                                 Some(key) => (key.to_owned(), format!("{{= {}}}", std::mem::take(v))),
@@ -440,14 +474,25 @@ impl Planner<'_, '_> {
             }
             *els = kept;
         }
+        // Every node's id is a `$name` (markup::local_name) before any is read.
+        fn check_ids(el: &El) -> Result<(), String> {
+            if matches!(el.name.as_str(), "place" | "make-component" | "link") {
+                return Ok(());
+            }
+            markup::local_name(el)?;
+            el.children.iter().try_for_each(check_ids)
+        }
+        for (verb, el) in &trees {
+            check_ids(el).map_err(|e| one(self, *verb, e))?;
+        }
         let mut l = Lift { places: Vec::new(), links: Vec::new(), deferred: Vec::new(), sequences: Vec::new(), synthetic: 0, place_names: &place_names };
         for (verb, el) in trees.iter_mut() {
-            let mut one_tree = vec![std::mem::replace(el, El { name: String::new(), attrs: Vec::new(), children: Vec::new(), text: String::new(), src: String::new(), inner: String::new() })];
+            let mut one_tree = vec![std::mem::replace(el, El { name: String::new(), attrs: Vec::new(), children: Vec::new(), text: String::new(), inner: String::new() })];
             lift(&mut one_tree, None, *verb, true, &mut l);
             *el = one_tree.pop().expect("one");
         }
         let Lift { places: mut lifted, links, deferred, sequences, .. } = l;
-        let mut appended_places: Vec<(usize, String, String)> = top.iter().filter_map(|p| Some((p.verb, p.el.attr("in")?.to_owned(), p.el.attr("as")?.to_owned()))).collect();
+        let mut appended_places: Vec<(usize, String)> = top.iter().filter_map(|p| Some((p.verb, p.el.attr("id")?.to_owned()))).collect();
         // Top-level component verbs keep their place in the edit's order.
         lifted.extend(top);
         lifted.sort_by_key(|p| p.verb);
@@ -460,7 +505,7 @@ impl Planner<'_, '_> {
         }
         for n in &place_names {
             if self.nodes.contains_key(n) {
-                return Err(vec![self.error(lifted.iter().find(|p| p.el.attr("as") == Some(&format!("${n}"))).map_or(0, |p| p.verb), "parse", format!("${n} names a node and a place"))]);
+                return Err(vec![self.error(lifted.iter().find(|p| p.el.attr("id") == Some(&format!("${n}"))).map_or(0, |p| p.verb), "parse", format!("${n} names a node and a place"))]);
             }
         }
         let mut ids = ids.into_iter();
@@ -471,7 +516,7 @@ impl Planner<'_, '_> {
             Node(NodeId),
             Place(String),
         }
-        let mut appended: Vec<(usize, String, Top)> = Vec::new();
+        let mut appended: Vec<(usize, Top)> = Vec::new();
         for (verb, el) in &trees {
             let verb = *verb;
             let parent = match el.attr("in") {
@@ -496,8 +541,8 @@ impl Planner<'_, '_> {
             let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.document()) };
             let mut ops = Vec::new();
             markup::emit(el, parent, order, &mut ids, &names, &mut ops).map_err(|e| one(self, verb, e))?;
-            if let (Some(raw), None, None, Some(Op::Create { id, .. })) = (el.attr("in"), el.attr("after"), el.attr("first"), ops.first()) {
-                appended.push((verb, raw.to_owned(), Top::Node(*id)));
+            if let (Some(_), None, None, Some(Op::Create { id, .. })) = (el.attr("in"), el.attr("after"), el.attr("first"), ops.first()) {
+                appended.push((verb, Top::Node(*id)));
             }
             made.extend(ops.into_iter().map(|op| (op, verb)));
         }
@@ -513,8 +558,8 @@ impl Planner<'_, '_> {
             // Ids for this edit's nodes; a place's names are compose.rs's.
             let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.document()) };
             for (k, v) in el.attrs.iter_mut() {
-                if k != "as" {
-                    *v = markup::refs(v, &names).map_err(|e| one(self, p.verb, format!("{k}=\"{v}\": {e}")))?;
+                if k != "id" {
+                    *v = markup::refs(k, v, &names).map_err(|e| one(self, p.verb, format!("{k}=\"{v}\": {e}")))?;
                 }
             }
             if el.name == "place" && el.attr("in").is_none() {
@@ -556,42 +601,42 @@ impl Planner<'_, '_> {
         // over it.
         let mut later = Vec::new();
         for (verb, owner, sequence) in &sequences {
-            let doc = self.scratch.document();
             let Some(parent) = owner.as_ref().and_then(|o| self.nodes.get(o)).map(|(id, _)| *id) else { continue };
             let ids: Vec<NodeId> = sequence.iter().filter_map(|s| match s {
                 Sibling::Node(local) => self.nodes.get(local).map(|(id, _)| *id),
                 Sibling::Place(alias) => self.places.get(alias.trim_start_matches('$')).map(|p| p.picture),
             }).collect();
-            let Some(mut key) = ids.first().and_then(|&id| doc.live(id)).map(|n| n.order.clone()) else { continue };
-            for &id in &ids[1..] {
-                key = OrderKey::after(&key);
-                later.push((Op::Reparent { id, parent: Some(parent), order: key.clone() }, *verb));
+            later.extend(self.restack(parent, &ids).map_err(|e| one(self, *verb, e))?.into_iter().map(|op| (op, *verb)));
+        }
+        // So do top-level nodes and places appended to one parent, however
+        // its in= was spelled.
+        appended.extend(appended_places.drain(..).map(|(verb, alias)| (verb, Top::Place(alias))));
+        appended.sort_by_key(|(verb, _)| *verb);
+        let mut groups: Vec<(NodeId, bool, Vec<(usize, NodeId)>)> = Vec::new();
+        for (verb, t) in &appended {
+            let (id, place) = match t {
+                Top::Node(id) => (*id, false),
+                Top::Place(alias) => match self.places.get(alias.trim_start_matches('$')) {
+                    Some(p) => (p.picture, true),
+                    None => continue,
+                },
+            };
+            let Some(parent) = self.scratch.document().live(id).and_then(|n| n.parent) else { continue };
+            match groups.iter_mut().find(|g| g.0 == parent) {
+                Some(g) => {
+                    g.1 |= place;
+                    g.2.push((*verb, id));
+                }
+                None => groups.push((parent, place, vec![(*verb, id)])),
             }
         }
-        appended.extend(appended_places.drain(..).map(|(verb, raw, alias)| (verb, raw, Top::Place(alias))));
-        appended.sort_by_key(|(verb, ..)| *verb);
-        let mut parents: Vec<&str> = Vec::new();
-        for (_, raw, _) in &appended {
-            if !parents.contains(&raw.as_str()) {
-                parents.push(raw);
-            }
-        }
-        for raw in parents {
-            let group: Vec<(usize, NodeId)> = appended.iter().filter(|(_, r, _)| r == raw).filter_map(|(verb, _, t)| match t {
-                Top::Node(id) => Some((*verb, *id)),
-                Top::Place(alias) => self.places.get(alias.trim_start_matches('$')).map(|p| (*verb, p.picture)),
-            }).collect();
-            if !appended.iter().any(|(_, r, t)| r == raw && matches!(t, Top::Place(_))) || group.len() < 2 {
+        for (parent, place, group) in groups {
+            if !place || group.len() < 2 {
                 continue;
             }
-            let doc = self.scratch.document();
-            let Some(parent) = doc.live(group[0].1).and_then(|n| n.parent) else { continue };
-            let mut lo = doc.children(parent).iter().filter(|c| !c.is_expanded() && !group.iter().any(|(_, g)| g == *c)).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
-            for &(verb, id) in &group {
-                let key = OrderKey::between(lo.as_ref(), None).map_err(|e| one(self, verb, format!("{e:?}")))?;
-                later.push((Op::Reparent { id, parent: Some(parent), order: key.clone() }, verb));
-                lo = Some(key);
-            }
+            let ids: Vec<NodeId> = group.iter().map(|g| g.1).collect();
+            let ops = self.restack(parent, &ids).map_err(|e| one(self, group[0].0, e))?;
+            later.extend(ops.into_iter().zip(group.iter().map(|g| g.0)));
         }
         // The leaves that read a place, now that it exists.
         for (verb, local, key, raw) in deferred {
@@ -635,6 +680,10 @@ impl Planner<'_, '_> {
     /// One verb, planned and applied to the scratch document.
     fn verb(&mut self, i: usize, el: &El) -> Result<(), Failure> {
         let fail = |p: &Self, kind: &str, m: String| Failure::Errors(vec![p.error(i, kind, m)]);
+        // What a verb would not read is refused, not dropped.
+        if (PLAIN.contains(&el.name.as_str()) || el.name == "link-figures") && (!el.children.is_empty() || !el.text.trim().is_empty()) {
+            return Err(fail(self, "parse", format!("<{}> holds nothing; give what it changes as attributes", el.name)));
+        }
         // A verb that reads the document sees the plain verbs before it.
         if !PLAIN.contains(&el.name.as_str()) {
             self.flush().map_err(Failure::Errors)?;
@@ -708,19 +757,22 @@ impl Planner<'_, '_> {
                     Some(raw) => Some(self.node(raw).map_err(|e| fail(self, "parse", e))?),
                     None => None,
                 };
-                // Among what exists and what earlier held verbs put there.
-                let planned: Vec<(NodeId, OrderKey)> = self.pending.iter().filter_map(|(op, _)| match op {
-                    Op::Reparent { id, parent: p, order } if *p == parent => Some((*id, order.clone())),
-                    _ => None,
-                }).collect();
-                // This node, and what earlier held verbs moved or deleted,
-                // are not where the document has them.
-                let mut gone: Vec<NodeId> = self.pending.iter().filter_map(|(op, _)| match op {
-                    Op::Reparent { id, .. } | Op::Delete { id } => Some(*id),
-                    _ => None,
-                }).collect();
+                // Where earlier held verbs left each node they moved (its
+                // last move; none once deleted): those are not where the
+                // document has them, and neither is this one.
+                let mut now: Vec<(NodeId, Option<(Option<NodeId>, OrderKey)>)> = Vec::new();
+                for (op, _) in &self.pending {
+                    let (n, at) = match op {
+                        Op::Reparent { id, parent: p, order } => (*id, Some((*p, order.clone()))),
+                        Op::Delete { id } => (*id, None),
+                        _ => continue,
+                    };
+                    now.retain(|(m, _)| *m != n);
+                    now.push((n, at));
+                }
+                let planned: Vec<(NodeId, OrderKey)> = now.iter().filter(|(n, _)| *n != id).filter_map(|(n, at)| at.as_ref().filter(|(p, _)| *p == parent).map(|(_, k)| (*n, k.clone()))).collect();
+                let mut gone: Vec<NodeId> = now.iter().map(|(n, _)| *n).collect();
                 gone.push(id);
-                let planned: Vec<(NodeId, OrderKey)> = planned.into_iter().filter(|(p, _)| *p != id).collect();
                 let order = self.keys(parent, el.attr("after"), el.attr("first").is_some_and(|f| f != "false"), 1, &planned, &gone).map_err(|e| fail(self, "parse", e))?.remove(0);
                 self.hold(i, vec![Op::Reparent { id, parent, order }]);
                 Ok(())
@@ -752,10 +804,18 @@ impl Planner<'_, '_> {
                 Ok(())
             }
             "circuit" => {
-                let markup = markup::src_refs(&el.src, &self.names()).map_err(|e| fail(self, "circuit", e))?;
+                // Its names as ids, written back as markup for parts.rs.
+                let names = self.names();
+                fn written(el: &El, names: &Names) -> Result<String, String> {
+                    let attrs = el.attrs.iter().map(|(k, v)| markup::refs(k, v, names).map(|v| format!(" {k}=\"{}\"", escape(&v).replace('"', "&quot;")))).collect::<Result<String, String>>()?;
+                    let children = el.children.iter().map(|c| written(c, names)).collect::<Result<String, String>>()?;
+                    Ok(if children.is_empty() { format!("<{}{attrs}/>", el.name) } else { format!("<{}{attrs}>{children}</{}>", el.name, el.name) })
+                }
+                let markup = written(el, &names).map_err(|e| fail(self, "circuit", e))?;
+                let sheet = markup::refs("sheet", el.attr("sheet").unwrap_or(""), &names).map_err(|e| fail(self, "circuit", e))?;
+                drop(names);
                 let (ops, summary) = crate::parts::circuit_ops(&self.scratch, &markup).map_err(|e| fail(self, "circuit", e))?;
                 self.push(i, ops).map_err(Failure::Errors)?;
-                let sheet = markup::refs(el.attr("sheet").unwrap_or(""), &self.names()).map_err(|e| fail(self, "circuit", e))?;
                 self.summary.push(format!("  <circuit>{summary}</circuit>"));
                 if let Ok(id) = crate::parts::sheet_named(self.scratch.document(), &sheet) {
                     self.summary.push(format!("  <netlist sheet=\"{sheet}\">\n{}\n  </netlist>", crate::parts::netlist(&self.scratch, id)));
@@ -765,7 +825,7 @@ impl Planner<'_, '_> {
             "table" => self.table(i, el).map_err(|e| fail(self, "table", e)),
             "context" => {
                 // A context printed by a view carries its node's id; the name decides.
-                let attrs: String = el.attrs.iter().filter(|(k, _)| k != "id").map(|(k, v)| format!(" {k}=\"{}\"", v.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;"))).collect();
+                let attrs: String = el.attrs.iter().filter(|(k, _)| k != "id").map(|(k, v)| format!(" {k}=\"{}\"", escape(v).replace('"', "&quot;"))).collect();
                 let markup = format!("<context{attrs}>{}</context>", el.inner);
                 let (ops, node) = crate::contexts::put_ops(self.scratch.document(), &markup).map_err(|e| fail(self, "context", e))?;
                 self.push(i, ops).map_err(Failure::Errors)?;

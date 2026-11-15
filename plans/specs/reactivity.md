@@ -580,4 +580,4 @@ pointer.
   growing with the document.
   `tests/reactivity.rs` `a_plot_s_new_tick_writes_nothing_outside_it`.
 - Next: re-expand and patch the graph for the one scope whose items changed, rather
-  than the document (a design note in §11 first).
+  than the document: [`handoff-reactive-structure.md`](../handoff-reactive-structure.md).

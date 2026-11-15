@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-13 for the 2D control/pivot workflow. Update this file whenever a plan is added,
+**Updated:** 2026-11-15 for the reactive-structure handoff. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -13,6 +13,10 @@ finishes, or is superseded.
      [`handoff-product.md`](handoff-product.md). Several tasks are open; it says to ask
      the user which.
    - **Rendering performance** (stage H): [`handoff-render.md`](handoff-render.md) §4.
+   - **Reactive engine: structure that costs what changed** (incremental expansion and
+     graph patching, after the `std:plot` pan/zoom frame drops):
+     [`handoff-reactive-structure.md`](handoff-reactive-structure.md). Starts with a
+     design note for the user's approval.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as

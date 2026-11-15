@@ -332,6 +332,7 @@ async function run(line: string) {
           overlay_geometry: phase("overlay_geometry"),
           bounds: phase("bounds"),
           propagate: phase("propagate"),
+          action: phase("action"),
           bounds_updated: t.bounds_updated,
           pick_candidates: t.pick_candidates,
           frame: phase("frame"),

@@ -1462,7 +1462,8 @@ from the console. `await __iron.timings(reset)` reads per-phase CPU times
 `encode` (content views), `overlay_encode` (editor-feedback views), `render`, `pick`,
 `overlay_geometry`, `bounds`, `propagate` (Bevy's transform propagation, timed from
 outside its set; every frame), `produce` (a Bevy-side producer's step and publish,
-only while one runs), and whole frames as `frame` and `changed_frame`
+only while one runs), `action` (a document's own `drag` or `wheel` action,
+`Store::pointer_action`, with the repeats it re-expands), and whole frames as `frame` and `changed_frame`
 (a frame in which some view, content or overlay, re-encoded). Each phase records only frames on
 which it did work.
 
@@ -1492,6 +1493,13 @@ The 1k/10k SIMD before/after tables and raw data are in `plans/rendering/render-
 §6–7; older scalar rows are historical. `bounds_updated` and `pick_candidates`
 report maximum work counts per update/walk in the interval; `drawn` is the last
 visible draw walk. Idle `pick.n` and `bounds.n` should be zero.
+
+Plot pan and zoom (reactivity.md §13, 2026-11-14): `plot-perf.txt` places a
+700 × 420 `std:plot`, drags in it slowly and fast, and wheels in and out once a frame,
+printing a `measure` line for each; read `action` (the store's share) beside
+`changed_frame`. Build `PROFILE=wasm-bench` first. The store alone, natively:
+`cargo test --release -p iron_document --target aarch64-apple-darwin --test plot_perf
+-- --ignored --nocapture` (`PLOTS=10` for a larger document).
 
 Selection cache regression checks (run after the build, with Vite up):
 

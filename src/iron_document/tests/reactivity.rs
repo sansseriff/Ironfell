@@ -761,6 +761,39 @@ fn a_drag_previews_its_writes_and_commits_one_step() {
     assert!((store.resolved(n["zoom"], path("let.value")).unwrap().as_f64().unwrap() - std::f64::consts::E).abs() < 1e-9);
 }
 
+/// A tick-count change in one plot re-expands, and writes only that
+/// plot's labels: the other plot's `auto` (NaN) leaves are the same data
+/// as before, not changes, so it gets no ops.
+#[test]
+fn a_plot_s_new_tick_writes_nothing_outside_it() {
+    let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
+    let plot = store.place_standard("plot", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let other = store.place_standard("plot", comp, [0.0, 400.0], Actor::Human).unwrap();
+    let area = named(&store, plot, "plot area")[0];
+    store.take_derived_ops();
+    let mut seen = 0;
+    for _ in 0..200 {
+        store.pointer_action(area, "drag", [-3.0, 0.0, 0.0, 0.0, 0.0]).unwrap().unwrap();
+        let ops = store.take_derived_ops();
+        if ops.is_empty() {
+            continue;
+        }
+        seen += 1;
+        for op in &ops {
+            let id = match op {
+                Op::Create { id, .. } | Op::Delete { id } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Reparent { id, .. } => *id,
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(id.path()[0], plot, "{op:?} is outside the panned plot (the other is {other})");
+        }
+    }
+    assert!(seen > 0, "the pan changed the tick count at least once");
+    // A formula's `==` is still IEEE: NaN is not equal to itself.
+    let read = |_: Leaf| -> Option<Value> { None };
+    assert_eq!(Expr::parse("0 / 0 == 0 / 0").unwrap().eval(&read).unwrap(), Value::Bool(false));
+    assert_eq!(Value::Number(f64::NAN), Value::Number(f64::NAN));
+}
+
 /// `std:plot` pans by a drag in its plot area and zooms by the wheel about
 /// the pointer: its view is state on the instance, one undo step a gesture.
 #[test]

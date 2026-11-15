@@ -1,0 +1,453 @@
+nav
+ready
+eval __iron.snapping(false)
+eval (async()=>{const r=await __iron.edit('<edit><place def="std:plot" in="#1" x="40" y="60" w="700" h="420" name="P1"/></edit>');return r.ok?true:r})()
+sleep 1000
+shot perf-plot-before
+measure-reset
+sleep 1000
+measure idle
+dmove 600 250
+measure-reset
+down
+dmove 596 251
+sleep 16
+dmove 592 252
+sleep 16
+dmove 588 253
+sleep 16
+dmove 584 254
+sleep 16
+dmove 580 255
+sleep 16
+dmove 576 256
+sleep 16
+dmove 572 257
+sleep 16
+dmove 568 258
+sleep 16
+dmove 564 259
+sleep 16
+dmove 560 250
+sleep 16
+dmove 556 251
+sleep 16
+dmove 552 252
+sleep 16
+dmove 548 253
+sleep 16
+dmove 544 254
+sleep 16
+dmove 540 255
+sleep 16
+dmove 536 256
+sleep 16
+dmove 532 257
+sleep 16
+dmove 528 258
+sleep 16
+dmove 524 259
+sleep 16
+dmove 520 250
+sleep 16
+dmove 516 251
+sleep 16
+dmove 512 252
+sleep 16
+dmove 508 253
+sleep 16
+dmove 504 254
+sleep 16
+dmove 500 255
+sleep 16
+dmove 496 256
+sleep 16
+dmove 492 257
+sleep 16
+dmove 488 258
+sleep 16
+dmove 484 259
+sleep 16
+dmove 480 250
+sleep 16
+dmove 476 251
+sleep 16
+dmove 472 252
+sleep 16
+dmove 468 253
+sleep 16
+dmove 464 254
+sleep 16
+dmove 460 255
+sleep 16
+dmove 456 256
+sleep 16
+dmove 452 257
+sleep 16
+dmove 448 258
+sleep 16
+dmove 444 259
+sleep 16
+dmove 440 250
+sleep 16
+dmove 436 251
+sleep 16
+dmove 432 252
+sleep 16
+dmove 428 253
+sleep 16
+dmove 424 254
+sleep 16
+dmove 420 255
+sleep 16
+dmove 416 256
+sleep 16
+dmove 412 257
+sleep 16
+dmove 408 258
+sleep 16
+dmove 404 259
+sleep 16
+dmove 400 250
+sleep 16
+dmove 396 251
+sleep 16
+dmove 392 252
+sleep 16
+dmove 388 253
+sleep 16
+dmove 384 254
+sleep 16
+dmove 380 255
+sleep 16
+dmove 376 256
+sleep 16
+dmove 372 257
+sleep 16
+dmove 368 258
+sleep 16
+dmove 364 259
+sleep 16
+dmove 360 250
+sleep 16
+dmove 356 251
+sleep 16
+dmove 352 252
+sleep 16
+dmove 348 253
+sleep 16
+dmove 344 254
+sleep 16
+dmove 340 255
+sleep 16
+dmove 336 256
+sleep 16
+dmove 332 257
+sleep 16
+dmove 328 258
+sleep 16
+dmove 324 259
+sleep 16
+dmove 320 250
+sleep 16
+dmove 316 251
+sleep 16
+dmove 312 252
+sleep 16
+dmove 308 253
+sleep 16
+dmove 304 254
+sleep 16
+dmove 300 255
+sleep 16
+dmove 296 256
+sleep 16
+dmove 292 257
+sleep 16
+dmove 288 258
+sleep 16
+dmove 284 259
+sleep 16
+dmove 280 250
+sleep 16
+dmove 276 251
+sleep 16
+dmove 272 252
+sleep 16
+dmove 268 253
+sleep 16
+dmove 264 254
+sleep 16
+dmove 260 255
+sleep 16
+dmove 256 256
+sleep 16
+dmove 252 257
+sleep 16
+dmove 248 258
+sleep 16
+dmove 244 259
+sleep 16
+dmove 240 250
+sleep 16
+measure pan-slow
+up
+sleep 600
+dmove 300 250
+measure-reset
+down
+dmove 315 250
+sleep 16
+dmove 330 250
+sleep 16
+dmove 345 250
+sleep 16
+dmove 360 250
+sleep 16
+dmove 375 250
+sleep 16
+dmove 390 250
+sleep 16
+dmove 405 250
+sleep 16
+dmove 420 250
+sleep 16
+dmove 435 250
+sleep 16
+dmove 450 250
+sleep 16
+dmove 465 250
+sleep 16
+dmove 480 250
+sleep 16
+dmove 495 250
+sleep 16
+dmove 510 250
+sleep 16
+dmove 525 250
+sleep 16
+dmove 540 250
+sleep 16
+dmove 555 250
+sleep 16
+dmove 570 250
+sleep 16
+dmove 585 250
+sleep 16
+dmove 300 250
+sleep 16
+dmove 285 250
+sleep 16
+dmove 270 250
+sleep 16
+dmove 255 250
+sleep 16
+dmove 240 250
+sleep 16
+dmove 225 250
+sleep 16
+dmove 210 250
+sleep 16
+dmove 195 250
+sleep 16
+dmove 180 250
+sleep 16
+dmove 165 250
+sleep 16
+dmove 150 250
+sleep 16
+dmove 135 250
+sleep 16
+dmove 120 250
+sleep 16
+dmove 105 250
+sleep 16
+dmove 90 250
+sleep 16
+dmove 75 250
+sleep 16
+dmove 60 250
+sleep 16
+dmove 45 250
+sleep 16
+dmove 30 250
+sleep 16
+dmove 15 250
+sleep 16
+dmove 300 250
+sleep 16
+dmove 315 250
+sleep 16
+dmove 330 250
+sleep 16
+dmove 345 250
+sleep 16
+dmove 360 250
+sleep 16
+dmove 375 250
+sleep 16
+dmove 390 250
+sleep 16
+dmove 405 250
+sleep 16
+dmove 420 250
+sleep 16
+dmove 435 250
+sleep 16
+dmove 450 250
+sleep 16
+dmove 465 250
+sleep 16
+dmove 480 250
+sleep 16
+dmove 495 250
+sleep 16
+dmove 510 250
+sleep 16
+dmove 525 250
+sleep 16
+dmove 540 250
+sleep 16
+dmove 555 250
+sleep 16
+dmove 570 250
+sleep 16
+dmove 585 250
+sleep 16
+dmove 300 250
+sleep 16
+dmove 285 250
+sleep 16
+dmove 270 250
+sleep 16
+dmove 255 250
+sleep 16
+dmove 240 250
+sleep 16
+dmove 225 250
+sleep 16
+dmove 210 250
+sleep 16
+dmove 195 250
+sleep 16
+dmove 180 250
+sleep 16
+dmove 165 250
+sleep 16
+dmove 150 250
+sleep 16
+dmove 135 250
+sleep 16
+dmove 120 250
+sleep 16
+dmove 105 250
+sleep 16
+dmove 90 250
+sleep 16
+dmove 75 250
+sleep 16
+dmove 60 250
+sleep 16
+dmove 45 250
+sleep 16
+dmove 30 250
+sleep 16
+dmove 15 250
+sleep 16
+dmove 300 250
+sleep 16
+dmove 315 250
+sleep 16
+dmove 330 250
+sleep 16
+dmove 345 250
+sleep 16
+dmove 360 250
+sleep 16
+dmove 375 250
+sleep 16
+dmove 390 250
+sleep 16
+dmove 405 250
+sleep 16
+dmove 420 250
+sleep 16
+dmove 435 250
+sleep 16
+dmove 450 250
+sleep 16
+dmove 465 250
+sleep 16
+dmove 480 250
+sleep 16
+dmove 495 250
+sleep 16
+dmove 510 250
+sleep 16
+dmove 525 250
+sleep 16
+dmove 540 250
+sleep 16
+dmove 555 250
+sleep 16
+dmove 570 250
+sleep 16
+dmove 585 250
+sleep 16
+dmove 300 250
+sleep 16
+dmove 285 250
+sleep 16
+dmove 270 250
+sleep 16
+dmove 255 250
+sleep 16
+dmove 240 250
+sleep 16
+dmove 225 250
+sleep 16
+dmove 210 250
+sleep 16
+dmove 195 250
+sleep 16
+dmove 180 250
+sleep 16
+dmove 165 250
+sleep 16
+dmove 150 250
+sleep 16
+dmove 135 250
+sleep 16
+dmove 120 250
+sleep 16
+dmove 105 250
+sleep 16
+dmove 90 250
+sleep 16
+dmove 75 250
+sleep 16
+dmove 60 250
+sleep 16
+dmove 45 250
+sleep 16
+dmove 30 250
+sleep 16
+dmove 15 250
+sleep 16
+dmove 300 250
+sleep 16
+measure pan-fast
+up
+sleep 600
+dmove 400 250
+sleep 200
+eval (window.addEventListener('pointermove',e=>{window.__m=[e.clientX,e.clientY]},true), true)
+dmove 401 251
+sleep 100
+measure-reset
+eval (async()=>{const [x,y]=window.__m;const el=document.elementFromPoint(x,y);for(let i=0;i<180;i++){const d=(Math.floor(i/30)%2?1:-1)*40;el.dispatchEvent(new WheelEvent('wheel',{deltaY:d,deltaMode:0,clientX:x,clientY:y,bubbles:true,cancelable:true}));await new Promise(r=>requestAnimationFrame(r))}return el.tagName})()
+measure zoom
+sleep 600
+shot perf-plot-after
+errors
+quit

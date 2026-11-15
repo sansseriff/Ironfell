@@ -17,7 +17,13 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq)]
+/// Equality is sameness of data, as a file would hold it: NaN equals NaN
+/// (an `auto` input, an empty reading) and `PartialEq` is otherwise the
+/// fields'. Diffs and change detection rely on it: with IEEE equality a NaN
+/// leaf never compares equal to itself, so it re-runs its readers on every
+/// pass and expansion rewrites it on every re-expansion. A formula's `==`
+/// keeps IEEE numbers (`expr::same`).
+#[derive(Clone, Debug)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -55,6 +61,37 @@ pub enum Value {
     /// form for numbers with one unit and is accepted wherever a list is.
     /// Shared, so copies are free.
     List(Arc<[Value]>),
+}
+
+/// Floats that are the same data: equal, or both NaN.
+fn same_f64(a: f64, b: f64) -> bool {
+    a == b || (a.is_nan() && b.is_nan())
+}
+
+fn same_floats(a: &[f64], b: &[f64]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(&x, &y)| same_f64(x, y))
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        use Value::*;
+        match (self, other) {
+            (Number(a), Number(b)) => same_f64(*a, *b),
+            (Bool(a), Bool(b)) => a == b,
+            (Str(a), Str(b)) | (Enum(a), Enum(b)) => a == b,
+            (Color(a), Color(b)) => a.iter().zip(b).all(|(&x, &y)| x == y || (x.is_nan() && y.is_nan())),
+            (Vec2(a), Vec2(b)) => same_floats(a, b),
+            (Vec3(a), Vec3(b)) => same_floats(a, b),
+            (Ref(a), Ref(b)) => a == b,
+            (Quantity { si: a, dim: da }, Quantity { si: b, dim: db }) => da == db && same_f64(*a, *b),
+            (Record { kind: ka, fields: fa }, Record { kind: kb, fields: fb }) => ka == kb && fa == fb,
+            (Value::Geometry(a), Value::Geometry(b)) => Arc::ptr_eq(a, b) || a == b,
+            (Series { data: a, dim: da }, Series { data: b, dim: db }) => da == db && (Arc::ptr_eq(a, b) || same_floats(a, b)),
+            (Value::Fn(a), Value::Fn(b)) => Arc::ptr_eq(a, b) || a == b,
+            (List(a), List(b)) => Arc::ptr_eq(a, b) || a == b,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]

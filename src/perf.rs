@@ -49,6 +49,10 @@ pub enum Phase {
     /// A Bevy-side producer's step and publish (`document_bridge::gas`),
     /// only while it runs.
     Produce,
+    /// `Store::pointer_action`: a document's own `drag` or `wheel` action
+    /// (reactivity.md §5.2), its previewed writes and what they settle,
+    /// repeats re-expanding included.
+    Action,
     /// One whole frame on the worker (`WorkerApp::frame`), main world and,
     /// when it renders, extraction and rendering. CPU only: the GPU's share
     /// shows in frames per second.
@@ -59,7 +63,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    const ALL: [Phase; 15] = [
+    const ALL: [Phase; 16] = [
         Phase::Sync,
         Phase::GestureReconcile,
         Phase::DisplayList,
@@ -73,6 +77,7 @@ impl Phase {
         Phase::Bounds,
         Phase::Propagate,
         Phase::Produce,
+        Phase::Action,
         Phase::Frame,
         Phase::ChangedFrame,
     ];
@@ -92,6 +97,7 @@ impl Phase {
             Phase::Bounds => "bounds",
             Phase::Propagate => "propagate",
             Phase::Produce => "produce",
+            Phase::Action => "action",
             Phase::Frame => "frame",
             Phase::ChangedFrame => "changed_frame",
         }

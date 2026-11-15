@@ -3552,7 +3552,10 @@ pub fn select_tool_system(
                         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
                         geo.store.listens_for(*node, "drag").map_or(at, |l| geo.world(l).inverse() * at)
                     };
-                    match store.0.pointer_action(*node, "drag", [d.x, d.y, local.x, local.y, 0.0]) {
+                    let timing = crate::perf::span(crate::perf::Phase::Action);
+                    let acted = store.0.pointer_action(*node, "drag", [d.x, d.y, local.x, local.y, 0.0]);
+                    drop(timing);
+                    match acted {
                         Ok(Some(name)) => *label = name,
                         Ok(None) => {}
                         Err(why) => warn!("drag on {node}: {why}"),
@@ -4954,7 +4957,10 @@ pub fn navigate_views(
         };
         let at = view.affine().inverse() * Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
         let local = Geo { store: &store.0, drawables: &drawables, spatial: &spatial }.world(listens).inverse() * at;
-        match store.0.pointer_action(node, "wheel", [0.0, 0.0, local.x, local.y, px as f64]) {
+        let timing = crate::perf::span(crate::perf::Phase::Action);
+        let acted = store.0.pointer_action(node, "wheel", [0.0, 0.0, local.x, local.y, px as f64]);
+        drop(timing);
+        match acted {
             Ok(Some(name)) => {
                 *wheeling = Some((now, name));
                 taken = true;

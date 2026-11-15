@@ -768,9 +768,14 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
 }
 
 /// Equality, with a choice and text equal when they name the same word.
+/// Numbers compare as IEEE numbers, so NaN equals nothing (`Value`'s own
+/// equality, for diffs, has NaN equal NaN).
 fn same(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Str(x) | Value::Enum(x), Value::Str(y) | Value::Enum(y)) => x == y,
+        (Value::Number(x), Value::Number(y)) => x == y,
+        (Value::Quantity { si: x, dim: dx }, Value::Quantity { si: y, dim: dy }) => dx == dy && x == y,
+        (Value::Series { data: x, dim: dx }, Value::Series { data: y, dim: dy }) => dx == dy && x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| p == q),
         _ => a == b,
     }
 }

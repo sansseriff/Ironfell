@@ -561,3 +561,23 @@ width following selection and resize; a tracked cycle), the whole `iron_document
 suite, `bun test` (115). In the app, `actions.txt` (run-iron skill): an accordion made
 through the model's edit surface, hovered, clicked twice and undone with the real
 pointer.
+
+**2026-11-14: plot pan and zoom measured; NaN is the same data as NaN.**
+
+- Measured (`plot-perf.txt`, run-iron; `tests/plot_perf.rs`, ignored, a native probe):
+  a pan step that only moves values costs the store 0.12 ms native. A step where the
+  tick count changes re-expands the whole document and rebuilds the graph: 1.3 ms with
+  one plot, 11 ms with ten (native release), about 60 % graph rebuild and 40 %
+  expansion. In the app (wasm-bench, the demo document, a 700 × 420 plot) the new
+  `action` phase (`perf::Phase::Action`, the store's `pointer_action`) is the largest
+  part of a zoom frame: 4.4 ms of a 8.3 ms changed frame at p50, up to 9.8 ms.
+- `Value`'s equality is now sameness of data: NaN equals NaN (`value.rs`). Before, an
+  `auto` (NaN) constant never equalled itself, so every re-expansion rewrote it in
+  every instance (three plots: 32 ops for one label removed, now 2), and a binding
+  that evaluates to NaN counted as changed on every pass. A formula's `==` keeps IEEE
+  numbers (`expr::same`). Zoom's changed frame went from 12.8 to 8.3 ms at p50; with
+  ten plots a tick change costs 7.3 ms native (was 11) and writes 2 ops (was 102), still
+  growing with the document.
+  `tests/reactivity.rs` `a_plot_s_new_tick_writes_nothing_outside_it`.
+- Next: re-expand and patch the graph for the one scope whose items changed, rather
+  than the document (a design note in §11 first).

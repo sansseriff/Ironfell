@@ -53,7 +53,7 @@
 <h2 id="applier"><span class="sec">F2.4</span>The applier: one function per op</h2>
 <snip file="src/iron_document/src/op.rs" lines="202-241" first="/// Apply one op to `doc`, returning the ops that invert it. On error `doc` is" last="}"/>
 <p><code>apply_op</code> takes the working document, the op's index (so errors can say "op 2"), the op, and the version this transaction will produce. It returns the inverse ops or an error. <code>set</code> is the simplest complete arm and the pattern for the rest:</p>
-<snip file="src/iron_document/src/op.rs" lines="552-580" first="fn set(" last="}"/>
+<snip file="src/iron_document/src/op.rs" lines="593-603" first="fn set(" last="}"/>
 <ol>
   <li>The node must be live (559). <code>live(…)?</code> returns an <code>UnknownNode</code> or <code>Tombstoned</code> error, and <code>?</code> hands it straight back.</li>
   <li>A binding is validated (560–562): every leaf it reads must exist, and it must not end up depending on itself (F3.3).</li>
@@ -62,10 +62,10 @@
   <li>The inverse is built from that old slot (575–579). No other bookkeeping.</li>
 </ol>
 <h3 id="delete">Delete: the one whose inverse needs care</h3>
-<snip file="src/iron_document/src/op.rs" lines="449-469" first="fn delete(doc: &amp;mut Document, cx: &amp;Ctx, id: NodeId) -&gt; Result&lt;Vec&lt;Op&gt;, ApplyError&gt; {" last="}"/>
+<snip file="src/iron_document/src/op.rs" lines="484-502" first="fn delete(doc: &amp;mut Document, cx: &amp;Ctx, id: NodeId) -&gt; Result&lt;Vec&lt;Op&gt;, ApplyError&gt; {" last="}"/>
 <p>Deleting a group tombstones it and everything under it. Each node gets its own <code>Create</code> in the inverse, carrying its facets, so undo restores the same ids with the same data. The loop walks deepest-first, so the reversed list recreates the group before its children.</p>
 <h3 id="create">Create, and the rules about ids</h3>
-<snip file="src/iron_document/src/op.rs" lines="302-351" first="fn create(" last="}"/>
+<snip file="src/iron_document/src/op.rs" lines="302-314" first="fn create(" last="}"/>
 <ul>
   <li>An id already live is refused (312–314).</li>
   <li>A fresh id must come from the counter (316–323). Callers reserve ids with <code>Document::next_ids</code> and use them in <code>Create</code> ops; an id below the counter that isn't a tombstone is refused, so ids can't be reused.</li>
@@ -75,7 +75,7 @@
 
 <h2 id="run"><span class="sec">F2.5</span>All or nothing: <code>Store::run</code></h2>
 <p>Several ops in one transaction must all apply or none. The simplest correct approach, which is the one used: copy the whole document, apply every op to the copy, and swap it in only if nothing failed.</p>
-<snip file="src/iron_document/src/lib.rs" lines="1723-1804" first="/// Run the ops against a working copy and return it with the" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2622-2640" first="/// Run the ops against a working copy and return it with the" last="}"/>
 <p>The loop doesn't stop at the first error (1740–1757); it collects every one, because a model fixing a rejected edit wants the whole list in one round trip. The deferred checks follow (1758–1776). Only if both passes are clean does the copy get the new version and go back to the caller. The comment above <code>run</code> covers the cost: one clone per <em>commit</em>, not per frame, because a drag produces one transaction when it ends (F3.5).</p>
 
 <h2 id="apply"><span class="sec">F2.6</span><code>Store::apply</code>, the public entry point</h2>
@@ -90,7 +90,7 @@
 
 <h2 id="undo"><span class="sec">F2.7</span>Undo and redo: ordinary transactions</h2>
 <p><code>History</code> keeps three lists: <code>past</code> (what undo will reverse), <code>future</code> (what redo will replay), and <code>log</code> (every transaction that applied, undo and redo included). The log is what the Bevy bridge reads (F4).</p>
-<snip file="src/iron_document/src/lib.rs" lines="1577-1610" first="/// Undo the most recent transaction. `ts` is the caller&#x27;s clock." last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2472-2477" first="/// Undo the most recent transaction. `ts` is the caller&#x27;s clock." last="}"/>
 <p>Undo pops the last transaction, builds a new one from its inverse, labels it "undo: …" with actor <code>System</code>, and runs it through the same <code>run</code> as everything else. Redo replays the original ops plus its <code>derived_ops</code>, without solving, so redo reproduces exactly what happened. Because both go through the normal path, validation, the version bump, the Bevy sync and the model's view of history need no special cases. Two newer details: undo first cancels any running gesture (1580–1582), so Cmd+Z mid-drag takes the drag back; and two calls edit the undo stack without new semantics, <code>retract</code> and <code>merge_with_previous</code>, which make an Alt-drag one undo step (Part 13).</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Action</th><th>Version</th><th>past</th><th>future</th><th>Appended to the log</th></tr></thead>
@@ -147,7 +147,7 @@
   &lt;/group&gt;
 &lt;/document&gt;</raw>
 <p>It's XML-shaped because the tree is the information, and models read XML well. A view is requested with a <code>ViewQuery</code>:</p>
-<snip file="src/iron_document/src/view.rs" lines="16-57" first="#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]" last="}"/>
+<snip file="src/iron_document/src/view.rs" lines="16-25" first="#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]" last="}"/>
 <ul>
   <li><strong>Relation</strong> picks which structure to walk: the raw tree, the model (entities and their figures, Part 5), or one composition's layout.</li>
   <li><strong>Fidelity.</strong> <code>skeleton</code> shows types, ids, names and child counts; <code>summary</code> shows values but elides long child lists; <code>full</code> shows everything.</li>

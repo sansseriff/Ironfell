@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 4 of 14 · <chip sys="solve"/></p>
+  <p class="kicker">Part 4 of 20 · <chip sys="solve"/></p>
   <h1>Constraints and the solver</h1>
   <p class="lede">Bindings run one way: the bar reads the slider. Many relationships in a diagram run both ways: two joints are coincident, and whichever one you drag, the other follows. This part covers roadmap stages C2 and D: a small numerical solver crate, constraint nodes in the document, the clusters they form, and the pendulum demo that drags through them.</p>
   <div class="prereq">
@@ -72,12 +72,12 @@
     <tr><td>On failure</td><td>Keep the last good pose</td><td>Reject the transaction, naming the culprits</td></tr>
   </tbody>
 </table></div>
-<snip file="src/iron_document/src/lib.rs" lines="350-380" first="/// Re-solve every cluster from the current resolved values, with the" last="report"/>
+<snip file="src/iron_document/src/lib.rs" lines="412-442" first="/// Re-solve every cluster from the current resolved values, with the" last="report"/>
 <p>Solve-on-apply is what keeps the document consistent no matter who edits it. A model edit that sets the ball's <code>x</code> to 900 is a driver; the solver moves the joints, and their new positions are recorded as derived ops on the same transaction, so one undo puts everything back:</p>
-<snip file="src/iron_document/src/lib.rs" lines="1646-1721" first="/// What needs the whole transaction in place (constraint-system.md §7):" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2545-2557" first="/// What needs the whole transaction in place (constraint-system.md §7):" last="}"/>
 <p>Two refinements matter for the model. The returned <code>SolverSummary</code> reports causes, not every changed value: which clusters re-solved, which nodes moved, and any request the solver couldn't honour (<code>&lt;unmet&gt;</code>). And <code>exact: true</code> on a transaction turns an unmet request into a rejection instead of an adjustment, for edits that must land exactly or not at all.</p>
 <snip file="src/iron_document/src/solve.rs" lines="71-94" first="/// A requested value the solver could not honour." last="}"/>
-<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="1523" has="post_apply">lib.rs:1523</ref>).</p>
+<p>Because <code>apply</code> runs <code>post_apply</code> on the committed document and puts the old one back on error, a transaction that makes the constraints unsatisfiable never happens at all (<ref file="src/iron_document/src/lib.rs" line="2418" has="post_apply">lib.rs:2418</ref>).</p>
 <div class="box rust"><span class="tab">Solve-on-apply and a running drag</span>
 <p>The two columns of the table above used to overlap. <code>post_apply</code> reads leaves through the reactive graph and passes the store's active fingers, so if a transaction arrived <em>during</em> a cluster drag (a model edit, an inspector field, even a recolour of something else), the solver read the dragged pose from the overlay, honoured the drag's finger, and wrote the half-finished pose into that unrelated transaction as derived ops. Since October 15, <code>apply</code> first sets the gesture aside (overlay values, drivers and fingers move into a <code>Suspended</code> record), applies and solves against the document alone, and then resumes the gesture or cancels it if the edit conflicts with it, including when the solver moved a node the drag holds. Part 13 has the algorithm.</p>
 </div>

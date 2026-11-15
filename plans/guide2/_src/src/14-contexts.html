@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 14 of 14 · <chip sys="ctx"/> <chip sys="tools"/> <chip sys="shell"/></p>
+  <p class="kicker">Part 14 of 20 · <chip sys="ctx"/> <chip sys="tools"/> <chip sys="shell"/></p>
   <h1>Behaviour as data</h1>
   <p class="lede">Until October 26 every choice about how Iron <em>behaves</em> was a line of Rust: “a row is passed through”, “a slider scrubs”, “R is the rectangle tool”, “the inspector shows Position before Fill”, “grips are 8 px and blue”. This part covers the change that turned those choices into <strong>data</strong>: <em>contexts</em>, lists of rules the engine reads, with the built-in ones shipped as a read-only library and a document free to override them. It opens with a one-page map of the whole app as it stands, so you can see where contexts sit, then walks the change from the vocabulary up: how a value is resolved, where rules come from, what the select tool asks, what each view offers, keys, reordering and motion, interaction state, chrome, and what is left.</p>
   <div class="prereq">
@@ -71,9 +71,9 @@
 
 <h2 id="vocab"><span class="sec">14.3</span>The vocabulary: fields</h2>
 <p>A <strong>field</strong> is a named question with a typed answer, <code>domain.name</code>. The registry is one array; a <code>Field</code> is an index into it, so resolving a node fills a fixed-size array of values with no hashing.</p>
-<snip file="src/iron_document/src/contexts.rs" lines="75-96" first="pub struct FieldSpec {" last="},"/>
+<snip file="src/iron_document/src/contexts.rs" lines="89-110" first="pub struct FieldSpec {" last="},"/>
 <p>Each field has a kind, which is how its value is validated when markup is parsed (a bad value is refused with a message, as <code>bad_context</code>):</p>
-<snip file="src/iron_document/src/contexts.rs" lines="23-44" first="/// What values a field takes." last="}"/>
+<snip file="src/iron_document/src/contexts.rs" lines="23-55" first="/// What values a field takes." last="}"/>
 <p>The fields as of this commit, grouped by what reads them. <em>Node</em> fields answer for one node; <em>view</em> fields (<code>match="view"</code>) answer for a whole view.</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Field</th><th>Of</th><th>Values (first is default)</th><th>Read by</th></tr></thead>
@@ -97,7 +97,7 @@
 
 <h2 id="rules"><span class="sec">14.4</span>Contexts and rules</h2>
 <p>A <strong>context</strong> is a named list of rules. A rule matches by <em>position</em> relative to the node carrying the context (<code>self</code>, <code>children</code>, <code>all</code> = both, or <code>view</code>), optionally by type (<code>type:rect|ellipse</code>) and state (<code>state:hovered</code>), and declares field values. Within a context, later rules win, field by field. A context is carried two ways: a composition's <code>notation</code> names one (<code>free</code> → <code>std:free-2d</code>), and a container type can carry one by <code>for</code>, with a leaf test when the type alone is not enough (a stack is a group with <code>layout.mode=stack_y</code>):</p>
-<snip file="src/iron_document/src/std_contexts.xml" lines="35-56" first="&lt;context name=&quot;std:table&quot; for=&quot;type:table&quot;&gt;" last="&lt;/context&gt;"/>
+<snip file="src/iron_document/src/std_contexts.xml" lines="38-45" first="&lt;context name=&quot;std:table&quot; for=&quot;type:table&quot;&gt;" last="&lt;/context&gt;"/>
 <p>That is the whole of what tables and stacks <em>do</em> differently from groups. A row is <code>through</code>, so a double-click on a table reaches a cell; a table navigates as ARIA's grid; a stack's items reorder by drag and glide when layout moves them.</p>
 
 <h2 id="resolve"><span class="sec">14.5</span>Resolving a value, locally</h2>
@@ -124,7 +124,7 @@
 </svg>
 <figcaption>The locality rule bounds the cost: resolving a node reads at most its notation, itself and one container, so the answer cannot depend on far-away structure, and a model reading a view can predict it.</figcaption>
 </figure>
-<snip file="src/iron_document/src/contexts.rs" lines="503-528" first="pub fn values(&amp;self, chain: &amp;[NodeId], i: usize) -&gt; Values {" last="}"/>
+<snip file="src/iron_document/src/contexts.rs" lines="535-544" first="pub fn values(&amp;self, chain: &amp;[NodeId], i: usize) -&gt; Values {" last="}"/>
 <p><code>__iron.computed(id)</code> (and the model's <code>computed</code> read) prints the result with provenance, so “why does this cell edit on double-click?” has an answer you can read:</p>
 <raw title="__iron.computed on a table cell after contexts.txt's override (first lines; rules count from 1)">affords.select="target" affords.select.by="std:free-2d rule 1"
 affords.enter="edit" affords.enter.by="std:table rule 1 from #…"
@@ -164,7 +164,7 @@ affords.drives=""</raw>
 </svg>
 <figcaption>A document context is an ordinary node (type <code>context</code>, facet <code>context_def.markup</code>) in the document's library, so it is undoable, saved, and editable by the model's <code>&lt;context&gt;</code> verb like any other change. Bad markup is refused at apply time.</figcaption>
 </figure>
-<snip file="src/iron_document/src/lib.rs" lines="1098-1114" first="/// Merge the document&#x27;s `context` nodes over the built-in library when" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="1806-1821" first="/// Merge the document&#x27;s `context` nodes over the built-in library when" last="}"/>
 <p>The inline style is CSS-like: <code>field: value</code> pairs separated by semicolons, an unqualified name meaning <code>affords.</code>, a qualified one any node field (<code>chrome.handle: dot</code>). It parses into an ordinary rule with an <code>INLINE</code> source.</p>
 
 <h2 id="press"><span class="sec">14.7</span>What the select tool asks</h2>
@@ -199,9 +199,9 @@ affords.drives=""</raw>
 </svg>
 <figcaption>Each branch is one gesture with one owner (Part 13) and ends in one transaction, so one undo takes it back.</figcaption>
 </figure>
-<snip file="src/iron_document/src/interaction.rs" lines="10-28" first="/// Which node along `chain` a press selects: the outermost one whose" last="}"/>
+<snip file="src/iron_document/src/interaction.rs" lines="10-17" first="/// Which node along `chain` a press selects: the outermost one whose" last="}"/>
 <p>Controls are the most interesting branch, because they make any plain node a widget. A press on the Dials tab's needle (<code>affords.style="drag: ring; drives: transform2d.rot"</code>) turns its <em>own</em> rotation leaf, and that leaf is bound to a slider (<code>rot = level × π</code>), so the store inverts the binding (Part 3) and the slider moves. A leaf that cannot follow (bound non-linearly) is refused with the handle's reason, and the press does nothing.</p>
-<snip file="src/bevy_app/select.rs" lines="519-536" first="pub(crate) struct Drive {" last="}"/>
+<snip file="src/bevy_app/select.rs" lines="719-742" first="pub(crate) struct Drive {" last="}"/>
 <p>The same mechanism gave <strong>demo 4</strong>, the Data tab: three sliders shown as a table of readouts (<code>{= fmt(#s.slider.value * 100, 0)}</code>) and as bars. A bar's drag drives its bound height; typing into a readout cell edits the slider, because words bound to <code>fmt</code>, <code>str</code> or <code>sci</code> now invert through their number (<code>handle.rs</code>, <code>typed_number</code>: the typed text is parsed, a plain number taking the format's unit). The binding stays.</p>
 <div class="box edge"><span class="tab">Rough edge</span><p><code>track</code> along a <em>path</em> (a bead on a wire) is deferred: a plain node has no leaf of its own holding its parameter, and its bound x and y are not linear in anything, so the own-leaf rule refuses it. It arrives with a component whose instance has an input to drive.</p></div>
 
@@ -227,7 +227,7 @@ affords.drives=""</raw>
 </svg>
 <figcaption>Recomputed only when the document version, the selection, a text or point edit, or the set of views changes; the event fires only when a view's palette or keymap actually changed.</figcaption>
 </figure>
-<snip file="src/bevy_app/view_focus.rs" lines="180-197" first="let f = Focus { world, scope, states };" last="}"/>
+<snip file="src/bevy_app/view_focus.rs" lines="217-242" first="let f = Focus { world, scope, states };" last="}"/>
 <p>Plain letter keys no longer mean anything in the shell. <code>route_tool_keys</code> turns a letter into <code>tool:&lt;id&gt;</code> through the keymap of the view under the pointer (or the last one it was over), and drops a letter that view does not bind. So in the Pitch tab, <kbd>B</kbd> makes a table and <kbd>R</kbd> does nothing, while in Main <kbd>R</kbd> is the rectangle: same app, different data.</p>
 
 <h2 id="keys"><span class="sec">14.9</span>Keys, reordering and motion</h2>
@@ -247,7 +247,7 @@ affords.drives=""</raw>
 </svg>
 <figcaption>Motion is a field too: a document that writes <code>motion.placement="linear 1500 layout"</code> for <code>std:column</code>'s children slows the glide; <code>"none"</code> removes it (<code>sequence.txt</code> does both).</figcaption>
 </figure>
-<snip file="src/iron_document/src/lib.rs" lines="1200-1221" first="fn start_motion(&amp;mut self, values: &amp;BTreeMap&lt;Leaf, Value&gt;) {" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2052-2063" first="fn start_motion(&amp;mut self, values: &amp;BTreeMap&lt;Leaf, Value&gt;) {" last="}"/>
 <div class="box edge"><span class="tab">Rough edge</span><p>Motion publishes the <em>eased</em> placements through the layout producer, so for the 160 ms of a glide picking sees where an item is drawn, not where it will land. Fine for a glide; a slow declared transition would make clicks during it land on the moving item.</p></div>
 
 <h2 id="state"><span class="sec">14.10</span>Interaction state</h2>
@@ -276,7 +276,7 @@ affords.drives=""</raw>
     <tr><td><code>chrome.handle</code></td><td><code>dot</code>: a part's own handle at its origin while it or its container is selected or hovered</td><td>Dials: the needle's pivot</td></tr>
   </tbody>
 </table></div>
-<snip file="src/bevy_app/view_focus.rs" lines="30-50" first="/// How a view&#x27;s chrome looks (`chrome.*`, plans/specs/chrome.md&#x27;s revision):" last="}"/>
+<snip file="src/bevy_app/view_focus.rs" lines="36-50" first="/// How a view&#x27;s chrome looks (`chrome.*`, plans/specs/chrome.md&#x27;s revision):" last="}"/>
 <p><code>chrome.txt</code> checks the look by counting pixels: a driver command, <code>tint</code>, screenshots a box of a panel and counts pixels near a colour. Orange grip (22 px) and no blue; the pivot dot (24); the hovered outline lit (60), then 0 after the context adds <code>chrome.hover="off"</code>.</p>
 <div class="box edge"><span class="tab">Rough edge</span><p>Path points, ports, guides, empties' markers, component chips, the marquee and tool previews keep their built-in colours. <code>chrome.hover="off"</code> stops hover from <em>lighting</em>, not from being tracked: the interaction state still says <code>hovered</code>. A part's handle dot is looked for among a lit container's first 64 children, and which chains are dotted is cached by document version, chains and interaction states: the first version resolved them every frame and cost 0.7 ms a frame with a 10k group hovered, which the same-day A/B benchmark caught.</p></div>
 

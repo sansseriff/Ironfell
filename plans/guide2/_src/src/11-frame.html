@@ -1,5 +1,5 @@
 <header class="chapter-head">
-<p class="kicker">Part 11 of 14 · <chip sys="bound"/> <chip sys="shell"/></p>
+<p class="kicker">Part 11 of 20 · <chip sys="bound"/> <chip sys="shell"/></p>
 <h1>One frame, in order</h1>
 <p class="lede">One engine runs in three places: a browser worker, browser main-thread wasm, or a native macOS host. They share input and document semantics, but acquire input, own surfaces and schedule frames differently. This part follows a request into the engine, through the two document syncs, into rendering and back to the shell, then separates engine completion from display presentation.</p>
 <div class="prereq"><div><b>You need</b>F4 (bridge), Part 6 (caches), Part 10 (spatial scene and entities).</div><div><b>Files</b><code>src/{engine_protocol,engine_dispatch,engine_api,host_events,web_ffi,lib}.rs</code>, <code>bevy_app/mod.rs</code>, <code>document_bridge/{mod,ui}.rs</code>; <code>src-ui/runtime/</code>; <code>src-native/src/</code>.</div></div>
@@ -37,7 +37,7 @@
 <tr><td>Last</td><td>Report work queued too late, coalesce UI changes, decide whether rendering is needed.</td></tr>
 <tr><td>After main world</td><td>Run extraction/rendering if needed, then drain engine events through the host transport.</td></tr>
 </tbody></table></div>
-<snip file="src/bevy_app/mod.rs" lines="287-289" first="(sync_document, ApplyDeferred, resolve_panel_views)" last=".in_set(GestureSystems)"/>
+<snip file="src/bevy_app/mod.rs" lines="292-294" first="(sync_document, ApplyDeferred, resolve_panel_views)" last=".in_set(GestureSystems)"/>
 <p>The same <code>sync_document</code> runs twice. There is no separate <code>reconcile_gesture</code> system now. The second sync is what makes a pen click, shape creation, delete, undo or gesture release visible without waiting for another frame. A preview-only sync is still measured under the GestureReconcile timing phase.</p>
 
 <h3 id="sync">Inside each sync</h3>

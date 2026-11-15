@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 13 of 14 · <chip sys="react"/> <chip sys="solve"/> <chip sys="tools"/></p>
+  <p class="kicker">Part 13 of 20 · <chip sys="react"/> <chip sys="solve"/> <chip sys="tools"/></p>
   <h1>Gestures have owners</h1>
   <p class="lede">Part 3's gestures were a store-wide overlay of previews plus one commit on release. That was safe only while nothing else wrote the document during a drag. Since the model applies edits between frames, the inspector writes immediately, and undo can arrive mid-drag, other things do. Commit <code>ac92fa7</code> gave each gesture an identity and a set of watched nodes, and made every other transaction be classified against it first. This part covers the three leaks that forced it (one of them inside the constraint solver), the algorithm in <code>Store::apply</code>, how tools find out, Alt-drag as one undo step, copy and paste, and the pointer state machine that now drives every edit.</p>
   <div class="prereq">
@@ -92,7 +92,7 @@
 </figure>
 
 <h2 id="apply"><span class="sec">13.3</span>The classification in <code>Store::apply</code></h2>
-<snip file="src/iron_document/src/lib.rs" lines="1488-1507" first="/// Apply a transaction atomically. Either every op applies and the" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2377-2393" first="/// Apply a transaction atomically. Either every op applies and the" last="}"/>
 <p>Four steps, in this order for reasons:</p>
 <ol>
   <li><strong>Classify before applying</strong> (1493). <code>conflict</code> asks "is a watched node, or an ancestor of one, deleted?" against the document <em>before</em> the delete, while <code>is_ancestor</code> can still answer.</li>
@@ -100,7 +100,7 @@
   <li><strong>Apply</strong>: the ordinary path of F2: run on a clone, swap, <code>after_transaction</code>, solve-on-apply.</li>
   <li><strong>Decide</strong> (1497–1504): a classified conflict, but only if the transaction actually applied, or the solver having moved a watched node (<code>moved</code> scans <code>derived_ops</code>), ends the gesture with that reason. Otherwise the previews go back on top of the new document and clusters re-solve live with the finger.</li>
 </ol>
-<snip file="src/iron_document/src/lib.rs" lines="897-920" first="/// Set the running gesture&#x27;s previews aside, so another transaction" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="1041-1049" first="/// Set the running gesture&#x27;s previews aside, so another transaction" last="}"/>
 <p>Resume checks that each leaf still exists (912) before re-previewing it. What counts as a conflict:</p>
 <snip file="src/iron_document/src/gesture.rs" lines="92-116" first="/// Why `ops`, about to apply to `doc`, conflict with the gesture; `None`" last="}"/>
 <div class="table-wrap"><table>
@@ -116,15 +116,15 @@
   </tbody>
 </table></div>
 <p><code>GEOMETRY</code> (<ref file="src/iron_document/src/gesture.rs" line="73" has="const GEOMETRY">gesture.rs:73</ref>) lists the facets a gesture reads to turn the pointer into values: transforms, size, radius, corners, arc, handles, path shape, contour, frame, group clip, slider. A colour isn't one, so recolouring the node you're dragging doesn't stop the drag.</p>
-<p>When history is available, undo and redo cancel a running gesture first (<code>Store::undo</code>, <ref file="src/iron_document/src/lib.rs" line="1580" has="self.gesture.is_some()">lib.rs:1580</ref>), so Cmd+Z discards the preview before applying history; an unfinished drag is never captured in the undo transaction.</p>
+<p>When history is available, undo and redo cancel a running gesture first (<code>Store::undo</code>, <ref file="src/iron_document/src/lib.rs" line="988" has="self.gesture.is_some()">lib.rs:988</ref>), so Cmd+Z discards the preview before applying history; an unfinished drag is never captured in the undo transaction.</p>
 
 <h2 id="notice"><span class="sec">13.4</span>How the tool finds out</h2>
 <p>The store can't call the tool. The tool keeps the id of the gesture it owns and asks each frame:</p>
-<snip file="src/bevy_app/select.rs" lines="2729-2748" first="// ---- Gesture ownership ----" last="}"/>
-<p>Once cancelled, the overlay, drivers and fingers are already gone, so even a commit request would find nothing to write. The tool goes idle, its release does nothing, and the model's edit stands. The inspector's number scrubbing uses the same contract over the host boundary: <code>inspect_scrub("begin")</code> returns the gesture id as a token, and every <code>"move"</code> checks <code>active_gesture() == token</code> before previewing (<ref file="src/engine_api.rs" line="1279" has="pub fn document_inspect_scrub">engine_api.rs:1279</ref>). One-off inspector edits go through <code>Store::set_through_handle</code>: a normal transaction through the leaf's handle, outside the overlay, classified like any other.</p>
+<snip file="src/bevy_app/select.rs" lines="3313-3323" first="// ---- Gesture ownership ----" last="}"/>
+<p>Once cancelled, the overlay, drivers and fingers are already gone, so even a commit request would find nothing to write. The tool goes idle, its release does nothing, and the model's edit stands. The inspector's number scrubbing uses the same contract over the host boundary: <code>inspect_scrub("begin")</code> returns the gesture id as a token, and every <code>"move"</code> checks <code>active_gesture() == token</code> before previewing (<ref file="src/engine_api.rs" line="1899" has="pub fn document_inspect_scrub">engine_api.rs:1899</ref>). One-off inspector edits go through <code>Store::set_through_handle</code>: a normal transaction through the leaf's handle, outside the overlay, classified like any other.</p>
 
 <h3 id="commit">Commit can now add facets</h3>
-<snip file="src/iron_document/src/lib.rs" lines="987-1029" first="// The gesture&#x27;s own commit: taken first, so `apply` neither suspends" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="1131-1136" first="// The gesture&#x27;s own commit: taken first, so `apply` neither suspends" last="}"/>
 <p>Dragging a rect's corner-radius dot previews <code>corners.tl</code> on a rect that has no <code>corners</code> facet. <code>handle</code> answers <code>Direct</code> for a leaf of a facet the type allows but the node lacks, and the commit prepends an <code>AddFacet</code> with defaults plus the previewed fields (684–698, 714–715). So "round this corner" is one transaction.</p>
 
 <h2 id="alt"><span class="sec">13.5</span>Alt-drag: a structural edit inside a gesture</h2>
@@ -159,7 +159,7 @@
 </svg>
 <figcaption>The duplicate is applied synchronously, not queued, because the copies have to exist for <code>begin_drag</code> to grab them in the same frame. The bridge picks the transaction up from the log at the next sync like any other synchronous apply. Esc mid-drag cancels and retracts.</figcaption>
 </figure>
-<snip file="src/iron_document/src/lib.rs" lines="922-956" first="/// Take back transaction `version` if it is the latest: undo it and drop" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="1066-1073" first="/// Take back transaction `version` if it is the latest: undo it and drop" last="}"/>
 <p>The merged entry's inverse is <code>v8.inverse</code> followed by <code>v9.inverse</code>, and <code>undo_ops</code> applies an inverse list in reverse, so undo first moves the copy back, then deletes it.</p>
 
 <h2 id="copy"><span class="sec">13.6</span>Copy and paste: a fragment and its closure</h2>
@@ -210,7 +210,7 @@
 </svg>
 <figcaption>What differs between manipulators is only how a pointer becomes leaf values: through a panel's affine, through a camera ray onto a plane, through an affine decomposed into position, rotation and size, or through the gizmo handing back a whole transform.</figcaption>
 </figure>
-<snip file="src/bevy_app/manipulate.rs" lines="290-312" first="/// Every document edit a pointer can make." last="}"/>
+<snip file="src/bevy_app/manipulate.rs" lines="343-367" first="/// Every document edit a pointer can make." last="}"/>
 
 <h2 id="tests"><span class="sec">13.8</span>What the tests promise</h2>
 <div class="table-wrap"><table>

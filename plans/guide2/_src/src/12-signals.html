@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 12 of 14 · <chip sys="react"/> <chip sys="bound"/></p>
+  <p class="kicker">Part 12 of 20 · <chip sys="react"/> <chip sys="bound"/></p>
   <h1>Runtime signals and producers</h1>
   <p class="lede">F3 described a stack of layers that every read goes through: overlay, binding, physics, clips, constant. Two of those were special-purpose maps, and a planned simulation would have added a third special-purpose map. Phase 4 of vision 10 (<code>50b36f1</code>) replaced them with one <em>runtime layer</em> of signals, each owned by a producer. Clips and the port network became the first two producers. A Bevy system became the first host producer: 160 gas particles that have no document nodes, push on a piston, and publish a pressure the document's bindings read like any value. This part covers the layer, the publish algorithm, freezing, and the demo.</p>
   <div class="prereq">
@@ -15,9 +15,9 @@
 </div>
 
 <h2 id="layer"><span class="sec">12.2</span>The layer and the read order</h2>
-<snip file="src/iron_document/src/graph.rs" lines="32-54" first="/// Who publishes a runtime signal. Three producers are built in; a host" last="}"/>
+<snip file="src/iron_document/src/graph.rs" lines="37-69" first="/// Who publishes a runtime signal. Three producers are built in; a host" last="}"/>
 <p>Inside <code>Reactive</code>, the two maps became three fields:</p>
-<snip file="src/iron_document/src/graph.rs" lines="63-93" first="#[derive(Clone, Debug, Default)]" last="}"/>
+<snip file="src/iron_document/src/graph.rs" lines="92-124" first="#[derive(Clone, Debug, Default)]" last="}"/>
 <figure class="diagram">
 <svg viewBox="0 0 920 360" role="img" aria-label="The maps inside Reactive and how read_with consults them. overlay: leaf to value, gesture previews. nodes and resolved: bound leaves with expression, dependencies and height, and their values. runtime: leaf to Signal with value, producer and stamp. held: producer to its set of leaves. signal_errors: leaf to message. Read order: overlay, then a bound leaf's resolved value, never falling through, then runtime signal, then the document's constant. Examples for each rung.">
   <rect x="10" y="10" width="440" height="340" rx="8" class="zone"/>
@@ -60,11 +60,11 @@
 </svg>
 <figcaption>The rung order is the semantics. Bindings above signals means a producer can't overwrite a formula. Signals above constants means a running producer hides the authored value without destroying it, so releasing the producer shows that value again.</figcaption>
 </figure>
-<snip file="src/iron_document/src/graph.rs" lines="417-435" first="fn read_with(" last="}"/>
+<snip file="src/iron_document/src/graph.rs" lines="578-588" first="fn read_with(" last="}"/>
 
 <h2 id="publish"><span class="sec">12.3</span>Publishing: replace your whole set</h2>
 <p>A producer publishes everything it holds, every time. The graph diffs that against what it held last time:</p>
-<snip file="src/iron_document/src/graph.rs" lines="132-184" first="/// Replace everything `producer` publishes with `values`: leaves it no" last="}"/>
+<snip file="src/iron_document/src/graph.rs" lines="163-175" first="/// Replace everything `producer` publishes with `values`: leaves it no" last="}"/>
 <ol>
   <li><strong>Bound leaves are refused</strong> (141–144): a formula wins, and the attempt is recorded in <code>signal_errors</code>.</li>
   <li><strong>The first claim wins</strong> (146–149): a leaf held by a different producer stays with it, and the newcomer gets an error. A leaf the producer re-publishes with the same value is restamped but not reported as changed.</li>
@@ -110,8 +110,8 @@
     <tr><td>Host producers (3, 4, …)</td><td><code>Store::publish</code>, from wherever the host runs them</td><td>Gas and Stats publish when their visible compositions are running, before the first sync</td></tr>
   </tbody>
 </table></div>
-<snip file="src/iron_document/src/lib.rs" lines="631-636" first="fn resample(&amp;mut self) {" last="}"/>
-<snip file="src/iron_document/src/lib.rs" lines="666-679" first="/// Publish a host producer&#x27;s signals for this frame (vision 10 §4):" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="748-753" first="fn resample(&amp;mut self) {" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="783-794" first="/// Publish a host producer&#x27;s signals for this frame (vision 10 §4):" last="}"/>
 <p>A host publish isn't an isolated write. Lines 675–678 re-solve every constraint cluster live and then the network, so a signal that feeds a cluster's input moves the mechanism in the same call, and a signal that feeds a network parameter moves its solution. This is the "one evaluator" of Part 10 in practice: producers supply inputs, and the store propagates them through bindings, clusters and the network in one place.</p>
 <p>The network is also a producer that reads its own last output: its initial guess for each unknown is the signal it published last time (<code>x0</code> in <code>resolve_physics</code>), so successive solves start warm.</p>
 
@@ -123,9 +123,9 @@
 
 <h2 id="edit"><span class="sec">12.5</span>Gestures, handles and freezing</h2>
 <p>A leaf a producer holds isn't the user's to drag right now. The handle says so and names the producer:</p>
-<snip file="src/iron_document/src/handle.rs" lines="49-56" first="if let Some(signal) = reactive.signal(leaf) {" last="}"/>
+<snip file="src/iron_document/src/handle.rs" lines="53-56" first="if let Some(signal) = reactive.signal(leaf) {" last="}"/>
 <p>When the user does want to keep what a producer computed, <em>freeze</em> turns its signals into constants:</p>
-<snip file="src/iron_document/src/lib.rs" lines="696-708" first="/// Freeze a producer&#x27;s signals into the document: one transaction that" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="813-821" first="/// Freeze a producer&#x27;s signals into the document: one transaction that" last="}"/>
 <p>The values are read before <code>unpublish</code> releases them, and the transaction then writes them as constants, so what shows ends where it was. One history entry, "freeze gas", undoable like any other. The host stops the producer (or it republishes next frame and takes the leaves back, hiding the frozen constants until stopped). Vision 10 §4 names the two channels: <strong>signals per frame, ops only at explicit commit points</strong>.</p>
 
 <h2 id="piston"><span class="sec">12.6</span>The piston demo</h2>

@@ -30,6 +30,7 @@ SYSTEMS = {
     "model": "Model surface",
     "bound": "Engine boundary",
     "ctx": "Contexts",
+    "time": "Time & machines",
 }
 
 PAGES = [
@@ -53,9 +54,16 @@ PAGES = [
     ("12-signals", "12", "Runtime signals and producers", "Clips, the port network and Bevy simulations as producers of one runtime layer; freeze; the piston demo"),
     ("13-ownership", "13", "Gestures have owners", "Previews that belong to a gesture, edits that race it, Alt-drag as one undo step, copy and paste, one pointer state machine"),
     ("14-contexts", "14", "Behaviour as data", "The app today on one page; then contexts: rules the engine reads for selection, controls, keys, motion, palettes, tolerances and chrome"),
+    ("15-scopes", "15", "Scopes, ids and storage", "Durable local scopes in OPFS: a snapshot plus an op log, client-minted ids, boot into the last scope, layouts and chats saved per scope"),
+    ("16-reactivity", "16", "Structure that reacts", "One model for values, structure, state and events: repeats and lets, item scopes and keys, errors as data, state, actions, context, queries and presence"),
+    ("17-plots", "17", "Series, plots, types and themes", "Series values and lambdas, paths bound to data, sized instances and resizing constraints, std:plot as markup, typed ports and colour tokens"),
+    ("18-time", "18", "The timeline and state machines", "The playhead as a session clock, the timeline as a generated composition, keyframes and Animate change, machines and the state editor"),
+    ("19-agent", "19", "The agent and the narrative", "Local agent runtimes, the streamed turn, prompt topics, edits and vision, the chat, and the ProseMirror narrative"),
+    ("20-panels", "20", "Panels, commands and the editor", "The view strip, layers, the inspector, the colour picker, commands as context data, settings and the 2D controls"),
     ("field-guide", "", "Field guide", "Every function and type the guide covers, searchable, with its system and file:line"),
 ]
 
+PARTS = sum(1 for p in PAGES if p[1].isdigit())
 errors = []
 file_cache = {}
 
@@ -65,6 +73,9 @@ def lines_of(path, rev=None):
     if key not in file_cache:
         if rev:
             text = subprocess.run(["git", "-C", REPO, "show", f"{rev}:{path}"], capture_output=True, text=True, check=True).stdout
+        elif not os.path.exists(os.path.join(REPO, path)):
+            errors.append(f"{path}: file not found")
+            text = ""
         else:
             with open(os.path.join(REPO, path), encoding="utf-8") as f:
                 text = f.read()
@@ -236,7 +247,7 @@ def page(i, body):
     if prev_:
         pager += f'<a href="{href(prev_[0])}" aria-label="Previous part">&larr;</a>'
     if num:
-        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else 14}</span>'
+        pager += f'<span class="here">{label(num)} of {4 if num.startswith("F") else PARTS}</span>'
     if next_:
         pager += f'<a href="{href(next_[0])}" aria-label="Next part">&rarr;</a>'
     np = '<nav class="nextprev">'
@@ -249,7 +260,7 @@ def page(i, body):
     inner = f"""<title>{html.escape(doc_title)}</title>
 {FONTS}
 <link rel="stylesheet" href="guide.css">
-<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the engine boundary</span></a><div class="pager">{pager}</div></div></header>
+<header class="topbar"><div class="topbar-inner"><a class="series" href="index.html">Iron, Part Two <span>· from the spine to the app as built</span></a><div class="pager">{pager}</div></div></header>
 <div class="frame">
 <nav class="sidebar" aria-label="Series"><h4>The series</h4><ol>{''.join(nav)}</ol><h4>On this page</h4><ul class="toc"></ul></nav>
 <main>

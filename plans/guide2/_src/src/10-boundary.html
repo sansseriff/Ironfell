@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 10 of 14 · <chip sys="bound"/> <chip sys="react"/></p>
+  <p class="kicker">Part 10 of 20 · <chip sys="bound"/> <chip sys="react"/></p>
   <h1>Who computes where things are</h1>
   <p class="lede">Up to Part 9, three different pieces of code each worked out where a node sits on screen, and Bevy's was the one that drew. On October 17 that was settled the other way round: <strong>Iron computes every world transform, and Bevy only receives them</strong>. That one decision changed what the store tracks, gave the spatial index a different shape, removed Bevy's transform tree for document nodes, and removed most of the entities. This part follows the four commits that did it (<code>161648c</code>, <code>26de602</code>, <code>1cbe2d1</code>, and the signal layer of Part 12), with the data structures each one introduced.</p>
   <div class="prereq">
@@ -117,7 +117,7 @@
 <p>The counters live in the store:</p>
 <snip file="src/iron_document/src/geom.rs" lines="338-352" first="/// Monotonic counters per node and for the tree, bumped as changes are" last="}"/>
 <p>The counters are bumped when someone <em>takes</em> the changes, not when they happen, so there is exactly one consumer: the spatial scene. That raised a problem, because the reconciler already drains the graph's change list every frame. If both read the same list, whichever ran first would leave nothing for the other. So the graph's one place that records a change now writes two sets:</p>
-<snip file="src/iron_document/src/graph.rs" lines="334-343" first="/// The one place a resolved change is recorded." last="}"/>
+<snip file="src/iron_document/src/graph.rs" lines="387-391" first="/// The one place a resolved change is recorded." last="}"/>
 <figure class="diagram">
 <svg viewBox="0 0 920 360" role="img" aria-label="Two sources and two drains. Reactive::note writes both changes (a map leaf to value) and touched (a set of leaves). A transaction's ops go to the reconciler through the log and to Revisions as pending leaves and a pending structure flag. The reconciler drains changes; the spatial scene takes touched plus pending, classifies them with effect_of and bumps counters.">
   <defs><marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
@@ -341,13 +341,13 @@
 <figcaption>What a 2D entity carried was a copy of its node's draw data and a transform Iron also computed. Both now live by <code>NodeId</code> (draw data in <code>Drawables</code>, placement in the scene), and an entity is spawned only when something in Bevy needs a handle on the node.</figcaption>
 </figure>
 <p>The reconciler's first pass now writes draw data for every touched node and spawns an entity only where one is due:</p>
-<snip file="src/document_bridge/materialize.rs" lines="368-399" first="// Pass 1: draw data for every touched node, and an entity where one is due." last="}"/>
+<snip file="src/document_bridge/materialize.rs" lines="382-388" first="// Pass 1: draw data for every touched node, and an entity where one is due." last="}"/>
 <p>A 3D entity's pose comes from <code>Store::world_affine3</code>, written as both <code>Transform</code> and <code>GlobalTransform</code>. A root entity without a parent gets its <code>GlobalTransform</code> copied from its <code>Transform</code> by Bevy's simple sync, so writing both makes that copy a no-op instead of an overwrite, and keeps <code>update_aabbes</code> and the gizmo, which read <code>Transform</code>, current. Since entities are flat, moving a 3D parent has to rewrite its materialised descendants explicitly. That's the second pass:</p>
-<snip file="src/document_bridge/materialize.rs" lines="401-419" first="// Pass 2: 3D placement below a moved 3D node. Entities are flat (no" last="}"/>
+<snip file="src/document_bridge/materialize.rs" lines="415-423" first="// Pass 2: 3D placement below a moved 3D node. Entities are flat (no" last="}"/>
 <p>A 2D reader asks for a world affine through one function, which prefers the scene's cached placement and falls back to the store's walk for nodes the scene doesn't hold (an empty group, a point):</p>
 <snip file="src/document_bridge/nest.rs" lines="173-179" first="/// A 2D node&#x27;s local space to its composition&#x27;s: the spatial scene&#x27;s cached" last="}"/>
 <p>And the draw walk queries the scene for visible candidates, then restores the groups above them, because a group's opacity or clip must still wrap its visible children once, not once per leaf:</p>
-<snip file="src/document_bridge/render.rs" lines="436-455" first="fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32) {" last="}"/>
+<snip file="src/document_bridge/render.rs" lines="523-539" first="fn walk(&amp;mut self, b: &amp;mut crate::vector::DisplayListBuilder&lt;&#x27;_&gt;, roots: &amp;[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &amp;str, depth: u32) {" last="}"/>
 
 <h2 id="modes"><span class="sec">10.6</span>Modes: entities only for the working set</h2>
 <p>Vision 10 §5.2 says every subtree is in one <em>presentation mode</em>, which decides both what Bevy holds for it and how it's drawn. The modes now combine entity policy with the chunk/raster cache of Part 6:</p>

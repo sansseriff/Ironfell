@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 6 of 14 · <chip sys="render"/></p>
+  <p class="kicker">Part 6 of 20 · <chip sys="render"/></p>
   <h1>Every view is a texture</h1>
   <p class="lede">Embedding needed one thing the renderer couldn't do: draw a composition into something other than the window. Fixing that turned into a rewrite of how everything reaches the screen. Every view (a 2D panel, a 3D camera, a 3D view inside a 2D composition, a 2D composition on a plane in 3D) now renders into its own texture, sized to where it's seen, and only when something it shows changed. This part follows <code>plans/specs/view-textures.md</code>: the problem, the model, the three uses, render on demand, and the rendering order, retained chunks, raster tiles and instance sharing.</p>
   <div class="prereq">
@@ -22,10 +22,10 @@
 <snip file="src/vector/backend.rs" lines="37-85" mark="55-57,69-73,79-85" first="/// Marks an entity as a 2D vector layer and fixes its place in painter order." last="pub struct Overlay;"/>
 <p>Each 2D composition panel spawns one entity that is both a layer and a <code>VectorView</code> over the panel's rectangle (<ref file="src/document_bridge/render.rs" line="49" has="pub(super) fn sync_document_views">render.rs:49</ref>). Editor feedback (the selection box, grips, hover outlines, the marquee) has its own <code>Overlay</code> view stacked above each panel's content view since October 14, so a hover or selection change re-encodes only that small overlay texture and never the content beneath it.</p>
 <p>The backend gives every view a texture and a quad that pastes it into the window. Sizes round up to 64 px buckets, so dragging a pane divider rarely reallocates:</p>
-<snip file="src/vector/hybrid.rs" lines="288-295" first="/// A view&#x27;s texture and the quad that pastes it into the window." last="}"/>
-<snip file="src/vector/hybrid.rs" lines="301-311" first="/// Give every [`VectorView`] a texture (bucketed, so a pane drag rarely" last="composites: Query&lt;(Entity, &amp;ViewCompositeOf)&gt;,"/>
+<snip file="src/vector/hybrid.rs" lines="289-296" first="/// A view&#x27;s texture and the quad that pastes it into the window." last="}"/>
+<snip file="src/vector/hybrid.rs" lines="302-312" first="/// Give every [`VectorView`] a texture (bucketed, so a pane drag rarely" last="composites: Query&lt;(Entity, &amp;ViewCompositeOf)&gt;,"/>
 <p>Each target keeps its own retained Vello scene and remembers whether its texture already holds it. When no layer of a view changed, the view isn't rendered at all; its texture is still on the GPU and the window pastes it again:</p>
-<snip file="src/vector/hybrid.rs" lines="635-650" first="/// One target&#x27;s retained scene." last="}"/>
+<snip file="src/vector/hybrid.rs" lines="636-651" first="/// One target&#x27;s retained scene." last="}"/>
 
 <h3 id="paste">Pasting texel for pixel</h3>
 <p>The window has exactly one camera now. It clears to the background and draws every view's quad with <code>ViewCompositeMaterial</code>, whose shader computes the texture coordinate from the fragment's window position, so the mapping is exact by construction:</p>
@@ -34,14 +34,14 @@
 
 <h2 id="3d"><span class="sec">6.3</span>3D views</h2>
 <p>A 3D panel's camera renders into its own texture instead of the window, with the same bucketing and the same retention. <code>ViewImage</code> tracks the texture and when the camera needs to run:</p>
-<snip file="src/bevy_app/scene3d.rs" lines="474-494" mark="480-485,489-493" first="/// A texture-backed camera&#x27;s target and the quad that composites it." last="}"/>
+<snip file="src/bevy_app/scene3d.rs" lines="475-495" mark="481-486,490-494" first="/// A texture-backed camera&#x27;s target and the quad that composites it." last="}"/>
 <p><code>sync_view_images</code> marks a camera active only when something it shows changed: its rectangle, its pose or lens, or any 3D content on its render layers moving, highlighting, appearing or disappearing. Otherwise it sleeps and its texture is reused. Two practical details from getting this right: a camera woken for one frame can render with stale per-view state (lights, visibility), so it stays <em>awake</em> for a few frames after a change; and the system runs before Bevy's frustum and visibility systems, so a camera woken this frame is culled and lit as an active view this frame.</p>
-<p>Camera orders (Bevy needs them unique) come from the lowest free slot, so cameras appearing and disappearing never collide (<ref file="src/bevy_app/scene3d.rs" line="270" has="fn free_order">scene3d.rs:270</ref>).</p>
+<p>Camera orders (Bevy needs them unique) come from the lowest free slot, so cameras appearing and disappearing never collide (<ref file="src/bevy_app/scene3d.rs" line="271" has="fn free_order">scene3d.rs:271</ref>).</p>
 
 <h3 id="3d-in-2d">3D inside 2D</h3>
-<p>A 3D embed's camera renders into a texture sized to the embed's on-screen size (Part 5's <code>EmbedView</code>), and the 2D view that contains the embed draws that texture with <code>DrawCmd::Texture</code>, under the embed's whole transform, in painter order. So a 3D view inside a 2D composition can be rotated, scaled, clipped and drawn over like any other shape. Vello can't read a Bevy camera's sRGB texture directly, so each one is converted into Vello's encoding first (<code>Convert</code>, <ref file="src/vector/hybrid.rs" line="1015" has="struct Convert">hybrid.rs:1015</ref>).</p>
+<p>A 3D embed's camera renders into a texture sized to the embed's on-screen size (Part 5's <code>EmbedView</code>), and the 2D view that contains the embed draws that texture with <code>DrawCmd::Texture</code>, under the embed's whole transform, in painter order. So a 3D view inside a 2D composition can be rotated, scaled, clipped and drawn over like any other shape. Vello can't read a Bevy camera's sRGB texture directly, so each one is converted into Vello's encoding first (<code>Convert</code>, <ref file="src/vector/hybrid.rs" line="1021" has="struct Convert">hybrid.rs:1021</ref>).</p>
 <p>Picking goes the other way: <code>PointerToCamera</code> stores the map from window pixels to the embed camera's own texture pixels, through every transform on the way, so clicking the torus inside a rotated embed casts the ray from the right place.</p>
-<snip file="src/bevy_app/scene3d.rs" lines="496-512" first="/// For a camera whose texture is drawn inside a 2D view (a 3D embed), the" last="}"/>
+<snip file="src/bevy_app/scene3d.rs" lines="497-510" first="/// For a camera whose texture is drawn inside a 2D view (a 3D embed), the" last="}"/>
 
 <h3 id="planes">2D on a plane in 3D</h3>
 <p>A 2D composition embedded in 3D is a plane mesh whose material samples an <em>offscreen</em> vector view: a <code>VectorView</code> marked <code>Offscreen</code>, rendered but never pasted into the window. Its resolution comes from how large the plane appears: project the plane's corners through every camera that sees it, and take the largest screen-space length of one document pixel:</p>
@@ -50,8 +50,8 @@
 
 <h2 id="on-demand"><span class="sec">6.4</span>Render on demand</h2>
 <p>With every view retaining its texture, a frame where nothing visible changed needs no GPU work at all. <code>WorkerApp::frame</code> runs the main world, asks whether anything the window shows changed, and only then runs extraction and rendering:</p>
-<snip file="src/lib.rs" lines="108-131" mark="119-128" first="/// One frame. With render on demand (`RedrawNeeded`), the main world runs," last="}"/>
-<snip file="src/lib.rs" lines="163-209" mark="182-197,206-207" first="/// Decide, at the end of the main world&#x27;s frame, whether to render it." last="}"/>
+<snip file="src/lib.rs" lines="112-123" first="/// One frame. With render on demand (`RedrawNeeded`), the main world runs," last="}"/>
+<snip file="src/lib.rs" lines="167-214" first="/// Decide, at the end of the main world&#x27;s frame, whether to render it." last="}"/>
 <p>Changed display lists, views, cameras, panel geometry and assets wake rendering, with a short linger for settling. Raster work keeps rendering until required tiles are ready. Free-running compositions are an explicit exception: Auto follows live sources and embeds, Always runs continuously, and On demand suppresses continuous updates. The Stats composition is itself a live source, so an idle experiment must first set Stats to On demand.</p>
 <p>The original view-texture migration measurements, before the later cache and Stats changes (historical, unthrottled):</p>
 <div class="table-wrap"><table>

@@ -37,18 +37,18 @@
 <h2 id="ids"><span class="sec">F1.2</span>Identity: <code>NodeId</code></h2>
 <p>An authored node's id is an opaque number that means nothing: not its position, name or type. The store hands out the next number from a counter and never hands it out again, even after deletion. For display it's written in base62 (digits, then A–Z, then a–z) with a <code>#</code> in front: <code>#1</code>, <code>#M</code> (22), <code>#1a</code>. You'll see ids like these in every view and log line.</p>
 <p>There are two kinds of id, node ids (<code>#…</code>) and relation ids (<code>r…</code>), which need identical code (printing, parsing, JSON). <code>id.rs</code> writes it once as a macro and invokes it twice:</p>
-<snip file="src/iron_document/src/id.rs" lines="118-135" first="macro_rules! id_type {" last="}"/>
+<snip file="src/iron_document/src/id.rs" lines="252-261" first="macro_rules! id_type {" last="}"/>
 <div class="box rust"><span class="tab">Reading the Rust</span>
 <p><code>macro_rules! id_type</code> is a template. <code>$name:ident</code> matches an identifier such as <code>NodeId</code>, <code>$prefix:literal</code> a literal such as <code>"#"</code>, and <code>$(#[$m:meta])*</code> "zero or more attributes", which is how the <code>///</code> doc comment is passed through. Everything after <code>=&gt;</code> is pasted once per invocation with those names filled in.</p>
 <p>Line 122 is the point: <code>pub struct $name(u64)</code>, with the field <em>not</em> <code>pub</code>. Code outside the crate can't read or construct the integer; only <code>from_raw</code> and <code>raw</code>, which are <code>pub(crate)</code>, can. JSON writes the id as its string (<code>"#M"</code>, never 22). So nothing outside the store can depend on ids being numbers. <code>is_session</code> belongs to Part 8: ids from 2⁴⁰ up are for state that's never saved.</p>
 </div>
 <p>The third id-like type counts transactions. Every successful one bumps it by exactly one, undo included:</p>
-<snip file="src/iron_document/src/id.rs" lines="263-267" first="/// Monotonic document version, bumped once per applied transaction." last="pub struct Version(pub u64);"/>
+<snip file="src/iron_document/src/id.rs" lines="488-492" first="/// Monotonic document version, bumped once per applied transaction." last="pub struct Version(pub u64);"/>
 
 <p>Session ids occupy their own range (Part 8). Expanded instance ids are stable owner/local paths such as <code>#m/7</code>, interned by the id registry, rather than fresh allocations from the authored counter (Part 2). They never become authored records in a save.</p>
 <h2 id="nodes"><span class="sec">F1.3</span>The node record, and relations</h2>
 <p>A node holds almost nothing itself. Its properties live in separate facet tables (next section). The node is identity, type and placement:</p>
-<snip file="src/iron_document/src/document.rs" lines="17-70" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="17-27" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <ul>
   <li><code>parent: Option&lt;NodeId&gt;</code>. <code>None</code> means a root. Placement is a field, not nesting, so moving a node changes this one field.</li>
   <li><code>order: OrderKey</code> positions the node among its siblings (F1.8).</li>
@@ -58,10 +58,10 @@
 
 <h2 id="values"><span class="sec">F1.4</span>Values, and the slots that hold them</h2>
 <p>A <em>leaf</em> is one editable authored value, such as "the square's x". Every leaf holds a <code>Value</code> of a known kind:</p>
-<snip file="src/iron_document/src/value.rs" lines="20-45" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
+<snip file="src/iron_document/src/value.rs" lines="671-674" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <p><code>Quantity</code> and <code>Record</code> are Part 2's subject. <code>ValueKind</code> is the matching type tag, used to check that a <code>Number</code> field only ever receives numbers; its extra member <code>Any</code> is for fields that take whatever kind their target has (clip endpoints, port defaults).</p>
 <p>A leaf doesn't hold a bare <code>Value</code>, though. It holds a <code>Slot</code>, which answers the fourth problem in the table above:</p>
-<snip file="src/iron_document/src/value.rs" lines="425-452" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
+<snip file="src/iron_document/src/value.rs" lines="671-674" first="#[derive(Clone, Debug, PartialEq)]" last="}"/>
 <ul>
   <li><code>Slot::Const(value)</code>: an authored constant. "x is 500."</li>
   <li><code>Slot::Bound(expr)</code>: an expression over other leaves. "height is <code>#O.slider.value * 300</code>." The slot stores the formula, never its result. Results live in the reactive graph (F3).</li>
@@ -101,16 +101,16 @@ impl LeafStruct for Radius {
   </tbody>
 </table></div>
 <p>The one hand-written method that matters is <code>set</code>, which replaces one field's slot. It type-checks constants and returns the old slot, which, as F2 shows, is exactly what undo needs:</p>
-<snip file="src/iron_document/src/facet.rs" lines="703-732" first="/// Replace one field&#x27;s slot, checking the value kind. Returns the previous" last="}"/>
+<snip file="src/iron_document/src/facet.rs" lines="1053-1071" first="/// Replace one field&#x27;s slot, checking the value kind. Returns the previous" last="}"/>
 
 <h3 id="leafpath">The leaf address: <code>LeafPath</code></h3>
-<snip file="src/iron_document/src/facet.rs" lines="805-834" first="/// `facet.field`, the address of one editable value." last="}"/>
+<snip file="src/iron_document/src/facet.rs" lines="1167-1172" first="/// `facet.field`, the address of one editable value." last="}"/>
 <p>A <code>LeafPath</code> is a facet kind plus a field name. The field is a <code>&amp;'static str</code> pointing into the generated table (or, for a dynamic field, an interned name), so a path is two small values that are free to copy. The only way to make one is <code>LeafPath::new</code> (or <code>"fill.color".parse()</code>), which rejects unknown fields. <strong>An unknown path is an error, never a silent no-op</strong>; that rule recurs all the way up to the model's edit parser.</p>
-<p>When a leaf also needs to say which node, it becomes a <code>Leaf { node, path }</code> (<ref file="src/iron_document/src/expr.rs" line="27" has="pub struct Leaf">expr.rs:27</ref>), printed <code>#O.slider.value</code>: exactly the syntax expressions use.</p>
+<p>When a leaf also needs to say which node, it becomes a <code>Leaf { node, path }</code> (<ref file="src/iron_document/src/expr.rs" line="32" has="pub struct Leaf">expr.rs:32</ref>), printed <code>#O.slider.value</code>: exactly the syntax expressions use.</p>
 
 <h2 id="registry"><span class="sec">F1.6</span>The registry: which types exist</h2>
 <p>A node's <code>ty</code> says what kind of thing it is. The registry lists every type: which facets it allows (and requires), what it may contain, and which renderer draws it by default:</p>
-<snip file="src/iron_document/src/registry.rs" lines="40-74" first="pub struct TypeSpec {" last="},"/>
+<snip file="src/iron_document/src/registry.rs" lines="40-57" first="pub struct TypeSpec {" last="},"/>
 <p>The registry holds <strong>primitives only</strong>. Domain things (a bar chart, a laser) are <em>definitions</em> in the document's own library, built from these (Part 2). Today's types, grouped:</p>
 <div class="table-wrap"><table>
   <thead><tr><th>Group</th><th>Types</th><th>Covered in</th></tr></thead>
@@ -124,10 +124,10 @@ impl LeafStruct for Radius {
     <tr><td>Wiring</td><td><code>port_spec</code>, <code>port</code>, <code>equation</code>, <code>connection</code></td><td>Part 9</td></tr>
   </tbody>
 </table></div>
-<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="419" has="pub fn schema_json">registry.rs:419</ref>) exports the registry and the facet table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
+<p>A <code>TypeId</code> is just an index into that static list. It is never saved as a number, only as the type's name. <code>schema_json()</code> (<ref file="src/iron_document/src/registry.rs" line="552" has="pub fn schema_json">registry.rs:552</ref>) exports the registry and the facet table as JSON, which becomes the model's manifest and attribute parser (F4). The vocabulary is defined once, in Rust, so the model can't be told about a field the validator would reject.</p>
 
 <h2 id="document"><span class="sec">F1.7</span>The <code>Document</code>: tables and indexes</h2>
-<snip file="src/iron_document/src/document.rs" lines="89-109" first="#[derive(Clone, Debug, Default)]" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="112-142" first="#[derive(Clone, Debug, Default)]" last="}"/>
 <ul>
   <li><strong>The tables</strong> (lines 91–99) are the data: nodes by id, facets by kind and then by node, relations by id, the id counters and the version. This is what's saved.</li>
   <li><strong>The indexes</strong> (lines 103–108) are derived, to make questions fast: a node's children in order, the roots, nodes by type, nodes by facet, relations by source and by target. Never saved; rebuilt after loading.</li>
@@ -135,10 +135,10 @@ impl LeafStruct for Radius {
 <p>Components are stored by kind first, so "every <code>transform2d</code>" is one lookup and, in the saved file, all <code>transform2d</code> records sit together.</p>
 <h3 id="reads">Reads are public</h3>
 <p>Everything under <code>// ---- reads</code> is <code>pub</code> and takes <code>&amp;self</code>:</p>
-<snip file="src/iron_document/src/document.rs" lines="266-281" first="pub fn facet(&amp;self, id: NodeId, kind: FacetKind) -&gt; Option&lt;&amp;Facet&gt; {" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="333-335" first="pub fn facet(&amp;self, id: NodeId, kind: FacetKind) -&gt; Option&lt;&amp;Facet&gt; {" last="}"/>
 <p><code>leaf(id, path)</code> is the most used: find the facet, then the field, return the <code>Slot</code>. The <code>?</code> on line 280 means "if this node has no such facet, return <code>None</code>". Others you'll meet: <code>live(id)</code> (the node, only if not deleted), <code>children</code>, <code>descendants</code>, <code>is_ancestor</code>, <code>nodes_of_type</code>, <code>relations_from</code>, <code>relations_to</code>.</p>
 <h3 id="writes">Writes are <code>pub(crate)</code></h3>
-<snip file="src/iron_document/src/document.rs" lines="345-349" first="// ---- crate-private mutators ---------------------------------------" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="432-436" first="// ---- crate-private mutators ---------------------------------------" last="}"/>
 <p>…and below it <code>insert_node</code>, <code>restore_node</code>, <code>tombstone</code>, <code>set_parent</code>, <code>set_order</code>, <code>insert_facet</code>, <code>remove_facet</code>, <code>insert_relation</code>, <code>remove_relation</code>, all <code>pub(crate)</code>.</p>
 <p>Every method that changes the document is <code>pub(crate)</code>: callable only from inside <code>iron_document</code>. The Bevy app, the FFI and the tests can read the document but cannot write it except by submitting ops (F2). "No code path mutates the store directly" isn't a convention here; code that breaks it won't compile. <code>check_invariants</code> cross-checks every index against the tables, and the tests call it after every transaction.</p>
 
@@ -158,10 +158,10 @@ impl LeafStruct for Radius {
   </tbody>
 </table></div>
 <p>It works because the base62 alphabet <code>0-9 A-Z a-z</code> is also in ASCII order, so plain string comparison sorts keys correctly. This is the published rocicorp/fractional-indexing scheme. The rule to remember: <strong>code outside the store never computes order keys</strong>. It asks with <code>OrderKey::first/after/before/between</code>, or from TypeScript with <code>document_place</code>. Inside, a binary search keeps each child list sorted by (key, id), so even two siblings sharing a key have a stable order:</p>
-<snip file="src/iron_document/src/document.rs" lines="493-508" first="fn place(&amp;mut self, id: NodeId) {" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="580-595" first="fn place(&amp;mut self, id: NodeId) {" last="}"/>
 
 <h2 id="tombstones"><span class="sec">F1.9</span>Deletion keeps the record</h2>
-<snip file="src/iron_document/src/document.rs" lines="413-430" first="/// Tombstone one node. The caller tombstones descendants separately so" last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="500-509" first="/// Tombstone one node. The caller tombstones descendants separately so" last="}"/>
 <p>Deleting a node sets <code>tombstoned = Some(version)</code> and removes it from every index, so <code>children</code> and <code>nodes_of_type</code> stop seeing it. The record and its facets stay, which buys three things:</p>
 <ul>
   <li><strong>Stale references fail loudly.</strong> An op naming a deleted id gets "#M was deleted at version 5", not "no node #M".</li>

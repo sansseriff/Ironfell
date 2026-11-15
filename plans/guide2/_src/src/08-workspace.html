@@ -1,5 +1,5 @@
 <header class="chapter-head">
-  <p class="kicker">Part 8 of 14 · <chip sys="shell"/> <chip sys="store"/></p>
+  <p class="kicker">Part 8 of 20 · <chip sys="shell"/> <chip sys="store"/></p>
   <h1>The workspace and the session</h1>
   <p class="lede">The main view had become crowded, and the left panel was a card of leftovers. This part covers the shell's answer: a dock of tabs and splits where every tab is a <em>view onto a composition</em>, drawn by the canvas, by HTML, or both; per-view pan and zoom; and a third tier of state, the <em>session</em>, for things like the selection that belong in the store but not in the file or the undo history.</p>
   <div class="prereq">
@@ -13,20 +13,20 @@
 <div class="box built"><span class="tab">The idea</span>
 <p><strong>A view is a source plus a notation.</strong> The source is what it shows: a composition, the timeline root, the document, the session's selection. The notation is how it's drawn, and decides which part the canvas draws (a Rust panel kind) and which part is HTML (a Svelte component). <strong>A presenter</strong> is where the view sits: today a dock tab or split; later a popover, a context menu, a tooltip. The view doesn't change with its presenter.</p>
 </div>
-<snip file="src-ui/views/views.ts" lines="1-45" first="/**" last="};"/>
+<snip file="src-ui/views/views.ts" lines="1-54" first="/**" last="};"/>
 <p>The Document, Model, Inspector and Settings tabs are HTML views; Main, Scene, Pendulum and the rest are canvas views of compositions; the Timeline is a canvas view of the timeline root. A hybrid (an inspector with canvas sliders and HTML text fields) is a notation with both parts; the HTML is laid over the canvas part and takes the pointer only where it actually draws something.</p>
 <p>On the Rust side, nothing about tabs exists. Whatever part of a <em>visible</em> view the canvas draws arrives as a panel rectangle, exactly as before:</p>
 <snip file="src/panels.rs" lines="1-17" first="//! The canvas side of views (plans/specs/panels-and-session.md)." last="//! - vello panels (timeline, ui) draw in screen space clipped to their rect"/>
 
 <h2 id="dock"><span class="sec">8.2</span>The dock</h2>
 <p>Tab and split UIs are mature in HTML (VS Code is one), so the dock is <a href="https://dockview.dev">dockview</a>, a framework-independent library. Each dockview panel renders a <code>ViewPanel</code>, which mounts the canvas part only while its tab is visible:</p>
-<snip file="src-ui/views/ViewPanel.svelte" lines="1-91" first="&lt;script lang=&quot;ts&quot;&gt;" last="&lt;/div&gt;"/>
+<snip file="src-ui/views/ViewPanel.svelte" lines="1-95" first="&lt;script lang=&quot;ts&quot;&gt;" last="&lt;/div&gt;"/>
 <p>Because a hidden tab unmounts its placeholder, Rust removes the panel, the panel's camera and view stop, and a hidden tab costs nothing to render. The default layout puts the compositions in tabs in the centre, Document and Model on the left, the Inspector on the right and the Timeline across the bottom:</p>
 <snip file="src-ui/views/workspace.ts" lines="17-47" first="/** The layout to start from: the main viewer with each composition in a" last="}"/>
 <p>The layout is workspace state: saved in the browser (<code>iron.workspace.v6</code>) and restored on reload; <code>?layout=default</code> or <em>Reset layout</em> in the Document tab forgets it. It is never in the document or its undo. "+" in any tab bar opens any composition (Rust lists them through <code>document_compositions</code>) or a fixed view.</p>
 <h3 id="pointer">The dock floats over the canvas</h3>
 <p>The dock is HTML over the one full-window canvas. Its chrome must take the pointer (tabs, sashes, HTML views), and everything over a canvas view must let it through to the canvas, except while a tab is being dragged, when drop targets over canvas views must see the pointer:</p>
-<snip file="src-ui/views/Workspace.svelte" lines="134-151" first=".dock :global(*) {" last="/* HTML views: a page in the theme&#x27;s background, scrolling, inside their tab. */"/>
+<snip file="src-ui/views/Workspace.svelte" lines="173-190" first=".dock :global(*) {" last="/* HTML views: a page in the theme&#x27;s background, scrolling, inside their tab. */"/>
 <p>Tab drags use pointer events rather than native HTML drag-and-drop (<code>dndStrategy: 'pointer'</code>), which is unreliable in Safari and hung the test browser.</p>
 <div class="box edge"><span class="tab">Rough edge</span>
 <p>dockview's ESM build ships without its stylesheet, so <code>src-ui/views/dockview.css</code> is a copy extracted from the UMD bundle of version 8.5.1. Upgrading dockview means regenerating it.</p>
@@ -38,7 +38,7 @@
 
 <h2 id="panzoom"><span class="sec">8.3</span>Pan and zoom per view</h2>
 <p>Every 2D view has its own pan and zoom in <code>ViewCameras</code>, keyed by view id, and <code>PanelView::affine</code> (Part 5) carries them to drawing, picking, the select tool and 3D embed textures, so nothing else had to change. The controls are Figma's:</p>
-<snip file="src/bevy_app/select.rs" lines="3995-4006" first="const ZOOM: (f32, f32) = (0.05, 64.0);" last="/// Space-drag and middle-drag pan (`select_tool_system`)."/>
+<snip file="src/bevy_app/select.rs" lines="4894-4922" first="const ZOOM: (f32, f32) = (0.05, 64.0);" last="/// Space-drag and middle-drag pan (`select_tool_system`)."/>
 <p>Scrolling pans; Ctrl/Cmd+wheel or a trackpad pinch (which browsers send as Ctrl+wheel) zooms about the pointer, keeping the document point under it fixed (<code>pan_keeping</code>); Space-drag pans; Shift+1 fits the content, Shift+0 is 100%, Cmd/Ctrl +/− zoom about the centre. "Show in" (Part 5) now sets the pan and keeps the zoom. The 3D camera controller acts only on the view under the pointer, so Space and the wheel no longer fly a camera in another tab.</p>
 
 <h2 id="session"><span class="sec">8.4</span>The session tier</h2>
@@ -59,18 +59,18 @@
   <div class="box built"><span class="tab">What was built</span><p><strong>Session ids start at 2⁴⁰.</strong> Session nodes and relations are allocated from their own counter, so content ids never move. Anything at or above the base is never saved and never shown in the tree views.</p></div>
 </div>
 <snip file="src/iron_document/src/id.rs" lines="14-17" first="/// Session-tier ids (plans/specs/panels-and-session.md) start here: session nodes" last="pub const SESSION_BASE: u64 = 1 &lt;&lt; 40;"/>
-<snip file="src/iron_document/src/document.rs" lines="147-156" first="/// Ids for session-tier nodes, from their own range." last="}"/>
+<snip file="src/iron_document/src/document.rs" lines="214-218" first="/// Ids for session-tier nodes, from their own range." last="}"/>
 
 <h3 id="apply-session">Session ops, outside authored history</h3>
-<snip file="src/iron_document/src/lib.rs" lines="1049-1087" first="// ---- The session tier (plans/specs/panels-and-session.md) ----------------" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="1210-1237" first="// ---- The session tier (plans/specs/panels-and-session.md) ----------------" last="}"/>
 <p>Every op must be in the session range (a content op is refused). The ops apply directly, with no version bump, no history entry and no undo; on an error the ops already applied are rolled back through their inverses. <code>session_version</code> counts session changes for whoever needs to notice them.</p>
 
 <h3 id="selection">The selection is relations</h3>
 <p>A selection is a <code>selection</code> node under a <code>session</code> root, with one ordered <code>selects</code> relation per selected node. Relations, not children: a child is owned and placed by its parent, and a selected square stays where it is. Each relation's data records how the select tool reached the node: the panel and the chain (Part 7), so a selection made in Main through the scene's embed is restored to the same place.</p>
-<snip file="src/iron_document/src/lib.rs" lines="1371-1407" first="/// The selected nodes, in pick order, with how each was reached" last="}"/>
+<snip file="src/iron_document/src/lib.rs" lines="2247-2256" first="/// The selected nodes, in pick order, with how each was reached" last="}"/>
 <p>In the app, the select tool keeps working on a per-frame copy (<code>SelectionState</code> plus its reaches), and one system keeps the copy and the record in step:</p>
-<snip file="src/bevy_app/select.rs" lines="4095-4148" first="/// The selection&#x27;s record is the store&#x27;s session tier (a `selection` node" last="}"/>
-<p>The model now receives the selection with every request, as a <code>SELECTED</code> block before the instruction (<ref file="src-ui/model/agent.ts" line="35" has="SELECTED">agent.ts:30</ref>), so "make the selected one red" resolves; <code>__iron.session()</code> returns it for tests.</p>
+<snip file="src/bevy_app/select.rs" lines="5099-5130" first="/// The selection&#x27;s record is the store&#x27;s session tier (a `selection` node" last="}"/>
+<p>The model now receives the selection with every request, as a <code>SELECTED</code> block before the instruction (<ref file="src-ui/model/agent.ts" line="101" has="SELECTED">agent.ts:30</ref>), so "make the selected one red" resolves; <code>__iron.session()</code> returns it for tests.</p>
 <div class="box edge"><span class="tab">Not yet</span>
 <p>Selection in undo, Figma-style: an edit remembers the selection before and after it, and runs of selection changes merge into one undo step. The representation is ready for it; the merging isn't built. Nor is the workspace root, or the inspector as a session composition with controls bound to the target's leaves. The missing piece for that last one is <em>hosting</em>: rendering document nodes (a text field node) as HTML elements laid over the canvas at rectangles Rust computes, which the original spine plan designed (§4) and nothing has built yet.</p>
 </div>

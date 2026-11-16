@@ -1,19 +1,21 @@
 # Handoff: building the new reactive engine
 
-**Date:** 2026-11-15 · **Branch:** `master` · **Status:** the design
+**Date:** 2026-11-16 · **Branch:** `master` · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
 and its decisions settled. **Nothing of the engine is built.** The current task is
 **phase 0** (§4.1). This file is for whoever builds it: what to read, the order of
-work, the first two phases as tasks, and the rules.
+work, the first two phases as tasks, and the rules. Phases 0 to 2 are ready to build;
+phases 3, 4 and 5 each have design points to settle first (§4.3).
 
 ## 0. Read first, in this order
 
 1. This file.
 2. The spec, whole. Its §3 is the vocabulary; §14 lists what is assumed and not yet
    verified; §17 is the phase table; §19 the settled decisions.
-3. `src/iron_engine_kernel` (`src/lib.rs`, then `src/engine.rs`, then
-   `tests/kernel.rs`): the core pass of the spec's §6 and §7 as about 700 lines of
-   running code, tested against recomputation from scratch. It is a model to learn the
+3. `src/iron_engine_kernel` (`src/lib.rs`, `src/model.rs`, then `src/engine.rs`,
+   `src/reference.rs` and `tests/kernel.rs`): the core pass of the spec's §6 and §7 as
+   about 900 lines of running code, tested against recomputation from scratch.
+   `lib.rs` says what it simplifies. It is a model to learn the
    algorithm from, not code to extend: the real engine is a new module,
    `iron_document::engine`, written in phase 2b.
 4. [`specs/reactivity.md`](specs/reactivity.md) §3 and §13: the behaviour that must
@@ -25,7 +27,7 @@ work, the first two phases as tasks, and the rules.
    for building, the smoke and timings.
 
 [`specs/reactive-engine-review.md`](specs/reactive-engine-review.md) is the design's
-history (two council rounds, what each found). It is not needed to build.
+history (three council rounds, what each found). It is not needed to build.
 
 **The change in one paragraph.** Today any change to a repeat's items, and any
 structural transaction, re-derives every derived node in the document and rebuilds and
@@ -126,7 +128,7 @@ form of §4, from the spec, before starting it.
 - **The old engine is the reference until the swap** (spec §16.1). From phase 0 on,
   every test in `src/iron_document/tests` is also a differential script (§4.1, task 2).
 - **Differences from the old engine are allowed only if listed** in
-  `src/iron_document/tests/differential/intended.rs`. The spec's §16.1 gives the list
+  `src/iron_document/src/differential/intended.rs`. The spec's §16.1 gives the list
   that is already agreed.
 - **Behaviour the old engine does not have** (dormancy, parking, the scheduler) is
   tested against the engine itself by the consistency property (spec §8.8, §16.3). The
@@ -148,24 +150,45 @@ Record the numbers in §1 of this file and in the "Today" column of the spec's �
 
 | Measure | How |
 |---|---|
-| Memory per placed meter beyond the first | In `instance_cost.rs`, a counting `#[global_allocator]` for that test binary; live bytes at 100 and at 1,000 meters, divided |
-| Where a **constant** edit at 1,000 meters spends its 14.1 ms | Temporary timers around each step of `Store::run` and `after_transaction` for that edit: the document clone, `expand::affected_by`, `attachment::validate`, `rebuild_clusters`, `resolve_physics`'s parts (layout, network, palette, contexts). Report the split; remove the timers |
-| Solver cost with clusters at rest | A new `tests/solve_cost.rs`: 1, 10 and 100 pendulums (the document `tests/constraints.rs` builds), then the time of one gesture step dragging one ball, and of a transaction setting an unrelated constant |
-| Growth of interned id paths | A script that pans a plot through 10,000 distinct tick values; the registry's length before and after (`id.rs`; add a test-only accessor) |
-| Loading the demo document | The demo is built by `document_bridge::demo::demo_scene` in the app crate. Apply it, save, and time `Store::load` of the saved text; do it wherever both are reachable (a test in the app crate, or the app with `__iron.timings`) and say which |
+| Memory per placed meter beyond the first | In `instance_cost.rs`, a counting `#[global_allocator]` for that test binary; (live bytes at 1,000 meters − live bytes at 100) / 900. The allocator counts every test in the binary, so run that test alone with `--test-threads=1`. The id registries (`id.rs:57`, `:116`) live for the process and are never freed; they are part of the number |
+| Where a **constant** edit at 1,000 meters spends its 14.1 ms | The edit is `instance_cost.rs`'s constant edit. Temporary timers around each step of `apply_now`, `Store::run`, `after_transaction` and `post_apply` for it: the document clone, `expand::affected_by`, `attachment::validate`, `invalidate`, `resample`, `rebuild_clusters`, `post_apply`'s `validate_all` and `solve::clusters`, and `resolve_physics`'s parts (`lib.rs:1796`: layout, network, palette, contexts, `publish_selection`, `settle_repeats`, `publish_state`). Report the split; remove the timers |
+| Solver cost with clusters at rest | A new `tests/solve_cost.rs`: 1, 10 and 100 pendulums, then the time of one gesture step dragging one ball, and of a transaction setting an unrelated constant. `pendulum()` in `tests/constraints.rs:70` is private and builds one in a fresh store: copy it, and place N of them in one composition, offset so they do not touch |
+| Growth of interned id paths | A repeat **keyed by value** (`repeat.key`), its values moved through 10,000 distinct numbers; the path and key registries' lengths before and after. A plot's ticks are keyed by index today, so panning a plot does not show this. The accessor is a `#[doc(hidden)] pub fn` in `id.rs`: an integration test cannot see a `#[cfg(test)]` item |
+| Loading the demo document | The demo is built by `document_bridge::demo::demo_scene` in the app crate. Apply it, save, and time `Store::load` of the saved text, as a test in the app crate: `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin` |
+
+Run the baselines without the `differential` feature.
 
 **Task 2. The differential facade.** Make every existing test a differential script
 without rewriting any test.
 
+- Rename today's `Store` to `StoreCore` (`lib.rs:197`, and the `impl crate::Store`
+  blocks at `parts.rs:561` and `standard.rs:170`). Without the feature,
+  `pub type Store = StoreCore`. The crate's own functions that take `&Store` (about
+  70, `geom::local_bounds` for one) take `&StoreCore`; callers outside keep
+  compiling, since `&Store` derefs to it.
 - Add a cargo feature `differential` to `iron_document`. With it on, the public
-  `Store` is a facade holding two stores, `subject` and `reference`. It implements
-  `Deref` to `subject` for every `&self` method, and **not** `DerefMut`: each of the 55
-  public `&mut self` methods is forwarded by hand (or one macro) to both, and after
-  each call the facade compares the two return values and the two snapshots (task 3)
-  and panics with the method's name and the first difference.
+  `Store` is a facade holding two `StoreCore`s, `subject` and `reference`. It
+  implements `Deref` to `subject` for every `&self` method, and **not** `DerefMut`:
+  each public `&mut self` method is forwarded by one macro to both, and after each
+  call the facade compares the two return values and the two snapshots (task 3) and
+  panics with the method's name and the first difference. On 2026-11-16 there are 58:
+  56 in `lib.rs`, `place_part` (`parts.rs:565`) and `place_standard`
+  (`standard.rs:174`). Also forward the consuming `into_document(self)` and the
+  constructors `new`, `with_document`, `load` and `Default`. Every by-value argument
+  type is `Clone`.
+- **Return values are compared with `==`, all of them, through phase 2a.** That
+  includes `ApplyError` messages, `SolveReport` counts and what the drains return: old
+  against old they are equal. A comparison is relaxed only by an entry in the
+  intended-differences file (task 4), in the phase that first needs it.
 - This works because the store's public API takes and returns plain data: timestamps
-  are arguments, producers are registered by name, there are no callbacks. If you find
-  a method for which that is false, stop and report (§5).
+  are arguments, producers are registered by name, there are no callbacks, no public
+  fields and no interior mutability, and the crate reads no wall clock and no random
+  source. If you find a method for which that is false, stop and report (§5).
+- Two things are shared by both stores, and must be: the id registries (`id.rs`),
+  so one path gets one id in both; and the text engine (`iron_text::engine()`), so
+  register fonts before building the stores and not between steps.
+- The free functions in `timeline_view.rs:1187` that take `&mut Store` call only
+  public methods and keep taking the facade.
 - `Store::new` and `Store::load` build both stores. A store is built with an engine
   choice (`Engine::Old` or `Engine::New`), which until phase 2b has one value. So in
   this phase `subject` and `reference` are both the old engine, and a green run proves
@@ -175,35 +198,58 @@ without rewriting any test.
   two stores share every type. Do not make a second copy of the crate: its types would
   not be comparable.
 - Exit: `cargo test -p iron_document --features differential --target
-  aarch64-apple-darwin` is green, and deliberately breaking the old engine in one of
-  the two stores (for example, skipping one `settle_repeats` call when a debug flag is
-  set on the reference) makes it fail. Show the failure, then remove the flag.
+  aarch64-apple-darwin` is green, and each of three faults put into the reference
+  alone, behind a debug flag, makes it fail: skipping one `settle_repeats` call;
+  dropping one emitted effect; leaving one pending change undrained. Show the three
+  failures, then remove the flag.
 
-**Task 3. The snapshot.** `fn snapshot(&StoreCore) -> Snapshot`, with `PartialEq` and a
-`diff` that names the first difference. It is the definition of "the same", so it is
-written out here and in the spec's §16.1; do not weaken it to make something pass.
+**Task 3. The snapshot.** `fn snapshot(&StoreCore) -> Snapshot`, in
+`src/differential/` behind the feature, with `PartialEq` and a `diff` that names the
+first difference. It is the definition of "the same", so it is written out here and in
+the spec's §16.1; do not weaken it to make something pass. It reads without draining:
+where a buffer has only a draining accessor, add a crate-internal one that looks.
 
 | Compared | Detail |
 |---|---|
-| Nodes | The set of live ids, authored and derived; each one's type, parent, order key and every facet, slot for slot |
+| The saved document | `serial`'s saved text of each store. This covers authored nodes, tombstones and the facets they keep, counters and the version |
+| Nodes | The set of live ids, authored, derived and session; each one's type, parent, order key and every facet, slot for slot |
 | Relations | Every relation: id, kind, ends, data |
-| Values | The resolved value or the error of every leaf that has a slot, read as a view reads it (overlay included) |
-| Problems | As a set of (node, kind); message text is not compared |
-| Counters | Version, next node and relation ids per client, session counters |
-| The view | What a `ViewQuery` of the whole document prints at full fidelity |
-| History | Undo and redo depth; the last transaction's `ops`, `derived_ops` and `inverse` |
-| Effects since the last step | Query requests issued, `on.emit` events (`take_emitted`), session cells made and dropped, revisions reported, the selection |
-| After a failed call | Everything above is identical to before the call |
+| Values | For every declared field of every facet of every live node, and every leaf that has an overlay, runtime or published entry without a stored slot (a preview may have none, `lib.rs:1152`): the value as a view reads it **and** the error, both. A failed leaf keeps a value to draw (`graph.rs:116`) |
+| Signals | `signals()` and `signal_errors()`: which producer holds which leaf, and its errors |
+| Problems | (node, kind, message) |
+| The view | What a `ViewQuery` of the whole document prints at full fidelity with every instance, table and narrative expanded (`ViewQuery::expand`, `view.rs:41`) |
+| History | The whole undo and redo stacks: each transaction's `ops`, `derived_ops` and `inverse` |
+| Other store state | Everything else a public `&self` method answers: the gesture, clocks and time, query states, `tables`, `clusters()`, the contexts library, the selection, a pinned state. Go through the 65 public `&self` methods; each is in the snapshot or on a short list in the code saying why not |
+| Pending | What each drain would return now (`take_derived_ops`, `drain_changes`, `take_touched`, `take_geometry_changes`), `take_emitted`, query requests issued, session cells made and dropped, revisions reported |
 
-Not compared: `Transaction::expanded` and any op emitted for derived structure;
-evaluation counts; heights; timing.
+Not compared: `Transaction::expanded`; evaluation counts; heights; timing. Message
+text and ops for derived structure **are** compared in phases 0 to 2a; they are
+relaxed from 2b by entries in task 4's file.
 
-**Task 4. The intended-differences file.**
-`src/iron_document/tests/differential/intended.rs`: a table the facade consults, each
-entry with a name, the predicate that narrows it (which nodes or leaves, in which
-situation), and the name of the test that asserts the new behaviour. Empty in this
-phase. The agreed entries, added in the phase that first needs each, are the spec's
-§16.1 list. Any other entry is a stop-and-report.
+**Two checks on a failed call, kept apart.**
+
+- *Agreement:* after a call that returns an error, the two stores still have equal
+  snapshots and equal errors. Always on.
+- *Atomicity:* after a call that returns an error, a store's snapshot equals its
+  snapshot before the call. **The old engine does not meet this**, so in this phase it
+  is measured, not required: run it over the existing suite and the random scripts,
+  and record every method and situation that fails it in task 4's file, each with a
+  test that shows it. Two are known: `apply_session` rolls back by inverse ops, which
+  leaves a tombstone and an advanced session counter (`lib.rs:1235`,
+  `document.rs:502`); and a transaction rejected after it expanded leaves the new
+  `expansion_problems` behind (`lib.rs:2663`). One was reported in review and is to be
+  confirmed: an action that fails on a later write has already queued its `emit`
+  (`lib.rs:1666`). Atomicity becomes required of the new engine call by call as the
+  spec's §11 takes each over (transactions in 2a), and its entry is then deleted.
+
+**Task 4. The differences file.** `src/iron_document/src/differential/intended.rs`,
+behind the feature, since the facade in `src` reads it. Two tables. *Intended
+differences:* each entry has a name, the predicate that narrows it (which nodes,
+leaves or return values, in which situation), and the name of the test that asserts
+the new behaviour. Empty in this phase; the agreed entries, added in the phase that
+first needs each, are the spec's §16.1 list, and any other is a stop-and-report.
+*Known not atomic:* the old engine's failures of the atomicity check above, found in
+this phase.
 
 **Task 5. Random scripts.** `tests/differential_random.rs`: a seeded generator of
 documents and of steps over them, run through the facade. It must reach, and count
@@ -213,17 +259,37 @@ kind, overrides on items that leave and return, enter and exit in flight, provid
 moved, connections to instance ports, definition edits, failing transactions, undo and
 redo, previews, publishes, clock moves). Assert the counts at the end, as the kernel's
 random test does: agreement over scripts that never reach the hard paths proves
-nothing. Exit: 10,000 seeds green, with the counts printed.
+nothing. Build documents from the pieces the existing tests build (the helpers in
+`tests/repeat.rs`, `compose.rs`, `machines.rs`, `constraints.rs`, `standard.rs`),
+combined and nested at random, not from random ops on an empty document: almost all
+of those are rejected. Keep a document under about 200 nodes and a script to about 30
+steps. The 10,000-seed run is a release, ignored test; 200 seeds run in the normal
+suite. If the full run takes more than ten minutes, report the time; do not thin the
+snapshot. Exit: 10,000 seeds green, with the counts printed.
 
 **Task 6. The host reference.** In the app crate: a headless Bevy `World` (no window,
 no GPU) with the document bridge's systems, a function that rebuilds the host's
 derived state from scratch (drawables, paint order, the spatial scene), and a test
 that after each step of a script compares the incrementally kept state with the
-rebuilt one. `materialize::reconcile` takes `Commands` and mesh assets
-(`materialize.rs:352`), which is why this needs a `World`. Exit: green over the
-fast smoke's document and a few written scripts.
+rebuilt one. `materialize::reconcile` takes `Commands` and mesh assets and is
+`pub(super)` (`materialize.rs:352`), so this needs a `World` and is a `#[cfg(test)]`
+module inside `document_bridge`, run with `cargo test -p ironfell --lib --features
+native --target aarch64-apple-darwin`. Compare by document `NodeId`, geometry and
+content, never by Bevy entity or asset handle. The browser smoke cannot run here:
+"the fast smoke's document" means the demo scene and the same document operations the
+smoke performs, written as store calls. Exit: green over that and a few written
+scripts.
 
-**Phase 0 is done when** tasks 1 to 6 meet their exits, the numbers are recorded, and
+**Task 7. Order across processes** (spec §14, A12). A derived id's number is its
+slot in a process-wide registry, in order of first use (`id.rs:255`), and ids order
+by that number. The facade's two stores share the registry, so it cannot show whether
+anything visible depends on that order. One test, run as two child processes of the
+test binary: each builds the same document with instances and repeats, the second
+after first interning a few hundred unrelated paths; both print the saved text and
+the full view, which must be equal. If they differ, that is a finding to report, not
+to fix in this phase.
+
+**Phase 0 is done when** tasks 1 to 7 meet their exits, the numbers are recorded, and
 this file's §2 and the roadmap say so.
 
 ### 4.2 Phase 1: the read contract, on the old engine
@@ -234,9 +300,14 @@ phase 2c takes the copies out, nothing else changes. **No behaviour changes in t
 phase.** The spec's §12 is the contract.
 
 **Task 1. `Tree`.** `Store::tree()` returns a read view with `Document`'s read methods
-under the same names (spec §12.1 lists them). In this phase it forwards to the
-document. It is a type of its own, not `&Document`, so later phases can change what
-is behind it.
+under the same names. Its inventory is every public `&self` method of `Document`
+that any caller uses, not only those the spec's §12.1 names: roots, enumeration of
+live nodes, descendants and ancestry helpers, `nodes_with`, relation lookup. In this
+phase it forwards to the document. It is a type of its own, not `&Document`, so later
+phases can change what is behind it. It must be buildable from a bare `&Document`
+inside the crate (`Tree::over(&doc)`), not only from a `&Store`: `Store::run`
+validates against a working document that is not the store's, and store methods read
+the tree while they hold `&mut` to other fields.
 
 **Task 2. Rename `Store::document()` to `Store::authored()`**, so every use is looked
 at. On 2026-11-15 there are about 286 uses in the host, 82 inside the crate's `src`,
@@ -259,13 +330,27 @@ table in the spec's §12.2, every consumer each field feeds (the spec asks for t
 then move `document_bridge::sync_document` and `collect_ids` onto it; then delete
 `take_derived_ops`, `drain_changes`, `has_changes`, `take_touched` and
 `take_geometry_changes`. Tests that call them (about 45 places) move to
-`take_changes()`.
+`take_changes()`. The facade compares what `take_changes()` returns with `==` in this
+phase. Today geometry and reconciliation keep separate pending sets on purpose
+(`graph.rs:110`); `Changes` must not let one consumer take what another still needs.
 
 **Task 5. The snapshot reads through the `Tree`.**
 
-**Exit:** the differential and host harnesses are green; the fast smoke's output is
-byte-identical to before the phase; `git grep` finds no caller of the deleted drains
-and no `document()`; timings in the smoke are within noise.
+**Exit:** the differential and host harnesses are green; the fast smoke's printed
+output is the same as before the phase, timings aside; `git grep` finds no caller of
+the deleted drains and no call of `Store::document` (other types' `document()`
+methods are not this); timings in the smoke are within noise.
+
+### 4.3 Before phases 3, 4 and 5
+
+Phases 0 to 2 can be built from the spec as it is. The later phases cannot yet: the
+spec's §14 ends with a list, "Open before a phase starts", of points where the last
+review found the design incomplete (when a solved pose is adopted, the full set of
+things that wake a parked owner, recording followed by another pass). The spec states
+a rule for each, but those rules have not been reviewed or tested. Before starting
+phase 3, 4 or 5, write that phase's tasks here, check each open point for that phase
+against the code as it then is, and report to the user what you would build; do not
+start the phase on the rule as written without that.
 
 ## 5. Rules, and when to stop
 

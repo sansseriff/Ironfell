@@ -1,6 +1,8 @@
 # The reactive engine: owners, demand, templates and time
 
 **Status:** Approved for building 2026-11-15; the decisions in §19 are settled.
+Revised 2026-11-16 after a third review; phases 0 to 2 are ready to build, and phases
+3, 4 and 5 each have points to settle first (§14, "Open before a phase starts").
 **Nothing is built** except a reference model of the core pass
 (`src/iron_engine_kernel`, §6). Work order, the current task and the rules for whoever
 builds it: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
@@ -27,7 +29,7 @@ tracked reads, context, queries, presence) is kept as behaviour and re-implement
 | Cost | Where | Measured |
 |---|---|---|
 | Any change to a repeat's items re-expands the document and rebuilds the graph, evaluating every binding | `Store::settle_repeats` (lib.rs ~1290), `expand::expand`, `Reactive::rebuild` | A plot tick change: 1.3 ms with 1 plot, 7.3 ms with 10 (native); a values-only step is 0.13 ms |
-| Any structural transaction does the same | `Store::run` (lib.rs ~2660), `after_transaction` (~2294) | 161.7 ms a structural edit at 1,000 meters (69,072 nodes) |
+| Any structural transaction does the same | `Store::run` (lib.rs ~2630), `after_transaction` (~2294) | 161.7 ms a structural edit at 1,000 meters (69,072 nodes) |
 | Every transaction clones the document | `Store::run`, `let mut work = self.doc.clone()` | 2.2 ms at 14,407 nodes (instance-cache.md); grows with the document |
 | Settling polls every repeat on every resolve, values-only steps included | `settle_repeats` reads 4–5 leaves per drawn repeat, compares with a `Debug`-text fallback | Not measured; grows with the number of repeats |
 | Each instance stores a full copy of its definition's nodes | `want_entity`, `want_use`, `want_items` clone and rewrite every facet | 69 nodes a plot; 69,072 nodes for 1,000 meters |
@@ -79,8 +81,10 @@ tracked reads, context, queries, presence) is kept as behaviour and re-implement
 6. Behaviour as specified in reactivity.md §13: keys, `when`, `let.keep`, `on`,
    `deref`, `@name`, traces, accumulators, queries, presence, drag and wheel actions.
 7. Errors propagate; problems are data on nodes.
-8. No backwards compatibility (AGENTS.md). No file-format change is needed: derived
-   nodes were never saved.
+8. No backwards compatibility (AGENTS.md). Taking derived nodes out of the document
+   changes no file format: they were never saved. What this spec adds to authored
+   data (declared containment, a declared extent, clock providers) bumps
+   `serial::SCHEMA` when it is built.
 
 **Two things that do not stay:** derived nodes are no longer real document nodes;
 they are **addressable, and stored only where they differ** (§5.4). And there is no
@@ -137,6 +141,7 @@ struct Cell {
     leaf: Leaf,            // (node id, facet.field)
     owner: OwnerId,
     kind: CellKind,        // Input | Binding | Structure | Layout | Solve | Stepper | Clock
+                           // (a Clusters cell is a Structure cell; an extent cell is a Binding)
     deps: SmallVec<CellId>,    // static, plus tracked reads from the last evaluation
     readers: SmallVec<CellId>,
     height: u32,
@@ -325,7 +330,7 @@ cone once.
 ### 6.2 One pass
 
 `src/iron_engine_kernel` is this section and §6.1, §6.3 and §7.1 as running code: about
-700 lines, its rules numbered R1 to R8 in `engine.rs`, tested against recomputation
+900 lines, its rules numbered R1 to R8 in `engine.rs`, tested against recomputation
 from scratch on random programs with everything observed and with a changing observed
 subset. Read it before writing `eval.rs`. It is a model of the algorithm, not a start
 on the engine: its values and expressions are toys (§14, A5).
@@ -343,17 +348,33 @@ stabilise():
 Everything a cell makes sits above it, so structure settles in the one pass, where
 `settle_repeats` loops once per nesting level, re-expanding each time. A cell runs
 again within a pass in one case, as now (`graph.rs:530`): a tracked read, or a read
-into an item that has just come to exist, finds a dependency that has not run yet. The
+into an item that has just come to exist, raises the reader while something below its
+new height has not run yet. That something may be the dependency itself, or a cell the
+dependency reads: a dependency that looks current can still be about to change. The
 dependency is pulled first (which may reconcile a Collection that was not necessary),
-the reader's height is raised and it is queued again. A budget bounds this, as now.
+and the reader is queued again at its new height. A budget bounds this, as now.
 
 ### 6.3 Heights
 
 Set on insertion, adjusted locally: when an edge is added and the dependency's height is
-not below the reader's, raise the reader and, recursively, its readers. Meeting the
-starting cell during the raise is a cycle. Today `compute_heights` relaxes the whole
-graph to a fixpoint (`graph.rs:405`), including from inside `evaluate` when a tracked
-read finds a new dependency.
+not below the reader's, raise the reader and, recursively, its readers. Today
+`compute_heights` relaxes the whole graph to a fixpoint (`graph.rs:405`), including
+from inside `evaluate` when a tracked read finds a new dependency.
+
+**Cycles.** Meeting the starting cell during the raise means the edge would close a
+cycle. The edge is not added and **the heights are put back as they were**. That alone
+is not a failure, because the cycle may run through an edge that another cell is
+about to drop in this same pass: when two tracked reads change together, the first to
+run sees the other's old edge. So the reader **waits**: it does not finish, it holds
+what it could not read necessary so that it is brought up to date, and everything
+that reads the waiting cell, directly or through others, waits when it comes to read
+it. When the queue is empty the waiting cells run again. Only when a whole round of
+them finishes nothing is a cycle real; then the lowest waiting cell fails, and the
+rest follow from it. A failed cell has no edge to what it could not read, so nothing
+would tell it that the cycle ended; the engine keeps the failed cells and runs them
+again in any pass that removes an edge. In that one case cells that read the failure
+may finish twice in a pass. The kernel's rule R6 is this, with tests for each part;
+two reviewers and a random test each found a way the simpler rule was wrong.
 
 - A cell an owner makes is placed above that owner's Structure cell.
 - A reader outside an Item of something inside it (`#g/~3/7`, a node list, `deref`) is
@@ -493,6 +514,8 @@ fn unobserve(&mut self, id: ObserverId);
   rule: those a drawn leaf in the region needs.
   Leaving by more than a second, larger margin makes them Dormant; Unloading is a
   separate, slower policy (memory pressure, or a count of Dormant owners).
+- An observer names nodes by id, not by owner: an item disposed and made again under
+  the same id is observed again without the observer doing anything.
 - A **Look** is short-lived: it makes necessary exactly the leaves it prints. Skeleton
   fidelity is answered from summaries and loads nothing. `expand="#x"` loads `#x`.
 - A **narrative** is an observer that also knows what comes next: it may observe the
@@ -513,24 +536,39 @@ by design: a `let` in a template is per picture (reactivity.md §5.1, the accord
 open flag), any node may be a template's child, and an entity inside a repeat's
 template gives each item an instance. So "the body computes, the picture shows" cannot
 be the line. Instead a template is **stateful** if it, or any template under it, holds
-a session `let`, a `trace`, an `accumulate`, a `machine`, a `query`, or an `on` with a
-condition trigger. That is known when the template is compiled. An `on` for pointer
-events is not state: it only runs while something is interacting with it.
+a session `let`, a `trace`, an `accumulate`, a `machine`, a `query`, a `constraint`
+(a cluster's pose is state, §9.4), or an `on` with a condition trigger when one is
+built (today's `on` has pointer and event triggers only). That is known when the
+template is compiled. An `on` for pointer events is not state: it only runs while
+something is interacting with it.
 
 For a stateful owner, always, whatever is observed:
 
 - **Its state is never lost.** While anything it follows is moving it is at least
   Dormant, so its session cells and logs exist and its events are recorded.
-- **At rest it may be parked.** An owner is at rest when no recording is pending, it
-  has no continuous scheduler entry, and no integrator in it is running. Parking
-  unloads its cells and keeps, beside `session`: each machine's state and the tail of
-  its log that a tween could still read, each `trace`'s changes still in flight, each
-  `accumulate`'s value, and its timed scheduler entries. It is loaded again, with that
-  state, when a leaf in `summary.reads` changes, when one of its timed entries is due,
-  or when it is observed. The first two are how it would have noticed the event had
-  it stayed loaded, so parking changes nothing that can be seen (§8.8). A thousand
-  machines far from every view, with still inputs, cost a summary and a few values
-  each.
+- **At rest it may be parked.** Whether an owner is at rest is decided after
+  `record` (§10.4), and it is when all of these hold: its loggers recorded nothing
+  this time; it has no continuous scheduler entry; no integrator in it is running; no
+  `query` in it has a request outstanding or a debounce running; no gesture or
+  preview addresses a leaf in it. Parking unloads its cells and keeps, beside
+  `session`: each machine's state and the tail of its log that a tween could still
+  read, each `trace`'s changes still in flight, each `accumulate`'s value, each
+  `query`'s whole state (what it last asked and saw, its sequence, its answer, where
+  the answer came from, its error: `query.rs:41`), each cluster's pose, and its timed
+  scheduler entries.
+- **What wakes it** is held by one **wake cell** per parked owner, which stays
+  necessary and reads everything the owner's cells read from outside it at their last
+  evaluation: static reads and tracked ones (what a `deref` reached), each argument,
+  item value and `@name` provider it resolved, and its template's version. Because the
+  wake cell is necessary, what it reads stays current upstream; that is the cost of a
+  parked owner, and it is what the owner would have cost Dormant, less its own cells.
+  When any of them changes, the owner is loaded with its kept state in the same pass,
+  above the wake cell. It is also loaded by anything addressed into it: an op or an
+  undo's snap on one of its nodes, `publish` onto one of its leaves, `set_state`, a
+  `query`'s reply (`resolve_query`), one of its timed entries coming due, and being
+  observed. These are how it would have noticed the event had it stayed loaded, so
+  parking changes nothing that can be seen (§8.8). A thousand machines far from every
+  view, with still inputs, cost a summary, a wake cell and a few values each.
 - **What cannot be parked** is an owner whose inputs keep moving: a machine whose
   state argument reads a running clock, an integrator with policy `run`. It stays
   Dormant, evaluating only what its state needs, unless its author sets `pause` or
@@ -550,8 +588,11 @@ For a stateful owner, always, whatever is observed:
 far from every observer, as a game stops the world beyond some distance: an observer
 may carry a range, and a running stateful owner outside every range is treated as
 `pause`. This is outside §8.8's property by design (the owner resumes where it
-stopped, not where it would have been) and is off unless set. Catching up on waking,
-by replaying inputs or taking large steps, is not designed here.
+stopped, not where it would have been) and is off unless set. **It is named here so
+that D1's shape allows it; it is not designed and not built in phases 0 to 6**: its
+shape and units, the observer's API for it, and what happens to a pending reply or
+deadline are open, as is catching up on waking by replaying inputs or taking large
+steps.
 
 For every loaded owner, stateful or not: **its extent** (§8.5), the inputs of the
 network solve when it runs (§8.9), and **each constraint cluster with an input that
@@ -572,10 +613,13 @@ clock); phase 4 measures this case.
 
 ### 8.4 Bodies and pictures
 
-A Body owner is never Unloaded while its entity exists: it is small, and saved
-connections attach to its ports. Its cells are evaluated only when necessary. Pure
-pictures go Dormant and Unloaded freely; stateful ones go Dormant, and are parked
-when at rest (§8.3). One entity
+A Body owner is not unloaded for lack of an observer: it is small, and saved
+connections attach to its ports. Its cells are evaluated only when necessary. A
+stateful Body at rest is parked like any stateful owner (§8.3); a reader of one of
+its ports is something addressed into it, and loads it. A Body has no position, so a
+simulation range would reach it through the pictures that show it. Pure pictures go
+Dormant freely, and Unloaded when their extent allows it (§8.5: static, clipped or
+declared); stateful ones go Dormant, and are parked when at rest. One entity
 pictured in two compositions computes once; each picture wakes with its own view.
 
 ### 8.5 Drawing what is not Live
@@ -661,8 +705,8 @@ must become, so that nothing built here has to be undone for ports-3d.md:
 
 | Written here as 2D | For a 3D composition |
 |---|---|
-| `Interest::Region { rect, zoom }` | A second variant, `Volume { composition, frustum, pixels_per_unit }`. Built in phase 4 with Region, since 3D compositions exist today |
-| `Summary::bound: Rect`, the extent cell reading `geom::local_bounds` | `Bound` is an enum of a rectangle and a box; the extent cell reads the mesh's box through `geom::world_affine3`. A 3D owner cannot clip, but it can **declare** its extent: a box its author states it stays inside, as game engines' fixed bounds do. A declared box is the extent, nothing inside is needed, and the owner may sleep or be unloaded. Content that leaves the box is not found by a view until the box is in view (a problem in debug builds when the computed extent is seen to exceed it). Without a declaration the extent is static or stays current, as in 2D |
+| `Interest::Region { rect, zoom }` | A second variant, `Volume { composition, frustum, pixels_per_unit }`, the frustum being six planes in the composition's space. Built in phase 4 with Region, since 3D compositions exist today |
+| `Summary::bound: Rect`, the extent cell reading `geom::local_bounds` | `Bound` is an enum of a rectangle and a box; the extent cell reads the mesh's box through `geom::world_affine3`. A 3D owner cannot clip, but it can **declare** its extent: a box its author states it stays inside, as game engines' fixed bounds do. A declared box is the extent, nothing inside is needed, and the owner may sleep or be unloaded. The box is in the owner's own space, so its placement still moves it. Its facet and fields are designed with phase 4, as a schema bump; mesh bounds live in the host today (`MeshAssets`, `materialize.rs:264`), so the engine is told a mesh's box by the host as an Input cell. Content that leaves the box is not found by a view until the box is in view (a problem in debug builds when the computed extent is seen to exceed it). Without a declaration the extent is static or stays current, as in 2D |
 | The spatial index (`iron_spatial`, an R-tree of rectangles) | Owner entries need a 3D index for 3D compositions. Today the 3D side has none and picks against mesh boxes; phase 4 may keep a walk over owner bounds until counts need more |
 | A 2D composition shown on a plane in 3D (`planes.rs`) | The 3D view's frustum, cut by the plane, gives that composition a Region with the zoom its texture is drawn at. One rule covers a panel, an embed and a draped plane |
 | Levels by size on screen (§8.6) | The same measure: projected size. Swapping meshes by distance is the host's (`VisibilityRange`), below this engine |
@@ -683,7 +727,7 @@ interface: publishing writes Input cells.
 | `publish_selection`, `publish_state`, interaction, events, theme | per call | Input cells written by the host or an action |
 | `resample` (clips, `time.rs`) | all clips, any change | One cell per animated leaf, reading the clock and its clip's keys (§10) |
 | `solve_network` | `port::network(doc)`, one Newton solve | A Solve cell per algebraic island: unknowns joined by any equation they share, a definition's equations included (`port.rs:274`), not by connections alone. Each keeps its own warm start |
-| Layout glides (`motion`, `advance_motion`, `lib.rs:2052`) | per call | Presentation state on the picture: a scheduled cell from the drawn position to the target; snaps on waking (§8.3) |
+| Layout glides (`motion`, `advance_motion`, `lib.rs:2034`) | per call | Presentation state on the picture: a scheduled cell from the drawn position to the target; snaps on waking (§8.3) |
 | `resolve_layout` | `layout::compute` over all groups and tables | A Layout cell per container (§9.2) |
 | `port::derived_signals`, `anchor::derived` | all connections and anchors, each rebuild | Cells made and removed with their relation (§7.2) |
 | `advance_machines`, `advance_steps`, `advance_queries`, `advance_presence`, `clock::advance` | each scans its node type each frame | Stepper cells on the scheduler (§10) |
@@ -778,58 +822,105 @@ a binding, and each has a place in this engine:
 
 **The cells.**
 
-- **A Clusters cell per composition.** Constraints, their operands and the mates that
-  connections imply (`plug::implied_mates`) all lie in one composition
-  (constraint-system.md §0), so the grouping is per Composition owner. It is a
-  Structure cell (§7): it reads the composition's `constraint` nodes and `constrains`
-  relations (told by ops, §7.2), each constraint's `enabled`, the anchors and
-  connections that imply mates, and which operand leaves are free (a constant slot,
-  not bound, not driven by a clip, not on a fixed node). It makes one Solve cell per
-  cluster, keyed as now (the parent of the cluster's lowest constraint). Adding a
-  constraint regroups one composition. `constraint::validate_all` becomes this cell's
-  problems, per composition.
-- **A Solve cell per cluster.** Its inputs are the cluster's knowns and its drivers;
-  it has one output per variable. Its height is one more than its highest input, so
-  bindings that feed it run first and bindings that read a solved leaf run after, in
-  the same pass. A binding that reads a variable and feeds the same cluster, and
-  clusters that feed each other in a ring, are ordinary cycles (§6.3), reported with
-  `ErrorKind::Cycle` and the cluster's name as now. The separate sort in
-  `solve::clusters` goes away.
+- **A Clusters cell per composition.** It is a Structure cell (§7) that groups the
+  composition's constraints and makes one Solve cell per cluster. It reads, as
+  dependencies: the composition's `constraint` nodes and `constrains` relations, told
+  by ops (§7.2), **authored and derived** (a repeat's template copies its relations,
+  constraints included, `expand.rs:451`, so a cluster can lie inside an item);
+  each constraint's `enabled`; the connections that imply mates
+  (`plug::implied_mates`), found through an index from anchor to connection, since a
+  connection is stored beside an entity and not in the composition (`plug.rs:212`);
+  each such anchor's frame **in its body's own space**, not its world transform, which
+  a solved variable can move (reading that would be a false cycle); the contexts
+  library's `plug.mate`, which decides whether a connection mates (`plug.rs:239`): the
+  library's version is an Input cell; and which operand leaves are free (a constant
+  slot, not bound, not driven by a clip, not on a fixed node). Adding a constraint
+  regroups one composition. `constraint::validate_all` becomes this cell's problems.
+  That every cluster lies in one composition is assumption A11 (§14): the code
+  checks it for implied mates only.
+- **A Solve cell per cluster.** Its key is the cluster's lowest constraint id, which
+  is unique. Today's `Cluster::id`, the parent of that constraint, is shared by two
+  separate clusters under one parent (`solve.rs:170`); it stays as the name shown in
+  errors. Its dependencies are **whatever building its problem reads**, found by
+  tracking as for any cell (§6.2), not today's `Cluster::inputs` list, which omits
+  the size and radius leaves that scale a rotation (`solve.rs:333`). It has one
+  output cell per variable; each reads the Solve cell, so a reader of one solved leaf
+  depends on the cluster. Its height is above its highest input, so bindings that
+  feed it run first and bindings that read a solved leaf run after, in the same pass.
+  A binding that reads a variable and feeds the same cluster, and clusters that feed
+  each other in a ring, are ordinary cycles (§6.3), reported with `ErrorKind::Cycle`
+  and the cluster's name as now. The separate sort in `solve::clusters` goes away.
 - **A solved layer in what a leaf reads as** (§5.2), between the gesture overlay and
-  the binding: a variable reads as its Solve cell's output while that differs from its
+  the binding: a variable reads as its output cell while that differs from its
   constant. Today these values are written into the overlay with `preview`; a layer of
   their own means a gesture's cancel does not have to tell its previews from the
-  solver's.
+  solver's. A gesture that moves a constrained node writes a **driver**, not an
+  overlay value on the variable: an overlay value would hide the solver's answer.
 - **Drivers.** A finger (the grabbed anchor at the cursor, strong priority) and a
   transaction's explicit `Set` on a variable are Input cells that the cluster's Solve
   cell reads. They exist for one gesture or one transaction.
 
-**When it solves.** When an input changed, and only then. This rests on the solver
-being at a fixed point: solving again from a converged pose with the same inputs gives
-that pose. `resolve_clusters_live` assumes the same today (it solves everything and
-writes only what differs), and phase 5 tests it directly: solving every cluster on
-every call and solving only dirty ones must agree on every script.
+**The pose is state, and there are three of it.** A solve starts from a pose and its
+answer depends on that pose (the least-change term is measured from where the solve
+began, `iron_solve/src/lib.rs:243`).
 
-**The pose is state.** The Solve cell keeps its last converged pose as its warm
-start. A trial inside a transaction reads that pose and does not replace it; commit
-adopts the result, as `record(now)` adopts events (§10.4), so `stabilise()` stays pure
-and step 6 of §11.2 restores the pose by restoring the inputs. A solve that does not
-converge keeps the previous pose and reports it, as now (constraint-system.md §5.5).
+- The **pose** of a cluster is where its next solve starts: per variable, a number.
+- The Solve cell's **output** is the result of its last solve from that pose. The
+  solved layer shows the output.
+- **Adopting** sets the pose to the output. It happens outside `stabilise()`, as
+  `record(now)` does (§10.4): at the end of every public `&mut` call that is not
+  inside a transaction (a gesture frame, `publish`, `advance`, `preview`), and at
+  step 7 of a transaction (§11.2). So a drag frame starts from the frame before, as
+  now (`lib.rs:421`), and a trial inside a transaction reads the pose and never
+  replaces it.
+- **An op that writes a variable's constant sets the pose** for that variable to the
+  constant and drops its output: in a transaction, an undo, a redo, a replay, a
+  remote op or a session op. Today the same happens because a solve starts from the
+  leaf's resolved value (`solve.rs:354`). In a transaction the Solve cell then runs
+  with the `Set` as a driver. In undo, redo and replay no Solve cell runs: the
+  recorded `derived_ops` are the answer, and each variable they write takes it as
+  pose and output both.
+- **Rolling back does not solve again.** A Solve cell that ran inside a transaction
+  keeps the output and status it had before; step 6 of §11.2 puts them back and
+  marks the cell current. Solving again from the old pose would not be exact while a
+  finger is held.
+- A solve that does not converge keeps the previous output and reports it, as now
+  (constraint-system.md §5.5).
+
+**When it solves.** When one of its inputs changed: a known, a driver, a finger, or
+an op writing a variable. Not otherwise. Today every cluster is solved at each of the
+eleven call sites and by every transaction, whether anything of it changed. The two
+agree when no driver or finger is held, if the solver is at a fixed point (assumption
+A6). They do **not** agree to the last bit while a finger is held: a strong term has
+a finite weight, so each further solve from the adopted pose moves a little closer to
+the finger, and today's result depends on how many unrelated calls happened during
+the drag. That is an accident of the old schedule, not behaviour to keep. So **phase
+5 begins by putting the new schedule into the old engine**: a cluster is skipped
+unless a known, a driver, a finger or one of its variables' constants changed since
+its last solve. The constraint and gesture suites and the smoke judge that change on
+its own; after it the two engines can be compared exactly.
 
 **Unobserved clusters.** Because the answer depends on the pose before it (an elbow
 that is up stays up), skipping solves while an input sweeps and solving once on waking
 can land on another branch. So a cluster follows D1's rule for integrators: it solves
-whenever an input changes, observed or not, unless its author sets `pause` or
-`coarse` (decision D11). The saving against today is that a cluster whose inputs are
-still costs nothing, where today each of the eleven call sites solves all of them. At
-commit every cluster the transaction touched is solved whatever is observed, since a
-transaction's acceptance never depends on observation (§11).
+whenever an input changes, observed or not (decision D11). The saving against today
+is that a cluster whose inputs are still costs nothing. `pause` and `coarse` for a
+cluster are named in D11 and not built here.
+
+**At commit** (§11.2, step 5) the rule is `post_apply`'s, without its solves. Every
+Solve cell in the document is current after step 4, since each solves when its inputs
+change. If any Solve cell's status is not converged, the transaction fails, as now:
+`post_apply` solves every cluster and fails on any that does not converge
+(`lib.rs:2575`). Every variable, in any cluster, whose output differs from its
+constant is written as a `derived_op`. That includes a cluster the transaction did
+not touch whose pose a playhead or a publish moved since the last commit: today an
+unrelated transaction commits such poses, and this keeps that.
 
 **Kept as behaviour:** the three priority tiers, culprits and `Unmet` in errors,
 `exact` transactions, `SolverSummary` and what the model is told (causes, not
 effects), gestures (`begin_grab`, fingers, release committing one transaction that
-reproduces the previewed pose), undo and replay applying recorded `derived_ops`
-without solving.
+reproduces the previewed pose, `lib.rs:1120`), undo and replay applying recorded
+`derived_ops` without solving.
 
 **Later, and why this shape is ready for it.** A live simulation (XPBD,
 constraint-system.md §11) is the same cluster with a stepper on presentation time
@@ -921,6 +1012,15 @@ recorded and appends events. So a trial inside a transaction records nothing (§
 and a value that changes and changes back between two recordings leaves no event,
 as today, where steppers poll once a frame.
 
+**Recording is followed by another pass.** An event just recorded can change a value
+at once: a `trace` with no delay gives the new value as its `out` (`step.rs:131`), a
+machine's transition with no duration lands in its new state (`machine.rs:331`). So
+`record(now)` and `stabilise()` alternate until a `record` appends nothing, before
+`Changes` is published or the call returns; effects stay buffered throughout. A chain
+of loggers each fed by the last takes one round per link. More than 8 rounds is a
+problem on the logger that is still recording, and the rounds stop (today a child
+machine is brought up to its parent by a fixed 4 rounds, `lib.rs:1939`).
+
 Recording costs when an event happens, not every frame, so a thousand machines off
 screen cost nothing between their state changes. An `accumulate` with policy `run` does
 cost every frame it moves; a closed form is preferred where one exists (the laser's
@@ -961,8 +1061,8 @@ way to see that time is to move the live clock. Structure per slice (an owner tr
 slice below a clock-dependent Collection) is the full form of "any time is equally
 valid"; it is possible in this design and is left open (decision D10).
 
-An observer names its slice (§8.2). The gesture overlay stays as it is; it is shared by
-the store and holds solver results, so it belongs to the live slice only.
+An observer names its slice (§8.2). The gesture overlay and the solved layer (§9.4)
+are shared by the store, so they belong to the live slice only.
 
 ## 11. Transactions
 
@@ -1022,28 +1122,33 @@ request sent, no `Changes` published.
    `stabilise()`. Owners it disposes are **held**, with their state. Clusters cells
    and Solve cells are part of this pass (§9.4), so the solve happens here, once, in
    dependency order.
-5. **The solver's commit step.** Every cluster the transaction touched is made
-   current whatever is observed. A Clusters cell's problem (a malformed or duplicate
-   constraint), a cycle through a cluster, a solve that did not converge, or an
-   `exact` transaction with an unmet request fails the transaction with the errors
-   `post_apply` gives now. Otherwise each variable whose solved value differs from its
-   constant is written to the document as a `derived_op`, through the journal. The
-   constant now equals the solved layer, so telling the engine changes no value.
-   Until phase 5 this step is `post_apply` as it is, reading through the engine and
-   stabilising after each cluster's writes (`lib.rs:2609`).
-6. **On any failure in 4 or 5:** roll the journal back to the mark, tell the engine
-   the reverse changes, `stabilise()`, re-attach held owners, discard the pending
-   `Changes`. Values, structure and solved poses are then what they were, since `stabilise()` is pure;
-   stamps are newer, which costs a recomputation that finds nothing changed.
-7. **Commit:** close the journal, drop held owners, `record(now)`, adopt each solved
-   pose as its cluster's warm start and clear the drivers, release buffered
-   effects (a query's request, `on.emit`), publish `Changes`, push history.
+5. **The solver's commit step** (§9.4, "At commit"). A Clusters cell's problem (a
+   malformed or duplicate constraint), a cycle through a cluster, any Solve cell in
+   the document that is not converged, or an `exact` transaction with an unmet request
+   fails the transaction with the errors `post_apply` gives now. Otherwise each
+   variable, in any cluster, whose output differs from its constant is written to the
+   document as a `derived_op`, through the journal. The constant now equals the solved
+   layer, so telling the engine changes no value. Until phase 5 this step is
+   `post_apply` as it is, reading through the engine and stabilising after each
+   cluster's writes (`lib.rs:2604`).
+6. **On any failure in 4 or 5:** roll the journal back to the mark, clear the
+   transaction's drivers, tell the engine the reverse changes, put back the output
+   and status of each Solve cell that ran (§9.4), `stabilise()`, re-attach held
+   owners, discard the pending `Changes`. Values, structure and solved poses are then
+   what they were, since `stabilise()` is pure; stamps are newer, which costs a
+   recomputation that finds nothing changed.
+7. **Commit:** close the journal, drop held owners, adopt each solved output as its
+   cluster's pose and clear the drivers, then `record(now)` and `stabilise()` in
+   turn until nothing more is recorded (§10.4), release buffered effects (a query's
+   request, `on.emit`), publish `Changes`, push history.
 
 ### 11.3 Consequences
 
 - `Transaction::expanded` goes away. It is never replayed today; undo re-derives.
   `ops`, `derived_ops` (solver writes) and `inverse` stay.
-- Undo, redo and replay take steps 1 to 4 and 7 without the solver, as now, and undo
+- Undo, redo and replay take steps 1 to 4 and 7, and no Solve cell runs in them, as
+  now: each variable their ops write takes the written constant as its pose and its
+  output (§9.4), so the solved layer cannot show a pose from before the undo. Undo
   still snaps the machines it touches. Ops from a server take the same path.
 - **`apply_session`** (`lib.rs:1216`) is the second way the document changes: session
   ops (selection, the clock, the timeline and Library compositions), outside history.
@@ -1068,7 +1173,9 @@ the contract is small.
 read methods under the same names: `live`, `node`, `parent`, `children`, `depth`,
 `facet`, `facets_of`, `get::<T>`, `leaf`, `relations_from`, `relations_to`,
 `nodes_of_type`. For a derived node it answers from what the owner has materialised
-(§5.4). `Store::document()` remains and holds authored nodes only.
+(§5.4). The authored document stays reachable as `Store::authored()` and holds
+authored nodes only. The method names here are the ones this spec's readers need
+most; the Tree has every read method of `Document` that a caller uses (handoff §4.2).
 
 - **A read never loads** (§8.9). A derived node of an Unloaded owner is "not loaded";
   the caller observes or pins first, in a `&mut` step.
@@ -1078,9 +1185,9 @@ read methods under the same names: `live`, `node`, `parent`, `children`, `depth`
   would silently drop every selected derived node), `solve::clusters`,
   `check_created`, `translate` and handles, `view`, `analysis`. They take a `Tree`
   where they take `&Document` now.
-- Outside the crate, about 260 uses of `document()`. Keeping `document()` means a
-  missed caller still compiles, so phase 1 renames it (`authored()`), which makes every
-  use a decision.
+- `Store::document()` has about 286 uses in the host, 82 in the crate and 733 in its
+  tests. Keeping the name would mean a missed caller still compiles, so phase 1
+  renames it to `authored()`, which makes every use a decision.
 - Enumerations on the Tree visit loaded owners only.
 
 ### 12.2 Changes
@@ -1169,15 +1276,33 @@ fails, stop and report before designing around it (handoff §5).
 | A2 | No validation check reads a resolved value | §11.1 | 2b: the checks compile against a document and templates with no engine in reach | Each check that does is named, and moved after `stabilise()` with the solver's |
 | A3 | Cycle, look-only and signal-loop checks can be made over templates with item references abstracted, and accept exactly what today's checks over expanded copies accept, apart from the listed intended differences | §11.1 | 2b: the differential test's failing transactions | Validate against materialised structure for the owners the ops touch |
 | A4 | A lazily materialised derived node can be handed out as `&T` from `&Store` (write-once slots per loaded owner) without a lock a reader could contend on | §5.4 | 2c | Materialise a loaded owner in full when it loads |
-| A5 | The one pass with structure inside it gives the old engine's results on real templates. The kernel (`src/iron_engine_kernel`) shows the algorithm agrees with recomputation from scratch on a toy language; it has no overrides, exits, `deref` into items, or shared templates | §6, §7 | 2b: the differential test | Report which rule failed; the rules are numbered in the kernel |
-| A6 | Solving a cluster from a converged pose with unchanged inputs returns that pose, so solving only dirty clusters equals solving all | §9.4 | 5: both run on every script | Solve every cluster of a composition whenever any of its inputs changed |
+| A5 | The one pass with structure inside it gives the old engine's results on real templates. The kernel (`src/iron_engine_kernel`) shows the algorithm agrees with recomputation from scratch on a toy language; it has no overrides, exits, `deref` into items, or shared templates. After a cycle the old graph keeps a cell's previous tracked reads (`graph.rs:517`) where the kernel keeps none and looks again when an edge goes; whether the two ever differ in a value is not known | §6, §7 | 2b: the differential test | Report which rule failed; the rules are numbered in the kernel |
+| A6 | With no driver and no finger, solving a cluster from a converged pose with unchanged inputs returns that pose, so a cluster skipped because nothing of it changed is where solving it would have left it. **Known false while a finger is held** (§9.4), which is why phase 5 first puts the new schedule into the old engine | §9.4 | 5, first step: the constraint and gesture suites and the smoke on the old engine with the new schedule | Stop and report what moved and by how much |
 | A7 | A machine's tween, a trace's `out` and a stateful item's exit can each be computed from a log of events and the clocks, matching the old steppers' sampled results within the differences §16.1 lists | §9.3, §10.4 | 3 | That stepper stays a per-frame stepper while necessary, and is Integrating |
 | A8 | An extent cell reading what `geom::local_bounds` reads is cheap enough to keep necessary for every loaded owner | §8.5 | 4: measured on the demo document and at 1,000 meters | Extents only for owners above a size; smaller ones stay Live |
 | A9 | Taffy can lay out a contained box's interior as a separate run that gives the same placements as the single nested run today | §9.2 | 5: `layout` and `table` suites | Containment only at sized `use` boundaries, which are already separate templates |
 | A10 | The interned path registry's growth under churned value keys is small enough to leave unreclaimed for now | §5.4, D5 | 0: measured | Reclaiming becomes part of 2c |
+| A11 | No constraint cluster spans two compositions. constraint-system.md §0 says so and `implied_mates` checks it for mates (`plug.rs:251`), but nothing validates an explicit constraint's operands (`constraint.rs:97`, `op.rs:721`), and today's grouping is one union-find over the document (`solve.rs:130`) | §9.4 | 5: a scan of the demo and standard library, and a validation check added to the old engine first | One Clusters cell for the document, or refusing such constraints as a listed difference; the user chooses |
+| A12 | Nothing that can be seen depends on the numeric order of derived ids. A derived id's number is its slot in a process-wide registry in order of first use (`id.rs:255`), so `BTreeMap` order over derived ids, sibling ties (`document.rs:590`) and anything emitted in that order can differ between two processes holding the same document. The differential harness cannot see this: its two stores share the registry | §2 item 3, §13 | 0: one test that builds the same document in two processes with different ids interned first, and compares saved text and views | Order by path wherever the order can be seen |
+| A13 | The wake cell's reads and the list of things addressed into an owner (§8.3) are everything that could have made a parked owner record an event | §8.3 | 4: §8.8's property test with parking on | That owner kind is not parked; it stays Dormant |
 
-Not reviewed by the council (the handoff's pre-build review covers them): §9.4, §8.10,
-and parking in §8.3.
+**Open before a phase starts.** A third review (2026-11-16) found these parts
+incomplete. The rule now written for each has not been reviewed or tested. Whoever
+starts the phase checks each against the code as it then is and reports what they
+will build before building it (handoff §4.3).
+
+| Phase | Point | The rule as written |
+|---|---|---|
+| 3 | A value that changes because an event was just recorded | `record` and `stabilise` alternate until nothing is recorded, 8 rounds at most (§10.4) |
+| 4 | When an owner is at rest, and everything that wakes a parked one | The lists in §8.3; assumption A13 |
+| 4 | A parked Body, and what a reader of its port does | §8.4 |
+| 4 | A simulation range | Not designed; not built (§8.3) |
+| 4 | A 3D owner's declared extent: its facet, and how the engine learns a mesh's box | §8.10 |
+| 4 | The limits of D9 (owners in total), the wake budget and the height at which heights are recomputed | Named in §7.5, §8.7 and §6.3 without numbers; phase 4 sets them from measurement |
+| 5 | Which pose a solve starts from, when the output is adopted, and what an op on a variable does | §9.4, "The pose is state" |
+| 5 | The solve schedule differs from today's while a finger is held | Put into the old engine first (§9.4, A6) |
+| 5 | Clusters across compositions; constraints inside repeat items | A11; §9.4's Clusters cell reads derived constraints too |
+| 5 | Everything the Clusters cell and a Solve cell depend on | Listed in §9.4; a Solve cell's by tracking |
 
 ## 15. Targets
 
@@ -1198,7 +1323,7 @@ reports the engine's share.
 | Structural edit at 1,000 placed meters (`instance_cost`, `bench-instances.txt`) | 161.7 ms | Under 2 ms |
 | Placing one more meter at 1,000 | 79.9 ms | Under 1 ms |
 | Memory per placed meter beyond the first, **for a meter nothing reads** (off screen, unloaded) | to be measured in phase 0 | Under a tenth of today's. A visible meter is materialised in full, as today |
-| Evaluations per frame for a composition in a hidden tab | all its bindings on any change | 0 |
+| Evaluations per frame for a composition of pure pictures with static or clipped extents, in a hidden tab | all its bindings on any change | 0 |
 | Loading the demo document | to be measured in phase 0 | No slower |
 
 ## 16. Verification
@@ -1212,19 +1337,28 @@ everything-observed mode.
 Through phase 2b the new engine still stores copies in the document (§17), so the
 comparison is exact:
 
-- the set of live node ids, authored and derived; each node's type, parent, order and
+- the saved text of the document, which covers tombstones and counters; the set of
+  live node ids, authored, derived and session; each node's type, parent, order and
   facets; relations;
-- the resolved value and error of every leaf; problems, as (node, kind);
-- what a `ViewQuery` prints, at full fidelity;
+- the resolved value **and** the error of every leaf; problems; signals and who
+  holds them;
+- what a `ViewQuery` prints, at full fidelity with everything expanded;
+- every other piece of store state a public `&self` method answers, and the whole
+  history;
 - **effects, not only final state:** the query requests issued, `on.emit` events,
-  session cells made and dropped, the revisions reported, the selection after undo;
-- **a failed transaction leaves nothing:** the document, counters, values and effects
-  are identical to before it.
+  session cells made and dropped, the revisions reported, the selection after undo,
+  and what each drain would return;
+- every return value of every public `&mut` method;
+- **after a failed call the two stores still agree.** That a failed call leaves a
+  store exactly as it was (atomicity) is a separate check: the old engine fails it in
+  known places, which phase 0 finds and lists, and the new engine must pass it for
+  each kind of call it takes over.
 
-Not compared: ops emitted for derived structure, evaluation counts, heights.
+The handoff's §4.1 has this as a table, field by field. Not compared: evaluation
+counts, heights, timing.
 
 **Intended differences** are listed in one file,
-`src/iron_document/tests/differential/intended.rs`, as data the harness reads: each
+`src/iron_document/src/differential/intended.rs`, as data the harness reads: each
 entry names the difference, where the comparison is relaxed for it and how narrowly,
 and the test of the new behaviour. A difference not in that file fails the harness;
 adding an entry is a stop-and-report unless it is one of these:
@@ -1232,7 +1366,14 @@ adding an entry is a stop-and-report unless it is one of these:
 - the prototype is not evaluated unless observed;
 - a derived id inside an item validates by its template path, whatever keys exist
   (§11.1);
-- a failed transaction leaves no tombstone and no gap in the id counters;
+- from 2b: the text of problem and error messages (nodes and kinds are still
+  compared), and ops emitted for derived structure;
+- a failed `apply_session` leaves no tombstone and no advanced session counter (today
+  it rolls back by inverse ops, `lib.rs:1235`), and a transaction rejected after it
+  expanded leaves `expansion_problems` as they were (`lib.rs:2663`). A failed
+  `apply` already leaves none today, since it works on a clone;
+- from 5: `SolveReport` and `SolverSummary` counts of clusters solved and of
+  iterations;
 - an inner picture's definition follows an override of its entity's `instance.def`
   (today the body does, `expand.rs:487`, and the picture does not, `expand.rs:587`);
 - the old engine's text comparison of NaN inputs in `settle_repeats`, its 4-round
@@ -1293,7 +1434,7 @@ measured and recorded in the roadmap's Status table.
 | **2c. Copies leave the document** | Derived nodes answered by the Tree from owner, template and diffs, materialised on read (§5.4); paint order and the spatial scene from the Tree | The Tree equals 2b's stored copies on every script; memory per instance measured against phase 0 |
 | **3. Time** | Two root clocks, `clock()` and clock providers, the scheduler, `advance` and `Wake`; steppers as scheduled cells; events recorded for traces and machines; memory classes (§10.1–§10.4) | `fiber.txt` and `pulses.txt` pass; an idle document with a trace and an accumulator at rest schedules no wake; a machine's transition matches the old player's, interrupted transitions included |
 | **4. Observation** | Observers, Dormant and Unloaded pictures, what stays necessary (§8.3), bounds kept right (§8.5), owner entries in the spatial index, the wake budget, the idle sweep, reads that never load (§8.9) | §8.8's property test is green; a hidden tab's composition of pure pictures costs 0 evaluations; a pulse from an off-screen laser reaches an on-screen meter on time; something moving into the view from outside it appears |
-| **5. The pipeline as cells** | Layout cells with declared containment and `fits`; the network solve per algebraic island; clips as cells; the constraint solver as Clusters and Solve cells with a solved layer and a commit step (§9.4); the remaining per-transaction scans measured and, where they dominate, indexed (§9) | A repeat whose count reads a contained box's width adds items during a resize drag; solving only dirty clusters agrees with solving all on every script, and a drag in one cluster solves no other; `resolve_clusters_live` has no callers; `layout`, `table`, `ports`, `schematic`, `constraints`, `gestures` and `handles` suites green; the meter targets of §15 |
+| **5. The pipeline as cells** | First, in the old engine: a cluster is solved only when something of it changed (§9.4). Then layout cells with declared containment and `fits`; the network solve per algebraic island; clips as cells; the constraint solver as Clusters and Solve cells with a solved layer and a commit step (§9.4); the remaining per-transaction scans measured and, where they dominate, indexed (§9) | A repeat whose count reads a contained box's width adds items during a resize drag; solving only dirty clusters agrees with solving all on every script, and a drag in one cluster solves no other; `resolve_clusters_live` has no callers; `layout`, `table`, `ports`, `schematic`, `constraints`, `gestures` and `handles` suites green; the meter targets of §15 |
 | **6. Value slices** | §10.5: sources per cell, per-slice values, an observer's slice, "not seekable" errors; timeline.md phase 5's seekable endpoints use it | Two views of one composition at two clock times, both correct where structure does not depend on the clock; a clip end bound to a clock-derived value is accepted and one bound to an accumulator is refused with the reason |
 
 Phase 3 comes before 4 because what may sleep depends on how steppers and events are
@@ -1329,8 +1470,8 @@ blocking does not change it; that is a stop-and-report (handoff §5).
 | D7 | `std:plot` tick labels keyed by value (labels slide and fade) | Yes, as its own change after phase 2b |
 | D8 | Session lets when an owner is unloaded | Kept (unloading is not disposal) |
 | D9 | Limits | 50,000 loaded derived nodes; also a limit on owners in total, loaded or not, since each keeps a summary |
-| D11 | A constraint cluster nothing observes | **Solves whenever an input changes**, as an integrator runs (D1), because its pose depends on the pose before it. A cluster at rest costs nothing. `pause` and `coarse` are for the author to set, on the composition; they are named here and built with the live simulation, not before |
 | D10 | Structure per slice | Not built: phase 6 is value slices, and a time whose structure differs is seen by moving the live clock. The full form is left open until something needs two structures at once (a side-by-side "before and after", say) |
+| D11 | A constraint cluster nothing observes | **Solves whenever an input changes**, as an integrator runs (D1), because its pose depends on the pose before it. A cluster at rest costs nothing. `pause` and `coarse` are for the author to set, on the composition; they are named here and built with the live simulation, not before. At commit the rule is today's: any cluster not converged fails the transaction, and every pose that differs from the document is written (§9.4) |
 
 ## 20. History
 

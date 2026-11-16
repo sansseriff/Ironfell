@@ -111,3 +111,38 @@ returns that pose.
 state, not its cells. §8.1 and §8.3 now park it and load it again on a change to what
 it reads or a timed event; a simulation range is the application's opt-in for state
 that is running far from every observer.
+
+## Council round three (2026-11-16): a cold read as the builder
+
+Both members were asked to read the handoff, the spec and the kernel as the builder
+would, describe their first days on phases 0 and 1, review the parts no one had
+reviewed (§9.4, parking, §8.10, §14) and try to break the kernel. Opus: ready after
+fixes. Sol: not ready. Every claim below was checked against the code before acting.
+
+| Finding | From | Checked | Result |
+|---|---|---|---|
+| Phase 0's exit required "a failed call leaves nothing", which the old engine does not meet: `apply_session` rolls back by inverse ops; a rejected transaction keeps new `expansion_problems` | both | True (`lib.rs:1235`, `:2663`) | Handoff §4.1 task 3: agreement and atomicity are two checks; phase 0 measures the second and lists its failures |
+| The kernel left heights wrong after a cycle | both | True: `check()` failed once the cyclic test called it | Heights are put back; test added |
+| The kernel reported a cycle when two tracked reads changed in one pass and the first met the other's old edge | Sol | True: reproduced as a test | R6 rewritten: the reader waits, and fails only when a round of waiting cells finishes nothing |
+| A cell that failed on a cycle was never told the cycle had ended | Opus | True: reproduced | Failed cells are kept and run again when an edge is removed |
+| (found while fixing) A reader raised above a dependency that looked current, while a cell below it was still queued, finished on a value about to change | neither | A new random test of cells selecting each other found it | R5: a raised reader is queued again if anything below its new height is queued |
+| 58 public `&mut self` methods, not 55; `StoreCore` used and never defined; the differences file under `tests/` cannot be read from `src` | both | True | Handoff §4.1 tasks 2 and 4 |
+| "Compare every return value" contradicted "ops for derived structure are not compared" | both | True | Everything is compared exactly through 2a; relaxations enter by phase as listed entries |
+| The snapshot missed tombstones, a failed leaf's kept value, previews with no slot, signals, earlier history, pending buffers and other store state | both | True | Handoff §4.1 task 3; spec §16.1 |
+| `post_apply` solves every cluster, commits live poses of clusters the transaction did not touch, and fails on any cluster that does not converge; the spec said "every cluster the transaction touched" | Opus | True (`lib.rs:2575`) | §9.4 "At commit", §11.2 step 5: today's rule, without the solves |
+| A6 is false while a finger is held: the least-change term is measured from each solve's start and a strong term has finite weight | Sol | True (`iron_solve/src/lib.rs:243`, `solve.rs:452`) | §9.4: the new schedule goes into the old engine first, so the two can be compared exactly; A6 restated |
+| When a pose is adopted outside a transaction was undefined; a `Set` changes the start pose as well as adding a driver; undo would leave a stale solved layer | both | True (`lib.rs:421`, `solve.rs:354`) | §9.4 "The pose is state"; §11.2 steps 6 and 7; §11.3 |
+| The Clusters cell reads things that are not cells (`plug.mate`, world transforms); a Solve cell's real reads are more than `Cluster::inputs`; `Cluster::id` is not unique; nothing validates that an explicit constraint stays in one composition; constraints can be derived | both | True (`plug.rs:239`, `solve.rs:333`, `:170`, `constraint.rs:97`, `expand.rs:451`) | §9.4 cells; A11; `constraint` counts as state in §8.3 |
+| Parking can miss events: tracked reads, arguments and providers, a query's reply, `set_state`, a publish onto a leaf inside; a query's state was not all kept; "at rest" was not operational | both | Agreed | §8.3: an explicit at-rest list, a wake cell, the list of things addressed into an owner; A13 |
+| §8.3 parks machines while §8.4 said a Body is never unloaded; §8.4 and §8.5 disagreed on unloading pure pictures | Opus | True | §8.4 |
+| Recording after the last `stabilise` leaves a zero-delay trace's `out` and an instant transition stale | Sol | True (`step.rs:131`) | §10.4: record and stabilise alternate until nothing is recorded |
+| Derived-id order depends on what the process interned first | both | True (`id.rs:255`) | A12, with a two-process test in phase 0 |
+| A simulation range cannot be built from its description; the declared 3D box has no schema | both | Agreed | Both marked as not designed, in §8.3, §8.10 and §14's open list |
+| Stale line references; §12.1 said `document()` remains and is renamed; counts differed | both | True | Fixed |
+
+**Not taken as written.** Sol's verdict of "not ready" covers phases 4 and 5; both
+members agree phases 0 and 1 can start once the handoff's fixes are in, which they
+are. The later phases now have rules for each point, but those rules are new and
+unreviewed, so §14 lists them as open and the handoff (§4.3) makes checking them the
+first task of each phase. Not changed: the kernel still never frees a cell and breaks
+ties by cell id; `lib.rs` there now says so.

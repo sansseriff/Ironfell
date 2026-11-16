@@ -13,6 +13,16 @@
 //! observed and not (§8.1), exits and presence (§7.1 step 3), layout and
 //! solve cells (§9), time (§10), transactions (§11), ids and the Tree (§12).
 //! Its expression language is a toy; only the reads matter.
+//!
+//! Where it is simpler than the real engine must be, so do not copy these:
+//! cells and owners are never freed and ids never reused, so there are no
+//! generation checks; cells at one height run in order of cell id, where
+//! the spec orders by leaf (§6.5); an observer is attached to an owner, not
+//! to a node id, so an item made again is not observed again (§8.2);
+//! `eval` evaluates every operand so that static reads do not depend on
+//! values, which `expr.rs` does not; numbers are equal by bits, so 0.0 and
+//! -0.0 differ; and a cycle's waiting cells mark everything above them by
+//! walking their readers, which the real engine should bound.
 
 pub mod engine;
 pub mod model;

@@ -202,9 +202,107 @@ fn tracked_reads_raise_and_cycles_fail() {
     let mut e = Engine::new(cyclic, &[n(0.0)]);
     e.observe(e.root());
     e.stabilise();
+    e.check();
     let values = e.values(false);
     assert!(values[&(vec![], 0)].is_err());
     assert!(values[&(vec![], 1)].is_err());
+}
+
+fn selects(index: usize, candidates: &[usize]) -> Entry {
+    Entry::Cell(Expr::Deref(input(index), Rc::new(candidates.to_vec())))
+}
+
+/// A cycle that ends is noticed by the cell that failed on it, whichever
+/// side ends it (R6): it holds no edge to what it could not read, so it is
+/// the engine's list of failed cells that brings it round again.
+#[test]
+fn a_broken_cycle_is_noticed() {
+    for mover in 0..2 {
+        let t = Rc::new(Template { entries: vec![selects(0, &[1, 2]), selects(1, &[0, 2]), Entry::Cell(Expr::Const(5.0))] });
+        let mut e = Engine::new(t, &[n(0.0), n(0.0)]);
+        e.observe(e.root());
+        e.stabilise();
+        e.check();
+        assert!(e.values(false)[&(vec![], 0)].is_err() && e.values(false)[&(vec![], 1)].is_err());
+        e.set_input(mover, n(1.0));
+        e.stabilise();
+        e.check();
+        assert_eq!(e.values(false)[&(vec![], 0)], Ok(n(5.0)), "moving selector {mover}");
+        assert_eq!(e.values(false)[&(vec![], 1)], Ok(n(5.0)), "moving selector {mover}");
+    }
+}
+
+/// Two tracked reads that change in one pass: the first to run would close
+/// a cycle through an edge the second is about to drop. That is not a cycle
+/// (R6): it waits, and reads the second after it has run.
+#[test]
+fn a_cycle_through_an_edge_about_to_go_is_not_one() {
+    let t = Rc::new(Template { entries: vec![selects(0, &[1, 2]), selects(1, &[0, 3]), Entry::Cell(Expr::Const(20.0)), Entry::Cell(Expr::Const(30.0))] });
+    let mut e = Engine::new(t, &[n(1.0), n(0.0)]);
+    e.observe(e.root());
+    e.stabilise();
+    e.check();
+    assert_eq!(e.values(false)[&(vec![], 1)], Ok(n(20.0)));
+    e.set_input(0, n(0.0));
+    e.set_input(1, n(1.0));
+    e.stabilise();
+    e.check();
+    assert_eq!(e.values(false)[&(vec![], 0)], Ok(n(30.0)));
+    assert_eq!(e.values(false)[&(vec![], 1)], Ok(n(30.0)));
+    // It never showed a failure: nothing that read it ran on one. (A
+    // Collection fed by it would have disposed its items, and their state.)
+    assert_eq!(e.reruns, 0);
+}
+
+/// Cells that each select one of the others, or a constant, by an input:
+/// any change of the selectors gives what following the selections gives,
+/// and a cell fails exactly when its chain of selections never ends.
+#[test]
+fn random_selections_agree_with_following_them() {
+    const CELLS: usize = 6;
+    let mut cycles = 0;
+    for seed in 1..=300u64 {
+        let mut r = Rng(seed.wrapping_mul(0x9E3779B97F4A7C15) | 1);
+        let candidates: Vec<Vec<usize>> = (0..CELLS).map(|i| (0..CELLS + 2).filter(|j| *j != i && !r.chance(4)).collect()).collect();
+        let mut entries: Vec<Entry> = (0..CELLS).map(|i| selects(i, &candidates[i])).collect();
+        entries.push(Entry::Cell(Expr::Const(100.0)));
+        entries.push(Entry::Cell(Expr::Const(200.0)));
+        let mut inputs: Vec<Value> = (0..CELLS).map(|_| n(r.below(8) as f64)).collect();
+        let mut e = Engine::new(Rc::new(Template { entries }), &inputs);
+        e.observe(e.root());
+        for step in 0..60 {
+            for _ in 0..1 + r.below(3) {
+                let i = r.below(CELLS);
+                inputs[i] = n(r.below(8) as f64);
+                e.set_input(i, inputs[i].clone());
+            }
+            e.stabilise();
+            e.check();
+            let values = e.values(false);
+            for start in 0..CELLS {
+                let (mut at, mut steps) = (start, 0);
+                let want = loop {
+                    if at >= CELLS {
+                        break Some(if at == CELLS { 100.0 } else { 200.0 });
+                    }
+                    let Value::Num(i) = inputs[at] else { unreachable!() };
+                    if candidates[at].is_empty() || steps > CELLS {
+                        break None;
+                    }
+                    at = candidates[at][i as usize % candidates[at].len()];
+                    steps += 1;
+                };
+                match want {
+                    Some(v) => assert_eq!(values[&(vec![], start)], Ok(n(v)), "seed {seed}, step {step}, cell {start}"),
+                    None => {
+                        cycles += 1;
+                        assert!(values[&(vec![], start)].is_err(), "seed {seed}, step {step}, cell {start}");
+                    }
+                }
+            }
+        }
+    }
+    assert!(cycles > 1_000, "cycles {cycles}");
 }
 
 // ---- random programs ----

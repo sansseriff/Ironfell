@@ -573,8 +573,9 @@ pictured in two compositions computes once; each picture wakes with its own view
   An owner whose geometry moves keeps that geometry current while Dormant, which for
   an unclipped plot of live data is most of its work. An owner with a declared size
   that **clips** has that size as its extent and nothing inside is needed: standard
-  components should clip. Only an owner whose extent is static or clipped may be
-  Unloaded. Phase 4 measures both cases.
+  components should clip. Only an owner whose extent is static, clipped or declared
+  (§8.10) may be Unloaded. Keeping an extent current needs only the cells the extent
+  reads: a part that moves as a whole needs its placement, not its insides. Phase 4 measures both cases.
 
 ### 8.6 Levels
 
@@ -633,7 +634,7 @@ must become, so that nothing built here has to be undone for ports-3d.md:
 | Written here as 2D | For a 3D composition |
 |---|---|
 | `Interest::Region { rect, zoom }` | A second variant, `Volume { composition, frustum, pixels_per_unit }`. Built in phase 4 with Region, since 3D compositions exist today |
-| `Summary::bound: Rect`, the extent cell reading `geom::local_bounds` | `Bound` is an enum of a rectangle and a box; the extent cell reads the mesh's box through `geom::world_affine3`. Clipping to a declared size has no 3D form, so a 3D owner's extent is static or it stays current |
+| `Summary::bound: Rect`, the extent cell reading `geom::local_bounds` | `Bound` is an enum of a rectangle and a box; the extent cell reads the mesh's box through `geom::world_affine3`. A 3D owner cannot clip, but it can **declare** its extent: a box its author states it stays inside, as game engines' fixed bounds do. A declared box is the extent, nothing inside is needed, and the owner may sleep or be unloaded. Content that leaves the box is not found by a view until the box is in view (a problem in debug builds when the computed extent is seen to exceed it). Without a declaration the extent is static or stays current, as in 2D |
 | The spatial index (`iron_spatial`, an R-tree of rectangles) | Owner entries need a 3D index for 3D compositions. Today the 3D side has none and picks against mesh boxes; phase 4 may keep a walk over owner bounds until counts need more |
 | A 2D composition shown on a plane in 3D (`planes.rs`) | The 3D view's frustum, cut by the plane, gives that composition a Region with the zoom its texture is drawn at. One rule covers a panel, an embed and a draped plane |
 | Levels by size on screen (§8.6) | The same measure: projected size. Swapping meshes by distance is the host's (`VisibilityRange`), below this engine |

@@ -1319,12 +1319,12 @@ reports the engine's share.
 | Pan or zoom step that changes the tick count, native, 1 and 10 plots | 1.3 / 7.3 ms | Within 2× the values-only step at both sizes, so about 0.3 ms |
 | Values-only pan step, native | 0.13 ms | No slower |
 | `action` p95 in `plot-perf.txt` (wasm-bench): slow pan, wheel zoom | 6.7, 6.4 ms | Under 1.5 ms |
-| A drag in one cluster with 100 other clusters at rest in the document | to be measured in phase 0 | The cost of the one cluster; no other cluster solved or regrouped |
-| Structural edit at 1,000 placed meters (`instance_cost`, `bench-instances.txt`) | 161.7 ms | Under 2 ms |
+| A drag in one cluster with 100 other clusters at rest in the document | 1.90 ms a drag step with 100 pendulums, 0.16 ms with 1; an unrelated constant edit 5.77 ms with 100, 0.23 ms with 1 (`solve_cost.rs`, 2026-11-16) | The cost of the one cluster; no other cluster solved or regrouped |
+| Structural edit at 1,000 placed meters (`instance_cost`, `bench-instances.txt`) | 161.7 ms (instance-cache.md). Re-measured 2026-11-16: 129.0 ms, but only about 740 meters are expanded: the rest are past `expand::NODE_BUDGET` (50,000 derived nodes) | Under 2 ms |
 | Placing one more meter at 1,000 | 79.9 ms | Under 1 ms |
-| Memory per placed meter beyond the first, **for a meter nothing reads** (off screen, unloaded) | to be measured in phase 0 | Under a tenth of today's. A visible meter is materialised in full, as today |
+| Memory per placed meter beyond the first, **for a meter nothing reads** (off screen, unloaded) | 92.4 KiB, 69 nodes (`instance_cost.rs` `memory_per_meter`, 100 to 700 meters, history cleared, 2026-11-16) | Under a tenth of today's. A visible meter is materialised in full, as today |
 | Evaluations per frame for a composition of pure pictures with static or clipped extents, in a hidden tab | all its bindings on any change | 0 |
-| Loading the demo document | to be measured in phase 0 | No slower |
+| Loading the demo document | 65.8 ms, the demo scene and showcase, 3,712 nodes, 359 KB (`demo.rs` `load_demo_time`, native release, 2026-11-16) | No slower |
 
 ## 16. Verification
 

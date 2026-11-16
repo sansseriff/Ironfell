@@ -1733,3 +1733,26 @@ pub fn template_snapshot(kind: &str) -> Result<String, String> {
     store.clear_history();
     Ok(store.save())
 }
+
+#[cfg(test)]
+mod tests {
+    /// Baseline (reactive-engine handoff §4.1, task 1): loading the demo
+    /// document, the demo scene and the showcase as a first visit gets.
+    /// Ignored; run with
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin load_demo -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn load_demo_time() {
+        let text = super::template_snapshot("demo").unwrap();
+        let mut times = Vec::new();
+        let mut nodes = 0;
+        for _ in 0..9 {
+            let t = std::time::Instant::now();
+            let store = iron_document::Store::load(&text).unwrap();
+            times.push(t.elapsed().as_secs_f64() * 1e3);
+            nodes = store.document().live_nodes().count();
+        }
+        times.sort_by(f64::total_cmp);
+        println!("load the demo document: p50 {:.2} ms, min {:.2} ms ({} bytes, {nodes} live nodes)", times[4], times[0], text.len());
+    }
+}

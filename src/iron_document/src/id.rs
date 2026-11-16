@@ -73,6 +73,12 @@ mod paths {
         slot
     }
 
+    /// How many paths are interned, and their steps in total.
+    pub fn size() -> (usize, usize) {
+        let r = registry().read().expect("path registry");
+        (r.paths.len(), r.paths.iter().map(Vec::len).sum())
+    }
+
     /// The path a slot holds.
     pub fn path(slot: u64) -> Option<Vec<u64>> {
         registry().read().expect("path registry").paths.get(slot as usize).cloned()
@@ -101,6 +107,17 @@ fn expanded_raw(path: &[u64]) -> u64 {
 /// paths are: step `ITEM_BASE + slot`. No authored id reaches this range.
 const ITEM_BASE: u64 = 1 << 61;
 const ITEM_END: u64 = ITEM_BASE + (1 << 32);
+
+/// The interned registries' sizes: (paths, their steps in total, keys,
+/// their bytes in total). For the growth probe (`tests/id_growth.rs`); the
+/// registries live for the process and are never freed (reactive-engine.md
+/// D5).
+#[doc(hidden)]
+pub fn registry_sizes() -> (usize, usize, usize, usize) {
+    let (p, steps) = paths::size();
+    let (k, bytes) = keys::size();
+    (p, steps, k, bytes)
+}
 
 mod keys {
     use std::collections::HashMap;
@@ -132,6 +149,12 @@ mod keys {
         r.keys.push(key.to_owned());
         r.slots.insert(key.to_owned(), slot);
         Some(slot)
+    }
+
+    /// How many keys are interned, and their bytes in total.
+    pub fn size() -> (usize, usize) {
+        let r = registry().read().expect("key registry");
+        (r.keys.len(), r.keys.iter().map(String::len).sum())
     }
 
     pub fn text(slot: u64) -> Option<String> {

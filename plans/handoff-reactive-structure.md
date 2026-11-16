@@ -89,6 +89,31 @@ The same cost at scale, from instance-cache.md: at 1,000 placed meters (69,072 l
 nodes) **any structural edit costs 161.7 ms** and each placement 79.9 ms, because every
 structural transaction re-expands every instance.
 
+### Phase 0 baselines (2026-11-16, native release, M-series)
+
+| Measure | Result | Probe |
+|---|---|---|
+| Memory per placed meter beyond the first | **92.4 KiB**, 69 nodes, history cleared (100 to 700 meters) | `instance_cost.rs` `memory_per_meter` |
+| A constant edit at 1,000 meters | **12.5 ms**, of which the document clone 6.1 ms and dropping the old document 4.4 ms (84 %); `after_transaction` 1.3 ms (`rebuild_clusters` 0.81, `solve_network` 0.34, layout 0.04); `post_apply` 0.62 ms, all `solve::clusters`; `affected_by`, `attachment::validate`, `invalidate`, `resample`, `settle_repeats`, palette, contexts, selection and state each under 0.01 ms | temporary timers, removed |
+| Solver, 1 / 10 / 100 pendulums at rest | drag step **0.16 / 0.30 / 1.90 ms**; a transaction setting an unrelated constant **0.23 / 0.66 / 5.77 ms** | `solve_cost.rs` |
+| Interned id growth | a value-keyed repeat moved through 10,000 positions: **+40,662 paths, +20,331 keys, about 5.2 MiB** never freed (about 530 bytes per item made) | `id_growth.rs` |
+| Loading the demo document | **65.8 ms** (scene and showcase, 3,712 nodes, 359 KB) | `demo.rs` `load_demo_time` (app crate) |
+
+**Finding: the 1,000-meter numbers are truncated.** At 1,000 meters the document has
+52,072 live nodes, 50,506 of them derived, not the 69,072 instance-cache.md recorded:
+expansion stops at `expand::NODE_BUDGET` (50,000 derived nodes), so only about 740
+meters are expanded and the rest are left as a problem. `instance_cost` now reports a
+structural edit at 129.0 ms and a placement at 80.6 ms over that truncated document.
+Memory is therefore measured from 100 to 700 meters. The §15 meter targets should be
+read against an un-truncated document (raise the budget for the probe, or compare at
+700).
+
+**A10 (registry growth):** about 530 bytes per value-keyed item made, kept for the
+process. A plot whose ticks are keyed by value (D7) and pans so that one tick enters
+per frame would grow it by about 30 KiB a second, 110 MiB an hour of continuous panning.
+Small per gesture; not small for a page left animating. Reported to the user; D5's
+decision stands until they choose.
+
 ### Already done (2026-11-14, `639f07b`)
 
 - `perf::Phase::Action` times `Store::pointer_action` (the store's share of a drag or

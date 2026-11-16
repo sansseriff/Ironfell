@@ -1,18 +1,16 @@
 # The reactive engine: owners, demand, templates and time
 
-**Status:** Proposed 2026-11-15; **revised twice the same day after two council rounds**
-(Claude Opus 5.5 and GPT-6.1 Sol; §20 records each finding and what changed). After
-round two one member asks for rework of §11 and §17 only, the other more widely; both
-are revised here and have not been reviewed a third time. Added after the council and
-reviewed by neither member: the constraint solver as cells (§9.4) and what is specific
-to two dimensions (§8.10). **Nothing here is built; it waits on the user's approval.** Work order and
-the next task: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
+**Status:** Approved for building 2026-11-15; the decisions in §19 are settled.
+**Nothing is built** except a reference model of the core pass
+(`src/iron_engine_kernel`, §6). Work order, the current task and the rules for whoever
+builds it: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
+What is assumed and not yet verified: §14. How the design was reached:
+[`reactive-engine-review.md`](reactive-engine-review.md).
 
 **Replaces** the reactive graph (`graph.rs`), expansion (`expand.rs`) and the settling
 and pipeline half of the store (`lib.rs`) with a new engine, written beside the old one
 and swapped in when a differential test says the two agree (§16). It supersedes
-[`reactivity.md`](reactivity.md) §3.3's "settle in rounds" and the A/B/C options of the
-first version of the handoff. Everything else in reactivity.md (keys, state, actions,
+[`reactivity.md`](reactivity.md) §3.3's "settle in rounds". Everything else in reactivity.md (keys, state, actions,
 tracked reads, context, queries, presence) is kept as behaviour and re-implemented.
 
 **Read first:** [`reactivity.md`](reactivity.md) §3 and §13;
@@ -84,10 +82,9 @@ tracked reads, context, queries, presence) is kept as behaviour and re-implement
 8. No backwards compatibility (AGENTS.md). No file-format change is needed: derived
    nodes were never saved.
 
-**Changed from the first handoff's "fixed" constraints**, with the user's agreement
-(2026-11-15): derived nodes are **addressable, and stored only where they differ**
-(was: real document nodes); a full rebuild survives only as loading with everything
-observed (was: a fallback path).
+**Two things that do not stay:** derived nodes are no longer real document nodes;
+they are **addressable, and stored only where they differ** (§5.4). And there is no
+full rebuild as a fallback path: loading is the same pass with everything observed.
 
 ## 3. Vocabulary
 
@@ -326,6 +323,12 @@ So a change costs the necessary cells it reaches, and looking at something costs
 cone once.
 
 ### 6.2 One pass
+
+`src/iron_engine_kernel` is this section and §6.1, §6.3 and §7.1 as running code: about
+700 lines, its rules numbered R1 to R8 in `engine.rs`, tested against recomputation
+from scratch on random programs with everything observed and with a changing observed
+subset. Read it before writing `eval.rs`. It is a model of the algorithm, not a start
+on the engine: its values and expressions are toys (§14, A5).
 
 ```
 stabilise():
@@ -963,9 +966,9 @@ the store and holds solver results, so it belongs to the live slice only.
 
 ## 11. Transactions
 
-`Store::run` no longer clones the document. Two council rounds found the first two
-versions of this section wrong; what follows is the third. It rests on three things,
-each checked against the code.
+`Store::run` no longer clones the document. This rests on three things. The facts
+about today's code in each were checked; what is assumed beyond them is A1 to A3
+(§14).
 
 ### 11.1 What it rests on
 
@@ -1153,30 +1156,33 @@ The platform's rooms each hold a whole `Store` (iron-platform README). A room ov
 partly loaded scope, summaries as nodes of a hash tree in storage, and fetching by
 interest are that repository's work.
 
-## 14. Answers to the first handoff's questions
+## 14. Assumptions not yet verified
 
-| # | Question | Answer |
-|---|---|---|
-| 1 | Expanding one scope exactly as a full expansion would | Expansion is one function per owner over a compiled template; expanding the document is that function from the roots (§5.4, §7) |
-| 2 | Problems per scope | Held per owner (§7.5) |
-| 3 | The template's own bindings | The prototype, evaluated only when observed (§5.3) |
-| 4 | Index or value keys for plot ticks | Decision D7 |
-| 5 | Edges across a scope boundary | Inward readers indexed per owner; they pin it (§7.4) |
-| 6 | Heights | Local adjustment on insert; one heap (§6.3) |
-| 7 | Context reads | Resolved at cell creation; an index name → readers (§7.2) |
-| 8 | Derived signals | Per relation (§7.2) |
-| 9 | Removing a binding | Per cell on disposal (§7.3) |
-| 10 | When to fall back to a full rebuild | Never; loading is the same path over everything |
-| 11 | Transactions on a working copy | In place, with rollback (§11) |
-| 12 | Presence | A scheduled cell on the Item; disposal in the pass where it reaches 0 (§10.3) |
-| 13 | Session lets | Dropped on disposal, kept on unload (§7.3) |
-| 14 | Render analysis and sharing | Per template (§12.3); `Changes` names what moved (§12.2) |
-| 15, 16 | Structure inside the graph | Yes (§6.2). Derived structure is never a transaction's op. In phase 2b owners still write copies into the document, reported through `Changes`; from 2c nothing is written |
+Everything else in this spec that states a fact about today's code was checked against
+it. These are the claims the design rests on that were **not** checked by running
+anything. Each names the phase that settles it and what to do if it is false. If one
+fails, stop and report before designing around it (handoff §5).
+
+| # | Assumption | Where | Settled in | If false |
+|---|---|---|---|---|
+| A1 | Every change to a `Document` goes through its mutators (`insert_node`, `restore_node`, `tombstone`, `set_parent`, `set_order`, `insert_facet`, `remove_facet`, `facet_mut`, `insert_relation`, `remove_relation`, the id counters, `set_version`), so a journal written there restores it bit for bit, indexes included. `facet_mut` hands out `&mut Facet` and must record the facet first | §11.1 | 2a: a random failing transaction leaves the document identical, compared field by field | The copy-on-write document of §11.3 |
+| A2 | No validation check reads a resolved value | §11.1 | 2b: the checks compile against a document and templates with no engine in reach | Each check that does is named, and moved after `stabilise()` with the solver's |
+| A3 | Cycle, look-only and signal-loop checks can be made over templates with item references abstracted, and accept exactly what today's checks over expanded copies accept, apart from the listed intended differences | §11.1 | 2b: the differential test's failing transactions | Validate against materialised structure for the owners the ops touch |
+| A4 | A lazily materialised derived node can be handed out as `&T` from `&Store` (write-once slots per loaded owner) without a lock a reader could contend on | §5.4 | 2c | Materialise a loaded owner in full when it loads |
+| A5 | The one pass with structure inside it gives the old engine's results on real templates. The kernel (`src/iron_engine_kernel`) shows the algorithm agrees with recomputation from scratch on a toy language; it has no overrides, exits, `deref` into items, or shared templates | §6, §7 | 2b: the differential test | Report which rule failed; the rules are numbered in the kernel |
+| A6 | Solving a cluster from a converged pose with unchanged inputs returns that pose, so solving only dirty clusters equals solving all | §9.4 | 5: both run on every script | Solve every cluster of a composition whenever any of its inputs changed |
+| A7 | A machine's tween, a trace's `out` and a stateful item's exit can each be computed from a log of events and the clocks, matching the old steppers' sampled results within the differences §16.1 lists | §9.3, §10.4 | 3 | That stepper stays a per-frame stepper while necessary, and is Integrating |
+| A8 | An extent cell reading what `geom::local_bounds` reads is cheap enough to keep necessary for every loaded owner | §8.5 | 4: measured on the demo document and at 1,000 meters | Extents only for owners above a size; smaller ones stay Live |
+| A9 | Taffy can lay out a contained box's interior as a separate run that gives the same placements as the single nested run today | §9.2 | 5: `layout` and `table` suites | Containment only at sized `use` boundaries, which are already separate templates |
+| A10 | The interned path registry's growth under churned value keys is small enough to leave unreclaimed for now | §5.4, D5 | 0: measured | Reclaiming becomes part of 2c |
+
+Not reviewed by the council (the handoff's pre-build review covers them): §9.4, §8.10,
+and parking in §8.3.
 
 ## 15. Targets
 
 Hypotheses, not measurements; each is measured before and after with the probes in the
-handoff's §4. The meter rows cannot be met by the engine alone: a **constant** edit at
+handoff's §6. The meter rows cannot be met by the engine alone: a **constant** edit at
 1,000 meters already costs 14.1 ms with no expansion (instance-cache.md), which is the
 document clone plus whole-document passes that outlive phase 2 (`rebuild_clusters`,
 `attachment::validate`, `layout::compute`, `port::network`, the palette, contexts).
@@ -1217,8 +1223,11 @@ comparison is exact:
 
 Not compared: ops emitted for derived structure, evaluation counts, heights.
 
-**Intended differences** are listed in one reviewed file, each with a test of the new
-behaviour:
+**Intended differences** are listed in one file,
+`src/iron_document/tests/differential/intended.rs`, as data the harness reads: each
+entry names the difference, where the comparison is relaxed for it and how narrowly,
+and the test of the new behaviour. A difference not in that file fails the harness;
+adding an entry is a stop-and-report unless it is one of these:
 
 - the prototype is not evaluated unless observed;
 - a derived id inside an item validates by its template path, whatever keys exist
@@ -1273,12 +1282,11 @@ throughout. A stepper with policy `pause` is excluded by construction.
 ## 17. Phases
 
 Sequence and the current task are in the handoff. Each phase ends committed, pushed,
-measured and recorded in the roadmap's Status table. The council asked for phase 2 to
-be cut and for time to come before observation; both are done here.
+measured and recorded in the roadmap's Status table.
 
 | Phase | Builds | Exit |
 |---|---|---|
-| **0. Baselines and the harness** | Memory and load-time baselines; a profile of the constant edit at 1,000 meters (§15); solver time per gesture step and per transaction with many clusters at rest; growth of interned id paths. The differential harness and the host reference (§16.1), run old against old. The script generator | Both harnesses green on old-vs-old across the existing suites' scripts and 10,000 random ones |
+| **0. Baselines and the harness** | Memory and load-time baselines; a profile of the constant edit at 1,000 meters (§15); solver time per gesture step and per transaction with many clusters at rest; growth of interned id paths. The differential harness and the host reference (§16.1), run old against old: a `differential` feature makes `Store` a facade over two stores, so every existing test is a differential script (handoff §4.1). The script generator | Both harnesses green on old-vs-old across the existing suites' scripts and 10,000 random ones |
 | **1. The read contract, on the old engine** | The `Tree` and `take_changes()` (§12) over today's document and graph. Every caller that can meet a derived id uses them, **inside the crate and outside**; `document()` is renamed | No behaviour change: smoke output identical; `take_derived_ops`, `drain_changes`, `take_touched` have no callers |
 | **2a. Transactions in place, on the old engine** | The document journal (§11.1). `run` applies in place; `expand::expand` still runs before the checks, its writes journaled and `expansion_problems` deferred to commit; a failure rolls the journal back and, after `post_apply`, rebuilds the graph as now. `attachment::validate` from the journal. Validation is otherwise unchanged | No document clone in `run`; a random failing transaction leaves the document bit-identical, tombstones and counters included; the constant edit at 1,000 meters measured again |
 | **2b. The new graph, copies still stored** | Cells, heights, necessity (everything necessary), owners, compiled templates, and §11's steps in full, with validation from templates. Cells evaluate from templates. Owners **write their copies into the document**: op-driven ones in step 2, before the checks; value-driven ones in step 4. Those writes go through the journal, are not transaction ops, bump no version, and stay out of history and sync; they reach the host only as `Changes`. Replaces `graph.rs`, `expand::expand` and `settle_repeats`. The pipeline's producers run in today's order and write Input cells; the solver stays `post_apply` and `resolve_clusters_live`, reading through the engine | The differential test is exact and green; **the plot targets of §15 are met**; the roadmap row "Plot pan and zoom performance" is closed |
@@ -1305,12 +1313,12 @@ after 4.
 | Phase 2 is large | Cut into 2a, 2b and 2c (§17), each useful alone; 2b keeps today's representation so its comparison with the old engine is exact |
 | A stale value is written into the document | Reads that feed writes make their inputs current first (§8.9); a stale read is an error in debug builds |
 
-## 19. Decisions for the user
+## 19. Decisions
 
-Each has a default the spec assumes until told otherwise. D1, D2, D6 and D9 changed
-after the council; D10 is new; D11 came after the council, with §9.4.
+Settled by the user on 2026-11-15 as written here. A builder who finds one of them
+blocking does not change it; that is a stop-and-report (handoff §5).
 
-| # | Decision | Default |
+| # | Decision | Settled as |
 |---|---|---|
 | D1 | What unobserved state does | **State keeps its history wherever it sits; pure pictures do not** (§8.3, §10.4). An owner holding a session `let`, a trace, an accumulator, a machine or a query has an exact lifecycle and its events recorded. It may sleep, and when at rest it is parked: unloaded with its state kept, and loaded again when an input it reads changes or a timed event is due. Only state whose inputs keep moving stays loaded, and the application may set a simulation range beyond which that is paused. An integrator runs unless its author sets `pause` or `coarse`. A pure owner's enter, exit and glides are simply absent on waking. The cost is that a component with a machine keeps the structure above it current |
 | D2 | A Dormant owner's bound | **Kept right**, by an extent cell that is always current while the owner is loaded (§8.5). Free when static or clipped; an unclipped owner with moving geometry keeps that geometry running. Standard components should clip |
@@ -1324,78 +1332,10 @@ after the council; D10 is new; D11 came after the council, with §9.4.
 | D11 | A constraint cluster nothing observes | **Solves whenever an input changes**, as an integrator runs (D1), because its pose depends on the pose before it. A cluster at rest costs nothing. `pause` and `coarse` are for the author to set, on the composition; they are named here and built with the live simulation, not before |
 | D10 | Structure per slice | Not built: phase 6 is value slices, and a time whose structure differs is seen by moving the live clock. The full form is left open until something needs two structures at once (a side-by-side "before and after", say) |
 
-## 20. Council review (2026-11-15)
+## 20. History
 
-Claude Opus 5.5 and GPT-6.1 Sol, both at high effort, each returned "rework". Every
-claim about the code below was checked before it changed the spec.
-
-| Finding | From | Checked | Result |
-|---|---|---|---|
-| Rollback by inverses leaves changes behind: ops mutate before a check that can fail; counters advance; disposal drops session, presence, trace and machine state; effects escape | both | True (`op.rs:524`, `:615`, `:690`; `lib.rs:1476`) | §11 rewritten: atomic ops, saved counters, pure validation before the engine is told, disposal held until commit. Sol's full transaction journal is not adopted, because validation no longer touches engine state |
-| Overrides replace slots (a binding included) and can add facets; they can change a nested instance's definition; constant references are relocated; the `sized` flag and `port_spec` → `port` | both | True (`expand.rs:647`, `:487`, `:706`) | §5.2, §5.4, §5.5 |
-| The crate's own readers walk derived nodes through `&Document`; `Store::selection` would drop derived nodes | Opus | True (`lib.rs:2251`) | §12.1; phase 1 covers the crate |
-| §8.8 is false for history: a dormant conditional that toggles, traces sampled per frame, machines started by polling, presence integrating `dt`, glides, queries | both | True (`machine.rs:282`, `step.rs:134`, `lib.rs:1436`) | §8.3, §8.8, §10.4, D1 |
-| A last-known bound can hide content that moved into view | Sol | Judgment; agreed | §8.5, D2 |
-| Reading a cell that is not current can write stale values into the document; reads through `&Store` cannot load | Opus | True (`post_apply`, `translate`, `resolve_clusters_live`) | §8.9 |
-| An Unloaded picture drawn as a reference shows the template's values, wrong with arguments | Opus | True (`render.rs:573` draws the template's own nodes) | §8.5 |
-| Value slices cannot hold structure that depends on time; no clock edge does not mean seekable | both | Judgment; agreed | §10.5, D10 |
-| Two clocks are merged; formulas cannot read time today; undo snaps machines | Opus | True (`lib.rs:1940`, `:2481`; no time function in `expr.rs`) | §10.1, §9.3 |
-| The scheduler misses clip starts, hold keys, jumps, `ages`, layout motion; machines are not pure | Sol | True (`time.rs:204`) | §10.3, §9.1, §9.3 |
-| "Sized by its parent" is not containment; one layout cell cannot both size the box and place its contents | both | True of today's single Taffy run (`layout.rs:318`) | §9.2 |
-| Network islands follow equations, not connections; the solve warm-starts | Sol | True (`port.rs:274`, `lib.rs:2146`) | §9.1, §8.8 |
-| `Changes` is too coarse; `apply_session` is a second path | both | True (`geom.rs:399`, `mod.rs:520`, `lib.rs:1216`) | §12.2, §11.3 |
-| The meter targets cannot be met in phase 2 | Opus | True: a constant edit is 14.1 ms at 1,000 meters | §15, phase 5 |
-| "Never revisits a height"; references to items that do not exist yet; Collections reading each other | both | Agreed | §6.2, §6.3, §7.4 |
-| The harness misses effects, failed transactions, the host, and intended differences | both | Agreed | §16.1 |
-| Phase 2 is too large; lifecycle before dormancy | both | Agreed | §17 |
-| Patch the old graph first (the first handoff's option A) | both | Not adopted as such: 2b writes the new cell graph directly but keeps today's stored copies, which gives the same early plot fix and an exact comparison without code that is thrown away |
-| A copy-on-write document instead of rollback | Opus | Kept as the fallback (§11.3) |
-| Materialise derived records per loaded owner so reads keep returning whole facets | Opus | Adopted for the Tree (§5.4); the engine itself still evaluates from the shared template |
-
-### Round two
-
-Both members reviewed the revision. Opus: rework of §11 and §17 only, the rest
-approvable with changes. Sol: rework. Sol confirmed eleven round-one resolutions as
-sound and Opus eight.
-
-| Finding | From | Checked | Result |
-|---|---|---|---|
-| A failed `post_apply` cannot be undone by inverses and a second stabilise: the first stabilise records events (a machine's transition, a trace's pulse), the second records their reverse; solver writes were missing from the steps | both | True (`lib.rs:2556`–`2615`) | §10.4 and §11: `stabilise()` is pure, recording and effects happen at commit, solver writes are a step. This is a different answer from the journal of engine state both proposed: with recording outside `stabilise()`, there is no engine history to journal |
-| Validation is not a function of the document and templates: item liveness comes from values, and `post_apply` reads values | both | Partly. `post_apply` was already after the engine in the steps. Item liveness is true: today's checks use the pre-transaction items (`lib.rs:2661`) | §11.1: an id inside an item validates by template path; cycle and look-only checks walk templates |
-| Op inverses do not restore the document: tombstones, counters | Opus | True (`document.rs:502`, `serial.rs:45`) | §11.1: a document journal; atomic ops are no longer required |
-| 2a promises template validation before templates exist; 2b would validate before copies are written, breaking create-and-connect in one transaction | Opus | True (`op.rs:720`) | §17: 2a keeps `expand` before the checks; in 2b op-driven copies are written before validation |
-| Pictures hold model state by design; §8.1, §8.3 and §8.4 contradicted each other | both | True (reactivity.md §5.1; `expand.rs:330`) | §8.3: stateful is a property of the template, by node kind; stateful owners are never unloaded |
-| Presence decides disposal, and so state, not only appearance | Sol | True (`lib.rs:1436`, `:1476`) | §8.3, §10.4: a stateful item's exit is logged and its disposal scheduled |
-| Authored content had no observation rule | Opus | Agreed | §5.3 (Composition owners), §8.2 |
-| `analysis.rs` cannot identify what decides a bound | both | True (`analysis.rs:57`) | §8.5: an extent cell, and clipping as the way to make it cheap |
-| §9.2 as written refused `std:plot`; one-axis containment needs a third step; `iron_layout` lacks what CSS has; pins and table tracks were missing | both | True (`plot.xml:89`; `iron_layout/src/lib.rs:68`; `layout.rs:443`) | §9.1, §9.2: a sized `use` is contained; both axes in phase 5, one axis left for later; CSS reach stated as layout-engine work |
-| `clock()` resolved like `@name` cannot be read by bodies, and a body under two clocks would have two values | Opus | Agreed | §10.1: `now()` and `clock()`; a body resolves time along the model's tree |
-| Sources cannot be computed statically; `machine.at` logs more than a state change; the laser example read the playhead | both | True (`machine.rs:309`, `graph.rs:511`) | §10.4, §10.5 |
-| `Changes` lacked slot changes and marks | Sol | True (`mod.rs:646`, `lib.rs:1834`) | §12.2 |
-| The template key does not key one owner's records; `Ref` lacked a body variant and item depth; the materialised cache went stale on an override | both | True (`expand.rs:526`–`607`, `:349`) | §5.4 |
-| Lazy `&T` through `&Store` needs a concrete representation; visible owners materialise in full; the debug stale-read error would fire on every dormant draw | both | Agreed | §5.4, §8.9, §15 |
-| The host reference needs a headless Bevy world | both | True (`materialize.rs:352`) | §16.1, phase 0 |
-
-**Not resolved by this revision, stated as limits:** one-axis containment (§9.2);
-structure per slice (D10); an unclipped owner with moving geometry saves little by
-sleeping (§8.5); ops on content that is not loaded (§13).
-
-
-### After the council: constraints and 3D
-
-Added at the user's request and reviewed by neither member. §9.4 brings the constraint
-solver into the engine as cells, where both earlier versions left it as it is; §11.2's
-steps 4, 5 and 7 and phase 5 change with it, and D11 is new. §8.10 lists what the spec
-wrote in 2D terms. Checked against the code before writing: clusters are regrouped for
-the whole document after each transaction (`solve.rs:130`, `lib.rs:2341`);
-`resolve_clusters_live` has eleven call sites and solves every cluster (`lib.rs:415`);
-`graph.rs` has no cluster node, though constraint-system.md §6 planned one;
-implied mates require both anchors in one composition (`plug.rs:251`). Not checked,
-and a phase 5 exit instead: that solving from a converged pose with unchanged inputs
-returns that pose.
-
-**D1 changed after the council (2026-11-15, at the user's request).** Round two's
-"stateful owners are never unloaded" kept too much: an owner at rest needs only its
-state, not its cells. §8.1 and §8.3 now park it and load it again on a change to what
-it reads or a timed event; a simulation range is the application's opt-in for state
-that is running far from every observer.
+How this design was reached is in
+[`reactive-engine-review.md`](reactive-engine-review.md): the two council rounds with
+every finding and what changed, the first handoff's open questions and their answers,
+and the changes made after the council. Nothing in it is needed to build from this
+spec.

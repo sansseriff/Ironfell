@@ -181,6 +181,14 @@ pub const FIELDS: &[FieldSpec] = &[
         doc: "the commands a view's keys reach, chord:command pairs (mod is Cmd on macOS, Ctrl elsewhere; mod+alt+g:create-control shift+1:zoom-fit); std:workspace's apply in every view, a view's own win (match=\"view\")",
     },
     FieldSpec { domain: "menu", name: "canvas", view: true, kind: Kind::Commands, options: &[""], doc: "the commands a right-click on a view's canvas offers, in order, | between groups (match=\"view\")" },
+    FieldSpec {
+        domain: "animate",
+        name: "keys",
+        view: true,
+        kind: Kind::Choice,
+        options: &["record", "off"],
+        doc: "whether a drag in this view writes keyframes: record (an animated leaf's keys, and with auto-keyframe any leaf's) or off (the leaf itself; the timeline, whose drags edit the animation; match=\"view\")",
+    },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -232,6 +240,7 @@ impl Field {
     pub const STRIP: Field = Field(29);
     pub const COMMAND_KEYS: Field = Field(30);
     pub const MENU: Field = Field(31);
+    pub const ANIMATE_KEYS: Field = Field(32);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]

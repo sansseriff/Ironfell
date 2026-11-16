@@ -31,6 +31,9 @@ pub struct Offer {
     /// The grid placement, wiring and moves round to, px (`snap.grid`; 0
     /// for none).
     pub grid: f64,
+    /// Whether a drag here writes keyframes (`animate.keys`): off in the
+    /// timeline, whose drags edit the animation itself.
+    pub record_keys: bool,
 }
 
 /// How a view's chrome looks (`chrome.*`, plans/specs/chrome.md's revision):
@@ -236,6 +239,7 @@ pub fn view_focus_system(
             tolerances,
             chrome,
             grid: num(Field::GRID, 0.0).max(0.0),
+            record_keys: v.get(Field::ANIMATE_KEYS) != "off",
         };
         if focus.views.iter().find(|(p, ..)| *p == view.panel).is_none_or(|(_, _, o)| (&o.palette, &o.keys, &o.commands) != (&offer.palette, &offer.keys, &offer.commands)) {
             events.push(EngineEvent::Focus { panel: view.panel.clone(), palette: offer.palette.clone(), keys: offer.keys.clone(), commands: offer.commands.clone() });

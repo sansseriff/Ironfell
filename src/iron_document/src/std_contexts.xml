@@ -66,7 +66,7 @@
      directly, and they stay the container their children's rules come
      from. The view's own offers are here; built-ins do not chain. -->
 <context name="std:timeline">
-  <rule match="view" palette.tools="select" keys.tools="v:select" chrome.component="off" inspector.sections="main position other"/>
+  <rule match="view" palette.tools="select" keys.tools="v:select" chrome.component="off" inspector.sections="main position other" animate.keys="off"/>
 </context>
 
 <!-- Backdrop, grid, row headers: drawn, never targets. `none` declared here

@@ -58,6 +58,9 @@ pub enum GestureStatus {
 pub(crate) struct ActiveGesture {
     pub id: GestureId,
     pub nodes: BTreeSet<NodeId>,
+    /// Commits the leaves themselves, never keys (a drag in a view whose
+    /// `animate.keys` is off: the timeline's edits of the animation).
+    pub unkeyed: bool,
 }
 
 /// The previews of a gesture set aside while another transaction applies.

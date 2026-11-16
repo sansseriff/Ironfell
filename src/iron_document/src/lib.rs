@@ -992,8 +992,18 @@ impl Store {
         }
         let id = GestureId(self.next_gesture);
         self.next_gesture += 1;
-        self.gesture = Some(gesture::ActiveGesture { id, nodes: nodes.iter().copied().collect() });
+        self.gesture = Some(gesture::ActiveGesture { id, nodes: nodes.iter().copied().collect(), unkeyed: false });
         id
+    }
+
+    /// Have the running gesture commit its leaves as themselves, never as
+    /// keys, whatever auto-keyframe says: a drag in a view whose context
+    /// sets `animate.keys="off"` (the timeline, where a drag edits the
+    /// animation itself: a key's time, a clip's start).
+    pub fn unkeyed_gesture(&mut self) {
+        if let Some(g) = &mut self.gesture {
+            g.unkeyed = true;
+        }
     }
 
     /// The gesture running now, if any.
@@ -1138,11 +1148,14 @@ impl Store {
         }
         let mut ops = Vec::new();
         // Animated leaves (and with auto-keyframe on, any leaf) write keys,
-        // by the visible mode (timeline.md §12.2), not their authored value.
+        // by the visible mode (timeline.md §12.2), not their authored value,
+        // unless the gesture's view records none.
+        let unkeyed = gesture.as_ref().is_some_and(|g| g.unkeyed);
         let driven: Vec<(Leaf, Value)> = self
             .reactive
             .overlay()
             .iter()
+            .filter(|_| !unkeyed)
             .filter(|(l, _)| self.drivers.contains(l) && self.doc.leaf(l.node, l.path).is_some_and(|s| s.expr().is_none()))
             .map(|(l, v)| (*l, v.clone()))
             .collect();

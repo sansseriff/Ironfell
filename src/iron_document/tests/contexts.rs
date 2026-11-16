@@ -543,7 +543,7 @@ fn every_field_constant_names_its_field() {
         (Field::DOUBLE_CLICK, "tolerance.double_click"), (Field::HIT, "tolerance.hit"), (Field::SECTIONS, "inspector.sections"),
         (Field::HANDLE, "chrome.handle"), (Field::ACCENT, "chrome.accent"), (Field::GRIP, "chrome.grip"), (Field::GRIP_SHAPE, "chrome.grip_shape"), (Field::HOVER, "chrome.hover"),
         (Field::MATE, "plug.mate"), (Field::GRID, "snap.grid"), (Field::DELETE, "affords.delete"), (Field::COMPONENT, "chrome.component"), (Field::CURSOR, "affords.cursor"),
-        (Field::STRIP, "workspace.strip"), (Field::COMMAND_KEYS, "keys.commands"), (Field::MENU, "menu.canvas"),
+        (Field::STRIP, "workspace.strip"), (Field::COMMAND_KEYS, "keys.commands"), (Field::MENU, "menu.canvas"), (Field::ANIMATE_KEYS, "animate.keys"),
     ];
     for (f, path) in named {
         assert_eq!(f.path(), path);

@@ -621,6 +621,9 @@ pub struct SelectTool {
     controls_hidden: bool,
     pivot_guides: Vec<iron_spatial::snap::Guide>,
     pivot_preview: Option<(String, Point)>,
+    /// The view the button went down in: its context says whether the
+    /// gesture's commit records keys (`animate.keys`).
+    press_panel: Option<String>,
 }
 
 struct PivotPlacement {
@@ -2767,6 +2770,7 @@ pub fn select_tool_system(
     // ---- Press ----
     if pointer.just_pressed_left && matches!(tool.gesture, Gesture::Idle) {
         tool.hover = None;
+        tool.press_panel = hits.panel.clone();
         let view = hits.panel.as_deref().and_then(|p| views.get(p)).cloned();
         let reaches = selected_reaches(&sel, tool);
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
@@ -3692,6 +3696,9 @@ pub fn select_tool_system(
     // ---- Release ----
     if pointer.just_released_left {
         tool.owned = None;
+        if tool.press_panel.take().and_then(|p| focus.offer(&p).map(|o| !o.record_keys)).unwrap_or(false) {
+            store.0.unkeyed_gesture();
+        }
         match std::mem::take(&mut tool.gesture) {
             Gesture::Press { then: AfterPress::Activate { id, leaf, kind, step }, .. } => {
                 let now = store.0.resolved(id, leaf);

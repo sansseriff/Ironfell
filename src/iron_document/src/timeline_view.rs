@@ -564,6 +564,18 @@ fn sized(w: &str, h: &str) -> Facet {
     s.wrap()
 }
 
+/// The playhead's head, Figma's: `w` wide, its top corners rounded by `r`,
+/// straight sides `side` tall, then a point `tip` below them, centred.
+fn head_shape(w: f64, side: f64, tip: f64, r: f64) -> Facet {
+    let k = r * 0.448; // a quarter circle's control points, from its corner
+    let (m, b) = (w / 2.0, side + tip);
+    let mut shape = crate::facet::PathShape::default();
+    let d = format!("M 0,{r} C 0,{k} {k},0 {r},0 L {a},0 C {c},0 {w},{k} {w},{r} L {w},{side} L {m},{b} L 0,{side} Z", a = w - r, c = w - k);
+    let g = crate::geometry::Geometry::from_svg_path(&d).expect("the playhead's head");
+    shape.d = Slot::Const(Value::Geometry(std::sync::Arc::new(g)));
+    shape.wrap()
+}
+
 fn rounded(r: f64) -> Facet {
     let mut c = Corners::default();
     for s in [&mut c.tl, &mut c.tr, &mut c.br, &mut c.bl] {
@@ -708,7 +720,7 @@ fn wants(plan: &Plan, comp: NodeId) -> Vec<Want> {
     }
     let head = at(&format!("{clock}.clock.t"));
     // The playhead's head, low on the ruler under the labels.
-    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 6"), &lit(RULER_H - 20.0)), sized("12", "18"), rounded(3.0), paint(PLAYHEAD)], None);
+    push("ruler", "playhead grip".into(), "path", vec![place(&format!("{head} - 6"), &lit(RULER_H - 21.0)), head_shape(12.0, 14.0, 6.0, 3.0), paint(PLAYHEAD)], None);
 
     // Rows (their names and controls are the DOM column's, §12.3): per
     // object a summary of its keys, per property a thin line per clip and a
@@ -926,7 +938,7 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
         }
     }
     let head = at(&cursor);
-    push("ruler", "playhead grip".into(), "rect", vec![place(&format!("{head} - 5"), &lit(top + rh - 12.0)), sized("10", "12"), rounded(3.0), paint(PLAYHEAD)], None, None);
+    push("ruler", "playhead grip".into(), "path", vec![place(&format!("{head} - 5"), &lit(top + rh - 14.0)), head_shape(10.0, 9.0, 5.0, 2.5), paint(PLAYHEAD)], None, None);
 
     let rows = rows(plan);
     let mut ri = rows.iter();

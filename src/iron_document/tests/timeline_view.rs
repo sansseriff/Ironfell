@@ -176,6 +176,34 @@ fn a_bar_drag_retimes_the_clip_and_a_diamond_drag_moves_its_key() {
     assert_eq!(store.resolved(bar, path("size.w")).unwrap(), Value::Number(250.0), "the bar widens through its binding");
 }
 
+/// A drag in the timeline edits the animation itself: with auto-keyframe
+/// on, moving a diamond must not animate the key's own time. The select tool
+/// marks a gesture in a view whose context sets `animate.keys="off"`
+/// (std:timeline) unkeyed; without that mark the key's `t` grows a clip.
+#[test]
+fn a_timeline_drag_under_auto_keyframe_moves_the_key_and_keys_nothing() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    set_autokey(&mut store, true);
+    store.set_time(1.5);
+    let clips = |s: &Store| s.document().nodes_of_type(TypeId::lookup("clip").unwrap()).filter(|c| !c.is_session()).count();
+    let before = clips(&store);
+    let diamond = node_named(&store, comp, &format!("key {} {rect}", keys[1]));
+    store.preview_target(diamond, path("transform2d.x"), Value::Number(510.0)).unwrap();
+    store.unkeyed_gesture();
+    store.commit_gesture("move key", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(key_of(&store, keys[1], "t"), Value::Number(2.5), "the key moved");
+    assert_eq!(clips(&store), before, "no clip animates the key's time");
+    assert_eq!(iron_document::time::keys(store.document(), clip).len(), 2, "and no key was added to the rect's clip");
+    store.undo(0).unwrap().unwrap();
+    // Unmarked, as before the fix, the same drag animated `key.t`.
+    let diamond = node_named(&store, comp, &format!("key {} {rect}", keys[1]));
+    store.preview_target(diamond, path("transform2d.x"), Value::Number(510.0)).unwrap();
+    store.commit_gesture("move key", Actor::Human, 0).unwrap().unwrap();
+    assert_eq!(clips(&store), before + 1, "an unmarked gesture keys the key's time");
+}
+
 #[test]
 fn the_static_pieces_do_not_move_and_the_playhead_scrubs() {
     let Scene { mut store, rect, .. } = scene();

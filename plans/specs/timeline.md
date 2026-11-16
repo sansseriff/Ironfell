@@ -315,6 +315,13 @@ the pointer.
 | on, leaf not animated | after 0 | a new clip at 0 with two keys: the value before (at 0) and the dragged value (at the playhead) |
 | off, leaf not animated | any | the authored value, as today |
 
+The table is for drags of content. A drag in the timeline itself edits the animation (a
+diamond's key time, a bar's clip start), and those leaves are never keyed, whatever
+auto-keyframe says: `std:timeline`'s view rule sets `animate.keys="off"`, the select
+tool marks a gesture pressed in such a view (`Store::unkeyed_gesture`), and its commit
+writes the leaves themselves (2026-11-16; before, moving a diamond with auto-keyframe on
+gave the key's own `t` a clip).
+
 `handle.rs` no longer locks a leaf because a clip drives it: an animated constant has a
 direct handle. Leaves *bound* to an animated leaf stay locked (inverting through a clip is
 phase 5's).

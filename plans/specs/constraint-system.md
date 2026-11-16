@@ -335,6 +335,10 @@ On structural change only (the `ezpz` docs warn that this analysis is expensive)
 
 ## 6. Constraints and the reactive graph
 
+> **2026-11-15:** the cluster-as-graph-node below was not built: clusters are regrouped
+> for the whole document and solved by hand-placed calls. [`reactive-engine.md`](reactive-engine.md)
+> §9.4 builds it in the new engine (phase 5).
+
 A cluster becomes a node in `graph.rs`'s height-ordered evaluation, alongside bindings:
 
 ```rust

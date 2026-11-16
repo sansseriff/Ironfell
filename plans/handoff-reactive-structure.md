@@ -100,7 +100,7 @@ what stays necessary, the 2a/2b order) has not been reviewed again. In order:
    in the document. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom
    performance" row.
 6. **Phase 2c:** copies leave the document (instances as references).
-7. **Phase 3** (time), then **phase 4** (observation). Phase 5 (the pipeline as cells)
+7. **Phase 3** (time), then **phase 4** (observation). Phase 5 (the pipeline as cells, the constraint solver included: spec §9.4)
    does not depend on them; it closes instance-cache.md's "Open" at 1,000 meters. Then
    phase 6 (value slices).
 

@@ -1,0 +1,9 @@
+[package]
+name = "iron_engine_kernel"
+version = "0.1.0"
+edition = "2024"
+description = "Reference model of the new reactive engine's core pass (plans/specs/reactive-engine.md §6, §7): cells, heights, necessity, structure inside one pass. Not used by the app."
+
+# No dependencies, by design: this is a model to read and test against, not a
+# library. The real engine is `iron_document::engine`.
+[dependencies]

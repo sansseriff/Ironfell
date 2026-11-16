@@ -333,7 +333,8 @@ pub fn revise(rejected: &str, patch: &str) -> Result<String, String> {
                     return Err(format!("{at}: give the attributes to set, e.g. x=\"10\""));
                 }
                 let src = slots[n].src.take().expect("live");
-                let open = draft.items[n].el.open - draft.items[n].el.span.start;
+                // The verb as it stands now: an earlier step may have changed or replaced it.
+                let open = element(&src, 0).filter(|el| el.span.start == 0 && el.open > 0).map(|el| el.open).ok_or_else(|| format!("{at}: op {n} no longer starts with a verb"))?;
                 let mut tag = src[..open].to_owned();
                 for (k, v) in changes {
                     tag = set_attr(&tag, k, v)?;

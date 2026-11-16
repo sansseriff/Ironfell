@@ -68,6 +68,16 @@ fn revise_counts_verbs_as_the_planner_does() {
 }
 
 #[test]
+fn a_change_reads_the_verb_as_earlier_steps_left_it() {
+    let shorter = revise(REJECTED, r##"<revise><change op="2" y="1"/><change op="2" x="7"/></revise>"##).unwrap();
+    assert!(shorter.contains(r##"<rect in="$d" x="7" y="1"/>"##), "{shorter}");
+    let longer = revise(REJECTED, r##"<revise><change op="$a" x="1234567"/><change op="$a" y="2"/></revise>"##).unwrap();
+    assert!(longer.contains(r##"<rect in="$d" id="$a" x="1234567" y="2"/>"##), "{longer}");
+    let replaced = revise(REJECTED, r##"<revise><replace op="3"><set id="#P"/></replace><change op="3" y="4"/></revise>"##).unwrap();
+    assert!(replaced.contains(r##"<set id="#P" y="4"/>"##), "{replaced}");
+}
+
+#[test]
 fn a_changed_value_is_written_escaped_once() {
     // The revise's value is read once and written once, so the planner reads
     // what the model meant: `<` and `&` stay text, quotes stay inside.

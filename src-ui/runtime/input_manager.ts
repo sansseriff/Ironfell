@@ -120,7 +120,18 @@ export class InputManager {
             this.post(moveMsg);
         };
 
+        // A press whose release never reached the page (let go over another
+        // window or app, off the screen's edge, or capture lost) must still
+        // end, or the engine keeps dragging with the button up: the next
+        // move without the button, or losing capture, releases it.
+        let leftDown = false, middleDown = false;
+        const releaseLost = (buttons: number) => {
+            if (leftDown && !(buttons & 1)) { leftDown = false; this.post({ ty: 'leftBtUp' }); }
+            if (middleDown && !(buttons & 4)) { middleDown = false; this.post({ ty: 'middleBt', down: false }); }
+        };
+
         const onPointerMove = (ev: PointerEvent) => {
+            releaseLost(ev.buttons);
             const coalesced = (ev as any).getCoalescedEvents ? (ev as any).getCoalescedEvents() : null;
             if (coalesced && coalesced.length > 0) {
                 // Rust consumes one cursor position per rendered frame, so posting the
@@ -146,22 +157,30 @@ export class InputManager {
             this.sendMods(InputManager.mods(e));
             if (e.button === 0) {
                 canvas.setPointerCapture?.(e.pointerId);
+                leftDown = true;
                 this.post({ ty: 'leftBtDown', x, y });
             }
             else if (e.button === 1) {
                 e.preventDefault();
                 // Keep the pan going when the pointer leaves the canvas.
                 canvas.setPointerCapture?.(e.pointerId);
+                middleDown = true;
                 this.post({ ty: 'middleBt', down: true });
             }
         });
         this.listen(canvas, 'pointerup', (e: PointerEvent) => {
             this.sendMods(InputManager.mods(e));
-            if (e.button === 0) this.post({ ty: 'leftBtUp' });
-            else if (e.button === 1) this.post({ ty: 'middleBt', down: false });
+            if (e.button === 0) { leftDown = false; this.post({ ty: 'leftBtUp' }); }
+            else if (e.button === 1) { middleDown = false; this.post({ ty: 'middleBt', down: false }); }
         });
-        this.listen(canvas, 'pointercancel', () => this.cancelInput());
-        this.listen(window, 'blur', () => this.cancelInput());
+        // Capture ends with the release (after `pointerup`, so nothing is
+        // held then) or without one; either way the press is over.
+        this.listen(canvas, 'lostpointercapture', () => releaseLost(0));
+        // Moves outside the canvas, where the canvas hears none once capture
+        // is gone, still show the button let go.
+        this.listen(window, 'pointermove', (e: PointerEvent) => { if (e.target !== canvas) releaseLost(e.buttons); }, { passive: true });
+        this.listen(canvas, 'pointercancel', () => { leftDown = middleDown = false; this.cancelInput(); });
+        this.listen(window, 'blur', () => { leftDown = middleDown = false; this.cancelInput(); });
         // A right-click opens Iron's menu, not the browser's.
         this.listen(canvas, 'contextmenu', (e: MouseEvent) => {
             e.preventDefault();

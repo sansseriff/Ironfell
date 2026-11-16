@@ -2929,6 +2929,8 @@ clicked [data-timeline-column] [data-prop="transform2d.x"] [data-key=toggle]
 "auto-keyframe on: keys [\"0@500\",\"2@700\",\"1@650\"]"
 "after delete: slide clip gone"
 "after undo: slide clip back"
+"at 2 s"
+"lost release: playhead at 0"
 applied "open demo scene" (282 ops, System) -> v1
 applied "open showcase" (1314 ops, System) -> v2
 applied "retime slide" (1 ops, Human) -> v3
@@ -2957,7 +2959,12 @@ so a new icon no longer causes it; a new npm dependency still might. Rerun.
 projecting their clips and keys, retiming and moving keys by drag, the §12.2 table of
 what a drag on an animated object writes, ‹ ◇ ›, pan/zoom/fit without history, the
 loop band, each piece's affordances and cursor from its group's context, the ruler's
-track, delete following `projects`) cover the store side. The smoke's scrub step presses the ruler and drags to 3 s.
+track, delete following `projects`) cover the store side.
+
+Its last step (2026-11-16) drags a scrub left past 0 and loses the release, as when the
+button is let go over another app or off the screen's edge: a move arriving with no
+button held ends the press (`InputManager`'s `releaseLost`), so the playhead stays at
+0. Before, it kept following the pointer. The smoke's scrub step presses the ruler and drags to 3 s.
 
 ## Free running and per-view FPS (2026-10-18; Stats removed 2026-11-04)
 

@@ -77,5 +77,17 @@ eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'after delet
 key Meta+z
 sleep 500
 eval (async()=>{const v=await __iron.view({fidelity:'full'});return 'after undo: slide clip '+(v.includes('name="slide"')?'back':'gone')})()
+# A scrub whose release never reaches the page (let go over another app or
+# off the screen's edge): the next move without the button ends it, so the
+# playhead stays where it was left instead of following the pointer.
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({t:2})]);return 'at 2 s'})()
+pmove timeline 360 20
+down
+pmove timeline 200 20
+pmove timeline 100 20
+sleep 300
+eval (async()=>{const c=document.getElementById('bevy-canvas');const p=document.querySelector('[data-timeline-column]').getBoundingClientRect();for(const x of [300,600,700])c.dispatchEvent(new PointerEvent('pointerrawupdate',{clientX:p.left+x,clientY:p.top+20,buttons:0,bubbles:true}));await new Promise(r=>setTimeout(r,400));return 'lost release: playhead at '+(await __iron.call('clock_read',[])).t})()
+up
+sleep 300
 logs applied
 errors

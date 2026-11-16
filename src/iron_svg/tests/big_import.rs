@@ -37,7 +37,7 @@ fn big_import() {
     let copy = doc.clone();
     println!("one document clone: {:?}, +{:.0} MB", t.elapsed(), rss_mb() - before);
     drop(copy);
-    // The drop's paste, as `engine_api::document_import_svg_at` makes it.
+    // The drop's paste, as `<import-svg>` (iron_document::edit) makes it.
     let mut store = iron_document::Store::new();
     let t = Instant::now();
     let pasted = iron_document::copy::paste(&store, &imported.fragment, &Default::default(), "import").expect("pastes");

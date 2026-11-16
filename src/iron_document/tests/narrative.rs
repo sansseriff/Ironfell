@@ -59,9 +59,9 @@ fn edits_are_one_transaction_and_undo_reverses_them() {
     assert_eq!(planned.minted.len(), 2);
     store.apply(tx("edit narrative", planned.ops)).unwrap();
     assert_eq!(texts(&store, n), ["Inserted after the heading.", "And after that.", "a changed point", "A lesson"]);
-    store.undo(0).unwrap();
+    store.undo(0).unwrap().unwrap();
     assert_eq!(texts(&store, n), before, "one undo reverses every edit");
-    store.redo(0).unwrap();
+    store.redo(0).unwrap().unwrap();
     assert_eq!(texts(&store, n).len(), 4);
 
     // Content survives the canonical file.

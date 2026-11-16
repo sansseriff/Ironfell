@@ -16,7 +16,7 @@
 //!   back to `initial`. While its formula leaves it where it is, the step
 //!   length is not republished, so nothing changes and no frame is drawn.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::document::Document;
 use crate::expr::Leaf;
@@ -39,6 +39,11 @@ const MAX_DT: f64 = 0.1;
 
 fn leaf(node: NodeId, facet: FacetKind, field: &'static str) -> Leaf {
     Leaf { node, path: LeafPath { facet, field } }
+}
+
+/// Whether `n` sits in one of the `paused` compositions.
+fn held(doc: &Document, n: NodeId, paused: &BTreeSet<NodeId>) -> bool {
+    !paused.is_empty() && crate::composition::composition_of(doc, n).is_some_and(|c| paused.contains(&c))
 }
 
 /// Whether a value counts as on, for the lit runs of a trace.
@@ -106,8 +111,8 @@ impl Steps {
     /// length now published (any length above 0 answers the same for a
     /// formula at rest). The store publishes the real length only then, so
     /// an accumulator at rest changes nothing from frame to frame.
-    pub fn restless(&self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> bool {
-        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).any(|n| {
+    pub fn restless(&self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, paused: &BTreeSet<NodeId>) -> bool {
+        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && !held(doc, n, paused)).any(|n| {
             let f = |field| leaf(n, FacetKind::Accumulate, field);
             let Some(v) = self.values.get(&n) else { return true };
             if read(f("reset")).and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -119,7 +124,9 @@ impl Steps {
 
     /// Step every trace and accumulator to `now`. Answers what to publish
     /// beside the step lengths, and the nodes still changing.
-    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+    /// An accumulator in a `paused` composition holds its value: no view
+    /// shows it, so it does not advance behind the picture.
+    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, paused: &BTreeSet<NodeId>) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
         let mut out = BTreeMap::new();
         let mut active = Vec::new();
 
@@ -162,6 +169,7 @@ impl Steps {
             let before = self.values.get(&n).cloned();
             let bound = doc.leaf(n, f("next").path).is_some_and(|s| s.expr().is_some());
             let value = match &before {
+                Some(v) if held(doc, n, paused) => v.clone(),
                 Some(v) if !reset => if bound { read(f("next")).unwrap_or_else(|| v.clone()) } else { v.clone() },
                 _ => read(f("initial")).unwrap_or(Value::Number(0.0)),
             };

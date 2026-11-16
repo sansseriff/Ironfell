@@ -52,10 +52,7 @@ pub mod bevy_app; // expose init_app and related types
 pub use bevy_app::*; // re-export init_app symbols
 
 
-mod tracking_circle;
 
-#[cfg(target_arch = "wasm32")]
-mod asset_reader; // browser host asset services
 
 
 // mod asset_loader;

@@ -28,11 +28,11 @@ try {
   const view = await page.evaluate(() => (window as any).__iron.view({ fidelity: 'full' }));
   const parent = view.match(/<composition id="([^"]+)" name="controls"/)[1];
   await edit(`<edit>
-    <create id="$a" type="rect" parent="${parent}" name="multi A" x="400" y="100" w="120" h="90" color="#ff0000"/><add id="$a" stroke.width="2" stroke.color="#aa0000"/>
-    <create id="$b" type="rect" parent="${parent}" name="multi B" x="580" y="100" w="120" h="90" color="#0000ff"/><add id="$b" stroke.width="5" stroke.color="#0000aa"/>
-    <create id="$c" type="ellipse" parent="${parent}" name="multi C" x="760" y="140" rx="40" ry="40" color="#ff0000"/>
-    <create id="$t" type="text" parent="${parent}" name="multi text A" x="400" y="300" text.content="First box" font.size="24" font.weight="400" color="#ff0000"/>
-    <create id="$u" type="text" parent="${parent}" name="multi text B" x="580" y="300" text.content="Second box" font.size="36" font.weight="700" color="#0000ff"/>
+    <rect in="${parent}" id="$a" name="multi A" x="400" y="100" w="120" h="90" color="#ff0000"/><add id="$a" stroke.width="2" stroke.color="#aa0000"/>
+    <rect in="${parent}" id="$b" name="multi B" x="580" y="100" w="120" h="90" color="#0000ff"/><add id="$b" stroke.width="5" stroke.color="#0000aa"/>
+    <ellipse in="${parent}" id="$c" name="multi C" x="760" y="140" rx="40" ry="40" color="#ff0000"/>
+    <text in="${parent}" id="$t" name="multi text A" x="400" y="300" text.content="First box" font.size="24" font.weight="400" color="#ff0000"/>
+    <text in="${parent}" id="$u" name="multi text B" x="580" y="300" text.content="Second box" font.size="36" font.weight="700" color="#0000ff"/>
   </edit>`);
   const initial = await save();
   const id = (name: string): string => Object.keys(initial.facets.name).find(k => initial.facets.name[k].text === name)!;

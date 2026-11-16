@@ -6,14 +6,13 @@
  * against MAX_CALLS.
  */
 import type { DocumentApi } from './api';
-import { applyEdit, extractEdit, type EditOutcome } from './edit';
-import { manifest, topicRequest, topicsFor, topicText } from './manifest';
-import { extractRevise, revise } from './revise';
-import { changesSince, conflicts, deletedNamed } from './merge';
+import { applyEdit, type EditOutcome } from './edit';
+import { manifest, topicsFor, topicText } from './manifest';
+import { changesSince, conflicts } from './merge';
 import { validImages, wireImages } from './images';
 import type { ModelTransport } from './transport';
 import { boundedHistory, executableReply, type ConversationOptions } from './conversation';
-import { STOPPED, type AskLive } from './progress';
+import { STOPPED, type AgentEvent, type AskLive } from './progress';
 
 export interface AskResult {
   ok: boolean;
@@ -86,8 +85,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   const tree = await api.view({ fidelity: 'full', omit_defaults: true });
   // Each schematic sheet's netlist too: what is wired to what, and the
   // solved voltages (plans/specs/schematic.md §5).
-  const sheets = [...tree.matchAll(/<composition id="[^"]+" name="([^"]+)" notation="schematic"/g)].map((m) => m[1]);
-  const netlists = (await Promise.all(sheets.map((s) => api.netlist(s)))).filter((n) => n.ok).map((n) => `<netlist>\n${n.netlist}\n</netlist>`);
+  const netlists = ((await api.netlists()).netlists ?? []).map((n) => `<netlist>\n${n.netlist}\n</netlist>`);
   const view = [await api.view({ fidelity: 'full', relation: 'model', omit_defaults: true }), tree, ...netlists].join('\n');
   // The prompt in topics (manifest.ts): the core, the topics this document
   // and request make relevant (recent conversation counts as the request),
@@ -151,9 +149,13 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     if (live.signal?.aborted) return stopped();
     emit({ kind: 'phase', phase: 'thinking', attempt: attempts });
     let text: string;
+    // The reply as it streams, read by the engine for the chat.
+    const streaming = live.onEvent ? streamViews(api, live.onEvent) : null;
     try {
-      text = (await transport.complete(system, messages, { onEvent: live.onEvent, signal: live.signal, turn: options.turnId })).text;
+      text = (await transport.complete(system, messages, { onEvent: streaming?.onEvent ?? live.onEvent, signal: live.signal, turn: options.turnId })).text;
+      await streaming?.finish();
     } catch (e) {
+      streaming?.stop();
       if (live.signal?.aborted) return stopped();
       // The message alone: a bridge error already reads "Error: …".
       const message = (e instanceof Error ? e.message : String(e)).replace(/^(Error: )+/, '');
@@ -162,12 +164,14 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     }
     // A reply that arrives after Stop is not applied.
     if (live.signal?.aborted) return stopped();
-    // `<look expand="#u #e"/>` with no edit: show those instances' derived
-    // insides (component-model.md §9) and ask again; not a repair attempt.
-    const picture = pictureRequest(executableReply(text));
+    // What the reply asks for, read by the engine (iron_document::reply):
+    // as written, and its executable part (not examples in code).
+    const read = await api.reply(text);
+    const executable = await api.reply(executableReply(text));
+    const picture = executable.picture;
     // A <revise> of the rejected edit is an edit too: a look beside it is taken
     // after it applies, not instead of it.
-    const editing = !!extractEdit(text) || (!!rejected && !!extractRevise(text));
+    const editing = !!read.edit || (!!rejected && !!read.revise);
     if (picture && !editing && pictures < MAX_PICTURES) {
       messages.push({ role: 'assistant', content: text });
       messages.push((await pictureMessage(picture)).message);
@@ -177,15 +181,17 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // Out of pictures: say so rather than end the turn on a reply with no edit.
     // Free the first time (so a prose answer still counts as the first reply);
     // after that it spends an attempt, so it cannot loop.
-    if (picture && !editing && !lookRequest(text) && !executableReply(text).replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim()) {
+    if (picture && !editing && !read.expand.length && !executable.note) {
       trace.push({ attempt: attempts, kind: 'picture', source: picture, ok: false });
       messages.push({ role: 'assistant', content: text });
       messages.push({ role: 'user', content: `No more pictures this request (at most ${MAX_PICTURES}). Finish with an <edit> or with prose from what you have seen.` });
       if (!toldNoPictures) { toldNoPictures = true; attempts -= 1; }
       continue;
     }
-    const look = lookRequest(text);
-    if (look && !editing && looks < MAX_LOOKS) {
+    // `<look expand="#u #e"/>` with no edit: show those instances' derived
+    // insides (component-model.md §9) and ask again; not a repair attempt.
+    const look = read.expand;
+    if (look.length && !editing && looks < MAX_LOOKS) {
       looks += 1;
       trace.push({ attempt: attempts, kind: 'look', ids: look });
       attempts -= 1;
@@ -196,8 +202,8 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     }
     // `<topic name="tables"/>` with no edit: send that part of the prompt
     // and ask again; not a repair attempt.
-    const wanted = topicRequest(text);
-    if (wanted && !editing && topicAsks < MAX_TOPIC_ASKS) {
+    const wanted = read.topics;
+    if (wanted.length && !editing && topicAsks < MAX_TOPIC_ASKS) {
       topicAsks += 1;
       trace.push({ attempt: attempts, kind: 'topic', names: wanted });
       attempts -= 1;
@@ -207,18 +213,19 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       messages.push({ role: 'user', content: `TOPIC\n${texts.join('\n\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.` });
       continue;
     }
-    const executable = options.allowTextReply ? executableReply(text) : text;
-    let edit = extractEdit(executable);
-    // A <revise> patches the edit just rejected (revise.ts): the full edit it
-    // makes is what is applied, shown and logged.
-    const patch = !edit && rejected ? extractRevise(executable) : null;
-    note = text.replace(edit ?? patch ?? '', '').replace(/<look\s+picture=["'][^"'<>]+["']\s*\/?>/g, '').trim();
+    // In a chat, an edit in a code example is not applied.
+    const acted = options.allowTextReply ? executable : read;
+    let edit = acted.edit;
+    // A <revise> patches the edit just rejected (iron_document::reply): the
+    // full edit it makes is what is applied, shown and logged.
+    const patch = !edit && rejected ? acted.revise : null;
+    note = (edit && edit === read.edit) || (patch && !read.edit && patch === read.revise) ? read.note : read.bare;
     if (patch && rejected) {
-      const revised = revise(rejected, patch);
+      const revised = await api.revise(rejected, patch);
       if (!revised.ok) {
         const failure = `<revise-failed>${revised.error.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</revise-failed>`;
         trace.push({ attempt: attempts, kind: 'revise', ok: false, failure });
-        lastOutcome = { ok: false, failure };
+        lastOutcome = { ok: false, failure, errors: [`the revise could not be applied: ${revised.error}`] };
         messages.push({ role: 'assistant', content: text });
         messages.push({ role: 'user', content: `${failure}\n\nNothing was applied. ${REPAIR}` });
         continue;
@@ -241,37 +248,42 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // The document may have changed while the agent worked: merge (merge.ts).
     let merged = 0;
     let unmergeable = false;
+    let plannedAt: number | undefined;
     const mergingApi = {
       ...api,
+      // A node the edit names that the person deleted meanwhile: say so,
+      // not only that it is missing.
+      plan: async (xml: string) => {
+        const planned = await api.plan(xml);
+        plannedAt = planned.version;
+        if (planned.ok || !planned.errors?.some((e) => e.kind === 'unknown_node') || (await api.version()) === since) return planned;
+        const changes = await changesSince(api, since);
+        const errors = planned.errors.map((e) => {
+          const id = e.kind === 'unknown_node' ? e.message.match(/#[\w/~]+/)?.[0] : undefined;
+          return id && changes.deleted.has(id) ? { ...e, message: `the person deleted ${id} while you worked` } : e;
+        });
+        return { ...planned, errors };
+      },
+      // Applied at the version it was planned against (applyEdit plans
+      // again when the document moved in between, so its ids, order keys and
+      // compound verbs see the person's change).
       apply: async (transaction: object) => {
-        for (let tries = 0; ; tries++) {
-          const current = await api.version();
-          if (current !== since) {
-            const changes = await changesSince(api, since);
-            if (changes.gap) { unmergeable = true; return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: UNMERGEABLE }] }; }
-            const found = conflicts((transaction as { ops: object[] }).ops, changes);
-            // Told now; a resend is judged against this version.
-            if (found.length) { since = current; return { ok: false, version: current, errors: found }; }
-          }
-          const result = await api.apply(transaction, current);
-          // Another change landed between the check and the apply: check again.
-          if (!result.ok && tries < 2 && result.errors?.some((e) => e.kind === 'stale')) continue;
-          if (result.ok) merged = current - cycleVersion;
-          return result;
+        const current = await api.version();
+        if (plannedAt !== undefined && current !== plannedAt) return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: 'the document changed after this edit was planned' }] };
+        if (current !== since) {
+          const changes = await changesSince(api, since);
+          if (changes.gap) { unmergeable = true; return { ok: false, version: current, errors: [{ op: null, kind: 'stale', message: UNMERGEABLE }] }; }
+          const found = conflicts((transaction as { ops: object[] }).ops, changes);
+          // Told now; a resend is judged against this version.
+          if (found.length) { since = current; return { ok: false, version: current, errors: found }; }
         }
+        const result = await api.apply(transaction, current);
+        if (result.ok) merged = current - cycleVersion;
+        return result;
       },
     };
-    const before = await api.version();
-    const storeChanges = STORE_BUILT.test(edit) && before !== since ? await changesSince(api, since) : null;
-    if (storeChanges?.gap) unmergeable = true;
-    const store = storeChanges && !storeChanges.gap ? deletedNamed(edit, storeChanges) : [];
+    lastOutcome = await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);
     if (unmergeable) return unmerged(edit);
-    lastOutcome = store.length
-      ? { ok: false, failure: `<edit-failed applied="none">\n  <error kind="conflict">the person deleted ${store.join(' ')} while you worked</error>\n</edit-failed>` }
-      : await applyEdit(mergingApi, edit, `model: ${instruction.slice(0, 60)}`);
-    if (unmergeable) return unmerged(edit);
-    if (store.length) since = before;
-    if (lastOutcome.ok && STORE_BUILT.test(edit)) merged = before - cycleVersion;
     trace.push({ attempt: attempts, kind: 'edit', ok: lastOutcome.ok, ...(lastOutcome.failure ? { failure: lastOutcome.failure } : {}), ...(lastOutcome.summary ? { summary: lastOutcome.summary } : {}), ...(lastOutcome.version !== undefined ? { version: lastOutcome.version } : {}), ...(patch ? { revised: true } : {}), ...(merged > 0 ? { merged } : {}) });
     if (lastOutcome.ok) {
       if (merged > 0) mergedWith += merged;
@@ -294,7 +306,7 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
       }
       // <continue/>: the reply is one step of several. Say what it made (the
       // ids its aliases became) and ask for the next.
-      if (CONTINUE.test(executableReply(text)) && calls < MAX_CALLS) {
+      if (executable.continue && calls < MAX_CALLS) {
         messages.push({ role: 'assistant', content: text });
         messages.push({ role: 'user', content: `${appliedMarkup(lastOutcome)}\n\nContinue: the next <edit> (with <continue/> after it if more follows), or finish with prose.` });
         continue;
@@ -320,22 +332,42 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   return { ok, note, edit: lastEdit, outcome: lastOutcome, attempts, transport: transport.name, ...(error ? { error } : {}), ...(mergedWith ? { merged: mergedWith } : {}) };
 }
 
-/** An applied edit for the model: its summary, and the ids its aliases became. */
+/** An applied edit for the model: its summary, which names the ids its aliases became. */
 function appliedMarkup(outcome: EditOutcome): string {
-  const created = Object.entries(outcome.aliases ?? {}).map(([a, id]) => `  <created alias="${a}" id="${id}"/>`);
-  const summary = outcome.summary ?? `<applied version="${outcome.version}">\n</applied>`;
-  const missing = created.filter((line) => !summary.includes(line));
-  return missing.length ? summary.replace(/<\/applied>/, `${missing.join('\n')}\n</applied>`) : summary;
+  return outcome.summary ?? `<applied version="${outcome.version}">\n</applied>`;
 }
 
-/** A reply's `<continue/>`: more steps follow its edit. */
-const CONTINUE = /<continue\s*\/>/;
+/** Events with each reply's stream view after the text it read: the
+ *  engine reads the reply as it streams (iron_document::reply::stream), one
+ *  read at a time, the latest text next. */
+function streamViews(api: DocumentApi, emit: (event: AgentEvent) => void) {
+  let text = '';
+  let dirty = false;
+  let stopped = false;
+  let running: Promise<void> | null = null;
+  const run = async () => {
+    while (dirty && !stopped) {
+      dirty = false;
+      const view = await Promise.resolve(api.stream(text)).catch(() => null);
+      if (view && !stopped) emit({ kind: 'stream', view });
+    }
+    running = null;
+  };
+  return {
+    onEvent(event: AgentEvent) {
+      emit(event);
+      if (event.kind !== 'text') return;
+      text += event.delta;
+      dirty = true;
+      running ??= run();
+    },
+    /** The last view sent before the turn moves on. */
+    async finish() { await running; stopped = true; },
+    stop() { stopped = true; },
+  };
+}
 
 const UNMERGEABLE = 'the document changed while the agent worked, and too much of that is gone from history to merge its edit; ask again with the current document';
-
-/** Edits the store builds from markup rather than ops (edit.ts): merged by
- *  checking only that the nodes they name still exist. */
-const STORE_BUILT = /<(?:place|make-component|link-figures|import-svg|table|circuit|context|write|rewrite)[\s/>]/;
 
 /** Model calls one request may make, of every kind: steps, repairs, looks,
  *  topics and refinements after a picture. Each re-sends the conversation. */
@@ -356,14 +388,6 @@ const MAX_PICTURES = 6;
 /** Topic requests one request may make before it must answer. */
 const MAX_TOPIC_ASKS = 2;
 
-/** The ids a reply's `<look expand="…"/>` names, if it has one. */
-export function lookRequest(text: string): string[] | null {
-  const m = text.match(/<look\s[^>]*?expand="([^"]*)"[^>]*\/?>/);
-  if (!m) return null;
-  const ids = m[1].split(/\s+/).filter(Boolean).map((id) => (id.startsWith('#') ? id : `#${id}`));
-  return ids.length ? ids : null;
-}
-
 /** The view a look asks for: each named instance's subtree with what it
  *  derives shown, marked `derived`. */
 async function lookView(api: DocumentApi, ids: string[]): Promise<string> {
@@ -375,9 +399,4 @@ async function lookView(api: DocumentApi, ids: string[]): Promise<string> {
     }
   }));
   return `LOOK\n${parts.join('\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.`;
-}
-
-/** Only executable markup is passed here; examples in fenced code do not capture. */
-export function pictureRequest(text: string): string | null {
-  return text.match(/<look\s+picture=["']([^"'<>]{1,200})["']\s*\/?>/)?.[1] ?? null;
 }

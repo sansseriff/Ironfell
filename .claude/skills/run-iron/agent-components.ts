@@ -49,10 +49,10 @@ try {
     const before = await iron.save();
     iron.configureAgent({ provider: 'codex', endpoint, token });
     const setup = await iron.edit(`<edit>
-      <create id="$bench" type="composition" name="agent-bench" notation="free" dims="2d"/>
-      <create id="$overview" type="composition" name="agent-overview" notation="free" dims="2d"/>
-      <create id="$body" type="rect" parent="$bench" name="body" x="100" y="50" w="60" h="40" color="#3366cc"/>
-      <create id="$dot" type="ellipse" parent="$bench" name="dot" x="130" y="70" rx="8" ry="8" color="#ffcc00"/>
+      <composition id="$bench" name="agent-bench" notation="free" dims="2d"/>
+      <composition id="$overview" name="agent-overview" notation="free" dims="2d"/>
+      <rect in="$bench" id="$body" name="body" x="100" y="50" w="60" h="40" color="#3366cc"/>
+      <ellipse in="$bench" id="$dot" name="dot" x="130" y="70" rx="8" ry="8" color="#ffcc00"/>
     </edit>`);
     if (!setup.ok) throw new Error(JSON.stringify(setup));
     const { $bench: bench, $overview: overview, $body: body, $dot: dot } = setup.aliases;

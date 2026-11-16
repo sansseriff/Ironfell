@@ -293,7 +293,7 @@ fn pieces(path: &BezPath) -> (Vec<Piece>, Vec<bool>) {
     const ACC: f64 = 1e-3;
     let (mut out, mut closed) = (Vec::new(), Vec::new());
     let (mut start, mut at) = (Point::ZERO, Point::ZERO);
-    let mut push = |seg: PathSeg, out: &mut Vec<Piece>, sub: usize| out.push(Piece { len: seg.arclen(ACC), seg, sub });
+    let push = |seg: PathSeg, out: &mut Vec<Piece>, sub: usize| out.push(Piece { len: seg.arclen(ACC), seg, sub });
     for el in path.elements() {
         let sub = closed.len().saturating_sub(1);
         match *el {

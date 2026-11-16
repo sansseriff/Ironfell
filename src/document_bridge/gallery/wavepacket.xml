@@ -1,0 +1,35 @@
+<edit>
+  <composition name="wave packet">
+    <text name="title" transform2d.x="40" transform2d.y="40" text.content="Gaussian wave packet: group vs phase velocity" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="80" text.content="Press play on the timeline to run t from 0 to 8 s (or drag t). Ringed points: a crest at v_p (top), the envelope peak at v_g (bottom).&#10;With v_g below v_p the crests slide forward through the envelope, each new one taking over as the last runs ahead." font.size="14" fill.color="@muted"/>
+    <text name="t label" transform2d.x="40" transform2d.y="520" text.content="time t (s)" font.size="14" fill.color="@ink-2"/>
+    <slider id="$t" name="t" transform2d.x="40" transform2d.y="540" size.w="200" size.h="24" slider.max="8" slider.value="0"/>
+    <text name="t readout" transform2d.x="260" transform2d.y="543" text.content="{= fmt($t.slider.value, 2) + ' s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="k label" transform2d.x="360" transform2d.y="520" text.content="wavenumber k (rad/m)" font.size="14" fill.color="@ink-2"/>
+    <slider id="$k" name="k" transform2d.x="360" transform2d.y="540" size.w="200" size.h="24" slider.min="0.5" slider.max="4" slider.step="0.05" slider.value="2"/>
+    <text name="k readout" transform2d.x="580" transform2d.y="543" text.content="{= fmt($k.slider.value, 2) + ' rad/m'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="sigma label" transform2d.x="680" transform2d.y="520" text.content="width σ (m)" font.size="14" fill.color="@ink-2"/>
+    <slider id="$sigma" name="sigma" transform2d.x="680" transform2d.y="540" size.w="200" size.h="24" slider.min="0.5" slider.max="4" slider.step="0.05" slider.value="2"/>
+    <text name="sigma readout" transform2d.x="900" transform2d.y="543" text.content="{= fmt($sigma.slider.value, 2) + ' m'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="vp label" transform2d.x="40" transform2d.y="600" text.content="phase velocity v_p (m/s)" font.size="14" fill.color="@ink-2"/>
+    <slider id="$v_p" name="v_p" transform2d.x="40" transform2d.y="620" size.w="200" size.h="24" slider.min="0.5" slider.max="5" slider.step="0.05" slider.value="5"/>
+    <text name="vp readout" transform2d.x="260" transform2d.y="623" text.content="{= fmt($v_p.slider.value, 2) + ' m/s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="vg label" transform2d.x="360" transform2d.y="600" text.content="group velocity v_g (m/s)" font.size="14" fill.color="@ink-2"/>
+    <slider id="$v_g" name="v_g" transform2d.x="360" transform2d.y="620" size.w="200" size.h="24" slider.min="0.5" slider.max="5" slider.step="0.05" slider.value="4"/>
+    <text name="vg readout" transform2d.x="580" transform2d.y="623" text.content="{= fmt($v_g.slider.value, 2) + ' m/s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="omega readout" transform2d.x="680" transform2d.y="600" text.content="{= 'ω = v_p · k = ' + fmt($v_p.slider.value * $k.slider.value, 2) + ' rad/s'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    <text name="dispersion readout" transform2d.x="680" transform2d.y="624" text.content="{= abs($v_g.slider.value - $v_p.slider.value) &lt; 0.005 ? 'No dispersion (v_g = v_p)' : $v_g.slider.value &lt; $v_p.slider.value ? 'Normal dispersion (v_g &lt; v_p)' : 'Anomalous dispersion (v_g &gt; v_p)'}" font.size="14" font.weight="600" fill.color="@ink"/>
+    <text name="dispersion note" transform2d.x="680" transform2d.y="648" text.content="{= abs($v_g.slider.value - $v_p.slider.value) &lt; 0.005 ? 'crests ride with the envelope' : $v_g.slider.value &lt; $v_p.slider.value ? 'crests overtake the envelope' : 'crests fall back through it'}" font.size="14" fill.color="@muted"/>
+    <place def="std:plot" name="packet plot" x="40" y="140" w="940" h="340" color2="@muted" color3="@muted" cursor="{= 0 / 0}" marks_label="{= list('envelope peak · v_g', 'crest · v_p')}" marks_x="{= series($envelope_peak_x.let.value, $crest_x.let.value)}" marks_y="{= series(-1, $crest_y.let.value)}" style="smooth" style2="line" style3="line" title="ψ(x, t) = A cos(kx − ωt);  grey: envelope ±A = ±exp(−(x − v_g t)² / 2σ²)" x_label="x (m)" xs="{= range(-10, 40, 801)}" y_label="ψ (arb. units)" y_max="1.3" y_min="-1.3" ys="{= exp(-pow($self.xs - $v_g.slider.value * $t.slider.value, 2) / (2 * pow($sigma.slider.value, 2))) * cos($k.slider.value * $self.xs - $v_p.slider.value * $k.slider.value * $t.slider.value)}" ys2="{= exp(-pow($self.xs - $v_g.slider.value * $t.slider.value, 2) / (2 * pow($sigma.slider.value, 2)))}" ys3="{= -exp(-pow($self.xs - $v_g.slider.value * $t.slider.value, 2) / (2 * pow($sigma.slider.value, 2)))}"/>
+    <let id="$envelope_peak_x" name="envelope peak x" let.value="{= $v_g.slider.value * $t.slider.value}"/>
+    <let id="$crest_x" name="crest x" let.value="{= $v_p.slider.value * $t.slider.value + 2 * pi / $k.slider.value * round(($v_g.slider.value - $v_p.slider.value) * $t.slider.value / (2 * pi / $k.slider.value))}"/>
+    <let id="$crest_y" name="crest y" let.value="{= exp(-pow($crest_x.let.value - $envelope_peak_x.let.value, 2) / (2 * pow($sigma.slider.value, 2)))}"/>
+    <text name="travel note" transform2d.x="790" transform2d.y="488" text.content="the packet travels this way →" font.size="13" fill.color="@muted"/>
+  </composition>
+  <!-- t plays on the timeline: a clip sweeping the slider from 0 to 8 s. -->
+  <clip in="#TIMELINE" id="$play" name="play t" start="0" prop="slider.value">
+    <key t="0" value="0" easing="linear"/>
+    <key t="8" value="8" easing="linear"/>
+  </clip>
+  <link from="$play" to="$t" rel="animates"/>
+</edit>

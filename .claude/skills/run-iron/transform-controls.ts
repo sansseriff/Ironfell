@@ -20,9 +20,9 @@ try {
   await page.waitForSelector('.loading',{state:'detached',timeout:60000});
   await until(async()=>{try{return (await page.evaluate(()=>(window as any).__iron.view({fidelity:'full'}))).includes('name="square"');}catch{return false;}});
   const r=await page.evaluate(()=>(window as any).__iron.edit(`<edit>
-    <create id="$c" type="composition" name="Pivot bench" notation="free" dims="2d"/>
-    <create id="$a" type="rect" parent="$c" name="Needle" x="160" y="200" w="180" h="40" color="#e9aa27"/>
-    <create id="$b" type="rect" parent="$c" name="Counterweight" x="120" y="210" w="30" h="20" color="#445577"/>
+    <composition id="$c" name="Pivot bench" notation="free" dims="2d"/>
+    <rect in="$c" id="$a" name="Needle" x="160" y="200" w="180" h="40" color="#e9aa27"/>
+    <rect in="$c" id="$b" name="Counterweight" x="120" y="210" w="30" h="20" color="#445577"/>
   </edit>`));assert(r.ok,JSON.stringify(r));
   let d=await save(); const named=(name:string)=>Object.keys(d.facets.name).find(id=>d.facets.name[id].text===name)!;
   const comp=named('Pivot bench'), a=named('Needle'), b=named('Counterweight');
@@ -77,11 +77,11 @@ try {
   await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:resolve(out,`controls-dark-${dpr}x.png`)});
   // Snapping uses the same target features as ordinary moves, plus path anchors.
   const added=await page.evaluate(comp=>(window as any).__iron.edit(`<edit>
-    <create id="$r" type="rect" parent="${comp}" name="Snap target" x="400" y="300" w="100" h="60" color="#bbbbbb"/>
-    <create id="$p" type="path" parent="${comp}" name="Snap path" x="400" y="500"/>
-    <create id="$c" type="contour" parent="$p"/>
-    <create id="$a" type="point" parent="$c" x="0" y="0"/>
-    <create id="$b" type="point" parent="$c" x="80" y="20"/>
+    <rect in="${comp}" id="$r" name="Snap target" x="400" y="300" w="100" h="60" color="#bbbbbb"/>
+    <path in="${comp}" id="$p" name="Snap path" x="400" y="500"/>
+    <contour in="$p" id="$c"/>
+    <point in="$c" id="$a" x="0" y="0"/>
+    <point in="$c" id="$b" x="80" y="20"/>
   </edit>`),comp);assert(added.ok,JSON.stringify(added));
   await wait();await select([control]);
   await page.getByRole('button',{name:'Place pivot',exact:true}).click();await click(449,329);

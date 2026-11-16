@@ -13,6 +13,7 @@ import { localEndpoint, type CompletionRequest } from '../src-ui/model/runtime-o
 import { ask } from '../src-ui/model/agent';
 import { discoverLocalAgent } from '../src-ui/model/local-pairing';
 import type { DocumentApi } from '../src-ui/model/api';
+import { fakePlanner, plan, planned, reader, said, scripted } from './fixtures/plan';
 
 const fixture = resolve(import.meta.dir, 'fixtures/fake-agent-runtime.ts');
 const token = 'iron-test-token-not-a-provider-key-12345';
@@ -168,7 +169,7 @@ test('Codex app-server handshake, final items, failures, approvals, exit and can
   try {
     const runtime = codexRuntime(fixture);
     const result = await runtime(payload, AbortSignal.timeout(3000));
-    assert.match(result.text, /<create/);
+    assert.match(result.text, /<rect in=/);
     await assert.rejects(() => codexRuntime('/missing-iron-codex')(payload, AbortSignal.timeout(3000)), /ENOENT/);
     for (const [mode, expected] of [['failed', /fixture turn failed/], ['approval', /Unexpected runtime request/], ['exit', /Runtime exited/], ['malformed', /JSON|Unexpected/], ['timeout', /abort|timed out/i]] as const) {
       process.env.IRON_TEST_RUNTIME_MODE = mode;
@@ -220,6 +221,19 @@ test('bridge lists each runtime\'s models behind the token, Codex from its app-s
   } finally { bridge.stop(); }
 });
 
+// What the engine reads and plans in the scripted replies below (fixtures/plan.ts).
+const created = { t: 'create', id: '#fixture', ty: 'rect', parent: '#1', order: 'a0', facets: [] };
+const addRect = planned('<edit><rect in="#1"/></edit>', plan([['create rect in #1', [created]]]));
+const addShape = planned('<edit><rect in="#1" id="$shape" x="20"/></edit>', plan([['create $shape', [created]]], { $shape: '#fixture' }));
+const notAType = (edit: string) => planned(edit, { ok: false, errors: [{ op: 0, kind: 'parse', message: '<not-a-type> is not a verb or a node type', verb: 'create not-a-type' }] });
+for (const edit of [addRect, addShape, notAType('<edit><not-a-type in="#1"/></edit>'), notAType('<edit><not-a-type/></edit>')]) said({ edit });
+// The fake runtime's replies (fixtures/fake-agent-runtime.ts).
+for (const [edit, made] of [
+  ['<edit><rect in="#1" id="$shape" name="agent-test-shape" x="100" y="120" w="80" h="60" color="#ff2200"/></edit>', plan([['create $shape', [created]]], { $shape: '#fixture' })],
+  ['<edit><set id="#fixture" x="240" fill.color="#22aa55"/></edit>', plan([['set #fixture', [{ t: 'set', id: '#fixture', path: 'transform2d.x', slot: 240 }, { t: 'set', id: '#fixture', path: 'fill.color', slot: '#22aa55' }]]])],
+] as const) scripted(planned(edit, made), { edit });
+const setX = planned('<edit><set id="#fixture" x="240"/></edit>', plan([['set #fixture', [{ t: 'set', id: '#fixture', path: 'transform2d.x', slot: 240 }]]]));
+
 function documentFixture() {
   let version = 1;
   let applyCalls = 0;
@@ -228,7 +242,7 @@ function documentFixture() {
     version: () => version,
     schema: () => ({ facets: { transform2d: { x: 'number', y: 'number' }, size: { w: 'number', h: 'number' }, fill: { color: 'color' } }, types: { rect: { facets: [{ kind: 'transform2d', required: true }, { kind: 'size', required: true }, { kind: 'fill', required: true }], default_host: '2d', children: 'none' } } }),
     view: () => `<document version="${version}"><composition id="#1" name="test" notation="2d">${Object.entries(nodes).map(([id, node]) => `<rect id="${id}" name="${node.name}" x="${node.x}"/>`).join('')}</composition></document>`,
-    selection: () => [], nextIds: () => ['#fixture'], nextRelationIds: () => [], place: () => ['a0'],
+    selection: () => [], plan: fakePlanner(() => version), ...reader,
     apply: (transaction: any, expected: number) => {
       applyCalls++;
       assert.equal(transaction.actor, 'model');
@@ -262,7 +276,7 @@ test('agent edit pipeline sends model-authored shape creation through the transa
 
 test('late replies cannot edit a document changed during generation', async () => {
   const fixtureDoc = documentFixture();
-  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { fixtureDoc.changed(); return { text: '<edit><create type="rect" parent="#1"/></edit>' }; } }, 'add a rectangle');
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { fixtureDoc.changed(); return { text: '<edit><rect in="#1"/></edit>' }; } }, 'add a rectangle');
   assert.equal(result.ok, false);
   assert.match(result.error!, /document changed/);
   assert.equal(fixtureDoc.calls(), 0);
@@ -273,9 +287,9 @@ test('invalid model edits get one correction attempt and no partial transaction'
   let calls = 0;
   const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async (_system, messages) => {
     calls++;
-    if (calls === 1) return { text: '<edit><create type="not-a-type" parent="#1"/></edit>' };
+    if (calls === 1) return { text: '<edit><not-a-type in="#1"/></edit>' };
     assert.match(messages.at(-1)!.content, /edit-failed/);
-    return { text: '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+    return { text: '<edit><rect in="#1" id="$shape" x="20"/></edit>' };
   } }, 'add a rectangle');
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.attempts, 2);
@@ -309,7 +323,9 @@ test('chat explicitly accepts prose-only replies with bounded previous conversat
 
 test('chat renders edit examples as prose without applying fenced or inline code', async () => {
   const fixtureDoc = documentFixture();
-  for (const text of ['Here is an example:\n\n```xml\n<edit><create type="rect" parent="#1"/></edit>\n```', 'Example: `<edit><create type="rect" parent="#1"/></edit>`', 'Example:\n\n    <edit><create type="rect" parent="#1"/></edit>', '> <edit><create type="rect" parent="#1"/></edit>']) {
+  for (const example of ['Here is an example:\n\n```xml\n<edit><rect in="#1"/></edit>\n```', 'Example: `<edit><rect in="#1"/></edit>`', 'Example:\n\n    <edit><rect in="#1"/></edit>', '> <edit><rect in="#1"/></edit>']) {
+    // As written it holds an edit; its executable part (prose, not code) does not.
+    const text = scripted(example, { edit: addRect }, {});
     const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text }) }, 'Explain edit syntax', { allowTextReply: true });
     assert.equal(result.ok, true);
     assert.equal(result.edit, null);
@@ -320,7 +336,7 @@ test('chat renders edit examples as prose without applying fenced or inline code
 test('a prose-only correction cannot turn a rejected edit into a reported success', async () => {
   const fixtureDoc = documentFixture();
   let calls = 0;
-  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text: ++calls === 1 ? '<edit><create type="not-a-type"/></edit>' : 'Done.' }) }, 'Make a shape', { allowTextReply: true });
+  const result = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => ({ text: ++calls === 1 ? '<edit><not-a-type/></edit>' : 'Done.' }) }, 'Make a shape', { allowTextReply: true });
   assert.equal(result.ok, false);
   assert.equal(result.attempts, 2);
   assert.equal(fixtureDoc.calls(), 0);
@@ -391,19 +407,22 @@ test('a streamed runtime that goes quiet times out with an error line; Stop abor
 });
 
 test('ask reports its phases and passes deltas on; a stopped turn applies nothing', async () => {
+  const streamed = said({ edit: planned('<edit><rect in="#1" id="$shape"/></edit>', plan([['create $shape', [created]]], { $shape: '#fixture' })) });
   const fixtureDoc = documentFixture();
   const events: any[] = [];
   const streaming = { name: 'fixture', complete: async (_s: string, _m: unknown, live: any = {}) => {
-    live.onEvent?.({ kind: 'text', delta: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' });
-    return { text: '<edit><create id="$shape" type="rect" parent="#1"/></edit>' };
+    live.onEvent?.({ kind: 'text', delta: streamed });
+    return { text: streamed };
   } };
   const result = await ask(fixtureDoc.api, streaming, 'add a rectangle', {}, { onEvent: event => events.push(event) });
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.deepEqual(events.filter(e => e.kind === 'phase').map(e => `${e.phase}:${e.attempt}`), ['reading:1', 'thinking:1', 'applying:1']);
   assert.equal(events.filter(e => e.kind === 'text').length, 1);
+  // The engine read the reply as it streamed, for the chat; after its text.
+  assert.deepEqual(events.filter(e => e.kind === 'text' || e.kind === 'stream').map(e => e.kind), ['text', 'stream']);
   // Stop while the model is answering: the reply that still arrives is not applied.
   const controller = new AbortController();
-  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><create id="$s" type="rect" parent="#1"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
+  const stopped = await ask(fixtureDoc.api, { name: 'fixture', complete: async () => { controller.abort(); return { text: '<edit><rect in="#1" id="$s"/></edit>' }; } }, 'add another', {}, { signal: controller.signal });
   assert.equal(stopped.ok, false);
   assert.equal(stopped.error, 'stopped');
   assert.equal(fixtureDoc.calls(), 1);
@@ -459,7 +478,7 @@ test('ask sends the turn id with each call and logs each reply\'s fate once the 
     complete: async (_s: string, _m: unknown, live: any = {}) => {
       turns.push(live.turn);
       calls++;
-      return { text: calls === 1 ? '<edit><create type="not-a-type" parent="#1"/></edit>' : '<edit><create id="$shape" type="rect" parent="#1" x="20"/></edit>' };
+      return { text: calls === 1 ? '<edit><not-a-type in="#1"/></edit>' : '<edit><rect in="#1" id="$shape" x="20"/></edit>' };
     },
     log: async (record: any) => { records.push(record); },
   };
@@ -494,10 +513,10 @@ test('agent receives pasted pixels and can inspect an applied edit then refine i
     calls++;
     if (calls === 1) {
       assert.deepEqual(messages.at(-1)?.images, [testImage]);
-      return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+      return { text: said({ edit: addRect }, { picture: 'test' }) };
     }
     assert.deepEqual(messages.at(-1)?.images, [testImage]);
-    if (calls === 2) return { text: '<edit><set id="#fixture" x="240"/></edit><look picture="test"/>' };
+    if (calls === 2) return { text: said({ edit: setX }, { picture: 'test' }) };
     return { text: 'The composition now matches the reference.' };
   } }, 'Match this picture', { images: [testImage], allowTextReply: true });
   assert.equal(result.ok, true);
@@ -513,7 +532,7 @@ test('capture failures are reported to the model and repeated pictures are bound
   fixtureDoc.api.picture = async () => { captures++; throw new Error('readback failed'); };
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
     if (captures) assert.match(messages.at(-1)!.content, /Picture failed/);
-    return { text: '<look picture="test"/>' };
+    return { text: said({ picture: 'test' }) };
   } }, 'Inspect this', { allowTextReply: false });
   assert.equal(captures, 6);
   assert.equal(result.ok, false);
@@ -583,7 +602,7 @@ test('a refinement sends the captured composition\'s view, not the whole documen
   let calls = 0;
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
     calls++;
-    if (calls === 1) return { text: '<edit><create type="rect" parent="#1"/></edit><look picture="test"/>' };
+    if (calls === 1) return { text: said({ edit: addRect }, { picture: 'test' }) };
     const last = messages.at(-1)!;
     assert.deepEqual(last.images, [testImage]);
     assert.match(last.content, /^Edit applied successfully\. Current #1:/);
@@ -603,7 +622,7 @@ test('once its pictures are spent, the agent is told so rather than the turn fai
   let told = false;
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
     if (/No more pictures this request \(at most 6\)/.test(messages.at(-1)!.content)) { told = true; return { text: 'It looks right.' }; }
-    return { text: '<look picture="test"/>' };
+    return { text: said({ picture: 'test' }) };
   } }, 'Inspect this', { allowTextReply: true });
   assert.equal(captures, 6);
   assert.ok(told);

@@ -1,0 +1,91 @@
+<edit>
+  <composition name="blackbody">
+    <group name="title block">
+      <text name="title" transform2d.x="40" transform2d.y="40" text.content="Blackbody radiation: Planck's law" font.size="26" font.weight="600" fill.color="@ink"/>
+      <text name="caption" transform2d.x="40" transform2d.y="80" text.content="Drag the temperature slider: the peak slides toward blue (Wien) while the total power climbs as T⁴ (Stefan–Boltzmann)." font.size="14" fill.color="@muted"/>
+    </group>
+    <group name="temperature control">
+      <text name="temperature label" transform2d.x="40" transform2d.y="580" text.content="Temperature T (blue curve)" font.size="13" fill.color="@muted"/>
+      <slider id="$temperature" name="temperature" transform2d.x="40" transform2d.y="604" size.w="520" size.h="24" slider.min="2500" slider.max="10000" slider.step="50" slider.value="7000"/>
+      <text name="temperature readout" transform2d.x="580" transform2d.y="606" text.content="{= 'T = ' + fmt($temperature.slider.value, 0) + ' K'}" font.size="15" font.tabular="true" fill.color="@ink"/>
+    </group>
+    <group name="legend">
+      <rect name="legend key 1" transform2d.x="720" transform2d.y="128" size.w="24" size.h="4" fill.color="@series-1"/>
+      <text name="legend label 1" transform2d.x="756" transform2d.y="120" text.content="{= fmt($temperature.slider.value, 0) + ' K · slider'}" font.size="13" fill.color="@ink-2"/>
+      <rect name="legend key 2" transform2d.x="720" transform2d.y="156" size.w="24" size.h="4" fill.color="@series-2"/>
+      <text name="legend label 2" transform2d.x="756" transform2d.y="148" text.content="3000 K · tungsten lamp" font.size="13" fill.color="@ink-2"/>
+      <rect name="legend key 3" transform2d.x="720" transform2d.y="184" size.w="24" size.h="4" fill.color="@series-3"/>
+      <text name="legend label 3" transform2d.x="756" transform2d.y="176" text.content="5800 K · the Sun" font.size="13" fill.color="@ink-2"/>
+    </group>
+    <group name="star swatch">
+      <rect name="night sky" transform2d.x="720" transform2d.y="240" size.w="280" size.h="180" corners.tl="10" corners.tr="10" corners.br="10" corners.bl="10" fill.color="{= rgb(14, 16, 28)}"/>
+      <text name="swatch label" transform2d.x="720" transform2d.y="216" text.content="Colour of a star at T" font.size="13" fill.color="@muted"/>
+      <ellipse id="$star_colour" name="star colour" transform2d.x="860" transform2d.y="330" radius.rx="48" radius.ry="48" shadow.color="{= $star_colour.fill.color}" shadow.blur="30" fill.color="{= rgb(66 &gt;= $temperature.slider.value / 100 ? 255 : clamp(329.7 * pow($temperature.slider.value / 100 - 60, -0.1332), 0, 255), 66 &gt;= $temperature.slider.value / 100 ? clamp(99.47 * ln($temperature.slider.value / 100) - 161.12, 0, 255) : clamp(288.12 * pow($temperature.slider.value / 100 - 60, -0.0755), 0, 255), $temperature.slider.value / 100 &gt;= 66 ? 255 : clamp(138.52 * ln($temperature.slider.value / 100 - 10) - 305.04, 0, 255))}" stroke.color="@axis" stroke.width="0"/>
+    </group>
+    <group name="readouts">
+      <text name="wien readout" transform2d.x="720" transform2d.y="458" text.content="{= 'λmax = 2.898 mm·K / T = ' + fmt(2898000 / $temperature.slider.value, 0) + ' nm'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="power readout" transform2d.x="720" transform2d.y="510" text.content="{= 'P / P_Sun = (T / 5800 K)⁴ = ' + fmt(sig(pow($temperature.slider.value / 5800, 4), 3))}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="normalisation note" transform2d.x="720" transform2d.y="548" text.content="{= $scale_each_peak.let.value ? 'Each curve divided by its own peak.' : 'Heights in units of the solar peak radiance.'}" font.size="12" fill.color="@muted"/>
+      <text name="wien label" transform2d.x="720" transform2d.y="440" text.content="Wien's peak" font.size="12" fill.color="@muted"/>
+      <text name="power label" transform2d.x="720" transform2d.y="492" text.content="Radiated power (Stefan–Boltzmann)" font.size="12" fill.color="@muted"/>
+    </group>
+    <group name="spectrum band">
+      <rect id="$wavelength_strip" name="wavelength strip" transform2d.x="94" transform2d.y="500" size.w="570" size.h="20" fill.color="{= mix(@surface, @grid, 0.6)}"/>
+      <rect name="band 380" transform2d.x="{= $wavelength_strip.transform2d.x + 280 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000385 m)}"/>
+      <rect name="band 390" transform2d.x="{= $wavelength_strip.transform2d.x + 290 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000039500000000000003 m)}"/>
+      <rect name="band 400" transform2d.x="{= $wavelength_strip.transform2d.x + 300 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000040500000000000004 m)}"/>
+      <rect name="band 410" transform2d.x="{= $wavelength_strip.transform2d.x + 310 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000041500000000000005 m)}"/>
+      <rect name="band 420" transform2d.x="{= $wavelength_strip.transform2d.x + 320 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000425 m)}"/>
+      <rect name="band 430" transform2d.x="{= $wavelength_strip.transform2d.x + 330 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000435 m)}"/>
+      <rect name="band 440" transform2d.x="{= $wavelength_strip.transform2d.x + 340 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000044500000000000003 m)}"/>
+      <rect name="band 450" transform2d.x="{= $wavelength_strip.transform2d.x + 350 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000045500000000000004 m)}"/>
+      <rect name="band 460" transform2d.x="{= $wavelength_strip.transform2d.x + 360 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.00000046500000000000005 m)}"/>
+      <rect name="band 470" transform2d.x="{= $wavelength_strip.transform2d.x + 370 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000475 m)}"/>
+      <rect name="band 480" transform2d.x="{= $wavelength_strip.transform2d.x + 380 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000485 m)}"/>
+      <rect name="band 490" transform2d.x="{= $wavelength_strip.transform2d.x + 390 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000495 m)}"/>
+      <rect name="band 500" transform2d.x="{= $wavelength_strip.transform2d.x + 400 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000505 m)}"/>
+      <rect name="band 510" transform2d.x="{= $wavelength_strip.transform2d.x + 410 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000515 m)}"/>
+      <rect name="band 520" transform2d.x="{= $wavelength_strip.transform2d.x + 420 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000005250000000000001 m)}"/>
+      <rect name="band 530" transform2d.x="{= $wavelength_strip.transform2d.x + 430 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000005350000000000001 m)}"/>
+      <rect name="band 540" transform2d.x="{= $wavelength_strip.transform2d.x + 440 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000005450000000000001 m)}"/>
+      <rect name="band 550" transform2d.x="{= $wavelength_strip.transform2d.x + 450 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000005550000000000001 m)}"/>
+      <rect name="band 560" transform2d.x="{= $wavelength_strip.transform2d.x + 460 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000565 m)}"/>
+      <rect name="band 570" transform2d.x="{= $wavelength_strip.transform2d.x + 470 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000575 m)}"/>
+      <rect name="band 580" transform2d.x="{= $wavelength_strip.transform2d.x + 480 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000585 m)}"/>
+      <rect name="band 590" transform2d.x="{= $wavelength_strip.transform2d.x + 490 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000595 m)}"/>
+      <rect name="band 600" transform2d.x="{= $wavelength_strip.transform2d.x + 500 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000605 m)}"/>
+      <rect name="band 610" transform2d.x="{= $wavelength_strip.transform2d.x + 510 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000615 m)}"/>
+      <rect name="band 620" transform2d.x="{= $wavelength_strip.transform2d.x + 520 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000625 m)}"/>
+      <rect name="band 630" transform2d.x="{= $wavelength_strip.transform2d.x + 530 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000006350000000000001 m)}"/>
+      <rect name="band 640" transform2d.x="{= $wavelength_strip.transform2d.x + 540 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000006450000000000001 m)}"/>
+      <rect name="band 650" transform2d.x="{= $wavelength_strip.transform2d.x + 550 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000006550000000000001 m)}"/>
+      <rect name="band 660" transform2d.x="{= $wavelength_strip.transform2d.x + 560 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000006650000000000001 m)}"/>
+      <rect name="band 670" transform2d.x="{= $wavelength_strip.transform2d.x + 570 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000675 m)}"/>
+      <rect name="band 680" transform2d.x="{= $wavelength_strip.transform2d.x + 580 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000685 m)}"/>
+      <rect name="band 690" transform2d.x="{= $wavelength_strip.transform2d.x + 590 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000695 m)}"/>
+      <rect name="band 700" transform2d.x="{= $wavelength_strip.transform2d.x + 600 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000705 m)}"/>
+      <rect name="band 710" transform2d.x="{= $wavelength_strip.transform2d.x + 610 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000715 m)}"/>
+      <rect name="band 720" transform2d.x="{= $wavelength_strip.transform2d.x + 620 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.000000725 m)}"/>
+      <rect name="band 730" transform2d.x="{= $wavelength_strip.transform2d.x + 630 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000007350000000000001 m)}"/>
+      <rect name="band 740" transform2d.x="{= $wavelength_strip.transform2d.x + 640 / 2900 * $wavelength_strip.size.w}" transform2d.y="500" size.w="{= $wavelength_strip.size.w * 10 / 2900 + 0.6}" size.h="20" fill.color="{= spectrum(0.0000007450000000000001 m)}"/>
+      <text name="band label" transform2d.x="{= $wavelength_strip.transform2d.x + 280 / 2900 * $wavelength_strip.size.w}" transform2d.y="528" text.content="visible 380–750 nm  ·  UV to the left, infrared to the right" font.size="12" fill.color="@muted"/>
+      <rect name="peak marker" transform2d.x="{= $wavelength_strip.transform2d.x + clamp((2898000 / $temperature.slider.value - 100) / 2900, 0, 1) * $wavelength_strip.size.w - 1}" transform2d.y="496" size.w="2" size.h="28" fill.color="@ink"/>
+    </group>
+    <place def="std:plot" name="planck plot" x="40" y="120" w="640" h="360" cursor="{= 2898000 / $temperature.slider.value}" style="smooth" title="Spectral radiance B(λ, T)" x_label="wavelength λ (nm)" x_max="3000" x_min="100" xs="{= range(100, 3000, 291)}" y_label="{= $scale_each_peak.let.value ? 'relative radiance (each peak = 1)' : 'relative radiance (Sun peak = 1)'}" y_min="0" ys="{= $scale_each_peak.let.value ? $planck_b_λ_t.let.value($self.xs, $temperature.slider.value) / max($planck_b_λ_t.let.value($self.xs, $temperature.slider.value)) : $planck_b_λ_t.let.value($self.xs, $temperature.slider.value)}" ys2="{= $scale_each_peak.let.value ? $planck_b_λ_t.let.value($self.xs, 3000) / max($planck_b_λ_t.let.value($self.xs, 3000)) : $planck_b_λ_t.let.value($self.xs, 3000)}" ys3="{= $scale_each_peak.let.value ? $planck_b_λ_t.let.value($self.xs, 5800) / max($planck_b_λ_t.let.value($self.xs, 5800)) : $planck_b_λ_t.let.value($self.xs, 5800)}"/>
+    <let id="$planck_b_λ_t" name="planck B(λ,T)" let.value="{= (lam, T) =&gt; pow(499.66 / lam, 5) * (exp(14388000 / (499.66 * 5800)) - 1) / (exp(14388000 / (lam * T)) - 1)}"/>
+    <let id="$scale_each_peak" name="scale each peak" let.value="true"/>
+    <group name="scale toggle">
+      <text name="scale label" transform2d.x="720" transform2d.y="580" text.content="Vertical scale" font.size="13" fill.color="@muted"/>
+      <group name="absolute button">
+        <rect name="absolute face" transform2d.x="720" transform2d.y="602" size.w="130" size.h="28" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= $scale_each_peak.let.value ? @surface : mix(@surface, @accent, 0.14)}" stroke.color="{= $scale_each_peak.let.value ? @grid : @accent}"/>
+        <text name="absolute text" transform2d.x="720" transform2d.y="602" size.w="130" size.h="28" text.content="Absolute" text.sizing="fixed" font.size="13" font.align="center" font.valign="middle" fill.color="{= $scale_each_peak.let.value ? @ink-2 : @ink}"/>
+        <on name="scale absolute" write.target="$scale_each_peak" write.to="false"/>
+      </group>
+      <group name="shape button">
+        <rect name="shape face" transform2d.x="860" transform2d.y="602" size.w="140" size.h="28" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6" fill.color="{= $scale_each_peak.let.value ? mix(@surface, @accent, 0.14) : @surface}" stroke.color="{= $scale_each_peak.let.value ? @accent : @grid}"/>
+        <text name="shape text" transform2d.x="860" transform2d.y="602" size.w="140" size.h="28" text.content="Each peak = 1" text.sizing="fixed" font.size="13" font.align="center" font.valign="middle" fill.color="{= $scale_each_peak.let.value ? @ink : @ink-2}"/>
+        <on name="scale each peak" write.target="$scale_each_peak" write.to="true"/>
+      </group>
+    </group>
+  </composition>
+</edit>

@@ -34,7 +34,6 @@
     "@resvg/resvg-wasm": "^2.6.2",
     "bits-ui": "^2.19.5",
     "dockview-core": "^8.5.1",
-    "fast-xml-parser": "^5.11.1",
     "heic-to": "^1.6.7",
     "konva": "^10.9.1",
     "marked": "^18.1.3",

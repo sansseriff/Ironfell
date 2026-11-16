@@ -53,22 +53,21 @@ test('layout modes validate stored values and scroll follow uses the reader posi
 
 test('a rejected edit reads as a sentence, not markup', () => {
   const failure = '<edit-failed applied="none" version="14">\n  <error kind="parse">instance.def: not a valid id: &quot;#$def&quot; at line 1</error>\n</edit-failed>';
-  assert.equal(failureSummary(failure, 2), 'The edit was rejected after 2 attempts, so nothing changed: instance.def: not a valid id: "#$def" at line 1');
-  assert.equal(failureSummary('plain words'), 'plain words');
+  assert.equal(failureSummary({ failure, errors: ['instance.def: not a valid id: "#$def" at line 1'] }, 2), 'The edit was rejected after 2 attempts, so nothing changed: instance.def: not a valid id: "#$def" at line 1');
+  assert.equal(failureSummary({ failure: 'plain words' }), 'plain words');
 });
 
-test('a streaming reply shows prose, holds back half-written markup and lists closed verbs', async () => {
-  const { streamView } = await import('../src-ui/chat/conversation');
-  assert.deepEqual(streamView('Making a pump.\n<ed'), { prose: 'Making a pump.\n', edit: null, verbs: [] });
-  assert.equal(streamView('See this:\n\n::vie').prose, 'See this:\n\n');
-  const forming = streamView('Making it.\n<edit><create id="$a" type="rect" name="pump body" x="1"/><set id="#4" x="2" fill.color="#f00"/><import-svg to="#1"><svg><g><path d="M0 0"/></g></svg></import-svg><create id="$b" type="te');
-  assert.equal(forming.prose, 'Making it.\n');
-  assert.deepEqual(forming.verbs, ['Create rect "pump body"', 'Set #4 · x, fill.color', 'Import SVG']);
-  assert.match(forming.edit!, /^<edit>/);
-  const closed = streamView('<edit><delete id="#3"/></edit>\nDone.');
-  assert.deepEqual([closed.prose, closed.verbs], ['\nDone.', ['Delete #3']]);
-  assert.equal(streamView('Like this:\n```xml\n<edit><delete id="#3"/></edit>\n```\n').edit, null);
-  assert.deepEqual(streamView('<look expand="#u"/>'), { prose: '', edit: null, verbs: [] });
+test('the edit forming is described verb by verb (the engine reads it, iron_document::reply::stream)', async () => {
+  const { describeVerb } = await import('../src-ui/chat/conversation');
+  const verb = (name: string, attrs: [string, string][]) => describeVerb({ name, attrs, closed: true });
+  assert.deepEqual([
+    verb('rect', [['id', '$a'], ['name', 'pump body'], ['x', '1']]),
+    verb('set', [['id', '#4'], ['x', '2'], ['fill.color', '#f00']]),
+    verb('import-svg', [['in', '#1']]),
+    verb('delete', [['id', '#3']]),
+    verb('change', [['op', '$a'], ['x', '1']]),
+    verb('drop', [['op', '4']]),
+  ], ['Create rect "pump body"', 'Set #4 · x, fill.color', 'Import SVG', 'Delete #3', 'Change $a · x', 'Drop 4']);
 });
 
 test('progress folds phases, reasoning and text into labelled steps', async () => {
@@ -76,11 +75,16 @@ test('progress folds phases, reasoning and text into labelled steps', async () =
   const progress = { steps: [], text: '' } as any;
   applyAgentEvents(progress, [{ kind: 'phase', phase: 'reading', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 1 }, { kind: 'reasoning', delta: 'Plan: ' }, { kind: 'reasoning', delta: 'a pump.' }], 10);
   assert.equal(stepLabel(progress.steps[1], false), 'Thinking');
-  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><create type="rect"/>' }], 20);
+  applyAgentEvents(progress, [{ kind: 'text', delta: 'Sure.\n<edit><rect/>' }], 20);
+  assert.equal(stepLabel(progress.steps[1], false), 'Writing', 'prose until the engine reads an edit forming');
+  const view = { prose: 'Sure.\n', edit: '<edit><rect/>', verbs: [{ name: 'rect', attrs: [], closed: true }] };
+  applyAgentEvents(progress, [{ kind: 'stream', view }], 21);
   assert.equal(stepLabel(progress.steps[1], false), 'Writing the edit');
+  assert.deepEqual(progress.view, view);
   assert.equal(progress.steps[1].reasoning, 'Plan: a pump.');
   applyAgentEvents(progress, [{ kind: 'phase', phase: 'applying', attempt: 1 }, { kind: 'phase', phase: 'thinking', attempt: 2 }], 30);
   assert.equal(progress.text, '');
+  assert.equal(progress.view, undefined);
   assert.equal(stepLabel(progress.steps[3], false), 'Reconsidering the rejected edit');
   finishProgress(progress, 40);
   assert.deepEqual(progress.steps.map((s: any) => [s.startedAt, s.endedAt]), [[10, 10], [10, 30], [30, 30], [30, 40]]);
@@ -182,5 +186,5 @@ test('a turn stopped or failed after applying edits stays in history and says so
   assert.deepEqual(history.map(m => m.role), ['user', 'assistant']);
   assert.match(history[1].content, /was stopped after 1 applied edit, which remain in the document: created rect #9/);
   const failure = '<edit-failed applied="none"><error kind="x">bad op</error></edit-failed>';
-  assert.match(failureSummary(failure, 1, true), /^Earlier edits in this turn remain applied; the next edit was rejected, so that edit was not applied: bad op$/);
+  assert.match(failureSummary({ failure, errors: ['bad op'] }, 1, true), /^Earlier edits in this turn remain applied; the next edit was rejected, so that edit was not applied: bad op$/);
 });

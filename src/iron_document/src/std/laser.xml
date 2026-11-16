@@ -2,11 +2,11 @@
      pulse_hz above 0 it pulses: on for `duty` of each period, timed by an
      accumulator (step.rs), so the pulses are live, not on the timeline. -->
 <definition name="laser">
-  <port_spec id="power" name="power" kind="value" dir="in" signal="10 mW"/>
-  <port_spec id="pulse" name="pulse_hz" kind="value" dir="in" signal="0"/>
-  <port_spec id="duty" name="duty" kind="value" dir="in" signal="0.5"/>
-  <accumulate id="phase" name="phase" initial="0" next="{= $pulse > 0 ? ($phase + $pulse * $phase.accumulate.dt) - floor($phase + $pulse * $phase.accumulate.dt) : 0}"/>
-  <port_spec id="out" name="out" kind="optical_power" dir="out" signal="{= $pulse > 0 && $phase >= $duty ? 0 * $power : $power}"/>
+  <port_spec id="$power" name="power" kind="value" dir="in" signal="10 mW"/>
+  <port_spec id="$pulse" name="pulse_hz" kind="value" dir="in" signal="0"/>
+  <port_spec id="$duty" name="duty" kind="value" dir="in" signal="0.5"/>
+  <accumulate id="$phase" name="phase" initial="0" next="{= $pulse > 0 ? ($phase + $pulse * $phase.accumulate.dt) - floor($phase + $pulse * $phase.accumulate.dt) : 0}"/>
+  <port_spec id="$out" name="out" kind="optical_power" dir="out" signal="{= $pulse > 0 && $phase >= $duty ? 0 * $power : $power}"/>
   <template notation="free">
     <rect name="body" x="0" y="0" w="130" h="70" fill.color="#2e3342"/>
     <rect name="beam" x="130" y="28" w="50" h="14" fill.color="#f2261a" fill.opacity="{= clamp($out / 20 mW, 0.15, 1)}"/>

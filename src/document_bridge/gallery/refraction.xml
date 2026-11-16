@@ -1,0 +1,61 @@
+<edit>
+  <composition name="refraction">
+    <text name="title" transform2d.x="40" transform2d.y="30" text.content="Refraction and Snell's law" font.size="26" font.weight="600" fill.color="@ink"/>
+    <text name="caption" transform2d.x="40" transform2d.y="72" text.content="Drag θ₁ and the two indices; make n₁ larger than n₂ and tilt past the critical angle to see total internal reflection." font.size="14" fill.color="@muted"/>
+    <group name="diagram">
+      <rect name="medium 1" transform2d.x="40" transform2d.y="120" size.w="520" size.h="220" fill.color="{= mix(@surface, @series-1, scale($n1.slider.value, 1, 2.5, 0, 0.3))}" stroke.color="@grid"/>
+      <rect name="medium 2" transform2d.x="40" transform2d.y="340" size.w="520" size.h="220" fill.color="{= mix(@surface, @series-1, scale($n2.slider.value, 1, 2.5, 0.08, 0.38))}" stroke.color="@grid"/>
+      <path name="interface" path.d="M 40 340 L 560 340" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
+      <path name="normal" path.d="M 300 130 L 300 550" fill.opacity="0" stroke.color="@axis" stroke.width="1.5" stroke.dash="6 4"/>
+      <text name="n1 label" transform2d.x="56" transform2d.y="134" text.content="{= 'n₁ = ' + fmt($n1.slider.value, 2)}" font.size="14" fill.color="@ink-2"/>
+      <text name="n2 label" transform2d.x="56" transform2d.y="528" text.content="{= 'n₂ = ' + fmt($n2.slider.value, 2)}" font.size="14" fill.color="@ink-2"/>
+      <path name="theta1 arc" path.d="{= arc(300, 340, 50, -pi / 2 - $theta1_rad.let.value, -pi / 2)}" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
+      <path name="theta2 arc" path.d="{= arc(300, 340, 60, pi / 2 - $theta2_rad.let.value, pi / 2)}" appearance.opacity="{= $tir.let.value ? 0 : 1}" fill.opacity="0" stroke.color="@ink-2" stroke.width="1.5"/>
+      <text name="theta1 label" transform2d.x="{= 300 - 74 * sin($theta1_label_angle.let.value) - 6}" transform2d.y="{= 340 - 74 * cos($theta1_label_angle.let.value) - 9}" text.content="θ₁" font.size="15" fill.color="@ink"/>
+      <text name="theta2 label" transform2d.x="{= 300 + 84 * sin($theta2_label_angle.let.value) - 6}" transform2d.y="{= 340 + 84 * cos($theta2_label_angle.let.value) - 9}" appearance.opacity="{= $tir.let.value ? 0 : 1}" text.content="θ₂" font.size="15" fill.color="@ink"/>
+      <path name="incident ray" path.d="{= line(300 - 200 * sin($theta1_rad.let.value), 340 - 200 * cos($theta1_rad.let.value), 300, 340)}" fill.opacity="0" stroke.color="@series-2" stroke.width="3"/>
+      <group name="incident arrow" transform2d.x="{= 300 - 100 * sin($theta1_rad.let.value)}" transform2d.y="{= 340 - 100 * cos($theta1_rad.let.value)}" transform2d.rot="{= atan2(cos($theta1_rad.let.value), sin($theta1_rad.let.value))}">
+        <path name="arrowhead" path.d="M 8 0 L -7 -6 L -7 6 L 8 0 Z" fill.color="@series-2"/>
+      </group>
+      <path name="refracted ray" path.d="{= line(300, 340, 300 + 200 * sin($theta2_rad.let.value), 340 + 200 * cos($theta2_rad.let.value))}" appearance.opacity="{= $tir.let.value ? 0 : 1}" fill.opacity="0" stroke.color="@series-2" stroke.width="3"/>
+      <group name="refracted arrow" transform2d.x="{= 300 + 110 * sin($theta2_rad.let.value)}" transform2d.y="{= 340 + 110 * cos($theta2_rad.let.value)}" transform2d.rot="{= atan2(cos($theta2_rad.let.value), sin($theta2_rad.let.value))}" appearance.opacity="{= $tir.let.value ? 0 : 1}">
+        <path name="arrowhead" path.d="M 8 0 L -7 -6 L -7 6 L 8 0 Z" fill.color="@series-2"/>
+      </group>
+      <path id="$reflected_ray" name="reflected ray" path.d="{= line(300, 340, 300 + 200 * sin($theta1_rad.let.value), 340 - 200 * cos($theta1_rad.let.value))}" appearance.opacity="{= clamp(0.3 + 0.7 * $reflectance_rs.let.value, 0.3, 1)}" fill.opacity="0" stroke.color="@series-2" stroke.width="3"/>
+      <group name="reflected arrow" transform2d.x="{= 300 + 110 * sin($theta1_rad.let.value)}" transform2d.y="{= 340 - 110 * cos($theta1_rad.let.value)}" transform2d.rot="{= atan2(-cos($theta1_rad.let.value), sin($theta1_rad.let.value))}" appearance.opacity="{= $reflected_ray.appearance.opacity}">
+        <path name="arrowhead" path.d="M 8 0 L -7 -6 L -7 6 L 8 0 Z" fill.color="@series-2"/>
+      </group>
+      <text name="TIR label" transform2d.x="320" transform2d.y="364" appearance.opacity="{= $tir.let.value ? 1 : 0}" text.content="Total internal reflection" font.size="14" font.weight="600" fill.color="@ink"/>
+    </group>
+    <group name="controls">
+      <text name="theta1 caption" transform2d.x="600" transform2d.y="440" text.content="Angle of incidence θ₁" font.size="14" fill.color="@ink-2"/>
+      <slider id="$theta1" name="theta1" transform2d.x="600" transform2d.y="460" size.w="240" size.h="24" slider.max="89" slider.step="1" slider.value="40"/>
+      <text name="theta1 readout" transform2d.x="860" transform2d.y="463" text.content="{= fmt($theta1.slider.value, 0) + '°'}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="n1 caption" transform2d.x="600" transform2d.y="500" text.content="Index above, n₁" font.size="14" fill.color="@ink-2"/>
+      <slider id="$n1" name="n1" transform2d.x="600" transform2d.y="520" size.w="240" size.h="24" slider.min="1" slider.max="2.5" slider.value="1"/>
+      <text name="n1 readout" transform2d.x="860" transform2d.y="523" text.content="{= fmt($n1.slider.value, 2)}" font.size="14" font.tabular="true" fill.color="@ink"/>
+      <text name="n2 caption" transform2d.x="600" transform2d.y="560" text.content="Index below, n₂" font.size="14" fill.color="@ink-2"/>
+      <slider id="$n2" name="n2" transform2d.x="600" transform2d.y="580" size.w="240" size.h="24" slider.min="1" slider.max="2.5" slider.value="1.5"/>
+      <text name="n2 readout" transform2d.x="860" transform2d.y="583" text.content="{= fmt($n2.slider.value, 2)}" font.size="14" font.tabular="true" fill.color="@ink"/>
+    </group>
+    <group name="readouts">
+      <text name="theta2 readout" transform2d.x="40" transform2d.y="596" text.content="{= $tir.let.value ? 'none (TIR)' : fmt($theta2_rad.let.value * 180 / pi, 1) + '°'}" font.size="18" font.weight="600" font.tabular="true" fill.color="@ink"/>
+      <text name="critical readout" transform2d.x="220" transform2d.y="596" text.content="{= $n1.slider.value &gt; $n2.slider.value ? fmt($critical_angle_deg.let.value, 1) + '°' : 'none (n₁ ≤ n₂)'}" font.size="18" font.weight="600" font.tabular="true" fill.color="@ink"/>
+      <text name="reflectance readout" transform2d.x="400" transform2d.y="596" text.content="{= fmt(100 * $reflectance_rs.let.value, 1) + ' %'}" font.size="18" font.weight="600" font.tabular="true" fill.color="@ink"/>
+      <text name="reflectance note" transform2d.x="40" transform2d.y="636" text.content="Rₛ is the s-polarised Fresnel reflectance; the reflected ray's opacity follows it." font.size="13" fill.color="@muted"/>
+      <text name="theta2 label" transform2d.x="40" transform2d.y="578" text.content="Refraction angle θ₂" font.size="12" fill.color="@muted"/>
+      <text name="critical label" transform2d.x="220" transform2d.y="578" text.content="Critical angle θc" font.size="12" fill.color="@muted"/>
+      <text name="reflectance label" transform2d.x="400" transform2d.y="578" text.content="Reflectance Rₛ" font.size="12" fill.color="@muted"/>
+    </group>
+    <text name="plot note" transform2d.x="600" transform2d.y="392" size.w="400" size.h="36" text.content="{= 'Grey line: θ₂ = θ₁ (no bending). With n₁ &gt; n₂ the curve ends at the critical angle θc (dashed); ' + ($tir.let.value ? 'past it there is no refracted ray, so no point.' : 'the ringed point is the current ray.')}" text.sizing="auto_height" font.size="13" fill.color="@muted"/>
+    <place def="std:plot" name="angle plot" x="600" y="120" w="400" h="260" color2="@muted" cursor="{= 0 / 0}" marks_label="{= '(' + fmt($theta1.slider.value, 0) + '°, ' + fmt($theta2_rad.let.value * 180 / pi, 1) + '°)'}" marks_x="{= $tir.let.value ? series() : $theta1.slider.value}" marks_y="{= $tir.let.value ? series() : $theta2_rad.let.value * 180 / pi}" title="θ₂ against θ₁" vlines="{= $n1.slider.value &gt; $n2.slider.value ? $critical_angle_deg.let.value : series()}" x_label="θ₁ (°)" x_max="90" x_min="0" xs="{= range(0, 89, 179)}" y_label="θ₂ (°)" y_max="100" y_min="0" ys="{= asin($n1.slider.value * sin($self.xs * pi / 180) / $n2.slider.value) * 180 / pi}" ys2="{= $self.xs}"/>
+    <let id="$theta1_rad" name="theta1 rad" let.value="{= $theta1.slider.value * pi / 180}"/>
+    <let id="$sin_theta2" name="sin theta2" let.value="{= $n1.slider.value * sin($theta1_rad.let.value) / $n2.slider.value}"/>
+    <let id="$tir" name="TIR" let.value="{= $sin_theta2.let.value &gt; 1}"/>
+    <let id="$theta2_rad" name="theta2 rad" let.value="{= asin(min(1, $sin_theta2.let.value))}"/>
+    <let id="$reflectance_rs" name="reflectance Rs" let.value="{= $tir.let.value ? 1 : with(a = $n1.slider.value * cos($theta1_rad.let.value), b = $n2.slider.value * cos($theta2_rad.let.value), pow((a - b) / (a + b), 2))}"/>
+    <let id="$critical_angle_deg" name="critical angle deg" let.value="{= $n1.slider.value &gt; $n2.slider.value ? asin($n2.slider.value / $n1.slider.value) * 180 / pi : 0 / 0}"/>
+    <let id="$theta1_label_angle" name="theta1 label angle" let.value="{= max($theta1_rad.let.value / 2, 0.2)}"/>
+    <let id="$theta2_label_angle" name="theta2 label angle" let.value="{= max($theta2_rad.let.value / 2, 0.2)}"/>
+  </composition>
+</edit>

@@ -74,6 +74,25 @@ pub enum RelKind {
 }
 
 impl RelKind {
+    pub const ALL: [RelKind; 11] = [
+        RelKind::Animates,
+        RelKind::After,
+        RelKind::During,
+        RelKind::AlignsTo,
+        RelKind::References,
+        RelKind::Figures,
+        RelKind::Constrains,
+        RelKind::Connects,
+        RelKind::Selects,
+        RelKind::Exposes,
+        RelKind::Projects,
+    ];
+
+    /// The kind [`RelKind::name`] names.
+    pub fn from_name(name: &str) -> Option<RelKind> {
+        RelKind::ALL.into_iter().find(|k| k.name() == name)
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             RelKind::Animates => "animates",

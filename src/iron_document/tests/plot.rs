@@ -44,7 +44,7 @@ fn desk() -> (Store, NodeId) {
 /// Place a plot; answer (entity, use).
 fn place(store: &mut Store, attrs: &str) -> (NodeId, NodeId) {
     let markup = format!(r#"<place def="std:plot" in="bench" x="20" y="20" {attrs}/>"#);
-    let (ops, summary) = compose::compose_ops(store, &markup).unwrap_or_else(|e| panic!("{e}"));
+    let (ops, summary) = place_ops(store, &markup).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let line = summary.lines().find(|l| l.contains("<placed")).unwrap();
     let get = |a: &str| -> NodeId {
@@ -245,4 +245,30 @@ fn the_plot_follows_the_theme_and_styles_each_series() {
     // Series 2 is scatter: dots, no line.
     assert_eq!(colour(&store, "series 2", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
     assert_ne!(colour(&store, "series 1", "stroke.color"), Some(Value::Color([0.0, 0.0, 0.0, 0.0])));
+}
+
+/// Marks in the data's coordinates (plot.md §4.2): points with labels and
+/// dashed reference lines, drawn in the clipped area and counted in the
+/// auto range; a series may be dashed.
+#[test]
+fn marks_label_points_and_reference_lines_in_data_coordinates() {
+    let (mut store, _) = desk();
+    let (e, u) = place(&mut store, r#"xs="0 1 2 3 4" ys="0 1 4 9 16" style="dashed" marks_x="{= series(2, 3)}" marks_y="{= series(4, 9)}" marks_label="{= list('peak', 'next')}" hlines="20" vlines="{= series(1)}""#);
+    assert!(errors(&store, e, u).is_empty(), "{:?}", errors(&store, e, u));
+    // Path data resolves to geometry: count its contours.
+    let contours = |name: &str| format!("{:?}", store.resolved(part(&store, u, name), path("path.d")));
+    assert!(contours("marks").contains("(2 contours"), "two marks: {}", contours("marks"));
+    assert!(contours("reference lines").contains("(2 contours"), "one h, one v: {}", contours("reference lines"));
+    let dash = store.resolved(part(&store, u, "series 1"), path("stroke.dash")).unwrap();
+    assert_eq!(dash.as_str(), Some("7 5"));
+    // The reference line at 20 is in view: the y range reaches it.
+    let y_hi = store.resolved(store.document().children(e).iter().copied().find(|&p| store.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("y_hi")).unwrap(), path("port.signal")).unwrap();
+    assert!(y_hi.as_f64().unwrap() >= 20.0, "{y_hi:?}");
+    assert_eq!(labels(&store, u, "mark label"), vec!["peak", "next"]);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

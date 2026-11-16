@@ -17,10 +17,6 @@ fn num(n: f64) -> Slot {
     Slot::Const(Value::Number(n))
 }
 
-fn bound(e: &str) -> Slot {
-    Slot::Bound(Expr::parse(e).unwrap())
-}
-
 fn path(s: &str) -> LeafPath {
     s.parse().unwrap()
 }
@@ -33,7 +29,6 @@ struct Scene {
     store: Store,
     rect: NodeId,
     clip: NodeId,
-    view: NodeId,
     keys: [NodeId; 2],
 }
 
@@ -77,16 +72,7 @@ fn scene() -> Scene {
         ))
         .unwrap();
     store.drain_changes();
-    Scene { store, rect, clip, view, keys: key_ids }
-}
-
-/// A node in `view` whose x is `expr`.
-fn add_bar(store: &mut Store, view: NodeId, expr: &str) -> NodeId {
-    let id = store.document().next_ids(1)[0];
-    let mut t = Transform2d::default();
-    t.x = bound(expr);
-    store.apply(tx("bar", vec![Op::Create { id, ty: ty("rect"), parent: Some(view), order: OrderKey::first(), facets: vec![t.wrap(), Size::default().wrap()] }])).unwrap();
-    id
+    Scene { store, rect, clip, keys: key_ids }
 }
 
 

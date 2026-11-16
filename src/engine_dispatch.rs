@@ -21,8 +21,6 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "narrative_edit" => { arity(args,4)?; crate::engine_api::narrative_edit(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "narrative_create" => { arity(args,3)?; crate::engine_api::narrative_create(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "narrative_markdown" => { arity(args,1)?; crate::engine_api::narrative_markdown(app,argument::<String>(args,0)?) },
-        "narrative_write" => { arity(args,4)?; crate::engine_api::narrative_write(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
-        "narrative_rewrite" => { arity(args,3)?; crate::engine_api::narrative_rewrite(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "timeline_axis" => { arity(args,1)?; crate::engine_api::timeline_axis(app,argument::<String>(args,0)?) },
         "workspace_strip" => { arity(args,0)?; crate::engine_api::workspace_strip(app) },
         "state_key" => { arity(args,1)?; crate::engine_api::state_key(app,argument::<String>(args,0)?) },
@@ -52,17 +50,19 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "author" => { arity(args,2)?; crate::engine_api::document_author(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "detach" => { arity(args,1)?; crate::engine_api::document_detach(app,argument::<String>(args,0)?) },
         "table" => { arity(args,1)?; crate::engine_api::document_table(app,argument::<String>(args,0)?) },
-        "context" => { arity(args,1)?; crate::engine_api::document_context(app,argument::<String>(args,0)?) },
         "computed" => { arity(args,1)?; crate::engine_api::document_computed(app,argument::<String>(args,0)?) },
         "view_context" => { arity(args,1)?; crate::engine_api::document_view_context(app,argument::<String>(args,0)?) },
         "demo" => { arity(args,0)?; crate::engine_api::document_demo(app) },
         "showcase" => { arity(args,0)?; crate::engine_api::document_showcase(app) },
         "contexts" => { arity(args,0)?; crate::engine_api::document_contexts(app) },
-        "circuit" => { arity(args,1)?; crate::engine_api::document_circuit(app,argument::<String>(args,0)?) },
-        "compose" => { arity(args,2)?; crate::engine_api::document_compose(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "picture" => { arity(args,1)?; crate::engine_api::document_picture(app,argument::<String>(args,0)?) },
         "picture_poll" => { arity(args,2)?; crate::engine_api::document_picture_poll(app,argument::<u64>(args,0)?,argument::<bool>(args,1)?) },
+        "edit_plan" => { arity(args,1)?; crate::engine_api::document_edit_plan(app,argument::<String>(args,0)?) },
         "netlist" => { arity(args,1)?; crate::engine_api::document_netlist(app,argument::<String>(args,0)?) },
+        "netlists" => { arity(args,0)?; crate::engine_api::document_netlists(app) },
+        "edit_revise" => { arity(args,2)?; crate::engine_api::document_edit_revise(argument::<String>(args,0)?,argument::<String>(args,1)?) },
+        "reply_read" => { arity(args,1)?; crate::engine_api::document_reply_read(argument::<String>(args,0)?) },
+        "reply_stream" => { arity(args,1)?; crate::engine_api::document_reply_stream(argument::<String>(args,0)?) },
         "table_edit" => { arity(args,3)?; crate::engine_api::document_table_edit(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
         "link" => { arity(args,4)?; crate::engine_api::document_link(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<String>(args,3)?) },
         "layers" => { arity(args,2)?; crate::engine_api::document_layers(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
@@ -72,9 +72,9 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "export_svg" => { arity(args,1)?; crate::engine_api::document_export_svg(app,argument::<String>(args,0)?) },
         "import_svg" => { arity(args,1)?; crate::engine_api::document_import_svg(app,argument::<String>(args,0)?) },
         "import_svg_flat" => { arity(args,1)?; crate::engine_api::document_import_svg_flat(app,argument::<String>(args,0)?) },
-        "import_svg_at" => { arity(args,5)?; crate::engine_api::document_import_svg_at(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<f64>(args,2)?,argument::<f64>(args,3)?,argument::<String>(args,4)?) },
         "focus" => { arity(args,1)?; crate::engine_api::document_focus(app,argument::<String>(args,0)?) },
         "selection" => { arity(args,0)?; crate::engine_api::document_selection(app) },
+        "version" => { arity(args,0)?; crate::engine_api::document_version(app) },
         "inspect" => { arity(args,1)?; crate::engine_api::document_inspect(app,argument::<String>(args,0)?) },
         "component" => { arity(args,3)?; crate::engine_api::document_component(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<bool>(args,2)?) },
         "inspect_patch" => { arity(args,2)?; crate::engine_api::document_inspect_patch(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
@@ -88,9 +88,6 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "render_inspector" => { arity(args,1)?; crate::engine_api::document_render_inspector(app,argument::<String>(args,0)?) },
         "render_inspector_options" => { arity(args,2)?; crate::engine_api::document_render_inspector_options(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "set_run_mode" => { arity(args,2)?; crate::engine_api::document_set_run_mode(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
-        "next_ids" => { arity(args,1)?; crate::engine_api::document_next_ids(app,argument::<u32>(args,0)?) },
-        "next_relation_ids" => { arity(args,1)?; crate::engine_api::document_next_relation_ids(app,argument::<u32>(args,0)?) },
-        "place" => { arity(args,3)?; crate::engine_api::document_place(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<u32>(args,2)?)? },
         "schema" => { arity(args,0)?; crate::engine_api::document_schema() },
         "commands" => { arity(args,0)?; crate::engine_api::commands() },
         "inspect_bind" => { arity(args,3)?; crate::engine_api::document_inspect_bind(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?) },
@@ -114,8 +111,8 @@ mod tests {
         let window = engine.world_mut().spawn_empty().id();
         let mut app = WorkerApp::new(engine, window);
         assert_eq!(call(&mut app, "missing", &[]).unwrap_err(), "unknown document operation: missing");
-        assert_eq!(call(&mut app, "next_ids", &[]).unwrap_err(), "expected 1 arguments, got 0");
-        assert!(call(&mut app, "next_ids", &[json!("wrong type")]).unwrap_err().starts_with("argument 0:"));
+        assert_eq!(call(&mut app, "stress", &[]).unwrap_err(), "expected 1 arguments, got 0");
+        assert!(call(&mut app, "stress", &[json!("wrong type")]).unwrap_err().starts_with("argument 0:"));
         assert!(call(&mut app, "apply", &[json!("{}"), json!(-1)]).unwrap_err().starts_with("argument 1:"));
         assert!(call(&mut app, "load", &[json!("not json")]).is_err());
         // No document store is installed: bad arguments must be rejected before

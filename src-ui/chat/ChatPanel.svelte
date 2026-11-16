@@ -46,7 +46,7 @@
         const applied = appliedEdits({ result }).length > 0;
         entry.error = result.error
           ? (applied && !result.ok ? `Earlier edits in this turn remain applied. ${result.error}` : result.error)
-          : (!result.ok ? (result.outcome?.failure ? failureSummary(result.outcome.failure, result.attempts, applied) : 'The request could not be completed.') : '');
+          : (!result.ok ? (result.outcome?.failure ? failureSummary(result.outcome, result.attempts, applied) : 'The request could not be completed.') : '');
       }
     } catch (error) {
       if (controller.signal.aborted) entry.status = 'stopped';

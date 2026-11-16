@@ -166,7 +166,6 @@ pub struct Square {
     pub kind: SquareKind,
     /// The tiling's scale, and the view's.
     pub scale: f64,
-    pub view_scale: f64,
 }
 
 /// What the raster cache did lately, for the inspector's legend.
@@ -175,7 +174,6 @@ pub struct Summary {
     pub tiles: usize,
     pub pages: usize,
     pub budget_mb: usize,
-    pub groups: usize,
     /// Over the last second.
     pub baked: u32,
     pub bake_ms: f32,
@@ -822,7 +820,6 @@ impl Raster {
     fn draw_group(&mut self, id: u64, members: &[Item<'_>], viewport: Rect, motion: Motion, wanted: bool, device: &wgpu::Device, scene: &mut Scene, pages: &mut Vec<u16>, emit: &mut Emit<'_>, vs: &mut ViewState, built: &mut Built) -> u32 {
         let now = self.now;
         let base = members[0].base;
-        let a = exact(base).scale();
         let at = self.choose(id, base, motion);
         // How much the view magnifies the tiling: 1 at rest.
         let stretch = ratio(linear(base), at.linear).unwrap_or(1.0);
@@ -868,7 +865,7 @@ impl Raster {
         }
         // A tile of another scale or phase than the view's is drawn
         // resampled.
-        vs.picture.extend(picture.into_iter().map(|(rect, kind)| Square { rect, kind: if kind == SquareKind::Tile && !exact { SquareKind::Stretched } else { kind }, scale: at.scale(), view_scale: a }));
+        vs.picture.extend(picture.into_iter().map(|(rect, kind)| Square { rect, kind: if kind == SquareKind::Tile && !exact { SquareKind::Stretched } else { kind }, scale: at.scale() }));
         drawn
     }
 
@@ -1155,7 +1152,7 @@ impl Raster {
         }
         self.totals = Totals::default();
         let tiles: usize = self.pages.iter().map(|p| p.owner.iter().filter(|o| o.is_some()).count()).sum();
-        let mut summary = Summary { tiles, pages: self.pages.len(), budget_mb: (BUDGET.load(Ordering::Relaxed) >> 20) as usize, groups: self.groups.len(), ..Default::default() };
+        let mut summary = Summary { tiles, pages: self.pages.len(), budget_mb: (BUDGET.load(Ordering::Relaxed) >> 20) as usize, ..Default::default() };
         for (_, t) in &self.recent {
             summary.baked += t.baked;
             summary.bake_ms += t.bake_ms;

@@ -173,10 +173,11 @@ impl Scene {
         self.entries.get(&id).map(|e| e.affine)
     }
 
-    /// An entry's bounds in its own composition's space.
+    /// An entry's bounds in its own composition's space; `None` while they
+    /// are not finite (the entry is then out of the index).
     pub fn bounds(&self, id: NodeId) -> Option<Bounds> {
         let e = self.entries.get(&id)?;
-        Some(e.bounds.mapped(self.placement(e.scope)))
+        Some(e.bounds.mapped(self.placement(e.scope))).filter(|b| b.finite())
     }
 
     /// An entry's painted bounds in composition space. A group's covers its

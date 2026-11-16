@@ -11,13 +11,14 @@
   import ChatProgress from './ChatProgress.svelte';
   import PencilLine from '@lucide/svelte/icons/pencil-line';
   import ClipboardList from '@lucide/svelte/icons/clipboard-list';
-  import { appliedEdits, contentParts, streamView, turnLog, type ChatTurn } from './conversation';
+  import { appliedEdits, contentParts, describeVerb, turnLog, type ChatTurn } from './conversation';
   import type { Snippet } from 'svelte';
 
   let { turn, retry, review }: { turn: ChatTurn; retry: () => void; review?: Snippet<[ChatTurn]> } = $props();
   const parts = $derived(contentParts(turn.result?.note ?? ''));
-  // While it runs: the reply as it streams, split into prose and the edit forming.
-  const live = $derived(turn.status === 'running' ? streamView(turn.progress?.text ?? '') : null);
+  // While it runs: the reply as it streams, split into prose and the edit
+  // forming (read by the engine, iron_document::reply::stream).
+  const live = $derived(turn.status === 'running' ? turn.progress?.view ?? null : null);
   const liveParts = $derived(live?.prose ? contentParts(live.prose) : []);
   /** Verbs listed while an edit forms; earlier ones are counted. */
   const SHOWN_VERBS = 6;
@@ -60,7 +61,7 @@
           {#if live.verbs.length}
             <ul class="verbs">
               {#if live.verbs.length > SHOWN_VERBS}<li class="earlier">{live.verbs.length - SHOWN_VERBS} earlier</li>{/if}
-              {#each live.verbs.slice(-SHOWN_VERBS) as verb, index (live.verbs.length - SHOWN_VERBS + index)}<li>{verb}</li>{/each}
+              {#each live.verbs.slice(-SHOWN_VERBS) as verb, index (live.verbs.length - SHOWN_VERBS + index)}<li>{describeVerb(verb)}</li>{/each}
             </ul>
           {/if}
           <Collapsible.Root>

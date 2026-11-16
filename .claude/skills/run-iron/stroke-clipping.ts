@@ -17,15 +17,15 @@ try{
 await page.goto('http://localhost:5173/Ironfell/?gfx=webgl2&demo&layout=default');await page.waitForSelector('.loading',{state:'detached',timeout:180000});await page.waitForFunction(async () => !!(window as any).__iron && (await (window as any).__iron.view({fidelity:'full'})).includes('name="controls"'), {timeout:180000});await page.waitForTimeout(1000);
 const v=await view(),parent=v.match(/<composition id="([^"]+)" name="controls"/)[1];
 await edit(`<edit>
-<create id="$source" type="composition" name="stroke bounds source" dims="2d"/>
-<create id="$anchor" type="rect" parent="$source" w="1" h="1" color="#00000000"/>
-<create id="$rect" type="rect" parent="$source" x="40" y="40" w="240" h="160" color="#8866dd"/>
+<composition id="$source" name="stroke bounds source" dims="2d"/>
+<rect in="$source" id="$anchor" w="1" h="1" color="#00000000"/>
+<rect in="$source" id="$rect" x="40" y="40" w="240" h="160" color="#8866dd"/>
 <add id="$rect" corners.tl="45" corners.tr="45" corners.br="45" corners.bl="45" stroke.color="#000000" stroke.width="16" gradient.kind="linear" gradient.start="#6546ed" gradient.end="#e86cb3"/>
 </edit>`);
 const source=(await view()).match(/<composition id="([^"]+)" name="stroke bounds source"/)[1];
 await edit(`<edit>
-<create id="$embed" type="embed" parent="${parent}" source="${source}" x="80" y="60"/>
-<create id="$framed" type="embed" parent="${parent}" source="${source}" x="430" y="60" frame.x0="0" frame.y0="0" frame.x1="280" frame.y1="200"/>
+<embed in="${parent}" id="$embed" source="${source}" x="80" y="60"/>
+<embed in="${parent}" id="$framed" source="${source}" x="430" y="60" frame.x0="0" frame.y0="0" frame.x1="280" frame.y1="200"/>
 </edit>`);
 await page.locator('.dv-tab',{hasText:/^\s*Controls\s*$/}).click();await wait();
 const p=(await page.locator('[data-panel-id="controls"]').boundingBox())!;

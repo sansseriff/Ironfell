@@ -34,7 +34,7 @@ pub mod view_composite;
 pub use backend::{BackendKind, Offscreen, Overlay, VectorLayer, VectorView, order};
 pub use hybrid::ViewTarget2d;
 pub use composite::VECTOR_LAYER;
-pub use display_list::{Brush, DisplayList, DisplayListBuilder, DisplayListRebuild, Recorded, Shape, SharedPath};
+pub use display_list::{Brush, DisplayList, DisplayListBuilder, DisplayListRebuild, Recorded, Shape};
 
 use bevy::prelude::*;
 

@@ -10,8 +10,6 @@ export type DocumentCommand =
   | { op: 'narrative_edit'; source: string; edits: string; label: string; actor: string }
   | { op: 'narrative_create'; name: string; markdown: string; actor: string }
   | { op: 'narrative_markdown'; source: string }
-  | { op: 'narrative_write'; source: string; after: string; markdown: string; actor: string }
-  | { op: 'narrative_rewrite'; block: string; markdown: string; actor: string }
   | { op: 'timeline_axis'; fields: string }
   | { op: 'workspace_strip' }
   | { op: 'state_key'; key: string }
@@ -41,17 +39,19 @@ export type DocumentCommand =
   | { op: 'author'; verb: string; args: string }
   | { op: 'detach'; entity: string }
   | { op: 'table'; spec: string }
-  | { op: 'context'; markup: string }
   | { op: 'computed'; node: string }
   | { op: 'view_context'; panel: string }
   | { op: 'demo' }
   | { op: 'showcase' }
   | { op: 'contexts' }
-  | { op: 'circuit'; markup: string }
-  | { op: 'compose'; markup: string; ops_json: string }
   | { op: 'picture'; source: string }
   | { op: 'picture_poll'; ticket: number; cancel: boolean }
+  | { op: 'edit_plan'; xml: string }
   | { op: 'netlist'; sheet: string }
+  | { op: 'netlists' }
+  | { op: 'edit_revise'; rejected: string; patch: string }
+  | { op: 'reply_read'; text: string }
+  | { op: 'reply_stream'; text: string }
   | { op: 'table_edit'; table: string; verb: string; cells: string }
   | { op: 'link'; a: string; b: string; keep: string; actor: string }
   | { op: 'layers'; source: string; open_json: string }
@@ -61,9 +61,9 @@ export type DocumentCommand =
   | { op: 'export_svg'; scope: string }
   | { op: 'import_svg'; text: string }
   | { op: 'import_svg_flat'; text: string }
-  | { op: 'import_svg_at'; text: string; parent: string; x: number; y: number; actor: string }
   | { op: 'focus'; node: string }
   | { op: 'selection' }
+  | { op: 'version' }
   | { op: 'inspect'; node: string }
   | { op: 'component'; node: string; kind: string; add: boolean }
   | { op: 'inspect_patch'; node: string; patch: string }
@@ -77,9 +77,6 @@ export type DocumentCommand =
   | { op: 'render_inspector'; panel: string }
   | { op: 'render_inspector_options'; panel: string; options: string }
   | { op: 'set_run_mode'; source: string; mode: string }
-  | { op: 'next_ids'; n: number }
-  | { op: 'next_relation_ids'; n: number }
-  | { op: 'place'; parent: string; after: string; count: number }
   | { op: 'schema' }
   | { op: 'commands' }
   | { op: 'inspect_bind'; node: string; leaf: string; expr: string }
@@ -101,8 +98,6 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'narrative_edit': return { fn: command.op, args: [command.source, command.edits, command.label, command.actor] };
     case 'narrative_create': return { fn: command.op, args: [command.name, command.markdown, command.actor] };
     case 'narrative_markdown': return { fn: command.op, args: [command.source] };
-    case 'narrative_write': return { fn: command.op, args: [command.source, command.after, command.markdown, command.actor] };
-    case 'narrative_rewrite': return { fn: command.op, args: [command.block, command.markdown, command.actor] };
     case 'timeline_axis': return { fn: command.op, args: [command.fields] };
     case 'workspace_strip': return { fn: command.op, args: [] };
     case 'state_key': return { fn: command.op, args: [command.key] };
@@ -132,17 +127,19 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'author': return { fn: command.op, args: [command.verb, command.args] };
     case 'detach': return { fn: command.op, args: [command.entity] };
     case 'table': return { fn: command.op, args: [command.spec] };
-    case 'context': return { fn: command.op, args: [command.markup] };
     case 'computed': return { fn: command.op, args: [command.node] };
     case 'view_context': return { fn: command.op, args: [command.panel] };
     case 'demo': return { fn: command.op, args: [] };
     case 'showcase': return { fn: command.op, args: [] };
     case 'contexts': return { fn: command.op, args: [] };
-    case 'circuit': return { fn: command.op, args: [command.markup] };
-    case 'compose': return { fn: command.op, args: [command.markup, command.ops_json] };
     case 'picture': return { fn: command.op, args: [command.source] };
     case 'picture_poll': return { fn: command.op, args: [command.ticket, command.cancel] };
+    case 'edit_plan': return { fn: command.op, args: [command.xml] };
     case 'netlist': return { fn: command.op, args: [command.sheet] };
+    case 'netlists': return { fn: command.op, args: [] };
+    case 'edit_revise': return { fn: command.op, args: [command.rejected, command.patch] };
+    case 'reply_read': return { fn: command.op, args: [command.text] };
+    case 'reply_stream': return { fn: command.op, args: [command.text] };
     case 'table_edit': return { fn: command.op, args: [command.table, command.verb, command.cells] };
     case 'link': return { fn: command.op, args: [command.a, command.b, command.keep, command.actor] };
     case 'layers': return { fn: command.op, args: [command.source, command.open_json] };
@@ -152,9 +149,9 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'export_svg': return { fn: command.op, args: [command.scope] };
     case 'import_svg': return { fn: command.op, args: [command.text] };
     case 'import_svg_flat': return { fn: command.op, args: [command.text] };
-    case 'import_svg_at': return { fn: command.op, args: [command.text, command.parent, command.x, command.y, command.actor] };
     case 'focus': return { fn: command.op, args: [command.node] };
     case 'selection': return { fn: command.op, args: [] };
+    case 'version': return { fn: command.op, args: [] };
     case 'inspect': return { fn: command.op, args: [command.node] };
     case 'component': return { fn: command.op, args: [command.node, command.kind, command.add] };
     case 'inspect_patch': return { fn: command.op, args: [command.node, command.patch] };
@@ -168,9 +165,6 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'render_inspector': return { fn: command.op, args: [command.panel] };
     case 'render_inspector_options': return { fn: command.op, args: [command.panel, command.options] };
     case 'set_run_mode': return { fn: command.op, args: [command.source, command.mode] };
-    case 'next_ids': return { fn: command.op, args: [command.n] };
-    case 'next_relation_ids': return { fn: command.op, args: [command.n] };
-    case 'place': return { fn: command.op, args: [command.parent, command.after, command.count] };
     case 'schema': return { fn: command.op, args: [] };
     case 'commands': return { fn: command.op, args: [] };
     case 'inspect_bind': return { fn: command.op, args: [command.node, command.leaf, command.expr] };

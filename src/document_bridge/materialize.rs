@@ -671,13 +671,6 @@ impl Reader<'_> {
         self.get(leaf).and_then(|v| v.as_str().map(str::to_owned))
     }
 
-    fn vec3(&self, leaf: &str, default: Vec3) -> Vec3 {
-        self.get(leaf)
-            .and_then(|v| v.as_vec3())
-            .map(|[x, y, z]| Vec3::new(x as f32, y as f32, z as f32))
-            .unwrap_or(default)
-    }
-
     /// The node's world pose in its composition's 3D space, from the store
     /// (`Store::world_affine3`): every live ancestor's `transform3d` then its
     /// own. Bevy receives it and never propagates it.

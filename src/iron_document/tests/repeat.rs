@@ -46,7 +46,7 @@ fn copies(store: &Store, g: NodeId) -> Vec<f64> {
 
 #[test]
 fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
-    let (mut store, named) = sheet(r#"<group id="g" name="row" repeat.count="3"><rect name="cell" x="{= $g.repeat.index * 20}" w="10" h="10"/></group>"#);
+    let (mut store, named) = sheet(r#"<group id="$g" name="row" repeat.count="3"><rect name="cell" x="{= $g.repeat.index * 20}" w="10" h="10"/></group>"#);
     let g = named["g"];
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0]);
     // The template is a child too, but no copy; it is never drawn.
@@ -75,7 +75,7 @@ fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
 
 #[test]
 fn each_copy_reads_its_own_element_and_nothing_derived_is_saved() {
-    let (mut store, named) = sheet(r#"<group id="g" name="dots" repeat.each="{= range(0, 30, 4)}"><ellipse name="dot" x="{= $g.repeat.item * 2}" rx="2" ry="2"/></group>"#);
+    let (mut store, named) = sheet(r#"<group id="$g" name="dots" repeat.each="{= range(0, 30, 4)}"><ellipse name="dot" x="{= $g.repeat.item * 2}" rx="2" ry="2"/></group>"#);
     let g = named["g"];
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0, 60.0]);
     let text = store.save();
@@ -96,7 +96,7 @@ fn a_wider_plot_gets_more_tick_labels_in_one_transaction() {
     let _ = named;
     let model = store.document().next_id();
     store.apply(tx("model", vec![Op::Create { id: model, ty: ty("model"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![] }])).unwrap();
-    let (ops, summary) = compose::compose_ops(&store, r#"<place def="std:plot" in="sheet" x="0" y="0"/>"#).unwrap();
+    let (ops, summary) = place_ops(&store, r#"<place def="std:plot" in="sheet" x="0" y="0"/>"#).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let start = summary.find("use=\"").unwrap() + 5;
     let u: NodeId = summary[start..start + summary[start..].find('"').unwrap()].parse().unwrap();
@@ -107,4 +107,10 @@ fn a_wider_plot_gets_more_tick_labels_in_one_transaction() {
     assert!(wide > narrow, "{narrow} → {wide}");
     store.undo(0).unwrap().unwrap();
     assert_eq!(count(&store), narrow);
+}
+
+/// Component verbs as an edit (edit.rs): its ops and its summary lines.
+fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_document::Op>, String), String> {
+    let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
+    Ok((plan.ops, plan.summary.join("\n")))
 }

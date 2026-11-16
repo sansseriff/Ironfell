@@ -15,15 +15,15 @@ await page.goto(process.env.URL??'http://localhost:5186/Ironfell/?gfx=webgl2&dem
 const deadline=Date.now()+180000;
 while(!await page.evaluate(async()=>{try{return (await (window as any).__iron.view({fidelity:'full'})).includes('name="square"');}catch{return false;}})) {assert(Date.now()<deadline,'engine did not become ready');await page.waitForTimeout(100);}
 const r=await page.evaluate(()=>(window as any).__iron.edit(`<edit>
-<create id="$c" type="composition" name="attachment bench" notation="free" dims="2d"/>
-<create id="$f" type="path" parent="$c" name="fiber" x="120" y="100"/><add id="$f" stroke.color="#e9aa27" stroke.width="6"/>
-<create id="$fc" type="contour" parent="$f"/><create id="$a" type="point" parent="$fc" x="0" y="0"/><add id="$a" handles.ox="100" handles.oy="0"/>
-<create id="$b" type="point" parent="$fc" x="300" y="100"/><add id="$b" handles.ix="-100" handles.iy="0"/>
-<create id="$s" type="path" parent="$c" name="shadow" x="120" y="108"/><add id="$s" stroke.color="#555555" stroke.width="8"/>
-<create id="$sc" type="contour" parent="$s"/><create id="$sa" type="point" parent="$sc" x="0" y="0"/><add id="$sa" handles.ox="100" handles.oy="0"/>
-<create id="$sb" type="point" parent="$sc" x="300" y="100"/><add id="$sb" handles.ix="-100" handles.iy="0"/>
-<create id="$ca" type="empty" parent="$c" name="endpoint A" x="120" y="100"/>
-<create id="$cb" type="empty" parent="$c" name="endpoint B" x="420" y="200"/>
+<composition id="$c" name="attachment bench" notation="free" dims="2d"/>
+<path in="$c" id="$f" name="fiber" x="120" y="100"/><add id="$f" stroke.color="#e9aa27" stroke.width="6"/>
+<contour in="$f" id="$fc"/><point in="$fc" id="$a" x="0" y="0"/><add id="$a" handles.ox="100" handles.oy="0"/>
+<point in="$fc" id="$b" x="300" y="100"/><add id="$b" handles.ix="-100" handles.iy="0"/>
+<path in="$c" id="$s" name="shadow" x="120" y="108"/><add id="$s" stroke.color="#555555" stroke.width="8"/>
+<contour in="$s" id="$sc"/><point in="$sc" id="$sa" x="0" y="0"/><add id="$sa" handles.ox="100" handles.oy="0"/>
+<point in="$sc" id="$sb" x="300" y="100"/><add id="$sb" handles.ix="-100" handles.iy="0"/>
+<empty in="$c" id="$ca" name="endpoint A" x="120" y="100"/>
+<empty in="$c" id="$cb" name="endpoint B" x="420" y="200"/>
 </edit>`));assert(r.ok,JSON.stringify(r));await wait();
 let d=await save();const named=(name:string)=>Object.entries(d.facets.name).find(([id,n]:any)=>n.text===name)![0];
 const comp=named('attachment bench'),roots=['fiber','shadow','endpoint A','endpoint B'].map(name=>Object.entries(d.facets.name).find(([id,n]:any)=>n.text===name && d.nodes[id].parent===comp)![0]);

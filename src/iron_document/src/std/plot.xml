@@ -7,64 +7,79 @@
 <definition name="plot">
   <!-- Inputs: each declares its type, whether it is a pin, and its group
        (plans/specs/types-and-units.md §6). -->
-  <port_spec id="xs" name="xs" kind="value" dir="in" datatype="series" show="pin" group="Data"
+  <port_spec id="$xs" name="xs" kind="value" dir="in" datatype="series" show="pin" group="Data"
     signal="0.0 0.25 0.5 0.75 1.0 1.25 1.5 1.75 2.0 2.25 2.5 2.75 3.0 3.25 3.5 3.75 4.0 4.25 4.5 4.75 5.0 5.25 5.5 5.75 6.0 6.25 6.5 6.75 7.0 7.25 7.5 7.75 8.0 8.25 8.5 8.75 9.0 9.25 9.5 9.75 10.0"/>
-  <port_spec id="ys" name="ys" kind="value" dir="in" datatype="series" show="pin" group="Data"
+  <port_spec id="$ys" name="ys" kind="value" dir="in" datatype="series" show="pin" group="Data"
     signal="0.0 0.30373591260877675 0.5475953047966606 0.7124096172476398 0.788894718781072 0.7776569899337605 0.6881902831541621 0.5370620712754023 0.34555090329079907 0.13702829322499951 -0.06562366632424375 -0.24229903733410313 -0.3774540710718614 -0.46125806855163254 -0.49005215726951645 -0.4661350628109074 -0.396961765299273 -0.2938926258101869 -0.1706633139044982 -0.04175812844547702 0.07913822100255291 0.18045996544934179 0.2537380045860618 0.29416882164488245 0.300755475970278 0.2760470183514113 0.22554111629762041 0.15684285391136576 0.07868868735408886 -5.208380586692441e-05 -0.07129436884343508 -0.12848710257942791 -0.1671352816122037 -0.18506266374769423 -0.1824130220880661 -0.16141470571218977 -0.125955039264916 -0.0810260565358325 -0.032110331267410884 0.015424766915096326 0.05686342493562173"/>
-  <port_spec id="ys2" name="ys2" kind="value" dir="in" datatype="series" show="auto" group="Data" signal="[]"/>
-  <port_spec id="ys3" name="ys3" kind="value" dir="in" datatype="series" show="auto" group="Data" signal="[]"/>
-  <port_spec id="f" name="f" kind="value" dir="in" datatype="fn(1) | auto" show="pin" group="Data" signal="NaN"/>
-  <port_spec id="style" name="style" kind="value" dir="in" datatype="choice(line|smooth|scatter|area|bars|line+markers)" show="auto" group="Look" signal="line"/>
-  <port_spec id="x_min" name="x_min" kind="value" dir="in" datatype="like(xs) | auto" show="auto" group="Axes" signal="NaN"/>
-  <port_spec id="x_max" name="x_max" kind="value" dir="in" datatype="like(xs) | auto" show="auto" group="Axes" signal="NaN"/>
-  <port_spec id="y_min" name="y_min" kind="value" dir="in" datatype="like(ys) | auto" show="auto" group="Axes" signal="NaN"/>
-  <port_spec id="y_max" name="y_max" kind="value" dir="in" datatype="like(ys) | auto" show="auto" group="Axes" signal="NaN"/>
-  <port_spec id="x_label" name="x_label" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
-  <port_spec id="y_label" name="y_label" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
-  <port_spec id="title" name="title" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
-  <port_spec id="cursor" name="cursor" kind="value" dir="in" datatype="like(xs) | auto" show="pin" group="Axes" signal="NaN"/>
-  <port_spec id="grid" name="grid" kind="value" dir="in" datatype="bool" show="settings" group="Look" signal="true"/>
+  <port_spec id="$ys2" name="ys2" kind="value" dir="in" datatype="series" show="auto" group="Data" signal="[]"/>
+  <port_spec id="$ys3" name="ys3" kind="value" dir="in" datatype="series" show="auto" group="Data" signal="[]"/>
+  <port_spec id="$f" name="f" kind="value" dir="in" datatype="fn(1) | auto" show="pin" group="Data" signal="NaN"/>
+  <port_spec id="$style" name="style" kind="value" dir="in" datatype="choice(line|smooth|dashed|scatter|area|bars|line+markers)" show="auto" group="Look" signal="line"/>
+  <port_spec id="$x_min" name="x_min" kind="value" dir="in" datatype="like(xs) | auto" show="auto" group="Axes" signal="NaN"/>
+  <port_spec id="$x_max" name="x_max" kind="value" dir="in" datatype="like(xs) | auto" show="auto" group="Axes" signal="NaN"/>
+  <port_spec id="$y_min" name="y_min" kind="value" dir="in" datatype="like(ys) | auto" show="auto" group="Axes" signal="NaN"/>
+  <port_spec id="$y_max" name="y_max" kind="value" dir="in" datatype="like(ys) | auto" show="auto" group="Axes" signal="NaN"/>
+  <port_spec id="$x_label" name="x_label" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
+  <port_spec id="$y_label" name="y_label" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
+  <port_spec id="$title" name="title" kind="value" dir="in" datatype="text" show="settings" group="Labels" signal=""/>
+  <port_spec id="$cursor" name="cursor" kind="value" dir="in" datatype="like(xs) | auto" show="pin" group="Axes" signal="NaN"/>
+  <port_spec id="$grid" name="grid" kind="value" dir="in" datatype="bool" show="settings" group="Look" signal="true"/>
   <!-- Colours default to the theme's series tokens, a style per series to
        the first's: NaN is `auto`. -->
-  <port_spec id="color" name="color" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
-  <port_spec id="color2" name="color2" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
-  <port_spec id="color3" name="color3" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
-  <port_spec id="style2" name="style2" kind="value" dir="in" datatype="choice(line|smooth|scatter|area|bars|line+markers) | auto" show="settings" group="Look" signal="NaN"/>
-  <port_spec id="style3" name="style3" kind="value" dir="in" datatype="choice(line|smooth|scatter|area|bars|line+markers) | auto" show="settings" group="Look" signal="NaN"/>
-  <port_spec id="reveal" name="reveal" kind="value" dir="in" datatype="number" show="auto" group="Motion" signal="1"/>
+  <port_spec id="$color" name="color" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
+  <port_spec id="$color2" name="color2" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
+  <port_spec id="$color3" name="color3" kind="value" dir="in" datatype="color | auto" show="settings" group="Look" signal="NaN"/>
+  <port_spec id="$style2" name="style2" kind="value" dir="in" datatype="choice(line|smooth|dashed|scatter|area|bars|line+markers) | auto" show="settings" group="Look" signal="NaN"/>
+  <port_spec id="$style3" name="style3" kind="value" dir="in" datatype="choice(line|smooth|dashed|scatter|area|bars|line+markers) | auto" show="settings" group="Look" signal="NaN"/>
+  <!-- Marks in the data's coordinates: points (each with a label from
+       marks_label, a list or one text) and dashed reference lines across
+       the plot at each y of hlines and each x of vlines. They pan, zoom and
+       clip with the curve. -->
+  <port_spec id="$marks_x" name="marks_x" kind="value" dir="in" datatype="any" show="auto" group="Marks" signal="[]"/>
+  <port_spec id="$marks_y" name="marks_y" kind="value" dir="in" datatype="any" show="auto" group="Marks" signal="[]"/>
+  <port_spec id="$marks_label" name="marks_label" kind="value" dir="in" datatype="any" show="settings" group="Marks" signal=""/>
+  <port_spec id="$marks_color" name="marks_color" kind="value" dir="in" datatype="color | auto" show="settings" group="Marks" signal="NaN"/>
+  <port_spec id="$hlines" name="hlines" kind="value" dir="in" datatype="any" show="auto" group="Marks" signal="[]"/>
+  <port_spec id="$vlines" name="vlines" kind="value" dir="in" datatype="any" show="auto" group="Marks" signal="[]"/>
+  <port_spec id="$reveal" name="reveal" kind="value" dir="in" datatype="number" show="auto" group="Motion" signal="1"/>
   <port_spec name="vis" kind="value" dir="in" datatype="choice(hidden|shown)" show="auto" group="Motion" signal="shown"/>
 
   <!-- Every series' values, for the y range: a function sampled at a fixed
        count (outputs do not see a picture's box). -->
-  <let id="is_fn" name="is function" value="{= kind($f) == 'function'}"/>
+  <let id="$is_fn" name="is function" value="{= kind($f) == 'function'}"/>
   <!-- The range before any panning or zooming: the inputs, or auto. -->
-  <let id="bx0" name="base x lo" value="{= isnan($x_min) ? ($is_fn ? 0 : (len($xs) == 0 ? 0 : min($xs))) : $x_min}"/>
-  <let id="bx1" name="base x hi" value="{= isnan($x_max) ? ($is_fn ? 10 : (len($xs) == 0 ? 1 : max($xs))) : $x_max}"/>
-  <let id="ys_all" name="all ys" value="{= concat($is_fn ? sample($f, $bx0, $bx1, 200) : $ys, $ys2, $ys3)}"/>
-  <let id="by0" name="base y lo" value="{= isnan($y_min) ? (len($ys_all) == 0 ? 0 : nice_lo(min($ys_all), max($ys_all), 5)) : $y_min}"/>
-  <let id="by1" name="base y hi" value="{= isnan($y_max) ? (len($ys_all) == 0 ? 1 : nice_hi(min($ys_all), max($ys_all), 5)) : $y_max}"/>
+  <let id="$bx0" name="base x lo" value="{= isnan($x_min) ? ($is_fn ? 0 : (len($xs) == 0 ? 0 : min($xs))) : $x_min}"/>
+  <let id="$bx1" name="base x hi" value="{= isnan($x_max) ? ($is_fn ? 10 : (len($xs) == 0 ? 1 : max($xs))) : $x_max}"/>
+  <!-- Marks as series: one value is a series of one. -->
+  <let id="$mxs" name="marks x" value="{= kind($marks_x) == 'series' ? $marks_x : series($marks_x)}"/>
+  <let id="$mys" name="marks y" value="{= kind($marks_y) == 'series' ? $marks_y : series($marks_y)}"/>
+  <let id="$hls" name="h lines" value="{= kind($hlines) == 'series' ? $hlines : series($hlines)}"/>
+  <let id="$vls" name="v lines" value="{= kind($vlines) == 'series' ? $vlines : series($vlines)}"/>
+  <let id="$ys_all" name="all ys" value="{= concat($is_fn ? sample($f, $bx0, $bx1, 200) : $ys, $ys2, $ys3, $mys, $hls)}"/>
+  <let id="$by0" name="base y lo" value="{= isnan($y_min) ? (len($ys_all) == 0 ? 0 : nice_lo(min($ys_all), max($ys_all), 5)) : $y_min}"/>
+  <let id="$by1" name="base y hi" value="{= isnan($y_max) ? (len($ys_all) == 0 ? 1 : nice_hi(min($ys_all), max($ys_all), 5)) : $y_max}"/>
   <!-- The view (reactivity.md §13): state the picture's drag and wheel
        actions write. `zoom` magnifies about the view's centre, which is a
        fraction of the base range (0.5 is its middle). At 1, 0.5, 0.5 the
        plot shows the base range. -->
-  <let id="vz" name="zoom" value="1"/>
-  <let id="vcx" name="centre x" value="0.5"/>
-  <let id="vcy" name="centre y" value="0.5"/>
+  <let id="$vz" name="zoom" value="1"/>
+  <let id="$vcx" name="centre x" value="0.5"/>
+  <let id="$vcy" name="centre y" value="0.5"/>
 
   <!-- Outputs: the ranges in use, and the curve's value at the cursor. -->
-  <port_spec id="x_lo" name="x_lo" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx - 0.5 / $vz)}"/>
-  <port_spec id="x_hi" name="x_hi" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx + 0.5 / $vz)}"/>
-  <port_spec id="y_lo" name="y_lo" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy - 0.5 / $vz)}"/>
-  <port_spec id="y_hi" name="y_hi" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy + 0.5 / $vz)}"/>
-  <port_spec id="y_at" name="y_at_cursor" kind="value" dir="out" signal="{= isnan($cursor) ? 0 / 0 : ($is_fn ? $f($cursor) : interp($xs, $ys, $cursor))}"/>
+  <port_spec id="$x_lo" name="x_lo" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx - 0.5 / $vz)}"/>
+  <port_spec id="$x_hi" name="x_hi" kind="value" dir="out" signal="{= $bx0 + ($bx1 - $bx0) * ($vcx + 0.5 / $vz)}"/>
+  <port_spec id="$y_lo" name="y_lo" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy - 0.5 / $vz)}"/>
+  <port_spec id="$y_hi" name="y_hi" kind="value" dir="out" signal="{= $by0 + ($by1 - $by0) * ($vcy + 0.5 / $vz)}"/>
+  <port_spec id="$y_at" name="y_at_cursor" kind="value" dir="out" signal="{= isnan($cursor) ? 0 / 0 : ($is_fn ? $f($cursor) : interp($xs, $ys, $cursor))}"/>
 
   <!-- The vis machine (plans/specs/machines.md): appear draws the plot on
        in order, frame, axes, ticks, then the curve; disappear takes it away
        in reverse. Parts read its channels. -->
-  <channel id="ch_frame" name="frame" value="1"/>
-  <channel id="ch_axes" name="axes" value="1"/>
-  <channel id="ch_ticks" name="ticks" value="1"/>
-  <channel id="ch_series" name="series" value="1"/>
+  <channel id="$ch_frame" name="frame" value="1"/>
+  <channel id="$ch_axes" name="axes" value="1"/>
+  <channel id="$ch_ticks" name="ticks" value="1"/>
+  <channel id="$ch_series" name="series" value="1"/>
   <machine name="vis">
     <state name="hidden" args.frame="0" args.axes="0" args.ticks="0" args.series="0"/>
     <state name="shown" args.frame="1" args.axes="1" args.ticks="1" args.series="1"/>
@@ -83,37 +98,38 @@
   </machine>
 
   <!-- The picture, 360 by 240 until resized: every part reads the box. -->
-  <template id="T" notation="free" size.w="360" size.h="240">
+  <template id="$T" notation="free" size.w="360" size.h="240">
     <!-- The plot area: inside the box less the margins (left 54, right 16,
          top 14 or 30 under a title, bottom 40). -->
-    <let id="w" name="w" value="{= $T.size.w}"/>
-    <let id="h" name="h" value="{= $T.size.h}"/>
-    <let id="top" name="top" value="{= $title != '' ? 30 : 14}"/>
-    <let id="aw" name="area w" value="{= max(1, $w - 70)}"/>
-    <let id="ah" name="area h" value="{= max(1, $h - $top - 40)}"/>
+    <let id="$w" name="w" value="{= $T.size.w}"/>
+    <let id="$h" name="h" value="{= $T.size.h}"/>
+    <let id="$top" name="top" value="{= $title != '' ? 30 : 14}"/>
+    <let id="$aw" name="area w" value="{= max(1, $w - 70)}"/>
+    <let id="$ah" name="area h" value="{= max(1, $h - $top - 40)}"/>
     <!-- Data to area pixels, and the ticks: about one per 70 px across,
          one per 40 px up, at most 8 asked for. -->
-    <let id="xp" name="x to px" value="{= v => scale(v, $x_lo, $x_hi, 0, $aw)}"/>
-    <let id="yp" name="y to px" value="{= v => scale(v, $y_lo, $y_hi, $ah, 0)}"/>
-    <let id="xt" name="x ticks" value="{= ticks($x_lo, $x_hi, clamp(floor($aw / 70), 2, 8))}"/>
-    <let id="yt" name="y ticks" value="{= ticks($y_lo, $y_hi, clamp(floor($ah / 40), 2, 8))}"/>
+    <let id="$xp" name="x to px" value="{= v => scale(v, $x_lo, $x_hi, 0, $aw)}"/>
+    <let id="$yp" name="y to px" value="{= v => scale(v, $y_lo, $y_hi, $ah, 0)}"/>
+    <let id="$xt" name="x ticks" value="{= ticks($x_lo, $x_hi, clamp(floor($aw / 70), 2, 8))}"/>
+    <let id="$yt" name="y ticks" value="{= ticks($y_lo, $y_hi, clamp(floor($ah / 40), 2, 8))}"/>
     <!-- Series 1: the data, or the function sampled every 2 px. -->
-    <let id="samples" name="samples" value="{= clamp(floor($aw / 2), 2, 2000)}"/>
-    <let id="px1" name="xs 1" value="{= $is_fn ? range($x_lo, $x_hi, $samples) : $xs}"/>
-    <let id="py1" name="ys 1" value="{= $is_fn ? sample($f, $x_lo, $x_hi, $samples) : $ys}"/>
-    <let id="x_unit" name="x unit" value="{= unit_of($px1)}"/>
-    <let id="y_unit" name="y unit" value="{= unit_of($py1)}"/>
+    <let id="$samples" name="samples" value="{= clamp(floor($aw / 2), 2, 2000)}"/>
+    <let id="$px1" name="xs 1" value="{= $is_fn ? range($x_lo, $x_hi, $samples) : $xs}"/>
+    <let id="$py1" name="ys 1" value="{= $is_fn ? sample($f, $x_lo, $x_hi, $samples) : $ys}"/>
+    <let id="$x_unit" name="x unit" value="{= unit_of($px1)}"/>
+    <let id="$y_unit" name="y unit" value="{= unit_of($py1)}"/>
     <!-- Each series' colour (its token on auto) and style (the first's on
          auto); bars and areas stand on y = 0 where it is in view, else the
          nearer edge. -->
-    <let id="c1" name="colour 1" value="{= kind($color) == 'color' ? $color : @series-1}"/>
-    <let id="c2" name="colour 2" value="{= kind($color2) == 'color' ? $color2 : @series-2}"/>
-    <let id="c3" name="colour 3" value="{= kind($color3) == 'color' ? $color3 : @series-3}"/>
-    <let id="st1" name="style 1" value="{= $style}"/>
-    <let id="st2" name="style 2" value="{= kind($style2) == 'number' ? $style : $style2}"/>
-    <let id="st3" name="style 3" value="{= kind($style3) == 'number' ? $style : $style3}"/>
-    <let id="base" name="baseline" value="{= clamp($yp($y_lo * 0), 0, $ah)}"/>
-    <let id="shown" name="series shown" value="{= min($reveal, $ch_series)}"/>
+    <let id="$c1" name="colour 1" value="{= kind($color) == 'color' ? $color : @series-1}"/>
+    <let id="$c2" name="colour 2" value="{= kind($color2) == 'color' ? $color2 : @series-2}"/>
+    <let id="$c3" name="colour 3" value="{= kind($color3) == 'color' ? $color3 : @series-3}"/>
+    <let id="$st1" name="style 1" value="{= $style}"/>
+    <let id="$st2" name="style 2" value="{= kind($style2) == 'number' ? $style : $style2}"/>
+    <let id="$st3" name="style 3" value="{= kind($style3) == 'number' ? $style : $style3}"/>
+    <let id="$mc" name="marks colour" value="{= kind($marks_color) == 'color' ? $marks_color : @ink}"/>
+    <let id="$base" name="baseline" value="{= clamp($yp($y_lo * 0), 0, $ah)}"/>
+    <let id="$shown" name="series shown" value="{= min($reveal, $ch_series)}"/>
 
     <rect name="frame" x="0" y="0" w="{= $w}" h="{= $h}" corners.tl="6" corners.tr="6" corners.br="6" corners.bl="6"
       fill.color="@surface" stroke.color="@grid" stroke.width="1" appearance.opacity="{= $ch_frame}"/>
@@ -124,12 +140,12 @@
       <!-- Dragging here pans the view and the wheel zooms it about the
            pointer; the margins still move the plot. -->
       <rect name="plot area" x="0" y="0" w="{= $aw}" h="{= $ah}" fill.color="@surface" appearance.opacity="{= $ch_frame}"/>
-      <on id="pan" name="pan plot" event="drag">
+      <on id="$pan" name="pan plot" event="drag">
         <set target="$vcx" to="{= $vcx - $pan.on.dx / $aw / $vz}"/>
         <set target="$vcy" to="{= $vcy + $pan.on.dy / $ah / $vz}"/>
       </on>
-      <let id="nz" name="next zoom" value="{= clamp($vz * exp(-$zoom.on.delta * 0.002), 0.25, 1000)}"/>
-      <on id="zoom" name="zoom plot" event="wheel">
+      <let id="$nz" name="next zoom" value="{= clamp($vz * exp(-$zoom.on.delta * 0.002), 0.25, 1000)}"/>
+      <on id="$zoom" name="zoom plot" event="wheel">
         <set target="$vz" to="{= $nz}"/>
         <set target="$vcx" to="{= $vcx + ($zoom.on.x / $aw - 0.5) * (1 / $vz - 1 / $nz)}"/>
         <set target="$vcy" to="{= $vcy + (0.5 - $zoom.on.y / $ah) * (1 / $vz - 1 / $nz)}"/>
@@ -139,25 +155,36 @@
       <!-- One path per series, drawn by its style; drawn on by trim. -->
       <path name="series 3" x="0" y="0"
         d="{= len($ys3) == 0 ? '' : ($st3 == 'scatter' ? circles($xp($xs), $yp($ys3), 3) : ($st3 == 'smooth' ? smooth($xp($xs), $yp($ys3)) : ($st3 == 'area' ? area($xp($xs), $yp($ys3), $base) : ($st3 == 'bars' ? bars($xp($xs), $yp($ys3), $base, max(1, $aw / max(1, len($ys3)) * 0.7)) : (points($xp($xs), $yp($ys3)) == '' ? '' : 'M ' + points($xp($xs), $yp($ys3))) + ($st3 == 'line+markers' ? ' ' + circles($xp($xs), $yp($ys3), 3) : '')))))}"
-        stroke.color="{= $st3 == 'scatter' || $st3 == 'bars' ? rgb(0, 0, 0, 0) : $c3}" stroke.width="2"
+        stroke.color="{= $st3 == 'scatter' || $st3 == 'bars' ? rgb(0, 0, 0, 0) : $c3}" stroke.width="2" stroke.dash="{= $st3 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c3}" fill.opacity="{= $st3 == 'scatter' || $st3 == 'bars' ? $shown : ($st3 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
       <path name="series 2" x="0" y="0"
         d="{= len($ys2) == 0 ? '' : ($st2 == 'scatter' ? circles($xp($xs), $yp($ys2), 3) : ($st2 == 'smooth' ? smooth($xp($xs), $yp($ys2)) : ($st2 == 'area' ? area($xp($xs), $yp($ys2), $base) : ($st2 == 'bars' ? bars($xp($xs), $yp($ys2), $base, max(1, $aw / max(1, len($ys2)) * 0.7)) : (points($xp($xs), $yp($ys2)) == '' ? '' : 'M ' + points($xp($xs), $yp($ys2))) + ($st2 == 'line+markers' ? ' ' + circles($xp($xs), $yp($ys2), 3) : '')))))}"
-        stroke.color="{= $st2 == 'scatter' || $st2 == 'bars' ? rgb(0, 0, 0, 0) : $c2}" stroke.width="2"
+        stroke.color="{= $st2 == 'scatter' || $st2 == 'bars' ? rgb(0, 0, 0, 0) : $c2}" stroke.width="2" stroke.dash="{= $st2 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c2}" fill.opacity="{= $st2 == 'scatter' || $st2 == 'bars' ? $shown : ($st2 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
       <path name="series 1" x="0" y="0"
         d="{= len($py1) == 0 ? '' : ($st1 == 'scatter' ? circles($xp($px1), $yp($py1), 3) : ($st1 == 'smooth' ? smooth($xp($px1), $yp($py1)) : ($st1 == 'area' ? area($xp($px1), $yp($py1), $base) : ($st1 == 'bars' ? bars($xp($px1), $yp($py1), $base, max(1, $aw / max(1, len($py1)) * 0.7)) : (points($xp($px1), $yp($py1)) == '' ? '' : 'M ' + points($xp($px1), $yp($py1))) + ($st1 == 'line+markers' ? ' ' + circles($xp($px1), $yp($py1), 3) : '')))))}"
-        stroke.color="{= $st1 == 'scatter' || $st1 == 'bars' ? rgb(0, 0, 0, 0) : $c1}" stroke.width="2"
+        stroke.color="{= $st1 == 'scatter' || $st1 == 'bars' ? rgb(0, 0, 0, 0) : $c1}" stroke.width="2" stroke.dash="{= $st1 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c1}" fill.opacity="{= $st1 == 'scatter' || $st1 == 'bars' ? $shown : ($st1 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
+      <path name="reference lines" x="0" y="0" d="{= segments(0, $yp($hls), $aw, $yp($hls)) + ' ' + segments($xp($vls), 0, $xp($vls), $ah)}"
+        stroke.color="@muted" stroke.width="1" stroke.dash="6 4" fill.opacity="0" appearance.opacity="{= $ch_series}"/>
+      <path name="marks" x="0" y="0" d="{= circles($xp($mxs), $yp($mys), 5)}"
+        stroke.color="{= $mc}" stroke.width="2" fill.color="@surface" appearance.opacity="{= $ch_series}"/>
+      <group id="$mk" name="mark labels" repeat.count="{= min(len($mxs), len($mys))}">
+        <let id="$mx" name="mark x" value="{= $mk.repeat.index < len($mxs) ? $xp(at($mxs, $mk.repeat.index)) : 0 / 0}"/>
+        <let id="$my" name="mark y" value="{= $mk.repeat.index < len($mys) ? $yp(at($mys, $mk.repeat.index)) : 0 / 0}"/>
+        <text name="mark label" x="{= isnan($mx) ? 0 : $mx + 8}" y="{= isnan($my) ? 0 : $my - 19}"
+          content="{= isnan($mx) || isnan($my) ? '' : (kind($marks_label) == 'list' ? str(at($marks_label, $mk.repeat.index)) : ($mk.repeat.index == 0 ? str($marks_label) : ''))}"
+          font.size="11" font.weight="600" fill.color="{= $mc}" appearance.opacity="{= $ch_series}"/>
+      </group>
       <path name="cursor" x="0" y="0" d="{= isnan($cursor) ? '' : segments($xp($cursor), 0, $xp($cursor), $ah)}"
         stroke.color="@muted" stroke.width="1" stroke.dash="4 3" fill.opacity="0" appearance.opacity="{= $ch_series}"/>
-      <path name="cursor dot" x="0" y="0" d="{= isnan($cursor) ? '' : circles($xp($cursor), $yp($y_at), 4)}"
+      <path name="cursor dot" x="0" y="0" d="{= isnan($cursor) || isnan($y_at) ? '' : circles($xp($cursor), $yp($y_at), 4)}"
         stroke.color="@surface" stroke.width="1.5" fill.color="{= $c1}" appearance.opacity="{= $ch_series}"/>
-      <text name="cursor value" x="{= isnan($cursor) ? 0 : $xp($cursor) + 6}" y="{= isnan($cursor) ? 0 : $yp($y_at) - 20}"
-        content="{= isnan($cursor) ? '' : fmt(sig($y_at, 3))}" font.size="11" font.weight="600" fill.color="@ink" appearance.opacity="{= $ch_series}"/>
+      <text name="cursor value" x="{= isnan($cursor) || isnan($y_at) ? 0 : $xp($cursor) + 6}" y="{= isnan($cursor) || isnan($y_at) ? 0 : $yp($y_at) - 20}"
+        content="{= isnan($cursor) || isnan($y_at) ? '' : fmt(sig($y_at, 3))}" font.size="11" font.weight="600" fill.color="@ink" appearance.opacity="{= $ch_series}"/>
     </group>
 
     <!-- Axes, tick marks and labels, unclipped, in the same space. -->
@@ -167,11 +194,11 @@
       <path name="tick marks" x="0" y="0" d="{= segments($xp($xt), $ah, $xp($xt), $ah + 4) + ' ' + segments(-4, $yp($yt), 0, $yp($yt))}"
         stroke.color="@axis" stroke.width="1" fill.opacity="0" trim.end="{= $ch_ticks}"/>
       <!-- A label per tick: each copy reads its own tick as repeat.item. -->
-      <group id="xl" name="x tick labels" repeat.each="{= $xt}">
+      <group id="$xl" name="x tick labels" repeat.each="{= $xt}">
         <text name="x tick" x="{= $xp($xl.repeat.item) - 28}" y="{= $ah + 7}" content="{= fmt(in_unit($xl.repeat.item, $x_unit))}"
           size.w="56" size.h="15" text.sizing="fixed" font.size="10" font.weight="400" font.align="center" fill.color="@muted" appearance.opacity="{= $ch_ticks}"/>
       </group>
-      <group id="yl" name="y tick labels" repeat.each="{= $yt}">
+      <group id="$yl" name="y tick labels" repeat.each="{= $yt}">
         <text name="y tick" x="-50" y="{= $yp($yl.repeat.item) - 7}" content="{= fmt(in_unit($yl.repeat.item, $y_unit))}"
           size.w="44" size.h="15" text.sizing="fixed" font.size="10" font.weight="400" font.align="right" fill.color="@muted" appearance.opacity="{= $ch_ticks}"/>
       </group>

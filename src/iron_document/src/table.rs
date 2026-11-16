@@ -255,12 +255,14 @@ pub struct Spec {
     pub align: Vec<String>,
 }
 
-const INK: [f32; 4] = [0.11, 0.13, 0.17, 1.0];
-const MUTED: [f32; 4] = [0.45, 0.48, 0.55, 1.0];
-const ACCENT: [f32; 4] = [0.85, 0.47, 0.13, 1.0];
+/// A colour token (palette.rs) as a slot: tables follow the theme.
+fn token(name: &str) -> Slot {
+    Slot::Bound(crate::Expr::parse(&format!("@{name}")).expect("a colour token"))
+}
 
-/// The style of the cell at (`row`, `col`), as its `font` and fill colour.
-pub fn cell_style(spec: &Spec, row: usize, col: usize) -> (Font, [f32; 4]) {
+/// The style of the cell at (`row`, `col`), as its `font` and the colour
+/// token its words are drawn in.
+pub fn cell_style(spec: &Spec, row: usize, col: usize) -> (Font, Slot) {
     let mut f = Font::default();
     let header = row < spec.header;
     let label = spec.label_col && col == 0;
@@ -270,22 +272,22 @@ pub fn cell_style(spec: &Spec, row: usize, col: usize) -> (Font, [f32; 4]) {
     f.valign = Slot::Const(Value::Enum("middle".into()));
     f.tabular = Slot::Const(Value::Bool(true));
     let n = |v: f64| Slot::Const(Value::Number(v));
-    let mut ink = INK;
+    let mut ink = "ink";
     match spec.preset {
         Preset::Light => {
             f.size = n(15.0);
             if label {
                 f.family = Slot::Const(Value::Str("JetBrains Mono".into()));
                 f.size = n(14.0);
-                ink = MUTED;
+                ink = "muted";
             } else if header {
-                ink = MUTED;
+                ink = "muted";
             } else {
-                ink = [0.25, 0.27, 0.32, 1.0];
+                ink = "ink-2";
             }
             if emph {
                 f.weight = n(700.0);
-                ink = if header { ACCENT } else { INK };
+                ink = if header { "series-2" } else { "ink" };
             }
         }
         Preset::Boxed => {
@@ -299,12 +301,12 @@ pub fn cell_style(spec: &Spec, row: usize, col: usize) -> (Font, [f32; 4]) {
             if emph {
                 f.weight = n(700.0);
                 if header {
-                    ink = ACCENT;
+                    ink = "series-2";
                 }
             }
         }
     }
-    (f, ink)
+    (f, token(ink))
 }
 
 /// The `table` and `rules` facets a preset gives a table.
@@ -315,30 +317,30 @@ pub fn preset_facets(preset: Preset, columns: usize, header: usize) -> (Table, R
     t.preset = Slot::Const(Value::Enum(preset.name().into()));
     let mut r = Rules::default();
     let n = |v: f64| Slot::Const(Value::Number(v));
-    let c = |v: [f32; 4]| Slot::Const(Value::Color(v));
+    let c = token;
     match preset {
         Preset::Light => {
             t.pad_x = n(14.0);
             t.pad_y = n(9.0);
             r.outer_width = n(0.0);
             r.header_width = n(1.0);
-            r.header_color = c([0.0, 0.0, 0.0, 0.12]);
+            r.header_color = c("axis");
             r.rows_width = n(1.0);
-            r.rows_color = c([0.0, 0.0, 0.0, 0.12]);
+            r.rows_color = c("grid");
             r.columns_width = n(0.0);
         }
         Preset::Boxed => {
             t.pad_x = n(12.0);
             t.pad_y = n(8.0);
-            t.header_fill = c([0.94, 0.95, 0.97, 1.0]);
+            t.header_fill = c("grid");
             r.outer_width = n(1.0);
-            r.outer_color = c([0.0, 0.0, 0.0, 0.3]);
+            r.outer_color = c("axis");
             r.header_width = n(1.5);
-            r.header_color = c([0.0, 0.0, 0.0, 0.3]);
+            r.header_color = c("axis");
             r.rows_width = n(1.0);
-            r.rows_color = c([0.0, 0.0, 0.0, 0.15]);
+            r.rows_color = c("grid");
             r.columns_width = n(1.0);
-            r.columns_color = c([0.0, 0.0, 0.0, 0.15]);
+            r.columns_color = c("grid");
         }
     }
     (t, r)
@@ -461,7 +463,7 @@ fn cell_facets(spec: &Spec, (r, c): (usize, usize), (sx, sy): (usize, usize), co
     let mut text = Text::default();
     text.content = content;
     let mut fill = crate::facet::Fill::default();
-    fill.color = Slot::Const(Value::Color(ink));
+    fill.color = ink;
     let mut facets = vec![Transform2d::default().wrap(), text.wrap(), font.wrap(), fill.wrap()];
     if sx > 1 || sy > 1 {
         let mut item = LayoutItem::default();
@@ -495,6 +497,40 @@ fn rows_ops(spec: &Spec, table: NodeId, rows: usize, cells: Vec<((usize, usize),
 /// written `{= expr}` is bound.
 pub fn create_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {
     create_ops_after(doc, 0, parent, order, at, spec)
+}
+
+/// [`create_ops`], with a caption above the table when `caption` has words:
+/// a stack of the two (layout-and-tables.md §3.3), the caption small, spaced
+/// capitals in the muted ink.
+pub fn captioned_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec, caption: Option<&str>) -> Result<(Vec<Op>, NodeId), String> {
+    let Some(words) = caption.filter(|c| !c.trim().is_empty()) else {
+        return create_ops(doc, parent, order, at, spec);
+    };
+    let ids = doc.next_ids(2);
+    let mut stack = crate::facet::Layout::default();
+    stack.mode = Slot::Const(Value::Enum("stack_y".into()));
+    stack.gap = Slot::Const(Value::Number(10.0));
+    let mut place = Transform2d::default();
+    place.x = Slot::Const(Value::Number(at[0]));
+    place.y = Slot::Const(Value::Number(at[1]));
+    let mut name = Name::default();
+    name.text = Slot::Const(Value::Str("captioned table".into()));
+    let mut text = Text::default();
+    text.content = Slot::Const(Value::Str(words.to_uppercase()));
+    let mut font = Font::default();
+    font.size = Slot::Const(Value::Number(12.0));
+    font.weight = Slot::Const(Value::Number(500.0));
+    font.letter_spacing = Slot::Const(Value::Number(12.0));
+    let mut fill = crate::facet::Fill::default();
+    fill.color = Slot::Bound(crate::expr::Expr::parse("@muted").expect("token"));
+    let mut ops = vec![
+        Op::Create { id: ids[0], ty: TypeId::lookup("group").expect("registered"), parent, order, facets: vec![place.wrap(), stack.wrap(), name.wrap()] },
+        Op::Create { id: ids[1], ty: TypeId::lookup("text").expect("registered"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), text.wrap(), font.wrap(), fill.wrap()] },
+    ];
+    // The table's ids follow the two just taken.
+    let (more, t) = create_ops_after(doc, 2, Some(ids[0]), OrderKey::after(&OrderKey::first()), [0.0, 0.0], spec)?;
+    ops.extend(more);
+    Ok((ops, t))
 }
 
 /// [`create_ops`] in a transaction whose earlier ops create `taken` nodes
@@ -745,7 +781,7 @@ pub fn edit_ops(store: &Store, table: NodeId, verb: &str, selected: &[NodeId]) -
                     ops.push(Op::Set { id: a.id, path, slot: font.get(f).expect("declared").clone() });
                 }
                 let path: crate::LeafPath = "fill.color".parse().expect("declared leaf");
-                ops.push(Op::Set { id: a.id, path, slot: Slot::Const(Value::Color(ink)) });
+                ops.push(Op::Set { id: a.id, path, slot: ink });
             }
             "restyle table"
         }
@@ -874,11 +910,16 @@ pub fn compact(doc: &Document, read: Read, bound: &dyn Fn(NodeId) -> Option<Stri
     }
     // The table's own leaves, where they differ from its preset's.
     let (t, r) = preset_facets(spec.preset, cols, spec.header);
-    let differs = |leaf: &str, want: Option<&Value>| read(table, leaf).as_ref() != want;
+    // A leaf as written: a token or formula as its text, else its value.
+    let written = |id: NodeId, leaf: &str| match doc.leaf(id, leaf.parse().expect("declared leaf")) {
+        Some(Slot::Bound(e)) => e.to_string(),
+        _ => read(id, leaf).map(|v| v.to_string()).unwrap_or_default(),
+    };
+    let differs = |leaf: &str, want: Option<&Slot>| doc.leaf(table, leaf.parse().expect("declared leaf")) != want;
     for f in ["pad_x", "pad_y", "width", "header_fill", "zebra_fill"] {
         let leaf = format!("table.{f}");
-        if differs(&leaf, t.get(f).and_then(|s| s.constant())) {
-            attrs.push((f.into(), read(table, &leaf).map(|v| v.to_string()).unwrap_or_default()));
+        if differs(&leaf, t.get(f)) {
+            attrs.push((f.into(), written(table, &leaf)));
         }
     }
     if doc.facet(table, crate::FacetKind::Rules).is_none() {
@@ -886,8 +927,8 @@ pub fn compact(doc: &Document, read: Read, bound: &dyn Fn(NodeId) -> Option<Stri
     } else {
         for (f, _) in <Rules as LeafStruct>::FIELDS {
             let leaf = format!("rules.{f}");
-            if differs(&leaf, r.get(f).and_then(|s| s.constant())) {
-                attrs.push((leaf.clone(), read(table, &leaf).map(|v| v.to_string()).unwrap_or_default()));
+            if differs(&leaf, r.get(f)) {
+                attrs.push((leaf.clone(), written(table, &leaf)));
             }
         }
     }
@@ -910,9 +951,9 @@ pub fn compact(doc: &Document, read: Read, bound: &dyn Fn(NodeId) -> Option<Stri
                 diffs.push(format!("{f}=\"{}\"", have.map(|v| v.to_string()).unwrap_or_default()));
             }
         }
-        let color = read(a.id, "fill.color");
-        if color != Some(Value::Color(ink)) {
-            diffs.push(format!("color=\"{}\"", color.map(|v| v.to_string()).unwrap_or_else(|| "none".into())));
+        let color = doc.leaf(a.id, "fill.color".parse().expect("declared leaf"));
+        if color != Some(&ink) {
+            diffs.push(format!("color=\"{}\"", if color.is_some() { written(a.id, "fill.color") } else { "none".into() }));
         }
         if !diffs.is_empty() {
             lines.push(format!("<style cell=\"{}\" {}/>", a.id, diffs.join(" ")));

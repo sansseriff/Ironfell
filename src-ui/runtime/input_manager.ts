@@ -31,6 +31,8 @@ export class InputManager {
     private latestPick: any[] = [];
     private options: InputManagerOptions;
     private keyPressed = new Set<string>();
+    /** Held keys whose keydown the engine has had (it goes on the next frame). */
+    private keySent = new Set<string>();
     private keyFrameScheduled = false;
     private attached = false;
 
@@ -60,6 +62,7 @@ export class InputManager {
         }
         this.cleanups = [];
         this.keyPressed.clear();
+        this.keySent.clear();
         this.keyFrameScheduled = false;
         this.canvas = null;
         this.poster = null;
@@ -183,8 +186,9 @@ export class InputManager {
         this.post({ ty: 'toolKey', key: 'Escape', m: 0 });
         this.post({ ty: 'leftBtUp' });
         this.post({ ty: 'middleBt', down: false });
-        for (const key of this.keyPressed) this.post({ ty: 'keyup', key });
+        for (const key of this.keySent) this.post({ ty: 'keyup', key });
         this.keyPressed.clear();
+        this.keySent.clear();
         this.sendMods(0);
     }
 
@@ -271,7 +275,7 @@ export class InputManager {
             }
         }
         // NOTE: keys are whitelisted twice — here and in `map_key_str_to_bevy_key`
-        // in src/web_ffi.rs. A new shortcut must be added to both or it silently
+        // in src/engine_api.rs. A new shortcut must be added to both or it silently
         // never reaches Bevy.
         // f9 cycles the 2D vector backend (classic Vello <-> sparse strips).
         const valid = ["w", "a", "s", "d", "f", "f9", "shift", "g", "control", "controlleft", " "]; // include space & control variants
@@ -289,7 +293,7 @@ export class InputManager {
         if (!this.keyFrameScheduled) {
             this.keyFrameScheduled = true;
             requestAnimationFrame(() => {
-                this.keyPressed.forEach(k => this.post({ ty: 'keydown', key: k }));
+                this.keyPressed.forEach(k => { this.post({ ty: 'keydown', key: k }); this.keySent.add(k); });
                 this.keyFrameScheduled = false;
             });
         }
@@ -300,6 +304,10 @@ export class InputManager {
         this.sendMods(InputManager.mods(event));
         if (this.keyPressed.has(key)) {
             this.keyPressed.delete(key);
+            // A tap shorter than a frame: its keydown has not gone yet, so
+            // send it first, or the engine never sees the key (Space turning
+            // a part, schematic.txt).
+            if (!this.keySent.delete(key)) this.post({ ty: 'keydown', key });
             this.post({ ty: 'keyup', key });
         }
     }

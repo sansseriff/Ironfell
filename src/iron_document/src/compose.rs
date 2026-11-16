@@ -5,8 +5,8 @@
 //! (`parts::circuit_ops`); these are its counterpart outside schematics.
 //!
 //! ```xml
-//! <make-component of="#a #b" name="pump" as="$pump"/>
-//! <place def="$pump" in="#bench" x="300" y="80" name="P1" as="$p1" rate="2"/>
+//! <make-component of="#a #b" name="pump" id="$pump"/>
+//! <place def="$pump" in="#bench" x="300" y="80" name="P1" id="$p1" rate="2"/>
 //! <place entity="$p1" in="#overview" x="40" y="40"/>
 //! <place def="std:laser" in="#bench" x="40" y="200" power="5 mW"/>
 //! ```
@@ -21,6 +21,7 @@
 //! a `{= expr}` binding. A `make-component` makes a component of `of`
 //! (plain shapes become a definition shown by its main; uses of linked
 //! instances become one instance of a new definition that nests them).
+//! They run inside an `<edit>` (edit.rs), which names each one (`id="$p"`).
 
 use crate::composition::{self, Dims};
 use crate::definition::{self, Placement};
@@ -28,7 +29,7 @@ use crate::expr::Expr;
 use crate::facet::{Composition, Facet, Name};
 use crate::id::NodeId;
 use crate::op::Op;
-use crate::parts::{elements, El};
+use crate::parts::El;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value, ValueKind};
 use std::collections::BTreeMap;
@@ -37,28 +38,19 @@ fn ty(n: &str) -> TypeId {
     TypeId::lookup(n).expect("registered type")
 }
 
-/// What an `as="$alias"` names: the definition a verb made or placed, the
+/// What a component verb's `id="$p"` names: the definition a verb made or placed, the
 /// entity it placed (or made), and that entity's picture.
 #[derive(Clone, Copy, Debug)]
-struct Named {
-    definition: NodeId,
-    entity: Option<NodeId>,
-    picture: NodeId,
+pub(crate) struct Named {
+    pub(crate) definition: NodeId,
+    pub(crate) entity: Option<NodeId>,
+    pub(crate) picture: NodeId,
 }
 
 /// Attributes of `<place>` that are not arguments.
-const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "as", "size.w", "size.h"];
+const PLACE_ATTRS: &[&str] = &["def", "entity", "in", "x", "y", "rot", "notation", "name", "id", "size.w", "size.h"];
 
-/// The ops for a model's component verbs (see the module doc), and a
-/// summary of what each made, one line per verb.
-pub fn compose_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, String), String> {
-    compose_after(store, Vec::new(), markup).map_err(|e| match e {
-        ComposeError::Ops(errors) => errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "),
-        ComposeError::Verb(message) => message,
-    })
-}
-
-/// Why [`compose_after`] failed: one of the ops before the verbs (each
+/// Why [`compose_els`] failed: one of the ops before the verbs (each
 /// error indexes `before`), or a verb.
 #[derive(Debug)]
 pub enum ComposeError {
@@ -66,15 +58,25 @@ pub enum ComposeError {
     Verb(String),
 }
 
-/// One edit that both writes ops and places components: `before` applied
-/// first, then the verbs, each seeing what came before it, so a `<place>`
-/// can name a definition `before` creates. The ops returned start with
-/// `before` and make one transaction.
-pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Result<(Vec<Op>, String), ComposeError> {
-    let els = elements(markup).map_err(ComposeError::Verb)?;
-    if els.is_empty() {
-        return Err(ComposeError::Verb("no <place> or <make-component>".into()));
-    }
+/// What the component verbs made: every op (`before`'s first), one summary
+/// line and the end of its ops for each verb, and what each `as` named.
+pub(crate) struct Composed {
+    pub(crate) ops: Vec<Op>,
+    pub(crate) lines: Vec<String>,
+    pub(crate) ends: Vec<usize>,
+    pub(crate) named: BTreeMap<String, Named>,
+}
+
+/// The component verbs (an edit's `<place>`s and `<make-component>`s,
+/// edit.rs): `before` applied first, then each verb, seeing what came before
+/// it, so a `<place>` can name a definition `before` creates. The ops
+/// returned start with `before` and make one transaction.
+pub(crate) fn compose_els(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
+    run_verbs(store, before, els)
+}
+
+/// The verbs run on a scratch copy holding `before`.
+fn run_verbs(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
     let mut scratch = crate::Store::with_document(store.document().clone());
     if !before.is_empty() {
         scratch
@@ -84,11 +86,22 @@ pub fn compose_after(store: &crate::Store, before: Vec<Op>, markup: &str) -> Res
     compose_verbs(scratch, before, els).map_err(ComposeError::Verb)
 }
 
-fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<(Vec<Op>, String), String> {
+fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<Composed, String> {
     let mut aliases: BTreeMap<String, Named> = BTreeMap::new();
     let mut lines = Vec::new();
+    let mut ends = Vec::new();
     for (i, el) in els.iter().enumerate() {
         let at = |m: String| format!("<{}> {}: {m}", el.name, i + 1);
+        // An argument's binding may read an earlier place: `$plot.x_hi`.
+        let mut el = el.clone();
+        let names = crate::markup::Names { nodes: BTreeMap::new(), places: aliases.iter().map(|(k, v)| (k.trim_start_matches('$').to_owned(), *v)).collect(), doc: Some(scratch.document()) };
+        for (k, v) in el.attrs.iter_mut() {
+            if !PLACE_ATTRS.contains(&k.as_str()) {
+                *v = crate::markup::bindings(v, &names).map_err(at)?;
+            }
+        }
+        drop(names);
+        let el = &el;
         let (new, line, named) = match el.name.as_str() {
             "place" => place(&scratch, el, &aliases).map_err(at)?,
             "make-component" => make(&scratch, el, &aliases).map_err(at)?,
@@ -98,21 +111,19 @@ fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> R
             .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: new.clone(), exact: false })
             .map_err(|e| at(e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")))?;
         ops.extend(new);
-        if let Some(a) = el.attr("as") {
-            if !a.starts_with('$') {
-                return Err(at(format!("as=\"{a}\": an alias starts with $")));
-            }
+        if let Some(a) = el.attr("id") {
             aliases.insert(a.to_owned(), named);
         }
         lines.push(line);
+        ends.push(ops.len());
     }
-    Ok((ops, lines.join("\n")))
+    Ok(Composed { ops, lines, ends, named: aliases })
 }
 
 /// A node id as written: `#3F`, or an earlier verb's `$alias` through `pick`.
 fn node(doc: &crate::document::Document, raw: &str, aliases: &BTreeMap<String, Named>, pick: impl Fn(&Named) -> Option<NodeId>, what: &str) -> Result<NodeId, String> {
     if raw.starts_with('$') {
-        let named = aliases.get(raw).ok_or_else(|| format!("{raw} is not named by an earlier verb's as=\"{raw}\""))?;
+        let named = aliases.get(raw).ok_or_else(|| format!("{raw} is not named by an earlier component verb (id=\"{raw}\"); place what you name after it"))?;
         return pick(named).ok_or_else(|| format!("{raw} names no {what}"));
     }
     let id: NodeId = raw.parse().map_err(|_| format!("{raw:?} is not a node id"))?;
@@ -147,7 +158,14 @@ fn arg_slot(kind: ValueKind, raw: &str, entity: NodeId) -> Result<Slot, String> 
         return Expr::parse(&e).map(Slot::Bound).map_err(|err| format!("{raw:?}: {err}"));
     }
     let v = match kind {
-        ValueKind::Series => Value::parse_series(t).unwrap_or_else(|| Err("expected two or more numbers, then an optional unit (400 450 500 nm), or {= range(…)}".into())).map_err(|e| format!("{raw:?}: {e}"))?,
+        // One value is a series of one.
+        ValueKind::Series => match Value::parse_series(t) {
+            Some(s) => s.map_err(|e| format!("{raw:?}: {e}"))?,
+            None => match Value::parse_quantity(t).ok().or_else(|| t.parse::<f64>().ok().map(Value::Number)).and_then(|v| v.as_quantity()) {
+                Some((si, dim)) => Value::series(vec![si], dim),
+                None => return Err(format!("{raw:?}: expected numbers, then an optional unit (400 450 500 nm), or {{= range(…)}}")),
+            },
+        },
         ValueKind::Enum => Value::Enum(t.to_owned()),
         ValueKind::Color => hex_color(t).ok_or_else(|| format!("{raw:?}: expected a colour, #rrggbb or #rrggbbaa, or {{= rgb(…)}}"))?,
         ValueKind::Number if t.eq_ignore_ascii_case("nan") || t == "auto" => Value::Number(f64::NAN),

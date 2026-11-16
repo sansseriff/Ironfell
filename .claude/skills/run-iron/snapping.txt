@@ -1,7 +1,6 @@
 # Object snapping (plans/specs/snapping.md). Run at SIZE=1680x1000@1.
 # In the Main tab the square covers (500,420)-(580,500). Dragged by (23, 3),
-# its right edge (603) already meets rect #E's left and its centre (y 463)
-# snaps to rect #6's centre (465): x 523, y 425, two guides mid-drag.
+# its left edge (523) snaps to the box's left (520): x 520, y 423.
 nav
 ready
 dmove 540 460
@@ -61,8 +60,8 @@ sleep 800
 eval (async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect[^>]*name="square"[^>]*>/)[0].replace(/ rot=.*/, ''); })()
 key Meta+z
 sleep 500
-# Resizing: the square's bottom edge, dragged to 586, snaps to the small
-# green rect's bottom (587), shown by crosses alone.
+# Resizing: the square's bottom edge, dragged to 586, snaps to the box's
+# top (590), shown by crosses alone.
 eval __iron.snapping(true)
 dclick 540 460
 sleep 500

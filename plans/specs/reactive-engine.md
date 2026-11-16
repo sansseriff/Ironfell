@@ -1,8 +1,9 @@
 # The reactive engine: owners, demand, templates and time
 
-**Status:** Proposed 2026-11-15; **revised the same day after a council review**
-(Claude Opus 5.5 and GPT-6.1 Sol, both "rework"; §20 records each finding and what
-changed). **Nothing here is built; it waits on the user's approval.** Work order and
+**Status:** Proposed 2026-11-15; **revised twice the same day after two council rounds**
+(Claude Opus 5.5 and GPT-6.1 Sol; §20 records each finding and what changed). After
+round two one member asks for rework of §11 and §17 only, the other more widely; both
+are revised here and have not been reviewed a third time. **Nothing here is built; it waits on the user's approval.** Work order and
 the next task: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
 
 **Replaces** the reactive graph (`graph.rs`), expansion (`expand.rs`) and the settling
@@ -172,7 +173,8 @@ template node lacks, where the type admits it.
 struct Owner {
     id: NodeId,                 // the instance, picture, repeat, or item scope `#r/~k`
     parent: Option<OwnerId>,
-    kind: OwnerKind,            // Root | Body | Picture | Collection | Item
+    kind: OwnerKind,            // Root | Composition | Body | Picture | Collection | Item
+    stateful: bool,             // its template holds state, here or below (§8.3)
     template: Option<Arc<Template>>,
     state: OwnerState,          // Unloaded | Dormant | Live
     pins: u32,                  // selection, an outside reader, an open inspector
@@ -197,7 +199,8 @@ struct Summary {
 
 | Kind | Made from | Template |
 |---|---|---|
-| Root | the document | none; authored nodes |
+| Root | the document | none |
+| Composition | a composition | none; its authored nodes. The unit a view observes, and later the unit of loading (§13) |
 | Body | an entity linked to a definition | the definition's ports, equations, inner entities, connections, channels, machines, lets, traces, accumulators, queries (`expand::is_body`) |
 | Picture | a `use` that figures a linked entity, or a main | the definition's template for that notation |
 | Collection | a group with a `repeat` or `when` facet | its children that are not items |
@@ -225,7 +228,8 @@ struct Template {
 
 enum Ref {
     Inside(Local, LeafPath),   // another node of this template: this owner's own copy
-    Item(ItemLeaf),            // value, index, presence, leaving: the enclosing Item's
+    Body(Local, LeafPath),     // a picture's read of its definition's body: the figured entity's Body owner
+    Item(u8, ItemLeaf),        // value, index, presence, leaving: the nth enclosing Item's
     Arg(Name),                 // the instance's argument, or what feeds its in port
     Outside(Leaf),             // an authored leaf outside: read as it is
     Context(Name),             // `@name`: the nearest provider above this owner
@@ -250,11 +254,24 @@ enum Ref {
   override may change an inner entity's `instance.def` or an inner `use`'s notation
   (`expand.rs:487`), so which template a child owner gets is read from the child node
   after overrides; such an override is a structure change to that child (§7.2).
+- **The key names shared syntax, not one owner's records.** What an expression's
+  `Ref`s resolve to comes from the owner's **environment**: the entity it figures, its
+  arguments, its enclosing items, and the relations that cross its boundary
+  (`figures`, `connects`, `exposes`).
+- **A Collection inside a template** is compiled as a sub-template of the enclosing
+  one (today `template_of_repeat` builds it from one picture's copies, that picture's
+  overrides baked in, `expand.rs:349`). The plot's tick labels are this case.
 - **The engine stores nothing per derived node** except cells for its bindings and its
   entries in `diffs`. **The Tree** (§12.1) materialises a derived node's facets, with
-  references relocated and overrides applied, the first time something reads them, and
-  keeps them per loaded owner until it unloads or its template's version changes. So
-  readers keep getting whole facets by reference, and only what is read is built.
+  references relocated and overrides applied, the first time something reads them:
+  each loaded owner has one write-once slot per template node (`OnceLock`), allocated
+  when it loads, so a read through `&Store` can fill a slot and hand out `&T`. An
+  owner's slots are cleared when it unloads, its template's version changes, or an
+  override, an argument or a boundary relation of its environment changes.
+- **What this saves:** drawing and picking read every visible node's facets, so a
+  visible owner is materialised in full, as today. The saving is in owners nothing
+  reads (off screen, in hidden tabs, collapsed in the agent's view), and in the engine
+  not cloning expressions.
 - **A definition edit** recompiles its templates. The compiler returns what changed
   (nodes added and removed, slots changed). Each Live or Dormant owner of that template
   applies the difference: new cells, disposed cells, readers of a changed slot marked
@@ -437,7 +454,8 @@ change. A Dormant or Unloaded owner's problems are those of `summary.as_of`
 | **Live** | referenced | exist | necessary ones, every pass | the same |
 
 An owner is at least as awake as its most awake child, and a child is never more awake
-than an Unloaded parent. Loading a derived owner is synchronous: instantiate cells from
+than an Unloaded parent. **A stateful owner (§8.3) is never Unloaded**, nor is any
+owner above it. Loading a derived owner is synchronous: instantiate cells from
 the template, apply `diffs`.
 
 ### 8.2 Observers
@@ -454,8 +472,11 @@ fn reobserve(&mut self, id: ObserverId, interest: Interest);
 fn unobserve(&mut self, id: ObserverId);
 ```
 
-- A **Region** makes Live the picture owners whose `summary.bound` meets the rectangle
-  grown by a margin, found through the spatial index's entry for each owner (§12.3).
+- A **Region** makes necessary the drawn leaves of every node the spatial index finds
+  in the rectangle grown by a margin: authored nodes of the composition as much as
+  derived ones. Picture owners whose bound meets it are made Live through the index's
+  entry for each owner (§12.3). Which cells of a Live owner are necessary is the same
+  rule: those a drawn leaf in the region needs.
   Leaving by more than a second, larger margin makes them Dormant; Unloading is a
   separate, slower policy (memory pressure, or a count of Dormant owners).
 - A **Look** is short-lived: it makes necessary exactly the leaves it prints. Skeleton
@@ -471,34 +492,52 @@ necessary. That is today's behaviour, and the mode the differential test runs in
 
 Necessity flows backwards from what is observed, so most of this is automatic: a visible
 readout that reads an off-screen machine's port keeps that port's whole upstream chain
-current, and nothing else of the machine. Beyond that, the rule is **the model keeps its
-history; the picture may lose its own.**
+current, and nothing else of the machine.
 
-Always necessary, whatever is observed:
+**State is told by the kind of node, not by where it sits.** Pictures can hold state
+by design: a `let` in a template is per picture (reactivity.md §5.1, the accordion's
+open flag), any node may be a template's child, and an entity inside a repeat's
+template gives each item an instance. So "the body computes, the picture shows" cannot
+be the line. Instead a template is **stateful** if it, or any template under it, holds
+a session `let`, a `trace`, an `accumulate`, a `machine`, a `query`, or an `on` with a
+condition trigger. That is known when the template is compiled. An `on` for pointer
+events is not state: it only runs while something is interacting with it.
 
-- **Lifecycle of anything that holds model state.** A Collection or conditional whose
-  template holds a session `let`, a `trace`, an `accumulate`, a `machine` or a `query`
-  (known from the template) keeps its Structure cell necessary, so its items are made
-  and disposed when they would have been, and their state reset when it would have
-  been. A Collection of pure pictures (the plot's tick labels) does not.
-- **Events that start something.** A machine's state argument changing, and the value a
-  `trace` follows changing, are recorded with their time when they happen (§10.4). The
-  tween or the picture of the pulse that follows is computed only when observed.
-- **An integrating stepper** whose policy is `run` (§10.4), with what it reads.
-- **An `on` whose trigger is a condition** (reactivity.md §5.2; not built yet).
-- **What bounds a loaded picture**, when that can move (§8.5).
-- **Inputs to the constraint solver and the network solve**, when they run (§8.9).
+For a stateful owner, always, whatever is observed:
 
-Presentation state in a picture is not kept: an item's presence (enter and exit), a
-layout glide, a tween inside a picture. On waking these **snap to where they would have
-settled**; nothing replays what was not seen.
+- It is never Unloaded (it may be Dormant), so its session cells and logs exist.
+- **Its lifecycle is exact.** Every Collection above it keeps its Structure cell
+  necessary, so it is made and disposed when it would have been and its state reset
+  when it would have been. A leaving item's exit is two recorded times (when it began
+  to leave, and whether it turned back), and its disposal a scheduled event at the
+  deadline; nothing is sampled per frame.
+- **Events that start something are recorded when they happen** (§10.4): a machine's
+  state argument changing, `machine.at` changing position or direction, the value a
+  `trace` follows changing. What they read stays necessary. The tween or the picture
+  of the pulse that follows is computed only when observed.
+- **An integrator** (`accumulate`) with policy `run` runs, with what it reads.
+
+For every loaded owner, stateful or not: **its extent** (§8.5), and the inputs of the
+constraint solver and the network solve when they run (§8.9).
+
+A pure owner (no state at any depth: the plot's tick labels, a table's cells, most
+drawings) keeps nothing else. On waking, a pure Collection reconciles once: its items
+appear and go without their enter and exit, and a layout glide is at its target. That
+is what "snaps" means, and it is exact, since nothing else depended on those.
+
+**What this costs.** A component with a machine is stateful, and so is everything
+above it; `std:plot` has one (`vis`). A lesson of many such components keeps their
+structure current and records their events, but evaluates none of their pictures. A
+machine's state argument that reads a running clock is evaluated every frame, unless
+the formula is one the scheduler can solve for its next crossing (a threshold on a
+clock); phase 4 measures this case.
 
 ### 8.4 Bodies and pictures
 
 A Body owner is never Unloaded while its entity exists: it is small, and saved
-connections attach to its ports. Its cells are evaluated only when necessary. Pictures
-are what go Dormant and Unloaded. One entity pictured in two compositions computes once;
-each picture wakes with its own view.
+connections attach to its ports. Its cells are evaluated only when necessary. Pure
+pictures are what go Dormant and Unloaded; stateful ones go Dormant. One entity
+pictured in two compositions computes once; each picture wakes with its own view.
 
 ### 8.5 Drawing what is not Live
 
@@ -510,13 +549,20 @@ each picture wakes with its own view.
   (`render.rs:573`); a reference draws the template's own values, which is wrong for
   anything else. An Unloaded owner with nothing cached is loaded when it comes into
   view.
-- **Bounds stay right.** A view must never miss something that has moved into it. The
-  cells that decide a loaded picture's bound (its placement, and its shape where that
-  can change) stay necessary while the picture is Dormant if they depend on anything
-  that can change without an edit: a clock, a signal, a stepper. Render analysis
-  already classes a part's placement and shape apart from its look (`analysis.rs`). A
-  picture whose bound is static costs nothing. A picture is Unloaded only if its bound
-  is static, or it declares a size that clips it.
+- **Bounds stay right.** A view must never miss something that has moved into it.
+  Each loaded owner, and each authored subtree the index holds as one entry, has an
+  **extent cell**: the union of its nodes' bounds, reading what `geom::local_bounds`
+  reads (geometry, placement, stroke width, shadow padding, measured text) and its
+  children's extents. It is always necessary while the owner is loaded, so an edit or
+  a moving input updates `summary.bound` whether or not anything is drawn. Render
+  analysis cannot supply this: its channels put fill and stroke with geometry, shadows
+  with effects, and treat layout as opaque (`analysis.rs:57`).
+- **What that costs, and the way out.** A static extent costs nothing between edits.
+  An owner whose geometry moves keeps that geometry current while Dormant, which for
+  an unclipped plot of live data is most of its work. An owner with a declared size
+  that **clips** has that size as its extent and nothing inside is needed: standard
+  components should clip. Only an owner whose extent is static or clipped may be
+  Unloaded. Phase 4 measures both cases.
 
 ### 8.6 Levels
 
@@ -552,8 +598,9 @@ what is observed (§11).
 ### 8.9 Reading
 
 A read through `&Store` never loads or evaluates. Reading a cell that is not current
-returns its last value and says so (`as_of`); in a debug build it is an error unless
-the caller asked for stale values.
+returns its last value and says so (`as_of`). Drawing a Dormant owner reads such
+values on purpose, so that is not an error; a debug build checks only the readers
+below, which must not see one.
 
 Anything that writes what it reads into the document or the overlay first makes what it
 reads current, through `&mut Store`: `expand::translate` and handles (inverting a value
@@ -579,6 +626,8 @@ interface: publishing writes Input cells.
 | `resolve_layout` | `layout::compute` over all groups and tables | A Layout cell per container (§9.2) |
 | `port::derived_signals`, `anchor::derived` | all connections and anchors, each rebuild | Cells made and removed with their relation (§7.2) |
 | `advance_machines`, `advance_steps`, `advance_queries`, `advance_presence`, `clock::advance` | each scans its node type each frame | Stepper cells on the scheduler (§10) |
+| Pins (`layout::constrained`, `layout.rs:443`), which overwrite placements and sizes after layout | all `use` nodes | Part of the Layout cell of the frame they pin to, after its children are placed |
+| Table tracks (`resolve_layout` marks `table.columns` so the grid redraws) | per table | Outputs of the table's Layout cell; a change is reported as a mark (§12.2) |
 | `resolve_contexts` (behaviour rules) | when markup changed | Unchanged; not reactive values |
 | `rebuild_clusters`, `post_apply` (constraint solver) | all constraints | Unchanged in this spec (§9.4) |
 
@@ -591,25 +640,40 @@ dependency one-way, so it resolves top-down. Three mechanisms, in order of prefe
 
 1. **Fitting is layout's job.** Wrapping, and showing only the children that fit, are
    layout modes that publish a `fits` flag per child. No structure changes.
-2. **Declared containment, per axis.** A group may declare `contain` on width, height
-   or both. On a contained axis it contributes no content size to its parent, and its
-   size is fixed or given by the parent. Only then may a Collection inside read that
-   size (`count="{= floor(#box.size.w / 80)}"`); reading the size of an uncontained
-   ancestor from a structural input is refused at write time. Being sized by a parent
-   is not enough: a fill child still feeds a parent that hugs its contents.
+2. **Containment.** A structural input (a Collection's `each`, `count`, `key`, `when`,
+   at any distance) may read a box's size only on an axis where the box is contained:
+   its size there does not come from its contents. That holds without declaring
+   anything for a sized `use` (`std:plot`'s ticks read their template's width, which is
+   the `use`'s) and for a group with a fixed size on that axis; a group that fills or
+   hugs must declare `contain`, and then contributes no content size to its parent.
+   Reading an uncontained size from a structural input is refused at write time.
 3. **Measuring the prototype.** "As many as fit" reads the size of the Collection's
    prototype (§5.3), which exists without any item.
 
 Today one Taffy run lays out each outermost container's whole nested tree, measuring
-text inside it (`layout.rs:318`). That stays the unit, cut only at contained boxes, in
-two cells each:
+text inside it (`layout.rs:318`), and a table's tracks are solved together. That stays
+the unit, cut only at contained boxes, each of which gets two cells:
 
-- **Allocation:** the outer run treats a contained box as a leaf of fixed size on its
-  contained axes and publishes the box's size.
-- **Interior:** a run rooted at the contained box places its children.
+- **Allocation:** the outer run treats the box as a leaf of known size and publishes
+  that size.
+- **Interior:** a run rooted at the box places its children.
 
 Structure inside the box sits between the two in height. Layout reads beneath its own
-published placements, as now (`layout.rs:33`).
+published placements, as now (`layout.rs:33`); a glide is presentation over the target
+(§9.1), which is what other cells read.
+
+**Limit in phase 5: a box that structure reads is contained on both axes.** CSS also
+allows containment on one axis with the other hugging (`inline-size`): the width is
+allocated, the contents are laid out and structured at that width, and their height
+goes back to the outer layout. That is a third step in the middle of the outer run,
+which Taffy would reach through a measure callback that may ask at several widths. It
+is the next step after phase 5, not part of it.
+
+**Reaching CSS** needs more than this engine: `iron_layout` has only `Auto`, `Px` and
+`Fill` for a dimension (`iron_layout/src/lib.rs:68`), so minimum and maximum sizes,
+percentages, aspect ratio, wrapping and growth weights are layout-engine work with
+their own spec. What this spec provides is the ordering that lets structure follow a
+container.
 
 True feedback (a count that reads its own items' laid-out size) is refused at write
 time where it is static. Where it arises through a tracked read it is a cycle, reported
@@ -648,12 +712,21 @@ A clock is a cell. There are **two root clocks today, and they stay two**:
 Steppers stay on presentation time: pausing the timeline does not freeze a pulse.
 
 Formulas have no way to read time today except a reference to the session `clock` node
-(`expr.rs` has no time function; timeline.md §11 notes the gap). New: `clock()` in a
-formula reads the **nearest clock provided above its owner**, resolved the way `@name`
-is, and the playhead where none is. An owner provides a clock with a `clock` facet,
-defined as another clock through a mapping (offset, rate, paused, loop). Uses: the
-narrative clock (position, not seconds), a preview at another time, a component in slow
-motion, a reduced update rate for something small on screen.
+(`expr.rs` has no time function; timeline.md §11 notes the gap). Two new functions:
+
+- **`now()`** is presentation time. It is what a free-running source reads (the laser's
+  pulse phase), and it does not stop when the timeline does.
+- **`clock()`** is the **nearest scripted clock**, and the playhead where none is
+  provided. A node provides one with a `clock` facet, defined as another clock through
+  a mapping (offset, rate, paused, loop). Uses: the narrative clock (position, not
+  seconds), a preview at another time, a component in slow motion.
+
+**A model has one time.** A body resolves `clock()` along the model's own tree (its
+entity's ancestors), never through a picture, because one entity may be pictured under
+several clocks and computes once (§8.4). A clock provided on a picture's side reaches
+pictures only: what the body computes is the same in every picture, and each picture
+may show it at its own clock. This is the context rule already in force (`@name` may
+be read in a template only, reactivity.md §13), applied to time.
 
 ### 10.2 One entry point
 
@@ -696,14 +769,21 @@ the parent clock reaches them.
 | Class | Examples | Unobserved | At another time (§10.5) |
 |---|---|---|---|
 | **Pure** in its clocks | clips; `ease` of a clock; a tween given its recorded start | skipped; computed when read | valid |
-| **Logged** | `trace` (changes with times); a machine's transitions (start time and starting values) | the **event** is always recorded (§8.3); nothing is sampled | valid within what the log holds |
+| **Logged** | `trace` (changes with times); a machine's transitions (start time, starting values, and for `machine.at` the position and direction it came from, `machine.rs:309`); a stateful item's entering and leaving | the **event** is always recorded (§8.3); nothing is sampled | valid within what the log holds |
 | **Integrating** | `accumulate`; a host simulation; the network solve's warm start | by policy: `run` (default), `pause`, or `coarse` (larger steps) | not valid unless recorded |
-| **Presentation** | presence, layout glides | not kept; snaps on waking | not valid |
+| **Presentation** | a pure item's enter and exit; layout glides | not kept; absent on waking (§8.3) | not valid |
 
-Recording an event costs when the event happens, not every frame, so a thousand
-animated machines off screen cost nothing between their state changes. An `accumulate`
-with policy `run` does cost every frame it moves; a closed form is preferred where one
-exists (the laser's pulse phase is `frac(clock() · hz)`). Decision D1.
+**Recording is a step of its own, not part of `stabilise()`.** `stabilise()` is a pure
+function of the document, the inputs and the logs. `record(now)` runs after it, at a
+commit and at each `advance`: it compares what each logger follows with what it last
+recorded and appends events. So a trial inside a transaction records nothing (§11),
+and a value that changes and changes back between two recordings leaves no event,
+as today, where steppers poll once a frame.
+
+Recording costs when an event happens, not every frame, so a thousand machines off
+screen cost nothing between their state changes. An `accumulate` with policy `run` does
+cost every frame it moves; a closed form is preferred where one exists (the laser's
+pulse phase is `frac(now() · hz)`). Decision D1.
 
 ### 10.5 Slices: time as a dimension
 
@@ -725,6 +805,13 @@ as the union of its dependencies':
 Depending on no clock is not enough to be valid: a host signal has no clock edge and is
 still "now" only.
 
+Sources are found **by evaluating in the slice**, as the note says ("a trial
+evaluation, not a separate analysis"): the evaluation records what it read, including
+what a `deref` reached, which provider an `@name` resolved to, and whether a producer
+held a leaf. A static check from `Expr::deps` is only a conservative first answer for
+refusing an edit (a clip's end bound to an accumulator); it cannot be exact, since a
+host may publish onto any leaf.
+
 **Phase 6 builds value slices only.** A slice stores values for cells that depend on a
 clock it sets differently, and reads through to the live slice for the rest. It does
 **not** hold its own structure: if a Collection's items, a layout or a solve depends on
@@ -738,57 +825,85 @@ the store and holds solver results, so it belongs to the live slice only.
 
 ## 11. Transactions
 
-`Store::run` no longer clones the document. The council found that rolling back by
-inverses alone does not work as first written; this section is the answer.
+`Store::run` no longer clones the document. Two council rounds found the first two
+versions of this section wrong; what follows is the third. It rests on three things,
+each checked against the code.
 
-### 11.1 What must be true first
+### 11.1 What it rests on
 
-- **Each op is atomic.** Today `set`, `add_comp` and `reparent` change the document and
-  then run a check that can fail, returning no inverse (`op.rs:615`, `:690`, `:524`).
-  Every op must check before it changes anything, or undo its own change on failure.
-- **Counters are saved.** A create advances the id counters (`next_ids`, `next_rels`);
-  they are saved at the start and put back on rollback, so a failed transaction leaves
-  no gap.
-- **Validation is a pure function of the document and its templates.** The checks that
-  read derived structure (`check_created` for a connection to a derived port,
-  `check_scope`, `check_context`) are answered by the Tree from the document and
-  compiled templates, without the engine's values. So nothing is evaluated, disposed,
-  scheduled or sent before a transaction is known to be good, and acceptance never
-  depends on what is observed. `attachment::validate` compares the documents before and
-  after (and scans every attachment); it works from the ops and their inverses.
+**A document journal, not op inverses.** Op inverses do not put the document back as it
+was: three ops change it and then run a check that can fail, returning no inverse
+(`op.rs:524`, `:615`, `:690`); a create's inverse is a delete, which leaves a saved
+tombstone stamped with a version that never committed (`document.rs:502`,
+`serial.rs:45`); id counters advance. So `Document`'s mutators write an exact undo
+record (the node, facet or relation as it was, or that it was absent, and the
+counters) to a journal while a transaction is open. Rolling back to a mark restores
+the document bit for bit, including its indexes. Op inverses remain what undo replays.
+
+**Validation is a function of the document and templates.** The checks before commit
+are `check_binding` (existence, `binding_cycles`, the look-only rule
+`reads_interaction`), `check_created` and `validate_connection`, `signal_loop`,
+`check_scope`, `check_context` and `attachment::validate`. None reads a value. They do
+read derived structure, in two kinds:
+
+- *Op-driven structure* (an instance's ports, a picture's parts): a function of the
+  document and templates. It is brought up to date for the transaction's ops **before**
+  the checks, as `expand` is today, so creating an instance and connecting to its port
+  in one transaction works, and so does undoing the deletion of a connected instance
+  (`link` accepts a derived end whose instance exists, `op.rs:720`).
+- *Value-driven structure* (which items a Collection has): today the checks use the
+  items as they were before the transaction (`expand(&mut work, stamp,
+  &self.repeats)`), which would make acceptance depend on what is observed once a
+  Collection can be dormant. Instead **a derived id inside an item is valid if its
+  path is valid in the template, for any key.** A binding that reads `#g/~3/7` is
+  accepted whether or not key 3 exists now, and is `Failed` while it does not (§7.4).
+  This is more permissive than today, and is an intended difference (§16.1).
+
+The cycle, look-only and signal-loop checks walk templates with item references
+abstracted, so they cover owners not yet made. `attachment::validate` compares before
+and after and scans every attachment; it works from the journal's touched nodes.
+
+**`stabilise()` is pure; recording and effects wait for commit** (§10.4). A trial
+stabilise changes values and structure and nothing else: no event is logged, no
+request sent, no `Changes` published.
 
 ### 11.2 The steps
 
-1. Translate edits aimed at derived nodes (`expand::translate`), making current what it
-   reads (§8.9).
-2. Apply each op in place, collecting inverses. On an error keep going, to report every
-   error, as now.
-3. Validate (§11.1). On any failure: apply the inverses in reverse, restore the
-   counters, discard templates compiled in step 2. The engine was never told.
-4. Tell the engine each op (§7.2) and `stabilise()`. **Owners disposed in this step are
-   held, with their state, until step 6.**
-5. `post_apply` (the solver). On failure (today: put the old document back and rebuild
-   the graph, `lib.rs:2423`): apply the inverses, tell the engine, `stabilise()`; held
-   owners are re-attached as they were.
-6. Commit: drop held owners; release buffered effects (a query's request, `on.emit`);
-   publish `Changes`.
+1. Check the idempotency key; suspend a running gesture and classify the transaction
+   against it, as now. Translate edits aimed at derived nodes (`expand::translate`),
+   making current what it reads (§8.9).
+2. Open the journal. Apply each op; on an error keep going, to report every error.
+   Bring op-driven structure up to date for these ops.
+3. Validate (§11.1). On failure: roll the journal back, discard templates compiled in
+   step 2. The engine's values were never touched.
+4. Tell the engine each op (§7.2) and `stabilise()`. Owners it disposes are **held**,
+   with their state.
+5. `post_apply`: validate constraints (which reads values), build clusters (which reads
+   the graph and can find a cycle), solve. Each solver write is applied to the
+   document, told to the engine and stabilised, as `invalidate` does now
+   (`lib.rs:2609`). An unsatisfiable or `exact` failure can come after writes.
+6. **On any failure in 4 or 5:** roll the journal back to the mark, tell the engine
+   the reverse changes, `stabilise()`, re-attach held owners, discard the pending
+   `Changes`. Values and structure are then what they were, since `stabilise()` is pure;
+   stamps are newer, which costs a recomputation that finds nothing changed.
+7. **Commit:** close the journal, drop held owners, `record(now)`, release buffered
+   effects (a query's request, `on.emit`), publish `Changes`, push history.
 
 ### 11.3 Consequences
 
 - `Transaction::expanded` goes away. It is never replayed today; undo re-derives.
   `ops`, `derived_ops` (solver writes) and `inverse` stay.
-- Undo, redo, replay and ops arriving from a server take the same path. Undo still
-  snaps machines (`machines.snap`).
-- `apply` still suspends a running gesture (overlay cleared), classifies the
-  transaction against it, and resumes or cancels; idempotency keys are checked before
-  step 1, as now.
+- Undo, redo and replay take steps 1 to 4 and 7 without the solver, as now, and undo
+  still snaps the machines it touches. Ops from a server take the same path.
 - **`apply_session`** (`lib.rs:1216`) is the second way the document changes: session
-  ops (selection, the clock, the timeline and Library compositions) applied outside
-  history, which today rebuilds the whole graph on any structural one. It takes the
-  same steps, without history.
-- If atomic ops prove hard to guarantee, the fallback is a document of shared,
-  copy-on-write chunks, so a working copy costs what changed. It is not the first
-  choice because every read pays for the indirection.
+  ops (selection, the clock, the timeline and Library compositions), outside history.
+  Today it runs no validation, no expansion and no solver, and rebuilds the whole
+  graph on a structural op. It keeps its rules (session-tier ids only, its own version
+  counter) and takes steps 2, 4 and 7: journal, tell the engine, commit. No solver
+  writes reach it.
+- If the journal proves awkward, the fallback is a document of shared, copy-on-write
+  chunks, where rollback is keeping the old root. It is not the first choice because
+  every read pays for the indirection.
 
 ## 12. The host contract
 
@@ -828,6 +943,10 @@ struct Changes {
     removed: Vec<(NodeId, NodeId)>,      // (node, the parent it had), deepest first
     moved: Vec<(NodeId, NodeId)>,        // (node, old parent): reparented or reordered
     relations: Vec<(NodeId, NodeId)>,    // ends of relations linked or unlinked
+    slots: BTreeSet<Leaf>,               // a slot or facet changed with no change of value:
+                                         // a binding became an equal constant, a facet was added
+    marks: BTreeSet<Leaf>,               // reported as changed on request (a table's tracks, a
+                                         // text whose font arrived: `Reactive::mark` today)
     structure: BTreeSet<NodeId>,         // owners and authored parents whose children changed
     loaded: Vec<NodeId>,
     unloaded: Vec<NodeId>,
@@ -842,6 +961,10 @@ relation's ends, `mod.rs:520`).
 
 - `values` are leaves, not nodes: `geom::Revisions` tells a move from a change of shape
   by the leaf (`geom.rs:399`).
+- `slots` covers what the host reconciles today from `AddFacet`, `RemoveFacet` and
+  `Set` ops whatever the value (`mod.rs:646`): editability and render analysis change
+  when a binding does, even to an equal value.
+- Phase 1 lists, for each field, every consumer it feeds, before the old drains go.
 - `removed` lists derived ids as well, since a disposed owner's nodes can no longer be
   enumerated afterwards; `materialize::reconcile` needs them to drop drawables.
 - `structure` is per parent, so paint order and the spatial index can update one
@@ -901,7 +1024,7 @@ interest are that repository's work.
 | 12 | Presence | A scheduled cell on the Item; disposal in the pass where it reaches 0 (§10.3) |
 | 13 | Session lets | Dropped on disposal, kept on unload (§7.3) |
 | 14 | Render analysis and sharing | Per template (§12.3); `Changes` names what moved (§12.2) |
-| 15, 16 | Structure inside the graph | Yes (§6.2). No ops are emitted for derived structure at all |
+| 15, 16 | Structure inside the graph | Yes (§6.2). Derived structure is never a transaction's op. In phase 2b owners still write copies into the document, reported through `Changes`; from 2c nothing is written |
 
 ## 15. Targets
 
@@ -920,7 +1043,7 @@ reports the engine's share.
 | `action` p95 in `plot-perf.txt` (wasm-bench): slow pan, wheel zoom | 6.7, 6.4 ms | Under 1.5 ms |
 | Structural edit at 1,000 placed meters (`instance_cost`, `bench-instances.txt`) | 161.7 ms | Under 2 ms |
 | Placing one more meter at 1,000 | 79.9 ms | Under 1 ms |
-| Memory per placed meter beyond the first | to be measured in phase 0 | Under a tenth of today's |
+| Memory per placed meter beyond the first, **for a meter nothing reads** (off screen, unloaded) | to be measured in phase 0 | Under a tenth of today's. A visible meter is materialised in full, as today |
 | Evaluations per frame for a composition in a hidden tab | all its bindings on any change | 0 |
 | Loading the demo document | to be measured in phase 0 | No slower |
 
@@ -947,9 +1070,18 @@ comparison is exact:
 Not compared: ops emitted for derived structure, evaluation counts, heights.
 
 **Intended differences** are listed in one reviewed file, each with a test of the new
-behaviour: the prototype is not evaluated unless observed; the old engine's text
-comparison of NaN inputs in `settle_repeats`; its 4-round machine loop; its 129-round
-cut for Collections that read each other.
+behaviour:
+
+- the prototype is not evaluated unless observed;
+- a derived id inside an item validates by its template path, whatever keys exist
+  (§11.1);
+- a failed transaction leaves no tombstone and no gap in the id counters;
+- an inner picture's definition follows an override of its entity's `instance.def`
+  (today the body does, `expand.rs:487`, and the picture does not, `expand.rs:587`);
+- the old engine's text comparison of NaN inputs in `settle_repeats`, its 4-round
+  machine loop, and its 129-round cut for Collections that read each other;
+- from phase 3: events are recorded at each commit and advance, where the old steppers
+  sample once a frame (`step.rs:136`).
 
 For phase 2c the reference is phase 2b's engine: the Tree's materialised nodes must
 equal the copies it stored.
@@ -957,7 +1089,9 @@ equal the copies it stored.
 **A host reference.** The store comparison does not show whether the host updated
 correctly from `Changes`. A second harness rebuilds the host's derived state from
 scratch at each step (drawables, paint order, the spatial scene) and compares it with
-the state kept incrementally.
+the state kept incrementally. `materialize::reconcile` takes Bevy `Commands` and mesh
+assets (`materialize.rs:352`), so this is a test in the app crate over a headless Bevy
+`World`, with no window or GPU; phase 0 builds that fixture first.
 
 Scripts: every existing test's sequence of calls, and a generator of random ones
 (transactions including failing ones, previews, publishes, clock moves, undo and redo)
@@ -998,8 +1132,8 @@ be cut and for time to come before observation; both are done here.
 |---|---|---|
 | **0. Baselines and the harness** | Memory and load-time baselines; a profile of the constant edit at 1,000 meters (§15); growth of interned id paths. The differential harness and the host reference (§16.1), run old against old. The script generator | Both harnesses green on old-vs-old across the existing suites' scripts and 10,000 random ones |
 | **1. The read contract, on the old engine** | The `Tree` and `take_changes()` (§12) over today's document and graph. Every caller that can meet a derived id uses them, **inside the crate and outside**; `document()` is renamed | No behaviour change: smoke output identical; `take_derived_ops`, `drain_changes`, `take_touched` have no callers |
-| **2a. Transactions in place, on the old engine** | Atomic ops, saved counters, validation from the document and templates, `attachment::validate` from ops, `apply_session` on the same path (§11) | No document clone in `run`; a random failing transaction leaves the store bit-identical; the constant edit at 1,000 meters measured again |
-| **2b. The new graph, copies still stored** | Cells, heights, necessity (everything necessary), owners, compiled templates, Structure cells that reconcile one owner and **write its copies into the document as today**. Replaces `graph.rs`, `expand::expand` and `settle_repeats`. The pipeline's producers run in today's order and write Input cells | The differential test is exact and green; **the plot targets of §15 are met**; the roadmap row "Plot pan and zoom performance" is closed |
+| **2a. Transactions in place, on the old engine** | The document journal (§11.1). `run` applies in place; `expand::expand` still runs before the checks, its writes journaled and `expansion_problems` deferred to commit; a failure rolls the journal back and, after `post_apply`, rebuilds the graph as now. `attachment::validate` from the journal. Validation is otherwise unchanged | No document clone in `run`; a random failing transaction leaves the document bit-identical, tombstones and counters included; the constant edit at 1,000 meters measured again |
+| **2b. The new graph, copies still stored** | Cells, heights, necessity (everything necessary), owners, compiled templates, and §11's steps in full, with validation from templates. Cells evaluate from templates. Owners **write their copies into the document**: op-driven ones in step 2, before the checks; value-driven ones in step 4. Those writes go through the journal, are not transaction ops, bump no version, and stay out of history and sync; they reach the host only as `Changes`. Replaces `graph.rs`, `expand::expand` and `settle_repeats`. The pipeline's producers run in today's order and write Input cells | The differential test is exact and green; **the plot targets of §15 are met**; the roadmap row "Plot pan and zoom performance" is closed |
 | **2c. Copies leave the document** | Derived nodes answered by the Tree from owner, template and diffs, materialised on read (§5.4); paint order and the spatial scene from the Tree | The Tree equals 2b's stored copies on every script; memory per instance measured against phase 0 |
 | **3. Time** | Two root clocks, `clock()` and clock providers, the scheduler, `advance` and `Wake`; steppers as scheduled cells; events recorded for traces and machines; memory classes (§10.1–§10.4) | `fiber.txt` and `pulses.txt` pass; an idle document with a trace and an accumulator at rest schedules no wake; a machine's transition matches the old player's, interrupted transitions included |
 | **4. Observation** | Observers, Dormant and Unloaded pictures, what stays necessary (§8.3), bounds kept right (§8.5), owner entries in the spatial index, the wake budget, the idle sweep, reads that never load (§8.9) | §8.8's property test is green; a hidden tab's composition of pure pictures costs 0 evaluations; a pulse from an off-screen laser reaches an on-screen meter on time; something moving into the view from outside it appears |
@@ -1030,8 +1164,8 @@ after the council; D10 is new.
 
 | # | Decision | Default |
 |---|---|---|
-| D1 | What unobserved state does | **The model keeps its history; pictures snap** (§8.3, §10.4). Events (a machine's state change, a traced change) are always recorded. An integrator runs unless its author sets `pause` or `coarse`. Presence, glides and tweens inside pictures are not kept. The reviewers disagreed (one wanted everything to run, one wanted integrators to run only when their output leaves their owner); this is between them |
-| D2 | A Dormant picture's bound | **Kept right**: whatever can move its bound without an edit stays necessary (§8.5). A picture with a static bound costs nothing. The first draft's "last known bound" could hide something that moved into view |
+| D1 | What unobserved state does | **State keeps its history wherever it sits; pure pictures do not** (§8.3, §10.4). An owner holding a session `let`, a trace, an accumulator, a machine or a query has an exact lifecycle and its events recorded; it may sleep but is never unloaded. An integrator runs unless its author sets `pause` or `coarse`. A pure owner's enter, exit and glides are simply absent on waking. The cost is that a component with a machine keeps the structure above it current |
+| D2 | A Dormant owner's bound | **Kept right**, by an extent cell that is always current while the owner is loaded (§8.5). Free when static or clipped; an unclipped owner with moving geometry keeps that geometry running. Standard components should clip |
 | D3 | Problems in owners that are not Live | As of their last evaluation, with the idle sweep refreshing them. Whether a transaction is accepted never depends on this |
 | D4 | The words "owner" and "slice" | As in §3; reactivity.md's "scope" is renamed where the two specs meet |
 | D5 | Reclaiming interned id paths | Measure in phase 0. Counting references from owners is not enough: relations, history and a selection can hold a derived id after its owner has gone |
@@ -1068,3 +1202,32 @@ claim about the code below was checked before it changed the spec.
 | Patch the old graph first (the first handoff's option A) | both | Not adopted as such: 2b writes the new cell graph directly but keeps today's stored copies, which gives the same early plot fix and an exact comparison without code that is thrown away |
 | A copy-on-write document instead of rollback | Opus | Kept as the fallback (§11.3) |
 | Materialise derived records per loaded owner so reads keep returning whole facets | Opus | Adopted for the Tree (§5.4); the engine itself still evaluates from the shared template |
+
+### Round two
+
+Both members reviewed the revision. Opus: rework of §11 and §17 only, the rest
+approvable with changes. Sol: rework. Sol confirmed eleven round-one resolutions as
+sound and Opus eight.
+
+| Finding | From | Checked | Result |
+|---|---|---|---|
+| A failed `post_apply` cannot be undone by inverses and a second stabilise: the first stabilise records events (a machine's transition, a trace's pulse), the second records their reverse; solver writes were missing from the steps | both | True (`lib.rs:2556`–`2615`) | §10.4 and §11: `stabilise()` is pure, recording and effects happen at commit, solver writes are a step. This is a different answer from the journal of engine state both proposed: with recording outside `stabilise()`, there is no engine history to journal |
+| Validation is not a function of the document and templates: item liveness comes from values, and `post_apply` reads values | both | Partly. `post_apply` was already after the engine in the steps. Item liveness is true: today's checks use the pre-transaction items (`lib.rs:2661`) | §11.1: an id inside an item validates by template path; cycle and look-only checks walk templates |
+| Op inverses do not restore the document: tombstones, counters | Opus | True (`document.rs:502`, `serial.rs:45`) | §11.1: a document journal; atomic ops are no longer required |
+| 2a promises template validation before templates exist; 2b would validate before copies are written, breaking create-and-connect in one transaction | Opus | True (`op.rs:720`) | §17: 2a keeps `expand` before the checks; in 2b op-driven copies are written before validation |
+| Pictures hold model state by design; §8.1, §8.3 and §8.4 contradicted each other | both | True (reactivity.md §5.1; `expand.rs:330`) | §8.3: stateful is a property of the template, by node kind; stateful owners are never unloaded |
+| Presence decides disposal, and so state, not only appearance | Sol | True (`lib.rs:1436`, `:1476`) | §8.3, §10.4: a stateful item's exit is logged and its disposal scheduled |
+| Authored content had no observation rule | Opus | Agreed | §5.3 (Composition owners), §8.2 |
+| `analysis.rs` cannot identify what decides a bound | both | True (`analysis.rs:57`) | §8.5: an extent cell, and clipping as the way to make it cheap |
+| §9.2 as written refused `std:plot`; one-axis containment needs a third step; `iron_layout` lacks what CSS has; pins and table tracks were missing | both | True (`plot.xml:89`; `iron_layout/src/lib.rs:68`; `layout.rs:443`) | §9.1, §9.2: a sized `use` is contained; both axes in phase 5, one axis left for later; CSS reach stated as layout-engine work |
+| `clock()` resolved like `@name` cannot be read by bodies, and a body under two clocks would have two values | Opus | Agreed | §10.1: `now()` and `clock()`; a body resolves time along the model's tree |
+| Sources cannot be computed statically; `machine.at` logs more than a state change; the laser example read the playhead | both | True (`machine.rs:309`, `graph.rs:511`) | §10.4, §10.5 |
+| `Changes` lacked slot changes and marks | Sol | True (`mod.rs:646`, `lib.rs:1834`) | §12.2 |
+| The template key does not key one owner's records; `Ref` lacked a body variant and item depth; the materialised cache went stale on an override | both | True (`expand.rs:526`–`607`, `:349`) | §5.4 |
+| Lazy `&T` through `&Store` needs a concrete representation; visible owners materialise in full; the debug stale-read error would fire on every dormant draw | both | Agreed | §5.4, §8.9, §15 |
+| The host reference needs a headless Bevy world | both | True (`materialize.rs:352`) | §16.1, phase 0 |
+
+**Not resolved by this revision, stated as limits:** one-axis containment (§9.2);
+structure per slice (D10); an unclipped owner with moving geometry saves little by
+sleeping (§8.5); ops on content that is not loaded (§13).
+

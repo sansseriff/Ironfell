@@ -82,8 +82,9 @@ structural transaction re-expands every instance.
 ## 2. Work order
 
 Phases, their contents and their exits are in the spec's §17. A council review
-(2026-11-15, Claude Opus 5.5 and GPT-6.1 Sol) returned "rework"; the spec was revised
-the same day and its §20 records each finding. In order:
+(2026-11-15, Claude Opus 5.5 and GPT-6.1 Sol) ran two rounds; the spec was revised
+after each and its §20 records every finding. The second revision (transactions,
+what stays necessary, the 2a/2b order) has not been reviewed again. In order:
 
 1. **Approval.** The user approves the revised spec and settles the decisions in its
    §19 (each has a default; D1, D2, D6, D9 and D10 changed or were added after the
@@ -93,7 +94,8 @@ the same day and its §20 records each finding. In order:
    the host reference, green on old against old.
 3. **Phase 1:** the read contract (the `Tree`, `take_changes()`) on the old engine, with
    every caller inside and outside the crate moved to it. No behaviour change.
-4. **Phase 2a:** transactions in place, on the old engine.
+4. **Phase 2a:** transactions in place, on the old engine: a document journal, with
+   `expand` still run before the checks.
 5. **Phase 2b:** the new cell graph and per-owner structure, with copies still stored
    in the document. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom
    performance" row.

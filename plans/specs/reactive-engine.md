@@ -458,13 +458,14 @@ change. A Dormant or Unloaded owner's problems are those of `summary.as_of`
 
 | State | Template | Cells | Evaluated | Stored |
 |---|---|---|---|---|
-| **Unloaded** | referenced | none | no | `summary`, `diffs`, `session` |
+| **Unloaded** | referenced | none | no | `summary`, `diffs`, `session`, and for a stateful owner its parked state (§8.3) |
 | **Dormant** | referenced | exist | no; values as of `summary.as_of` | the same, and cells |
 | **Live** | referenced | exist | necessary ones, every pass | the same |
 
 An owner is at least as awake as its most awake child, and a child is never more awake
-than an Unloaded parent. **A stateful owner (§8.3) is never Unloaded**, nor is any
-owner above it. Loading a derived owner is synchronous: instantiate cells from
+than an Unloaded parent. **A stateful owner (§8.3) is Unloaded only when it is at
+rest**, and then it is *parked*: its state is kept and it is loaded again when
+something it waits on happens. Loading a derived owner is synchronous: instantiate cells from
 the template, apply `diffs`.
 
 ### 8.2 Observers
@@ -515,7 +516,22 @@ events is not state: it only runs while something is interacting with it.
 
 For a stateful owner, always, whatever is observed:
 
-- It is never Unloaded (it may be Dormant), so its session cells and logs exist.
+- **Its state is never lost.** While anything it follows is moving it is at least
+  Dormant, so its session cells and logs exist and its events are recorded.
+- **At rest it may be parked.** An owner is at rest when no recording is pending, it
+  has no continuous scheduler entry, and no integrator in it is running. Parking
+  unloads its cells and keeps, beside `session`: each machine's state and the tail of
+  its log that a tween could still read, each `trace`'s changes still in flight, each
+  `accumulate`'s value, and its timed scheduler entries. It is loaded again, with that
+  state, when a leaf in `summary.reads` changes, when one of its timed entries is due,
+  or when it is observed. The first two are how it would have noticed the event had
+  it stayed loaded, so parking changes nothing that can be seen (§8.8). A thousand
+  machines far from every view, with still inputs, cost a summary and a few values
+  each.
+- **What cannot be parked** is an owner whose inputs keep moving: a machine whose
+  state argument reads a running clock, an integrator with policy `run`. It stays
+  Dormant, evaluating only what its state needs, unless its author sets `pause` or
+  `coarse`, or the application sets a **simulation range** (below).
 - **Its lifecycle is exact.** Every Collection above it keeps its Structure cell
   necessary, so it is made and disposed when it would have been and its state reset
   when it would have been. A leaving item's exit is two recorded times (when it began
@@ -526,6 +542,13 @@ For a stateful owner, always, whatever is observed:
   `trace` follows changing. What they read stays necessary. The tween or the picture
   of the pulse that follows is computed only when observed.
 - **An integrator** (`accumulate`) with policy `run` runs, with what it reads.
+
+**A simulation range** is the application's choice to stop state that is running and
+far from every observer, as a game stops the world beyond some distance: an observer
+may carry a range, and a running stateful owner outside every range is treated as
+`pause`. This is outside §8.8's property by design (the owner resumes where it
+stopped, not where it would have been) and is off unless set. Catching up on waking,
+by replaying inputs or taking large steps, is not designed here.
 
 For every loaded owner, stateful or not: **its extent** (§8.5), the inputs of the
 network solve when it runs (§8.9), and **each constraint cluster with an input that
@@ -548,7 +571,8 @@ clock); phase 4 measures this case.
 
 A Body owner is never Unloaded while its entity exists: it is small, and saved
 connections attach to its ports. Its cells are evaluated only when necessary. Pure
-pictures are what go Dormant and Unloaded; stateful ones go Dormant. One entity
+pictures go Dormant and Unloaded freely; stateful ones go Dormant, and are parked
+when at rest (§8.3). One entity
 pictured in two compositions computes once; each picture wakes with its own view.
 
 ### 8.5 Drawing what is not Live
@@ -600,7 +624,8 @@ clocks, the recorded events and the running steppers equals what observing every
 throughout would have given.** Outside the property, by design:
 
 - presentation state in pictures, which snaps (§8.3);
-- a stepper an author set to `pause` or `coarse`;
+- a stepper an author set to `pause` or `coarse`, or one outside a simulation range
+  (§8.3);
 - answers from outside (a `query`'s request times and replies);
 - the network solve where more than one solution exists, since it starts from its last
   answer (`lib.rs:2146`); §9.1 keeps its inputs and warm start per island.
@@ -1287,7 +1312,7 @@ after the council; D10 is new; D11 came after the council, with §9.4.
 
 | # | Decision | Default |
 |---|---|---|
-| D1 | What unobserved state does | **State keeps its history wherever it sits; pure pictures do not** (§8.3, §10.4). An owner holding a session `let`, a trace, an accumulator, a machine or a query has an exact lifecycle and its events recorded; it may sleep but is never unloaded. An integrator runs unless its author sets `pause` or `coarse`. A pure owner's enter, exit and glides are simply absent on waking. The cost is that a component with a machine keeps the structure above it current |
+| D1 | What unobserved state does | **State keeps its history wherever it sits; pure pictures do not** (§8.3, §10.4). An owner holding a session `let`, a trace, an accumulator, a machine or a query has an exact lifecycle and its events recorded. It may sleep, and when at rest it is parked: unloaded with its state kept, and loaded again when an input it reads changes or a timed event is due. Only state whose inputs keep moving stays loaded, and the application may set a simulation range beyond which that is paused. An integrator runs unless its author sets `pause` or `coarse`. A pure owner's enter, exit and glides are simply absent on waking. The cost is that a component with a machine keeps the structure above it current |
 | D2 | A Dormant owner's bound | **Kept right**, by an extent cell that is always current while the owner is loaded (§8.5). Free when static or clipped; an unclipped owner with moving geometry keeps that geometry running. Standard components should clip |
 | D3 | Problems in owners that are not Live | As of their last evaluation, with the idle sweep refreshing them. Whether a transaction is accepted never depends on this |
 | D4 | The words "owner" and "slice" | As in §3; reactivity.md's "scope" is renamed where the two specs meet |
@@ -1368,3 +1393,9 @@ the whole document after each transaction (`solve.rs:130`, `lib.rs:2341`);
 implied mates require both anchors in one composition (`plug.rs:251`). Not checked,
 and a phase 5 exit instead: that solving from a converged pose with unchanged inputs
 returns that pose.
+
+**D1 changed after the council (2026-11-15, at the user's request).** Round two's
+"stateful owners are never unloaded" kept too much: an owner at rest needs only its
+state, not its cells. §8.1 and §8.3 now park it and load it again on a change to what
+it reads or a timed event; a simulation range is the application's opt-in for state
+that is running far from every observer.

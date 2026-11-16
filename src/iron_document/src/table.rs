@@ -14,7 +14,7 @@
 use kurbo::{Line, Rect};
 
 use crate::facet::{Font, LayoutItem, LeafStruct, Name, Rules, Table, Text, Transform2d};
-use crate::{Document, NodeId, Op, OrderKey, Slot, Store, TypeId, Value};
+use crate::{Document, NodeId, Op, OrderKey, Slot, StoreCore, TypeId, Value};
 
 /// A cell's area: 0-based column and row, and how many of each it spans.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,7 +47,7 @@ fn read_word(read: Read, id: NodeId, leaf: &str) -> String {
     read(id, leaf).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
-fn num(store: &Store, id: NodeId, leaf: &str, default: f64) -> f64 {
+fn num(store: &StoreCore, id: NodeId, leaf: &str, default: f64) -> f64 {
     read_num(&|n, l| crate::layout::base(store, n, l), id, leaf, default)
 }
 
@@ -56,7 +56,7 @@ fn column_count_with(read: Read, table: NodeId) -> usize {
 }
 
 /// How many columns a table has: one per track in `table.columns`.
-pub fn column_count(store: &Store, table: NodeId) -> usize {
+pub fn column_count(store: &StoreCore, table: NodeId) -> usize {
     column_count_with(&|n, l| crate::layout::base(store, n, l), table)
 }
 
@@ -98,7 +98,7 @@ pub fn table_of(doc: &Document, id: NodeId) -> Option<NodeId> {
 /// no room left in its row goes past the last column, where it shows as an
 /// extra column rather than shifting its neighbours. Returns the areas, in
 /// reading order, and the number of rows.
-pub fn place(store: &Store, table: NodeId) -> (Vec<Area>, usize) {
+pub fn place(store: &StoreCore, table: NodeId) -> (Vec<Area>, usize) {
     place_with(store.document(), &|n, l| crate::layout::base(store, n, l), table)
 }
 
@@ -137,7 +137,7 @@ pub struct Decor {
     pub lines: Vec<(Line, f64, [f32; 4])>,
 }
 
-fn color(store: &Store, id: NodeId, leaf: &str) -> [f32; 4] {
+fn color(store: &StoreCore, id: NodeId, leaf: &str) -> [f32; 4] {
     match crate::layout::base(store, id, leaf) {
         Some(Value::Color(c)) => c,
         _ => [0.0; 4],
@@ -146,7 +146,7 @@ fn color(store: &Store, id: NodeId, leaf: &str) -> [f32; 4] {
 
 /// A table's bands and lines, from its grid and its `table` and `rules`
 /// leaves.
-pub fn decor(store: &Store, table: NodeId, grid: &Grid) -> Decor {
+pub fn decor(store: &StoreCore, table: NodeId, grid: &Grid) -> Decor {
     let mut d = Decor::default();
     let (Some(&(x0, _)), Some(&(xl, wl)), Some(&(y0, _)), Some(&(yl, hl))) = (grid.columns.first(), grid.columns.last(), grid.rows.first(), grid.rows.last()) else {
         return d;
@@ -556,7 +556,7 @@ pub fn create_ops_after(doc: &Document, taken: usize, parent: Option<NodeId>, or
 /// merges), only cells whose content changed are set, so every cell keeps
 /// its id, style and selection. Otherwise its rows are made again in the
 /// look the table has now (`infer`), keeping its own leaves.
-pub fn replace_ops(store: &Store, table: NodeId, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
+pub fn replace_ops(store: &StoreCore, table: NodeId, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
     let doc = store.document();
     if doc.live(table).is_none_or(|n| n.ty.name() != "table") {
         return Err(format!("{table} is not a table"));
@@ -647,7 +647,7 @@ fn index_in_row(areas: &[Area], row: usize, col: usize) -> usize {
 /// `selected` cells, which must make a rectangle: the top-left one keeps
 /// the others' words, on new lines, as PowerPoint does), `split` (the one
 /// selected merged cell back into single cells).
-pub fn edit_ops(store: &Store, table: NodeId, verb: &str, selected: &[NodeId]) -> Result<(Vec<Op>, String), String> {
+pub fn edit_ops(store: &StoreCore, table: NodeId, verb: &str, selected: &[NodeId]) -> Result<(Vec<Op>, String), String> {
     let doc = store.document();
     if doc.live(table).is_none_or(|n| n.ty.name() != "table") {
         return Err(format!("{table} is not a table"));
@@ -827,7 +827,7 @@ pub fn from_tsv(text: &str) -> Vec<Vec<String>> {
 /// Paste rows into a table (§5.1): from the selected cell (`at`, or the
 /// top-left), over what is there, the table growing to fit. A merge the
 /// pasted block lands on is undone where words land on it.
-pub fn paste_ops(store: &Store, table: NodeId, at: Option<NodeId>, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
+pub fn paste_ops(store: &StoreCore, table: NodeId, at: Option<NodeId>, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
     let doc = store.document();
     let read = |n: NodeId, l: &str| crate::layout::base(store, n, l);
     let bound = |cell: NodeId| doc.leaf(cell, "text.content".parse().expect("declared leaf")).and_then(|s| s.expr()).map(|e| e.to_string());
@@ -864,7 +864,7 @@ pub fn paste_ops(store: &Store, table: NodeId, at: Option<NodeId>, rows_in: &[Ve
 /// canvas).
 pub fn fragment(rows: Vec<Vec<String>>, centre: [f64; 2]) -> Result<crate::copy::Fragment, String> {
     use crate::{Actor, Affine2, TransactionInput};
-    let mut store = Store::new();
+    let mut store = StoreCore::new();
     let spec = Spec { rows, preset: Preset::Light, header: 1, label_col: false, emphasis: None, align: Vec::new() };
     let (ops, table) = create_ops(store.document(), None, OrderKey::first(), [0.0, 0.0], &spec)?;
     let tx = |ops| TransactionInput { label: "paste table".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false };

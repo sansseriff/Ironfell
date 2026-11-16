@@ -19,6 +19,12 @@ iron_text = { path = "../iron_text" }
 # Stacks and grids on groups (plans/specs/layout-and-tables.md); Bevy-free.
 iron_layout = { path = "../iron_layout" }
 
+[features]
+# The differential harness (plans/handoff-reactive-structure.md §4.1): `Store`
+# becomes a facade over two stores compared after every call, so every test
+# is a differential script. Test-only; the app never enables it.
+differential = []
+
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform
 # arithmetic. Same version as bevy_math's, so the comparison is exact.

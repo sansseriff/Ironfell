@@ -1,5 +1,5 @@
 //! Resolved clip frames, shared by picking and presentation. No renderer types.
-use crate::{NodeId, Store, Value};
+use crate::{NodeId, StoreCore, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClipFrame {
@@ -10,7 +10,7 @@ pub struct ClipFrame {
 }
 
 impl ClipFrame {
-    pub fn read(store: &Store, id: NodeId) -> Option<Self> {
+    pub fn read(store: &StoreCore, id: NodeId) -> Option<Self> {
         let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
         if read("group_clip.enabled") != Some(Value::Bool(true)) { return None; }
         let number = |leaf, default| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
@@ -34,7 +34,7 @@ impl ClipFrame {
 
 /// The point is in this node's composition space. Embedded compositions call
 /// this again in their own space; ancestors never cross embed references.
-pub fn inside_clips(store: &Store, id: NodeId, point: [f64; 2]) -> bool {
+pub fn inside_clips(store: &StoreCore, id: NodeId, point: [f64; 2]) -> bool {
     let mut at = Some(id);
     while let Some(id) = at {
         if let Some(frame) = ClipFrame::read(store, id) {

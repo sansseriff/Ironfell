@@ -296,6 +296,18 @@ fn a_conditional_groups_children_exist_only_while_it_holds() {
 
 // ---- Phase 4: state and actions -----------------------------------------
 
+/// `on.emit` queues a named event for the host when the action fires; the
+/// host takes it once (`take_emitted`).
+#[test]
+fn an_emitting_action_queues_its_event_for_the_host() {
+    let (mut store, _, n) = sheet(r#"<group id="$g" name="button"><rect id="$bar" name="bar" x="0" y="0" w="80" h="24"/><on event="click" emit="pressed"/></group>"#);
+    let (g, bar) = (n["g"], n["bar"]);
+    assert!(store.take_emitted().is_empty());
+    store.fire(bar, "click", Actor::Human, 0).unwrap();
+    assert_eq!(store.take_emitted(), vec![(g, "pressed".to_owned())]);
+    assert!(store.take_emitted().is_empty(), "taken once");
+}
+
 /// An accordion as a component, in markup: a click on its header toggles
 /// its own `open` state, which a conditional shows its body by. Each
 /// instance has its own; one click is one undo step.

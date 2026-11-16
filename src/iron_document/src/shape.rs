@@ -26,7 +26,7 @@ use crate::id::NodeId;
 use crate::op::Op;
 use crate::registry::TypeId;
 use crate::value::Slot;
-use crate::Store;
+use crate::StoreCore;
 use kurbo::{BezPath, Point, Vec2};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -66,7 +66,7 @@ fn parameters(ty: &str) -> &'static [&'static str] {
 }
 
 /// Whether `id` is a shape that can become a path.
-pub fn convertible(store: &Store, id: NodeId) -> bool {
+pub fn convertible(store: &StoreCore, id: NodeId) -> bool {
     store.document().live(id).is_some_and(|n| !parameters(n.ty.name()).is_empty())
 }
 
@@ -171,7 +171,7 @@ pub fn to_bez(contours: &[Vec<Anchor>]) -> BezPath {
 }
 
 /// A shape node's outline in its own space, from its resolved parameters.
-pub fn outline(store: &Store, id: NodeId) -> Option<Vec<Vec<Anchor>>> {
+pub fn outline(store: &StoreCore, id: NodeId) -> Option<Vec<Vec<Anchor>>> {
     let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).unwrap_or(default);
     let doc = store.document();
     match doc.live(id)?.ty.name() {
@@ -189,7 +189,7 @@ pub fn outline(store: &Store, id: NodeId) -> Option<Vec<Vec<Anchor>>> {
 
 /// The transaction's ops that turn the shape `id` into a closed path with the
 /// same outline, or why it cannot be.
-pub fn to_path(store: &Store, id: NodeId) -> Result<Conversion, String> {
+pub fn to_path(store: &StoreCore, id: NodeId) -> Result<Conversion, String> {
     let doc = store.document();
     let node = doc.live(id).ok_or_else(|| format!("{id} is not live"))?;
     let ty = node.ty.name();

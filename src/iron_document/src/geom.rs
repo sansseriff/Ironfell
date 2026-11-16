@@ -22,7 +22,7 @@ use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::value::Value;
-use crate::Store;
+use crate::StoreCore;
 use kurbo::{Rect, Shape as _};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -232,7 +232,7 @@ pub const PATH_HIT: f64 = 5.0;
 /// a frame boundary; the miter limit also covers round and bevel joins and
 /// square and round caps; a shadow reaches its offset plus three standard
 /// deviations (half the authored blur radius each).
-pub fn paint_padding(store: &Store, id: NodeId) -> f64 {
+pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, default: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
     let mut pad = if read("stroke.color").is_some() { num("stroke.width", 1.0) * 0.5 * num("stroke.miter", 4.0).max(4.0) } else { 0.0 };
@@ -249,7 +249,7 @@ pub fn paint_padding(store: &Store, id: NodeId) -> f64 {
 /// `path`, `text`), or of a 3D embed's on-screen frame. `None` for a group, an
 /// embed of a 2D composition (its region is the source's content, which a
 /// spatial scene knows), and anything else.
-pub fn local_bounds(store: &Store, id: NodeId) -> Option<LocalBounds> {
+pub fn local_bounds(store: &StoreCore, id: NodeId) -> Option<LocalBounds> {
     let doc = store.document();
     let node = doc.live(id)?;
     let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
@@ -340,7 +340,7 @@ impl GeometryChanges {
 /// re-derives when they move; a chain's placement stamp is the sum of its
 /// nodes' placement revisions, so a cached world affine stays valid until
 /// some ancestor moves.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Revisions {
     structure: u64,
     placement: BTreeMap<NodeId, u64>,
@@ -431,7 +431,7 @@ mod tests {
     use crate::order::OrderKey;
     use crate::registry::TypeId;
     use crate::value::Slot;
-    use crate::Store;
+    use crate::StoreCore;
 
     /// Bevy's own arithmetic for the same tree: `Transform::compute_affine`
     /// is `Affine3A::from_scale_rotation_translation`, and propagation is
@@ -477,7 +477,7 @@ mod tests {
                     r(&mut seed, 0.25, 3.0),
                 ));
             }
-            let mut store = Store::new();
+            let mut store = StoreCore::new();
             let ids = store.document().next_ids(depth);
             let mut ops = Vec::new();
             for (i, &(x, y, rot, sx, sy)) in chain.iter().enumerate() {
@@ -559,7 +559,7 @@ mod tests {
     }
 
     /// A rect under a group under a root group; returns (root, group, rect).
-    fn nested(store: &mut Store) -> [NodeId; 3] {
+    fn nested(store: &mut StoreCore) -> [NodeId; 3] {
         use crate::facet::Size;
         let ids = store.document().next_ids(3);
         let mut t = Transform2d::default();
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn revisions_separate_placement_from_local_and_structure() {
-        let mut store = Store::new();
+        let mut store = StoreCore::new();
         let [root, group, rect] = nested(&mut store);
         let first = store.take_geometry_changes();
         assert!(first.structure, "creation is structure");
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn a_points_move_is_its_paths_local_change() {
         use crate::facet::PathShape;
-        let mut store = Store::new();
+        let mut store = StoreCore::new();
         let ids = store.document().next_ids(4);
         let [path, contour, point, other] = [ids[0], ids[1], ids[2], ids[3]];
         let mut at = Transform2d::default();
@@ -666,7 +666,7 @@ mod tests {
     #[test]
     fn local_bounds_follow_shape_type_and_paint() {
         use crate::facet::{Radius, Shadow, Stroke};
-        let mut store = Store::new();
+        let mut store = StoreCore::new();
         let ids = store.document().next_ids(2);
         let mut r = Radius::default();
         r.rx = Slot::Const(Value::Number(10.0));
@@ -701,7 +701,7 @@ mod tests {
 
     #[test]
     fn world_affine_reads_previews_and_skips_missing_transforms() {
-        let mut store = Store::new();
+        let mut store = StoreCore::new();
         let ids = store.document().next_ids(2);
         let mut t = Transform2d::default();
         t.x = Slot::Const(Value::Number(100.0));

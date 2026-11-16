@@ -142,7 +142,7 @@ pub fn interfaces() -> Vec<(&'static str, Vec<PortInfo>)> {
     ENTRIES
         .iter()
         .map(|e| {
-            let mut store = crate::Store::new();
+            let mut store = crate::StoreCore::new();
             let doc = store.document();
             let (library, first) = (doc.next_id(), doc.next_id().raw() + 1);
             let mut ops = vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::first(), facets: vec![] }];
@@ -167,7 +167,7 @@ pub fn interfaces() -> Vec<(&'static str, Vec<PortInfo>)> {
         .collect()
 }
 
-impl crate::Store {
+impl crate::StoreCore {
     /// Place standard component `key` in `composition` at `at` (its
     /// picture's origin), as one history entry: its definition copied in on
     /// first use, then a linked instance. Returns the instance's `use`.
@@ -435,7 +435,7 @@ struct Baked {
 }
 
 fn bake(key: &str) -> Baked {
-    let mut store = crate::Store::new();
+    let mut store = crate::StoreCore::new();
     let ids = store.document().next_ids(3);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));

@@ -51,7 +51,7 @@ use crate::order::OrderKey;
 use crate::parts::El;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value, ValueKind};
-use crate::{Actor, Store, TransactionInput};
+use crate::{Actor, StoreCore, TransactionInput};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -115,7 +115,7 @@ impl Failure {
 pub type SvgImport<'a> = &'a dyn Fn(&str) -> Result<(crate::copy::Fragment, Vec<String>), String>;
 
 /// Plan `xml` (one `<edit>`) against `store`: nothing is applied.
-pub fn plan(store: &Store, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Failure> {
+pub fn plan(store: &StoreCore, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Failure> {
     let parse = |m: String| Failure::Errors(vec![VerbError { op: None, kind: "parse".into(), message: m, verb: None }]);
     let els = crate::parts::elements(xml).map_err(|e| parse(format!("not well-formed: {e}")))?;
     let root = match els.as_slice() {
@@ -135,7 +135,7 @@ pub fn plan(store: &Store, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Fa
         return Err(parse(format!("text inside <edit> is not read ({:?}); write prose outside the <edit>", root.text.trim().chars().take(40).collect::<String>())));
     }
     let verbs: Vec<String> = root.children.iter().map(describe).collect();
-    let mut p = Planner { store, svg, verbs: &verbs, scratch: Store::with_document(store.document().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
+    let mut p = Planner { store, svg, verbs: &verbs, scratch: StoreCore::with_document(store.document().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
     for (i, el) in root.children.iter().enumerate() {
         if !VERBS.contains(&el.name.as_str()) && TypeId::lookup(&el.name).is_none() {
             return Err(Failure::Errors(vec![p.error(i, "parse", format!("<{}> is not a verb or a node type; verbs: {}", el.name, VERBS.join(", ")))]));
@@ -191,7 +191,7 @@ pub fn plan(store: &Store, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Fa
 
 /// [`plan`] as a transaction, for callers that apply an edit as the system
 /// (the demo's gallery): its errors as one message.
-pub fn transaction(store: &Store, xml: &str, label: &str, actor: Actor) -> Result<(TransactionInput, Plan), String> {
+pub fn transaction(store: &StoreCore, xml: &str, label: &str, actor: Actor) -> Result<(TransactionInput, Plan), String> {
     let plan = plan(store, xml, None).map_err(|f| f.message())?;
     Ok((TransactionInput { label: label.into(), actor, ts: 0, idempotency_key: None, ops: plan.ops.clone(), exact: plan.exact }, plan))
 }
@@ -218,11 +218,11 @@ fn describe(el: &El) -> String {
 }
 
 struct Planner<'a, 'v> {
-    store: &'a Store,
+    store: &'a StoreCore,
     svg: Option<SvgImport<'a>>,
     verbs: &'v [String],
     /// The document with every op so far applied: what each verb reads.
-    scratch: Store,
+    scratch: StoreCore,
     ops: Vec<Op>,
     op_verb: Vec<usize>,
     summary: Vec<String>,

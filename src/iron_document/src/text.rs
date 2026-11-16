@@ -3,7 +3,7 @@
 //! bounds, picking, the renderer and the caret all agree on where a text's
 //! glyphs are.
 
-use crate::{NodeId, Store, Value};
+use crate::{NodeId, StoreCore, Value};
 use iron_text::{Align, StyleRun, TextLayout, TextStyle, VAlign};
 use kurbo::Rect;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ pub fn display(v: &Value) -> String {
 }
 
 /// The node's `font` leaves as a style.
-pub fn style(store: &Store, id: NodeId) -> TextStyle {
+pub fn style(store: &StoreCore, id: NodeId) -> TextStyle {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, d: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(d);
     let word = |leaf: &str| read(leaf).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
@@ -72,24 +72,24 @@ pub fn style(store: &Store, id: NodeId) -> TextStyle {
 }
 
 /// The node's text as it should read now.
-pub fn content(store: &Store, id: NodeId) -> String {
+pub fn content(store: &StoreCore, id: NodeId) -> String {
     store.resolved(id, "text.content".parse().expect("declared leaf")).map(|v| display(&v)).unwrap_or_default()
 }
 
 /// The node's style runs (`text.runs`), valid for its current content.
-pub fn runs(store: &Store, id: NodeId) -> Vec<StyleRun> {
+pub fn runs(store: &StoreCore, id: NodeId) -> Vec<StyleRun> {
     let json = store.resolved(id, "text.runs".parse().expect("declared leaf")).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
     iron_text::runs::normalize(&content(store, id), iron_text::runs::parse(&json))
 }
 
 /// Lay out a text node with its current content and style.
-pub fn measure(store: &Store, id: NodeId) -> Measured {
+pub fn measure(store: &StoreCore, id: NodeId) -> Measured {
     measure_with(store, id, &content(store, id), &runs(store, id))
 }
 
 /// Lay out a text node as if its content were `text` styled by `runs` (the
 /// editor's draft).
-pub fn measure_with(store: &Store, id: NodeId, text: &str, runs: &[StyleRun]) -> Measured {
+pub fn measure_with(store: &StoreCore, id: NodeId, text: &str, runs: &[StyleRun]) -> Measured {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, d: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(d);
     let sizing = Sizing::parse(read("text.sizing").and_then(|v| v.as_str().map(str::to_owned)).as_deref().unwrap_or("auto_width"));
@@ -111,7 +111,7 @@ pub fn measure_with(store: &Store, id: NodeId, text: &str, runs: &[StyleRun]) ->
 
 /// How far a text's words sit inside its box: a table's cell padding, or
 /// nothing for any other text.
-pub fn cell_pad(store: &Store, id: NodeId) -> [f64; 2] {
+pub fn cell_pad(store: &StoreCore, id: NodeId) -> [f64; 2] {
     let doc = store.document();
     let row = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "row"));
     match row.and_then(|r| crate::table::table_of(doc, r)) {
@@ -134,7 +134,7 @@ pub fn fragment(text: &str, centre: [f64; 2]) -> Result<crate::copy::Fragment, S
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let text = text.trim_end_matches('\n');
     let l = iron_text::engine().layout(text, &TextStyle::default(), &[], None);
-    let mut store = Store::new();
+    let mut store = StoreCore::new();
     let id = store.document().next_ids(1)[0];
     let mut t = Transform2d::default();
     t.x = Slot::Const(Value::Number((centre[0] - l.width * 0.5).round()));

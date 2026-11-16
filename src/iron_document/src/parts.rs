@@ -741,7 +741,7 @@ pub struct Placed {
     pub figure: NodeId,
 }
 
-impl crate::Store {
+impl crate::StoreCore {
     /// Place part `key` in `composition` with its origin at `at`, turned by
     /// `rot` radians, as one history entry: its definition copied in on
     /// first use, then a linked instance named by its next designator.
@@ -975,7 +975,7 @@ pub fn elbow(from: [f64; 2], to: [f64; 2], vertical_first: bool) -> Option<[f64;
 }
 
 /// Every pin drawn on `sheet`'s top level: its end and where it is.
-pub fn pins_on(store: &crate::Store, sheet: NodeId) -> Vec<(End, [f64; 2])> {
+pub fn pins_on(store: &crate::StoreCore, sheet: NodeId) -> Vec<(End, [f64; 2])> {
     let doc = store.document();
     let mut out = Vec::new();
     for &f in doc.children(sheet) {
@@ -1050,7 +1050,7 @@ pub enum Terminal {
 
 /// The wire under `at` on `sheet` (a path figuring a connection), within
 /// `reach` sheet px, and the nearest point on it.
-pub fn wire_at(store: &crate::Store, sheet: NodeId, at: [f64; 2], reach: f64) -> Option<(NodeId, [f64; 2])> {
+pub fn wire_at(store: &crate::StoreCore, sheet: NodeId, at: [f64; 2], reach: f64) -> Option<(NodeId, [f64; 2])> {
     let doc = store.document();
     let p = Point::new(at[0], at[1]);
     let mut best: Option<(f64, NodeId, Point)> = None;
@@ -1072,7 +1072,7 @@ pub fn wire_at(store: &crate::Store, sheet: NodeId, at: [f64; 2], reach: f64) ->
 
 /// A wire's points, sheet px, if `path` is a wire (a path figuring a
 /// connection, its points in one contour).
-fn wire_points(store: &crate::Store, path: NodeId) -> Option<Vec<[f64; 2]>> {
+fn wire_points(store: &crate::StoreCore, path: NodeId) -> Option<Vec<[f64; 2]>> {
     let doc = store.document();
     doc.live(path).filter(|n| n.ty.name() == "path")?;
     let figured = doc.relations_from(path).find(|r| r.rel == crate::document::RelKind::Figures)?.to;
@@ -1096,8 +1096,8 @@ fn wire_end(doc: &crate::document::Document, path: NodeId, last: bool) -> Option
 /// Split `wire` at `at` (on it): a junction placed there, the wire replaced
 /// by two through it. Applies to `scratch` and returns the ops and the
 /// junction's end.
-fn split(scratch: &mut crate::Store, sheet: NodeId, wire: NodeId, at: [f64; 2], ops: &mut Vec<Op>) -> Result<End, String> {
-    let apply = |scratch: &mut crate::Store, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
+fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 2], ops: &mut Vec<Op>) -> Result<End, String> {
+    let apply = |scratch: &mut crate::StoreCore, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
         scratch.apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::System, ts: 0, idempotency_key: None, ops: new.clone(), exact: false }).map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
         ops.extend(new);
         Ok(())
@@ -1136,10 +1136,10 @@ fn split(scratch: &mut crate::Store, sheet: NodeId, wire: NodeId, at: [f64; 2], 
 /// The ops for a wire from `from` to `to` through `points` (sheet px, the
 /// two ends first and last): a wire ending on a wire splits it at a new
 /// junction. One transaction's worth.
-pub fn wire_between(store: &crate::Store, sheet: NodeId, from: Terminal, to: Terminal, points: &[[f64; 2]]) -> Result<Vec<Op>, String> {
-    let mut scratch = crate::Store::with_document(store.document().clone());
+pub fn wire_between(store: &crate::StoreCore, sheet: NodeId, from: Terminal, to: Terminal, points: &[[f64; 2]]) -> Result<Vec<Op>, String> {
+    let mut scratch = crate::StoreCore::with_document(store.document().clone());
     let mut ops = Vec::new();
-    let end = |t: Terminal, scratch: &mut crate::Store, ops: &mut Vec<Op>| match t {
+    let end = |t: Terminal, scratch: &mut crate::StoreCore, ops: &mut Vec<Op>| match t {
         Terminal::Pin(e) => Ok(e),
         Terminal::Wire { path, at } => split(scratch, sheet, path, at, ops),
     };
@@ -1187,16 +1187,16 @@ fn entity_named(doc: &crate::document::Document, name: &str) -> Option<NodeId> {
 /// and any input's value. A `wire` joins two pins, `designator.pin`, of
 /// parts placed here or before, through the `via` corners (and one elbow,
 /// horizontal first, to reach the end). Returns the ops and a summary.
-pub fn circuit_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, String), String> {
+pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, String), String> {
     let els = elements(markup)?;
     let [circuit] = &els[..] else { return Err("write one <circuit> at a time".into()) };
     if circuit.name != "circuit" {
         return Err(format!("expected <circuit>, got <{}>", circuit.name));
     }
     let sheet = sheet_named(store.document(), circuit.need("sheet")?)?;
-    let mut scratch = crate::Store::with_document(store.document().clone());
+    let mut scratch = crate::StoreCore::with_document(store.document().clone());
     let mut ops: Vec<Op> = Vec::new();
-    let apply = |scratch: &mut crate::Store, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
+    let apply = |scratch: &mut crate::StoreCore, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
         scratch.apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: new.clone(), exact: false }).map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
         ops.extend(new);
         Ok(())
@@ -1287,7 +1287,7 @@ pub fn circuit_ops(store: &crate::Store, markup: &str) -> Result<(Vec<Op>, Strin
 /// its inputs; the net through any ground is `0`, the rest `N1`, `N2`, …
 /// in order of appearance. Grounds and junctions are only nets; a probe is
 /// a comment. Each net's solved voltage follows, as comments.
-pub fn netlist(store: &crate::Store, sheet: NodeId) -> String {
+pub fn netlist(store: &crate::StoreCore, sheet: NodeId) -> String {
     use std::collections::BTreeMap;
     let doc = store.document();
     let name_of = |n: NodeId| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned).unwrap_or_default();

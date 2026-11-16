@@ -24,7 +24,7 @@ use crate::op::Op;
 use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
-use crate::Store;
+use crate::{Store, StoreCore};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The session composition's name, as a view's source names it.
@@ -171,20 +171,20 @@ fn ty(n: &str) -> TypeId {
     TypeId::lookup(n).expect("registered type")
 }
 
-fn name_of(store: &Store, id: NodeId) -> Option<String> {
+fn name_of(store: &StoreCore, id: NodeId) -> Option<String> {
     store.document().get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
-fn label_of(store: &Store, id: NodeId) -> String {
+fn label_of(store: &StoreCore, id: NodeId) -> String {
     name_of(store, id).unwrap_or_else(|| format!("{} {id}", store.document().live(id).map_or("node", |n| n.ty.name())))
 }
 
-fn number(store: &Store, id: NodeId, facet: FacetKind, field: &str) -> Option<f64> {
+fn number(store: &StoreCore, id: NodeId, facet: FacetKind, field: &str) -> Option<f64> {
     store.resolved(id, LeafPath::new(facet, field).ok()?)?.as_f64()
 }
 
 /// The session's timeline composition, if it has been built.
-pub fn find(store: &Store) -> Option<NodeId> {
+pub fn find(store: &StoreCore) -> Option<NodeId> {
     let doc = store.document();
     doc.roots().iter().copied().find(|&r| r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == "composition") && name_of(store, r).as_deref() == Some(TIMELINE))
 }
@@ -206,7 +206,7 @@ fn tick_for(pps: f64) -> f64 {
 
 /// What the timeline would show now. `comp` is the composition, whose axis
 /// decides the tick spacing.
-pub fn plan(store: &Store, clock: NodeId, comp: Option<NodeId>) -> Plan {
+pub fn plan(store: &StoreCore, clock: NodeId, comp: Option<NodeId>) -> Plan {
     // A transition previewed in the state editor: the timeline is inside it.
     if let Some(pin) = store.pinned_state()
         && let Some((from, to, _)) = &pin.scrub
@@ -318,7 +318,7 @@ pub fn property_label(path: LeafPath) -> String {
 /// What the timeline shows inside the transition a pinned state previews
 /// (machines.md §6): a row per part of the component that reads a channel,
 /// a row per such property under it, each with its slice.
-fn inside_plan(store: &Store, clock: NodeId, comp: Option<NodeId>, pin: &crate::machine::Pinned, from: &str, to: &str) -> Plan {
+fn inside_plan(store: &StoreCore, clock: NodeId, comp: Option<NodeId>, pin: &crate::machine::Pinned, from: &str, to: &str) -> Plan {
     use crate::machine;
     let doc = store.document();
     let read = |l: Leaf| store.resolved(l.node, l.path);
@@ -370,7 +370,7 @@ fn inside_plan(store: &Store, clock: NodeId, comp: Option<NodeId>, pin: &crate::
 /// Where the document's animation ends, seconds: each clip's last key, or
 /// a keyed state's transition after it, whichever is later (a state keyed
 /// late runs on past its key, machines.md §4.2).
-pub fn clips_end(store: &Store) -> f64 {
+pub fn clips_end(store: &StoreCore) -> f64 {
     let doc = store.document();
     let mut end: f64 = 0.0;
     for clip in doc.nodes_of_type(ty("clip")).filter(|c| !c.is_session() && !c.is_expanded()) {
@@ -392,7 +392,7 @@ pub fn clips_end(store: &Store) -> f64 {
 
 /// The states of the machine an instance's `prop` (`args.<port>`) is the
 /// state of, in order; `None` when it is not a state port.
-fn machine_states(store: &Store, target: NodeId, prop: &str) -> Option<Vec<String>> {
+fn machine_states(store: &StoreCore, target: NodeId, prop: &str) -> Option<Vec<String>> {
     let doc = store.document();
     let port = prop.strip_prefix("args.")?;
     let def = crate::expand::linked_definition(doc, target)?;
@@ -402,7 +402,7 @@ fn machine_states(store: &Store, target: NodeId, prop: &str) -> Option<Vec<Strin
 
 /// The transitions a keyed state's keys select: (key, the transition's own
 /// length in seconds, its name), for each key that changes the state.
-fn state_bands(store: &Store, target: NodeId, prop: &str, keys: &[crate::time::KeyAt]) -> Vec<(NodeId, f64, String)> {
+fn state_bands(store: &StoreCore, target: NodeId, prop: &str, keys: &[crate::time::KeyAt]) -> Vec<(NodeId, f64, String)> {
     let doc = store.document();
     let Some(port) = prop.strip_prefix("args.") else { return Vec::new() };
     let Some(def) = crate::expand::linked_definition(doc, target) else { return Vec::new() };
@@ -482,7 +482,7 @@ pub fn projected_tweens(doc: &crate::document::Document, piece: NodeId) -> Vec<N
 }
 
 /// The generated pieces by their key (`slice <part> <channel>`, …).
-pub fn pieces(store: &Store, comp: NodeId) -> BTreeMap<String, NodeId> {
+pub fn pieces(store: &StoreCore, comp: NodeId) -> BTreeMap<String, NodeId> {
     let doc = store.document();
     let mut out = BTreeMap::new();
     let mut stack = doc.children(comp).to_vec();
@@ -1085,7 +1085,7 @@ fn inside_wants(plan: &Plan, comp: NodeId, inside: &Inside) -> Vec<Want> {
 /// The session ops that make the store's timeline composition show `plan`:
 /// the composition created when missing (with an axis), nodes whose key
 /// survives kept and updated in place, the rest created or deleted.
-pub fn reconcile(store: &Store, plan: &Plan) -> Vec<Op> {
+pub fn reconcile(store: &StoreCore, plan: &Plan) -> Vec<Op> {
     let doc = store.document();
     let mut ops = Vec::new();
     let existing = find(store);
@@ -1249,7 +1249,7 @@ pub fn sync_themed(store: &mut Store, last: &mut Option<(NodeId, Plan)>, light: 
 /// Zoom limits for the axis, px per second.
 pub const PPS: (f64, f64) = (4.0, 4000.0);
 
-fn axis_ops(store: &Store, t0: f64, pps: f64) -> Result<(NodeId, Vec<Op>), String> {
+fn axis_ops(store: &StoreCore, t0: f64, pps: f64) -> Result<(NodeId, Vec<Op>), String> {
     let comp = find(store).ok_or("no timeline composition")?;
     let set = |f: &str, v: f64| Op::Set { id: comp, path: LeafPath::new(FacetKind::Axis, f).expect("axis field"), slot: Slot::Const(Value::Number(v)) };
     Ok((comp, vec![set("t0", t0.max(0.0)), set("pps", pps.clamp(PPS.0, PPS.1))]))
@@ -1323,7 +1323,7 @@ pub fn clip_of(doc: &crate::document::Document, leaf: Leaf) -> Option<(NodeId, f
 }
 
 /// Whether auto-keyframe is on (the clock's `autokey`).
-pub fn autokey(store: &Store) -> bool {
+pub fn autokey(store: &StoreCore) -> bool {
     store.clock().and_then(|c| store.resolved(c, LeafPath::new(FacetKind::Clock, "autokey").ok()?)) == Some(Value::Bool(true))
 }
 
@@ -1381,7 +1381,7 @@ fn insert_key(doc: &crate::document::Document, clip: NodeId, keys: &[crate::time
 /// What committing these previewed leaves writes when they are animated, or
 /// when auto-keyframe is on (§12.2): key ops for each leaf it applies to,
 /// and those leaves. Every other leaf is an ordinary `Set` (the caller's).
-pub fn key_ops(store: &Store, leaves: &[(Leaf, Value)]) -> (Vec<Op>, Vec<Leaf>) {
+pub fn key_ops(store: &StoreCore, leaves: &[(Leaf, Value)]) -> (Vec<Op>, Vec<Leaf>) {
     let doc = store.document();
     let now = store.time();
     let auto = autokey(store);
@@ -1469,7 +1469,7 @@ pub fn key_ops(store: &Store, leaves: &[(Leaf, Value)]) -> (Vec<Op>, Vec<Leaf>) 
 
 /// The previous (`dir < 0`) or next key of `clip` from the playhead, as a
 /// clock time (‹ and ›).
-pub fn step_key(store: &Store, clip: NodeId, dir: i32) -> Option<f64> {
+pub fn step_key(store: &StoreCore, clip: NodeId, dir: i32) -> Option<f64> {
     let doc = store.document();
     let offset = doc.relations_from(clip).find(|r| r.rel == RelKind::Animates).and_then(|r| r.data.get("offset").and_then(|v| v.as_f64())).unwrap_or(0.0);
     let base = crate::time::start(doc, clip) + offset;
@@ -1480,7 +1480,7 @@ pub fn step_key(store: &Store, clip: NodeId, dir: i32) -> Option<f64> {
 
 /// ◇: remove the key at the playhead, or add one there holding the value
 /// shown now (the first target's). Removing the last key removes the clip.
-pub fn toggle_key_ops(store: &Store, clip: NodeId) -> Result<Vec<Op>, String> {
+pub fn toggle_key_ops(store: &StoreCore, clip: NodeId) -> Result<Vec<Op>, String> {
     let doc = store.document();
     let rel = doc.relations_from(clip).find(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).ok_or("the clip animates nothing")?;
     let offset = rel.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
@@ -1499,7 +1499,7 @@ pub fn toggle_key_ops(store: &Store, clip: NodeId) -> Result<Vec<Op>, String> {
 
 /// A new clip animating `leaf` with `keys` (clock times, values, easing):
 /// on the document's timeline, made if there is none.
-fn new_clip_ops(store: &Store, leaf: Leaf, keys: &[(f64, Value, &str)]) -> Vec<Op> {
+fn new_clip_ops(store: &StoreCore, leaf: Leaf, keys: &[(f64, Value, &str)]) -> Vec<Op> {
     let doc = store.document();
     let mut ids = doc.next_ids(keys.len() + 2).into_iter();
     let mut ops = Vec::new();
@@ -1533,7 +1533,7 @@ fn new_clip_ops(store: &Store, leaf: Leaf, keys: &[(f64, Value, &str)]) -> Vec<O
 /// The inspector's ◇ on a property (After Effects' stopwatch, timeline.md
 /// §12.3): an animated leaf toggles its key at the playhead; an unanimated
 /// one starts an animation with a key there holding its value now.
-pub fn key_leaf_ops(store: &Store, leaf: Leaf) -> Result<Vec<Op>, String> {
+pub fn key_leaf_ops(store: &StoreCore, leaf: Leaf) -> Result<Vec<Op>, String> {
     if let Some((clip, _)) = clip_of(store.document(), leaf) {
         return toggle_key_ops(store, clip);
     }
@@ -1552,7 +1552,7 @@ pub fn key_leaf_ops(store: &Store, leaf: Leaf) -> Result<Vec<Op>, String> {
 /// "Draw on" (After Effects' Trim Paths recipe): `trim.end` keyed from 0 at
 /// the playhead to 1 `secs` later with Easy Ease, adding the trim if the
 /// shape has none. One transaction.
-pub fn draw_on_ops(store: &Store, node: NodeId, secs: f64) -> Result<Vec<Op>, String> {
+pub fn draw_on_ops(store: &StoreCore, node: NodeId, secs: f64) -> Result<Vec<Op>, String> {
     let doc = store.document();
     let spec = doc.live(node).ok_or("no such node")?.ty.spec();
     if !spec.allows(FacetKind::Trim) {
@@ -1574,7 +1574,7 @@ pub fn draw_on_ops(store: &Store, node: NodeId, secs: f64) -> Result<Vec<Op>, St
 /// A value set from the inspector on an animated leaf (After Effects: with
 /// the stopwatch on, a change keys the playhead): the key there takes it,
 /// or a new key is added there. `None` for a leaf no clip animates.
-pub fn set_animated_ops(store: &Store, leaf: Leaf, value: Value) -> Option<Vec<Op>> {
+pub fn set_animated_ops(store: &StoreCore, leaf: Leaf, value: Value) -> Option<Vec<Op>> {
     let doc = store.document();
     let (clip, offset) = clip_of(doc, leaf)?;
     let keys = crate::time::keys(doc, clip);

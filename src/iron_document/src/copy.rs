@@ -37,7 +37,7 @@ use crate::op::Op;
 use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
-use crate::Store;
+use crate::StoreCore;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The format version of [`Fragment::to_text`].
@@ -129,7 +129,7 @@ fn preorder(doc: &Document) -> BTreeMap<NodeId, usize> {
 /// Copy `roots` (and what belongs with them) out of `store`. Roots inside
 /// another root, dead nodes and uncopyable types are skipped; `Err` when
 /// nothing is left.
-pub fn fragment(store: &Store, roots: &[NodeId], origin: &str) -> Result<Fragment, String> {
+pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fragment, String> {
     let doc = store.document();
     let order = preorder(doc);
     let mut roots: Vec<NodeId> = roots
@@ -302,7 +302,7 @@ fn place_transform(c: &mut Facet, m: Affine2, notes: &mut Vec<String>, id: NodeI
 
 /// The ops that put `frag` into `store`'s document. `here` is the caller's
 /// token for this document and session (see [`Fragment::origin`]).
-pub fn paste(store: &Store, frag: &Fragment, place: &Placement, here: &str) -> Result<Pasted, String> {
+pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) -> Result<Pasted, String> {
     let doc = store.document();
     let same = frag.origin == here;
     let mut notes = Vec::new();
@@ -538,7 +538,7 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
 /// Duplicate `roots` in place, each right above its original: Cmd+D. A
 /// main's duplicate is an instance, which looks the same: it goes to the
 /// main's right instead, so the two can be told apart.
-pub fn duplicate(store: &Store, roots: &[NodeId]) -> Result<Pasted, String> {
+pub fn duplicate(store: &StoreCore, roots: &[NodeId]) -> Result<Pasted, String> {
     const HERE: &str = "duplicate";
     let frag = fragment(store, roots, HERE)?;
     let doc = store.document();

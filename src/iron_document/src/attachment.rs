@@ -1,6 +1,6 @@
 //! Shared geometric controls. A point keeps its contour parent; ordinary
 //! bindings carry a control-local offset into that contour's coordinate frame.
-use crate::{Document, Expr, FacetKind, Leaf, LeafPath, LeafStruct, NodeId, Op, Slot, Store, Value};
+use crate::{Document, Expr, FacetKind, Leaf, LeafPath, LeafStruct, NodeId, Op, Slot, StoreCore, Value};
 use crate::facet::Attachment;
 
 fn path(s: &str) -> LeafPath { s.parse().expect("declared leaf") }
@@ -41,7 +41,7 @@ pub fn bindings(doc: &Document, point: NodeId, control: NodeId) -> [Expr; 2] {
 
 /// Attach atomically, keeping placement. Existing drivers must be detached
 /// explicitly; they are never silently overwritten.
-pub fn attach(store: &Store, control: NodeId, points: &[NodeId]) -> Result<Vec<Op>, String> {
+pub fn attach(store: &StoreCore, control: NodeId, points: &[NodeId]) -> Result<Vec<Op>, String> {
     let doc = store.document();
     let control = authored(doc, control)?;
     let inv = store.world_affine(control).inverse().ok_or("The control has a zero scale")?;
@@ -74,7 +74,7 @@ pub fn attach(store: &Store, control: NodeId, points: &[NodeId]) -> Result<Vec<O
     Ok(ops)
 }
 
-pub fn detach(store: &Store, points: &[NodeId]) -> Result<Vec<Op>, String> {
+pub fn detach(store: &StoreCore, points: &[NodeId]) -> Result<Vec<Op>, String> {
     let mut ops = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for &shown in points {

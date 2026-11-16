@@ -259,7 +259,7 @@ pub fn edit_port(doc: &Document, spec: NodeId, patch: &PortPatch) -> Result<Vec<
 
 /// Refuse coordinate changes whose meaning is observed or driven elsewhere.
 /// No binding or clip is baked, redirected or silently removed.
-fn static_coordinates(store: &crate::Store, nodes: &[NodeId]) -> Result<(), String> {
+fn static_coordinates(store: &crate::StoreCore, nodes: &[NodeId]) -> Result<(), String> {
     let doc = store.document();
     for &id in nodes {
         let n = doc.live(id).ok_or("The selection no longer exists")?;
@@ -307,7 +307,7 @@ fn static_coordinates(store: &crate::Store, nodes: &[NodeId]) -> Result<(), Stri
 
 /// Create a control around siblings. `pivot` is in their parent's space;
 /// None uses the selection centre. Child linear transforms stay unchanged.
-pub fn create_control(store: &crate::Store, selection: &[NodeId], pivot: Option<[f64; 2]>) -> Result<(Vec<Op>, NodeId), String> {
+pub fn create_control(store: &crate::StoreCore, selection: &[NodeId], pivot: Option<[f64; 2]>) -> Result<(Vec<Op>, NodeId), String> {
     let doc = store.document();
     let mut roots = selection.to_vec();
     if roots.is_empty() { return Err("Select objects to create a control".into()); }
@@ -347,7 +347,7 @@ pub fn create_control(store: &crate::Store, selection: &[NodeId], pivot: Option<
 
 /// Move a control's origin in parent coordinates, compensating every direct
 /// child's translation by the inverse linear transform. One atomic undo.
-pub fn relocate_pivot(store: &crate::Store, control: NodeId, pivot: [f64; 2]) -> Result<Vec<Op>, String> {
+pub fn relocate_pivot(store: &crate::StoreCore, control: NodeId, pivot: [f64; 2]) -> Result<Vec<Op>, String> {
     let doc = store.document();
     if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err("Select one control to place its pivot".into()); }
     let mut nodes = vec![control];

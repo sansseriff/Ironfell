@@ -390,6 +390,18 @@ impl Reactive {
         self.changes.insert(leaf, value);
     }
 
+    /// What `drain_changes` would return, without draining it.
+    #[cfg_attr(not(feature = "differential"), allow(dead_code))]
+    pub(crate) fn peek_changes(&self) -> &BTreeMap<Leaf, Value> {
+        &self.changes
+    }
+
+    /// What `take_touched` would return, without taking it.
+    #[cfg_attr(not(feature = "differential"), allow(dead_code))]
+    pub(crate) fn peek_touched(&self) -> &BTreeSet<Leaf> {
+        &self.touched
+    }
+
     /// Leaves whose resolved value moved since the last take.
     pub fn take_touched(&mut self) -> BTreeSet<Leaf> {
         std::mem::take(&mut self.touched)

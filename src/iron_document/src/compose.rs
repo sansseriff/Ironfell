@@ -71,13 +71,13 @@ pub(crate) struct Composed {
 /// edit.rs): `before` applied first, then each verb, seeing what came before
 /// it, so a `<place>` can name a definition `before` creates. The ops
 /// returned start with `before` and make one transaction.
-pub(crate) fn compose_els(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
+pub(crate) fn compose_els(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
     run_verbs(store, before, els)
 }
 
 /// The verbs run on a scratch copy holding `before`.
-fn run_verbs(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
-    let mut scratch = crate::Store::with_document(store.document().clone());
+fn run_verbs(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
+    let mut scratch = crate::StoreCore::with_document(store.document().clone());
     if !before.is_empty() {
         scratch
             .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: before.clone(), exact: false })
@@ -86,7 +86,7 @@ fn run_verbs(store: &crate::Store, before: Vec<Op>, els: Vec<El>) -> Result<Comp
     compose_verbs(scratch, before, els).map_err(ComposeError::Verb)
 }
 
-fn compose_verbs(mut scratch: crate::Store, mut ops: Vec<Op>, els: Vec<El>) -> Result<Composed, String> {
+fn compose_verbs(mut scratch: crate::StoreCore, mut ops: Vec<Op>, els: Vec<El>) -> Result<Composed, String> {
     let mut aliases: BTreeMap<String, Named> = BTreeMap::new();
     let mut lines = Vec::new();
     let mut ends = Vec::new();
@@ -192,7 +192,7 @@ pub(crate) fn hex_color(t: &str) -> Option<Value> {
     Some(Value::Color([ch(0)?, ch(2)?, ch(4)?, if h.len() == 8 { ch(6)? } else { 1.0 }]))
 }
 
-fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
+fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
     let doc = store.document();
     let parent = {
         let raw = el.need("in")?;
@@ -373,7 +373,7 @@ fn place(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Re
     Ok((ops, line, Named { definition: def, entity: Some(entity), picture }))
 }
 
-fn make(store: &crate::Store, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
+fn make(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
     let doc = store.document();
     let of = el.need("of")?;
     let selection = of.split_whitespace().map(|raw| node(doc, raw, aliases, |n| Some(n.picture), "picture")).collect::<Result<Vec<_>, _>>()?;

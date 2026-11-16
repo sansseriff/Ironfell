@@ -72,6 +72,8 @@ pub mod timeline_view;
 pub mod units;
 pub mod value;
 pub mod view;
+#[cfg(feature = "differential")]
+pub mod differential;
 
 pub use facet::{Facet, FacetKind, LeafError, LeafPath, LeafStruct};
 pub use document::{Document, Node, RelKind, Relation};
@@ -89,6 +91,14 @@ pub use solve::{Finger, SolverSummary, Unmet};
 pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
 pub use view::{Fidelity, ViewError, ViewQuery, ViewRelation};
+
+/// The store. With the `differential` feature it is a facade over two
+/// `StoreCore`s compared after every call (`differential.rs`); without, the
+/// one store itself.
+#[cfg(not(feature = "differential"))]
+pub type Store = StoreCore;
+#[cfg(feature = "differential")]
+pub use differential::Store;
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -196,7 +206,7 @@ impl History {
     }
 }
 
-pub struct Store {
+pub struct StoreCore {
     doc: Document,
     history: History,
     recent_keys: VecDeque<(String, Version)>,
@@ -284,9 +294,9 @@ pub struct Store {
     text_generation: u64,
 }
 
-impl Default for Store {
+impl Default for StoreCore {
     fn default() -> Self {
-        Store::new()
+        StoreCore::new()
     }
 }
 
@@ -337,13 +347,20 @@ impl Motion {
 const DEFAULT_HORIZON: usize = 200;
 const RECENT_KEYS: usize = 64;
 
-impl Store {
-    pub fn new() -> Store {
-        Store::with_document(Document::new())
+impl StoreCore {
+    /// Which engine this store runs (the differential harness's choice,
+    /// `differential::Engine`). Until phase 2b there is only the old one.
+    #[cfg(feature = "differential")]
+    pub fn engine(&self) -> differential::Engine {
+        differential::Engine::Old
     }
 
-    pub fn with_document(doc: Document) -> Store {
-        let mut store = Store {
+    pub fn new() -> StoreCore {
+        StoreCore::with_document(Document::new())
+    }
+
+    pub fn with_document(doc: Document) -> StoreCore {
+        let mut store = StoreCore {
             doc,
             history: History {
                 horizon: DEFAULT_HORIZON,
@@ -493,7 +510,7 @@ impl Store {
                 // The origin that puts the anchor at `world`: undo the
                 // parent's transform, then the node's own rotation and scale.
                 let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
-                let num = |s: &Store, f: &str, d: f64| s.resolved(h.node, t2(f)).and_then(|v| v.as_f64()).unwrap_or(d);
+                let num = |s: &StoreCore, f: &str, d: f64| s.resolved(h.node, t2(f)).and_then(|v| v.as_f64()).unwrap_or(d);
                 let parent = match self.doc.live(h.node).and_then(|n| n.parent) {
                     Some(p) => self.world_affine(p),
                     None => Affine2::IDENTITY,
@@ -627,7 +644,7 @@ impl Store {
             None => format!("move {}", p.from.name),
         };
         let mut last = p.unplugged;
-        let fold = |s: &mut Store, last: &mut Option<Version>, now: Version| {
+        let fold = |s: &mut StoreCore, last: &mut Option<Version>, now: Version| {
             if let Some(v) = *last {
                 s.merge_with_previous(v, label.clone());
             }
@@ -2752,8 +2769,8 @@ impl Store {
     }
 
     /// A store over a loaded document, with empty history.
-    pub fn load(text: &str) -> Result<Store, LoadError> {
-        serial::load(text).map(Store::with_document)
+    pub fn load(text: &str) -> Result<StoreCore, LoadError> {
+        serial::load(text).map(StoreCore::with_document)
     }
 
     // ---- Scopes (plans/specs/scopes.md) ---------------------------------

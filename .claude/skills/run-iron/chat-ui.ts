@@ -178,10 +178,16 @@ try {
   const running = page.locator('.chat-turn[data-status="running"]');
   await running.locator('[data-chat-progress]', { hasText: 'Thinking' }).waitFor();
   await running.locator('[data-chat-progress]', { hasText: 'Sizing the pump' }).waitFor();
-  await running.locator('[data-edit-forming] li', { hasText: 'Create rect "inlet"' }).waitFor({ timeout: 15000 });
-  assert.match(await running.locator('.chat-markdown').first().innerText(), /Here is a pump/);
-  assert.match(await running.locator('[data-chat-progress]').innerText(), /Writing the edit/);
-  assert.match(await running.locator('[data-chat-progress]').innerText(), /~\d+ tokens/);
+  // The verbs show while the edit is written, about half a second here, and a
+  // locator's waitFor polls only every 500 ms after its first few tries; so
+  // check the whole live turn at once, every frame.
+  await page.waitForFunction(() => {
+    const turn = document.querySelector('.chat-turn[data-status="running"]');
+    const progress = (turn?.querySelector('[data-chat-progress]') as HTMLElement | null)?.innerText ?? '';
+    return [...(turn?.querySelectorAll('[data-edit-forming] li') ?? [])].some(li => li.textContent?.includes('Create rect "inlet"'))
+      && /Here is a pump/.test((turn?.querySelector('.chat-markdown') as HTMLElement | null)?.innerText ?? '')
+      && /Writing the edit/.test(progress) && /~\d+ tokens/.test(progress);
+  }, undefined, { timeout: 15000 });
   await page.screenshot({ path: `.agents/chat/streaming-${runtimeMode}.png` });
   await page.waitForFunction(() => document.querySelectorAll('.chat-turn[data-status="completed"]').length === 4, undefined, { timeout: 15000 });
   const streamedTurn = page.locator('.chat-turn').last();

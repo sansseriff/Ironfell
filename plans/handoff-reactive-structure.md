@@ -1,8 +1,8 @@
 # Handoff: the new reactive engine
 
 **Date:** 2026-11-15 · **Branch:** `master` · **Status:** the design is
-[`specs/reactive-engine.md`](specs/reactive-engine.md), **proposed and waiting on the
-user's approval**. Do not build until it is approved. This file holds the problem as
+[`specs/reactive-engine.md`](specs/reactive-engine.md), **proposed, revised after a council review, and
+waiting on the user's approval**. Do not build until it is approved. This file holds the problem as
 measured, the work order and the measuring recipe.
 
 **History:** the first version of this handoff (same day, `e0935bd`) proposed patching
@@ -81,20 +81,26 @@ structural transaction re-expands every instance.
 
 ## 2. Work order
 
-Phases, their contents and their exits are in the spec's §17. In order:
+Phases, their contents and their exits are in the spec's §17. A council review
+(2026-11-15, Claude Opus 5.5 and GPT-6.1 Sol) returned "rework"; the spec was revised
+the same day and its §20 records each finding. In order:
 
-1. **Approval.** The user approves the spec, or asks for a council review first
-   (AGENTS.md, "Council review"), and settles the decisions in its §19 (each has a
-   default).
-2. **Phase 0:** baselines (memory per instance, load time, growth of the interned id
-   paths) and the differential harness, green on old against old.
-3. **Phase 1:** the host contract (`Store::tree()`, `take_changes()`) on the old engine,
-   with every outside caller moved to it. No behaviour change.
-4. **Phase 2:** the core with everything observed, then the swap and the deletion of
-   the old graph, expansion and settling. This closes the roadmap's "Plot pan and zoom
-   performance" row and instance-cache.md's "Open".
-5. **Phases 3 to 6** (observation, time, the pipeline as cells, slices). 3, 4 and 5 do
-   not depend on one another; ask the user which comes first.
+1. **Approval.** The user approves the revised spec and settles the decisions in its
+   §19 (each has a default; D1, D2, D6, D9 and D10 changed or were added after the
+   council).
+2. **Phase 0:** baselines (memory per instance, load time, a profile of the constant
+   edit at 1,000 meters, growth of the interned id paths), the differential harness and
+   the host reference, green on old against old.
+3. **Phase 1:** the read contract (the `Tree`, `take_changes()`) on the old engine, with
+   every caller inside and outside the crate moved to it. No behaviour change.
+4. **Phase 2a:** transactions in place, on the old engine.
+5. **Phase 2b:** the new cell graph and per-owner structure, with copies still stored
+   in the document. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom
+   performance" row.
+6. **Phase 2c:** copies leave the document (instances as references).
+7. **Phase 3** (time), then **phase 4** (observation). Phase 5 (the pipeline as cells)
+   does not depend on them; it closes instance-cache.md's "Open" at 1,000 meters. Then
+   phase 6 (value slices).
 
 Commit and push each step (AGENTS.md). Run the fast smoke before committing behaviour
 changes; Rust builds and tests need no check-in, other steps over a minute do. Record

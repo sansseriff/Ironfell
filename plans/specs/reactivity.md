@@ -579,5 +579,7 @@ pointer.
   ten plots a tick change costs 7.3 ms native (was 11) and writes 2 ops (was 102), still
   growing with the document.
   `tests/reactivity.rs` `a_plot_s_new_tick_writes_nothing_outside_it`.
-- Next: re-expand and patch the graph for the one scope whose items changed, rather
-  than the document: [`handoff-reactive-structure.md`](../handoff-reactive-structure.md).
+- Next: a new engine in which a change to one owner's items costs that owner, not the
+  document: [`reactive-engine.md`](reactive-engine.md) (proposed 2026-11-15; it calls
+  this spec's scopes "owners"), ordered in
+  [`handoff-reactive-structure.md`](../handoff-reactive-structure.md).

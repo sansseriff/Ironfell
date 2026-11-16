@@ -407,13 +407,15 @@ PASS FIXTURE COMPONENTS main: make, place in two compositions, std:laser with an
 ```
 
 Both pass 2026-11-06 on a fresh webgl2 build. Evidence: `.agents/agent-runtime/components-fixture-*.json`.
-On the same day `chat-ui.ts` times out waiting for the Lesson tab, with or without this
-change (it predates it; not yet investigated).
-On 2026-11-14 it gets past the Lesson tab but fails at its streaming step, on both
-runtimes and with the frontend from before the reply reader moved to Rust (a8430f9) as
-well as after: after the lesson steps the forming verbs show late (worker: only as the
-edit finishes, so "Writing the edit" has become "Applying"; main: not within 15 s). Run
-alone, a `chat-test-stream` turn lists each verb as it closes on both runtimes.
+`chat-ui.ts` passes on both runtimes (2026-11-16: 28 of 29 runs; the one failure
+was a timeout at an unrecorded step). Its streaming step had failed since about
+2026-11-06 for a reason in the test, not the app. The forming verbs and "Writing the
+edit" show together for only ~0.3–0.5 s, and a locator's `waitFor` polls at 0, 20, 50,
+100 and 100 ms and then only every 500 ms (playwright-core's
+`retryWithProgressAndBackoff`), so it missed them or saw them after the label had moved
+on to "Applying". The step now checks the whole live turn at once in a
+`page.waitForFunction`, which polls every frame. Use that for any state that lasts less
+than a second.
 
 ## Agent probe: prompt the in-app agent, read what it did
 

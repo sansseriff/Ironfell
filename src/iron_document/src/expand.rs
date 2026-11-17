@@ -57,6 +57,13 @@ pub struct Problem {
     pub message: String,
 }
 
+/// Problems in a fixed order, by node, kind and message, whatever order
+/// they were found in: `problem_notes` keeps the first three per node
+/// (reactive-engine handoff §4.4, stage 1).
+pub fn sort_problems(problems: &mut [Problem]) {
+    problems.sort_by(|a, b| (a.node, a.kind, &a.message).cmp(&(b.node, b.kind, &b.message)));
+}
+
 /// Scopes (instances, repeat items) nested deeper than this are reported.
 pub const DEPTH_REPORTED: usize = 16;
 /// Scopes nested deeper than this are not expanded.
@@ -805,6 +812,7 @@ pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, V
             run(doc, Op::Link { rel }, &mut ops);
         }
     }
+    sort_problems(&mut problems);
     (ops, problems)
 }
 
@@ -830,7 +838,8 @@ fn op_target(op: &Op) -> String {
 /// structural, or a set on an instance, a `use`, or a node of a definition.
 pub fn affected_by(doc: Tree<'_>, ops: &[Op]) -> bool {
     ops.iter().any(|op| match op {
-        Op::Set { id, path, .. } => matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || in_library(doc, *id),
+        // A repeat's template child: its items copy it.
+        Op::Set { id, path, .. } => matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || in_library(doc, *id) || in_repeat_template(doc, *id),
         _ => true,
     })
 }

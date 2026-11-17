@@ -13,82 +13,82 @@ use std::fmt::Debug;
 pub struct Snapshot {
     /// `serial`'s saved text: authored nodes, tombstones and the facets they
     /// keep, counters, the version.
-    saved: String,
+    pub saved: String,
     /// Every node the document holds (live and tombstoned; authored, derived
     /// and session) with its type, parent, order and every facet.
-    nodes: Vec<(Node, Vec<Facet>)>,
-    relations: Vec<Relation>,
+    pub nodes: Vec<(Node, Vec<Facet>)>,
+    pub relations: Vec<Relation>,
     /// For every declared field of every facet of every live node, and
     /// every leaf with an overlay, runtime, published or session entry and
     /// no stored slot: the value as a view reads it, and its error.
-    values: Vec<(Leaf, Option<Value>, Option<String>)>,
-    signals: Vec<(Leaf, Signal)>,
-    signal_errors: Vec<(Leaf, String)>,
-    problems: Vec<expand::Problem>,
+    pub values: Vec<(Leaf, Option<Value>, Option<String>)>,
+    pub signals: Vec<(Leaf, Signal)>,
+    pub signal_errors: Vec<(Leaf, String)>,
+    pub problems: Vec<expand::Problem>,
     /// The whole document's view at full fidelity, every node expanded.
-    view: Result<String, ViewError>,
+    pub view: Result<String, ViewError>,
     /// The undo and redo stacks and the log, `expanded` left out.
-    history: (Vec<Transaction>, Vec<Transaction>, Vec<Transaction>),
-    other: Other,
-    pending: Pending,
+    pub history: (Vec<Transaction>, Vec<Transaction>, Vec<Transaction>),
+    pub other: Other,
+    pub pending: Pending,
 }
 
 /// What the public `&self` methods answer beyond the document and values.
 /// Methods left out, and why, are listed in `NOT_COMPARED`.
 #[derive(PartialEq, Debug)]
-struct Other {
-    time: f64,
-    time_errors: BTreeMap<NodeId, String>,
-    clock: Option<NodeId>,
-    producers: Vec<(ProducerId, String)>,
-    clusters: solve::Clusters,
-    port_anchors: Vec<plug::PortAnchor>,
-    gesture_in_progress: bool,
-    active_gesture: Option<GestureId>,
+pub struct Other {
+    pub time: f64,
+    pub time_errors: BTreeMap<NodeId, String>,
+    pub clock: Option<NodeId>,
+    pub producers: Vec<(ProducerId, String)>,
+    pub clusters: solve::Clusters,
+    pub port_anchors: Vec<plug::PortAnchor>,
+    pub gesture_in_progress: bool,
+    pub active_gesture: Option<GestureId>,
     /// `gesture_status` of the active and the last ended gesture.
-    gesture_status: Vec<(GestureId, GestureStatus)>,
-    has_actions: bool,
-    problem_notes: BTreeMap<NodeId, Vec<String>>,
-    interaction: BTreeMap<NodeId, Vec<&'static str>>,
-    motion_enabled: bool,
-    pinned_state: Option<machine::Pinned>,
-    shared_edits: u64,
-    inside_open: std::collections::BTreeSet<NodeId>,
-    running_machines: Vec<machine::Running>,
-    pending_queries: Vec<NodeId>,
-    dark: bool,
-    layout_preview: Option<layout::Preview>,
-    contexts: contexts::Library,
+    pub gesture_status: Vec<(GestureId, GestureStatus)>,
+    pub has_actions: bool,
+    pub problem_notes: BTreeMap<NodeId, Vec<String>>,
+    pub interaction: BTreeMap<NodeId, Vec<&'static str>>,
+    pub motion_enabled: bool,
+    pub pinned_state: Option<machine::Pinned>,
+    pub shared_edits: u64,
+    pub inside_open: std::collections::BTreeSet<NodeId>,
+    pub running_machines: Vec<machine::Running>,
+    pub pending_queries: Vec<NodeId>,
+    pub dark: bool,
+    pub layout_preview: Option<layout::Preview>,
+    pub contexts: contexts::Library,
     /// `table_grid` for every table that has one.
-    tables: BTreeMap<NodeId, table::Grid>,
-    stale_overrides: Vec<(NodeId, String)>,
-    expansion_problems: Vec<expand::Problem>,
-    physics_error: Option<String>,
-    session_version: u64,
-    selection: Vec<(NodeId, BTreeMap<String, Value>)>,
-    scope: Option<ScopeId>,
-    client: u32,
-    horizon: usize,
+    pub tables: BTreeMap<NodeId, table::Grid>,
+    pub stale_overrides: Vec<(NodeId, String)>,
+    pub expansion_problems: Vec<expand::Problem>,
+    pub physics_error: Option<String>,
+    pub session_version: u64,
+    pub selection: Vec<(NodeId, BTreeMap<String, Value>)>,
+    pub scope: Option<ScopeId>,
+    pub client: u32,
+    pub horizon: usize,
     /// Per live node: `world_affine` and `local_bounds`, what the host
     /// places and indexes by.
-    geometry: Vec<(NodeId, Affine2, Option<geom::LocalBounds>)>,
+    pub geometry: Vec<(NodeId, Affine2, Option<geom::LocalBounds>)>,
     /// `context_reads` and `hover_listeners` of every live node that has any.
-    context_reads: Vec<(NodeId, Vec<(String, Option<NodeId>, Option<Value>)>)>,
-    hover_listeners: Vec<(NodeId, Vec<NodeId>)>,
+    pub context_reads: Vec<(NodeId, Vec<(String, Option<NodeId>, Option<Value>)>)>,
+    pub hover_listeners: Vec<(NodeId, Vec<NodeId>)>,
     /// Session state cells that differ from their initial value.
-    session_state: BTreeMap<Leaf, Value>,
+    pub session_state: BTreeMap<Leaf, Value>,
 }
 
 /// What `take_changes` would return now, and what is buffered for the
 /// host.
 #[derive(PartialEq, Debug)]
-struct Pending {
+pub struct Pending {
     /// `take_changes`, unless it is taken (and `changes_pending`).
-    changes: Changes,
+    pub changes: Changes,
     /// The revision counters `take_changes` bumps (`revisions`).
-    revisions: geom::Revisions,
+    pub revisions: geom::Revisions,
     /// `take_emitted`.
-    emitted: Vec<(NodeId, String)>,
+    pub emitted: Vec<(NodeId, String)>,
 }
 
 /// Public `&self` methods of `StoreCore` the snapshot does not call, and

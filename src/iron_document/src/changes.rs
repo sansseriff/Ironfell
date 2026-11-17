@@ -57,6 +57,10 @@ pub struct Changes {
     /// placements, local shapes.
     pub geometry: GeometryChanges,
     pub revisions: Revisions,
+    /// How deep each created or removed node was when it was noted: the
+    /// order `sorted` puts them in, since a removed node's ancestry can
+    /// change after.
+    depths: std::collections::BTreeMap<NodeId, usize>,
 }
 
 impl Changes {
@@ -98,6 +102,20 @@ impl Changes {
         out
     }
 
+    /// In a fixed order, whatever order the writes came in: `created`
+    /// parents first, `removed` deepest first, each then by id; `moved` and
+    /// `relations` by value (reactive-engine handoff §4.4, stage 1).
+    pub(crate) fn sorted(mut self) -> Changes {
+        let depth = |d: &std::collections::BTreeMap<NodeId, usize>, id: &NodeId| d.get(id).copied().unwrap_or(0);
+        let d = std::mem::take(&mut self.depths);
+        self.created.sort_by_key(|id| (depth(&d, id), *id));
+        self.removed.sort_by_key(|(id, parent)| (std::cmp::Reverse(depth(&d, id)), *id, *parent));
+        self.moved.sort();
+        self.relations.sort();
+        self.depths = d;
+        self
+    }
+
     /// Add `later`, taken after this.
     pub fn merge(&mut self, later: Changes) {
         self.values.extend(later.values);
@@ -112,6 +130,7 @@ impl Changes {
         self.unloaded.extend(later.unloaded);
         self.geometry.merge(later.geometry);
         self.revisions = later.revisions;
+        self.depths.extend(later.depths);
     }
 
     /// Record `ops`, applied to `doc`, with `inverse`, the inverse of
@@ -122,9 +141,10 @@ impl Changes {
             match op {
                 Op::Create { id, parent, .. } => {
                     self.created.push(*id);
+                    self.depths.insert(*id, doc.depth(*id));
                     self.structure.insert(*parent);
                 }
-                Op::Delete { id } => self.remove(*id, doc.node(*id).and_then(|n| n.parent)),
+                Op::Delete { id } => self.remove(doc, *id, doc.node(*id).and_then(|n| n.parent)),
                 Op::Reparent { id, parent, .. } => {
                     let old = inverse.iter().find_map(|i| match i {
                         Op::Reparent { id: j, parent: p, .. } if j == id => Some(*p),
@@ -169,14 +189,15 @@ impl Changes {
         // nodes no op names (a deleted instance's derived descendants).
         for i in inverse {
             if let Op::Create { id, parent, .. } = i {
-                self.remove(*id, *parent);
+                self.remove(doc, *id, *parent);
             }
         }
     }
 
-    fn remove(&mut self, id: NodeId, parent: Option<NodeId>) {
+    fn remove(&mut self, doc: Tree<'_>, id: NodeId, parent: Option<NodeId>) {
         if !self.removed.iter().any(|(n, _)| *n == id) {
             self.removed.push((id, parent));
+            self.depths.insert(id, doc.depth(id));
             self.structure.insert(parent);
         }
     }

@@ -36,6 +36,9 @@ pub use crate::Engine;
 pub struct Store {
     subject: StoreCore,
     reference: StoreCore,
+    /// The intended difference after which the two stores legitimately
+    /// differ: from then on only the subject runs and nothing is compared.
+    diverged: Option<&'static str>,
 }
 
 impl std::ops::Deref for Store {
@@ -87,25 +90,65 @@ impl Store {
     fn pair(subject: StoreCore, mut reference: StoreCore, method: &str) -> Store {
         debug_assert_eq!(subject.engine(), Engine::InPlace);
         reference.set_engine(Engine::Old);
-        let store = Store { subject, reference };
+        let store = Store { subject, reference, diverged: None };
         store.agree(method);
         store
     }
 
-    /// Panic unless the two stores' snapshots are equal.
+    /// Panic unless the two stores' snapshots are equal, or made equal by
+    /// an intended difference's normaliser.
     fn agree(&self, method: &str) {
-        if let Some(d) = snapshot(&self.subject).diff(&snapshot(&self.reference)) {
-            panic!("differential: after `{method}` the stores differ at {d}");
+        if self.diverged.is_some() {
+            return;
         }
+        let (mut a, mut b) = (snapshot(&self.subject), snapshot(&self.reference));
+        let Some(mut left) = a.diff(&b) else { return };
+        for e in intended::entries() {
+            if let intended::Relax::Normalise(f) = e.relax {
+                f(&mut a);
+                f(&mut b);
+                match a.diff(&b) {
+                    None => {
+                        intended::count(e.name, true);
+                        return;
+                    }
+                    Some(d) => left = d,
+                }
+            }
+        }
+        panic!("differential: after `{method}` the stores differ at {left}");
+    }
+
+    /// Stop comparing from here on, for an intended difference.
+    pub fn diverged(&self) -> Option<&'static str> {
+        self.diverged
+    }
+
+    /// The subject alone, for a test of the harness to make a difference
+    /// the facade has to notice.
+    pub fn subject_mut_for_test(&mut self) -> &mut StoreCore {
+        &mut self.subject
     }
 
     /// One `&mut` call, made on both stores, then compared.
     fn call<R: PartialEq + Debug + Outcome>(&mut self, method: &str, f: impl Fn(&mut StoreCore) -> R) -> R {
+        if self.diverged.is_some() {
+            return f(&mut self.subject);
+        }
         let before = atomicity_on().then(|| snapshot(&self.reference));
         let from_reference = f(&mut self.reference);
         let from_subject = f(&mut self.subject);
         if from_subject != from_reference {
-            panic!("differential: `{method}` returned different values\n  subject:   {from_subject:?}\n  reference: {from_reference:?}");
+            let (a, b) = (format!("{from_subject:?}"), format!("{from_reference:?}"));
+            let matched = intended::entries().into_iter().find(|e| matches!(e.relax, intended::Relax::Diverge(f) if f(method, &a, &b)));
+            match matched {
+                Some(e) => {
+                    intended::count(e.name, false);
+                    self.diverged = Some(e.name);
+                    return from_subject;
+                }
+                None => panic!("differential: `{method}` returned different values\n  subject:   {a}\n  reference: {b}"),
+            }
         }
         self.agree(method);
         if let Some(before) = before

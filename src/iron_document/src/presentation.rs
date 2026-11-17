@@ -2,6 +2,7 @@
 //! history and exports always observe the target; only the drawn control eases.
 use crate::{contexts, Leaf, NodeId, StoreCore, Value};
 
+#[derive(Clone)]
 pub(crate) struct Tween {
     from: f64,
     to: f64,

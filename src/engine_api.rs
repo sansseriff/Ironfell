@@ -458,7 +458,7 @@ pub fn document_spatial(app: &mut WorkerApp, enabled: bool) -> String {
 }
 
 /// The runtime signal layer (vision 10 §4): registered producers, every
-/// published signal with its producer and stamp, and conflicts.
+/// published signal with its producer, and conflicts.
 pub fn document_signals(app: &mut WorkerApp) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
@@ -476,7 +476,7 @@ pub fn document_signals(app: &mut WorkerApp) -> String {
         .0
         .signals()
         .iter()
-        .map(|(leaf, s)| serde_json::json!({"leaf": leaf.to_string(), "value": s.value, "producer": store.0.producer_name(s.producer), "stamp": s.stamp}))
+        .map(|(leaf, s)| serde_json::json!({"leaf": leaf.to_string(), "value": s.value, "producer": store.0.producer_name(s.producer)}))
         .collect();
     let errors: Vec<_> = store.0.signal_errors().iter().map(|(leaf, e)| serde_json::json!({"leaf": leaf.to_string(), "message": e})).collect();
     let result = serde_json::json!({"ok": true, "producers": producers, "signals": signals, "errors": errors, "gas": {"frames": gas.frames, "pressure": gas.pressure}});

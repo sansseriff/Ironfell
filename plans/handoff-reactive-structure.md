@@ -703,6 +703,24 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
 
 **Stages.** Five, each ending green on the differential suite, committed and pushed.
 
+**Progress.**
+- **Stage 1 done (2026-11-17).**
+  - Signal stamps are deleted; `Changes`, expansion problems and `truncated` are
+    sorted; a changed error message counts as a change.
+  - The stale-derivation cases re-derive (`tests/rederive.rs`; each test fails
+    without its fix).
+  - Every `NOT_ATOMIC` entry is fixed, so the table is empty. The restore after a
+    solver refusal applies only when the document holds a constraint.
+  - The harness runs intended differences: normalisers and divergence tests, with
+    counts (`tests/differential_harness.rs`).
+  - Checks: `iron_document` 453 tests; the differential suite 457, with
+    `IRON_ATOMICITY=1` reporting nothing; the host reference; `iron_spatial` and
+    `iron_svg`; the wasm build. `smoke.txt` and `regression.txt` match a build of
+    `HEAD` without stage 1.
+  - Measured: the solver baseline's unrelated constant edit with 100 pendulums is
+    6.2 ms (phase 0: 5.77; before 2a), within the threshold. The meter numbers were
+    noisy (load average about 6 from an unrelated process): re-measure at stage 2.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.
@@ -769,12 +787,10 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
     - a set on a port's `datatype`, or on an argument a boundary check reads:
       `types::declared` and `ty.check` read them during evaluation without a
       dependency. They become dependencies of the boundary binding;
-    - `apply_session`, which never expands. It expands when `affected_by` says so,
-      so the Latency view's per-frame constant `Set` runs no whole-document
-      `expand`. Its expanded ops reach `pending.note`, `geometry.note_ops` and its
-      structural check, as a transaction's do, and its journal rollback covers them.
-      Its expansion problems replace `expansion_problems` when it expanded, as
-      `run`'s do.
+    - ~~`apply_session`, which never expands.~~ **Not a case** (found building
+      stage 1): a derived id cannot sit under a session-tier id
+      (`NodeId::from_path`), so session nodes derive nothing, and session ops touch
+      only session nodes. `tests/rederive.rs` `a_session_use_derives_nothing`.
 
     Each becomes structural (or expanding, or a dependency) in shared code. Any
     further case found later is handled the same way and recorded.

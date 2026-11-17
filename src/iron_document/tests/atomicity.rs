@@ -1,9 +1,7 @@
-//! The old engine's failures of atomicity (reactive-engine handoff §4.1,
-//! task 3): calls that return an error and leave the store other than it
-//! was. Each test shows one, as it is today, and is listed in
-//! `src/differential/intended.rs` (`NOT_ATOMIC`). When a call meets
-//! atomicity (spec §11), the entry goes and its test is turned round to
-//! assert the store is unchanged: phase 2a did so for expansion problems.
+//! Calls that once returned an error and left the store other than it was
+//! (reactive-engine handoff §4.1, task 3). Phase 0 found four; phase 2a fixed
+//! expansion problems and phase 2b's stage 1 the rest, in both engines. Each
+//! test now asserts the failed call left the store as it was.
 
 use iron_document::facet::{Composition, Name};
 use iron_document::*;
@@ -34,12 +32,10 @@ fn draw(store: &Store, comp: NodeId, markup: &str) -> (Vec<Op>, BTreeMap<String,
     (built.ops, built.named)
 }
 
-/// A session op list that fails part-way is rolled back by applying the
-/// inverses of the ops before it: a created session node comes back as a
-/// tombstone, and the session id counter has moved (`lib.rs` `apply_session`,
-/// `document.rs`).
+/// A session op list that fails part-way is rolled back by the document's
+/// journal: no tombstone of the created session node, no moved counter.
 #[test]
-fn a_failed_session_op_list_leaves_a_tombstone() {
+fn a_failed_session_op_list_leaves_no_trace() {
     let (mut store, comp) = sheet();
     let before = store.tree().nodes().count();
     let id = store.authored().next_session_ids(1)[0];
@@ -51,8 +47,8 @@ fn a_failed_session_op_list_leaves_a_tombstone() {
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::BadId);
     assert!(!store.tree().is_live(id));
-    assert_eq!(store.tree().nodes().count(), before + 1, "the rolled-back create is kept as a tombstone");
-    assert_ne!(store.authored().next_session_ids(1)[0], id, "the session counter moved");
+    assert_eq!(store.tree().nodes().count(), before, "no tombstone");
+    assert_eq!(store.authored().next_session_ids(1)[0], id, "the session counter did not move");
 }
 
 /// Seventeen nested repeats of one item, deeper than expansion reports
@@ -107,11 +103,10 @@ fn a_transaction_that_does_not_expand_leaves_expansion_problems_alone() {
 }
 
 /// A transaction refused after it applied (by `post_apply`, here a binding
-/// that reads and feeds one constraint cluster) is undone by putting the old
-/// document back and rebuilding the graph, which reports the leaf it
-/// touched as changed (`lib.rs` `apply_now`).
+/// that reads and feeds one constraint cluster) puts back the document and
+/// what `after_transaction` changed, with no rebuild: nothing is pending.
 #[test]
-fn a_transaction_refused_by_the_solver_leaves_a_change_pending() {
+fn a_transaction_refused_by_the_solver_leaves_nothing_pending() {
     let (mut store, comp) = sheet();
     let markup = r#"<ellipse id="$p" x="0" y="0" rx="5" ry="5"/><ellipse id="$q" x="40" y="0" rx="5" ry="5"/><constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="50"/>"#;
     let (mut ops, n) = draw(&store, comp, markup);
@@ -132,17 +127,17 @@ fn a_transaction_refused_by_the_solver_leaves_a_change_pending() {
         .apply(tx("loop", vec![Op::Set { id: n["d"], path: "constraint.value".parse().unwrap(), slot: Slot::Bound(Expr::parse(&format!("{}.transform2d.x + 50", n["q"])).unwrap()) }]))
         .unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::Cycle, "{errs:?}");
-    assert!(store.changes_pending(), "the refused transaction left a change to take");
+    assert!(!store.changes_pending(), "the refused transaction left nothing to take");
 }
 
-/// An action that emits an event and then fails on a later write has
-/// already queued the event (`lib.rs` `action_writes`).
+/// An action that emits an event and then fails on a later write queues
+/// nothing: events are queued once the writes apply.
 #[test]
-fn a_failed_action_has_already_queued_its_emit() {
+fn a_failed_action_queues_no_emit() {
     let (mut store, comp) = sheet();
     let (ops, n) = draw(&store, comp, r#"<let id="$n" value="3"/><group name="button"><rect id="$bar" x="0" y="0" w="80" h="24"/><on event="click" emit="pressed" target="$n" verb="toggle"/></group>"#);
     store.apply(tx("button", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let err = store.fire(n["bar"], "click", Actor::Human, 0).unwrap_err();
     assert!(err.contains("toggle needs a yes/no value"), "{err}");
-    assert_eq!(store.take_emitted().len(), 1, "the failed action's event is queued");
+    assert!(store.take_emitted().is_empty(), "the failed action's event is not queued");
 }

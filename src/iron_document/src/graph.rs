@@ -60,12 +60,11 @@ impl ProducerId {
     pub const FIRST_HOST: ProducerId = ProducerId(12);
 }
 
-/// One published value: who published it and at which of their frames.
+/// One published value, and who published it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Signal {
     pub value: Value,
     pub producer: ProducerId,
-    pub stamp: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +158,7 @@ impl Reactive {
     /// longer names are released, leaves another producer holds are refused
     /// and reported. Leaves whose readable value moved are noted and their
     /// dependents re-evaluated, as for a constant that was set.
-    pub fn publish(&mut self, doc: Tree<'_>, producer: ProducerId, values: BTreeMap<Leaf, Value>, stamp: u64) {
+    pub fn publish(&mut self, doc: Tree<'_>, producer: ProducerId, values: BTreeMap<Leaf, Value>) {
         let mut changed: Vec<Leaf> = Vec::new();
         let was: BTreeSet<Leaf> = self.held.remove(&producer).unwrap_or_default();
         let mut now: BTreeSet<Leaf> = BTreeSet::new();
@@ -173,11 +172,9 @@ impl Reactive {
                     self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
                     continue;
                 }
-                Some(s) if s.value == value => {
-                    self.runtime.insert(leaf, Signal { value, producer, stamp });
-                }
+                Some(s) if s.value == value => {}
                 _ => {
-                    self.runtime.insert(leaf, Signal { value, producer, stamp });
+                    self.runtime.insert(leaf, Signal { value, producer });
                     changed.push(leaf);
                 }
             }
@@ -211,7 +208,7 @@ impl Reactive {
 
     /// Release everything `producer` publishes.
     pub fn retract(&mut self, doc: Tree<'_>, producer: ProducerId) {
-        self.publish(doc, producer, BTreeMap::new(), 0);
+        self.publish(doc, producer, BTreeMap::new());
     }
 
     /// Whether any binding reads `leaf`.
@@ -283,6 +280,10 @@ impl Reactive {
             }
             let mut tracks = false;
             expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
+            // A boundary's type check reads the instance's arguments
+            // (`like(…)`) while it evaluates: those reads are tracked, so an
+            // argument that changes checks it again.
+            tracks |= crate::types::declared(doc, leaf).is_some();
             self.nodes.insert(
                 leaf,
                 BoundNode {
@@ -568,7 +569,9 @@ impl Reactive {
                         recovered
                     }
                 }
-                Err(e) => self.errors.insert(leaf, e).is_none(),
+                // A new reason is a change too: readers name it ("depends
+                // on …, which failed: <why>").
+                Err(e) => self.errors.insert(leaf, e.clone()).as_ref() != Some(&e),
             };
             if changed && let Some(ds) = self.dependents.get(&leaf) {
                 for d in ds {

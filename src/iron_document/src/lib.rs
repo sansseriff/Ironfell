@@ -251,6 +251,70 @@ impl Drop for Rollback {
     }
 }
 
+/// What `after_transaction`, `post_apply` and the pipeline change outside
+/// the document, kept so that a transaction the solver refuses leaves the
+/// store as it was (reactive-engine handoff §4.4, stage 1).
+struct Saved {
+    reactive: graph::Reactive,
+    clusters: solve::Clusters,
+    geometry: geom::Revisions,
+    repeats: expand::Items,
+    presence: BTreeMap<NodeId, Presence>,
+    repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
+    truncated: Vec<expand::Problem>,
+    expansion_problems: Vec<expand::Problem>,
+    session_state: BTreeMap<Leaf, Value>,
+    tables: BTreeMap<NodeId, table::Grid>,
+    motion: Motion,
+    contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
+    layout_preview: Option<layout::Preview>,
+    time_errors: BTreeMap<NodeId, String>,
+    physics_error: Option<String>,
+    pending: Changes,
+}
+
+impl Saved {
+    fn of(s: &StoreCore) -> Saved {
+        Saved {
+            reactive: s.reactive.clone(),
+            clusters: s.clusters.clone(),
+            geometry: s.geometry.clone(),
+            repeats: s.repeats.clone(),
+            presence: s.presence.clone(),
+            repeat_inputs: s.repeat_inputs.clone(),
+            truncated: s.truncated.clone(),
+            expansion_problems: s.expansion_problems.clone(),
+            session_state: s.session_state.clone(),
+            tables: s.tables.clone(),
+            motion: s.motion.clone(),
+            contexts: s.contexts.clone(),
+            layout_preview: s.layout_preview.clone(),
+            time_errors: s.time_errors.clone(),
+            physics_error: s.physics_error.clone(),
+            pending: s.pending.clone(),
+        }
+    }
+
+    fn restore(self, s: &mut StoreCore) {
+        s.reactive = self.reactive;
+        s.clusters = self.clusters;
+        s.geometry = self.geometry;
+        s.repeats = self.repeats;
+        s.presence = self.presence;
+        s.repeat_inputs = self.repeat_inputs;
+        s.truncated = self.truncated;
+        s.expansion_problems = self.expansion_problems;
+        s.session_state = self.session_state;
+        s.tables = self.tables;
+        s.motion = self.motion;
+        s.contexts = self.contexts;
+        s.layout_preview = self.layout_preview;
+        s.time_errors = self.time_errors;
+        s.physics_error = self.physics_error;
+        s.pending = self.pending;
+    }
+}
+
 /// What `run` returns on success.
 struct Run {
     tx: Transaction,
@@ -259,6 +323,9 @@ struct Run {
     /// What expansion found, when `run` expanded; `None` leaves the store's
     /// as they were.
     problems: Option<Vec<expand::Problem>>,
+    /// Whether it edited parts a pinned machine state shares, to count once
+    /// the transaction is accepted.
+    shared: bool,
     rollback: Rollback,
 }
 
@@ -348,7 +415,6 @@ pub struct StoreCore {
     /// built-in producers (clips, the network) are not listed.
     producers: std::collections::BTreeMap<ProducerId, String>,
     /// Bumped on every publish: the stamp signals carry.
-    signal_stamp: u64,
     /// The text engine generation text was last measured under
     /// (`refresh_text`).
     text_generation: u64,
@@ -361,7 +427,7 @@ impl Default for StoreCore {
 }
 
 /// Declared transitions (affordances.md §8.2): the one interpolator.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Motion {
     enabled: bool,
     /// The host's clock, seconds, as of its last frame.
@@ -372,6 +438,7 @@ struct Motion {
     targets: BTreeMap<Leaf, Value>,
 }
 
+#[derive(Clone)]
 struct Anim {
     from: [f64; 2],
     to: [f64; 2],
@@ -428,6 +495,14 @@ impl StoreCore {
         let mut s = StoreCore::with_document(self.doc.clone());
         s.set_engine(self.engine);
         s
+    }
+
+    /// Whether `post_apply` could refuse what is in the document now: only
+    /// a constraint can be malformed, close a cycle through a cluster, or
+    /// fail to solve.
+    fn can_refuse(&self) -> bool {
+        let ty = TypeId::lookup("constraint").expect("registered");
+        self.doc.nodes_of_type(ty).any(|n| self.doc.is_live(n))
     }
 
     /// Keep what `run` applied.
@@ -491,7 +566,6 @@ impl StoreCore {
             next_gesture: 1,
             geometry: geom::Revisions::default(),
             producers: Default::default(),
-            signal_stamp: 0,
             text_generation: iron_text::engine().generation(),
         };
         // A loaded document holds only authored nodes: derive its instances.
@@ -859,8 +933,7 @@ impl StoreCore {
     fn resample(&mut self) {
         let sample = time::sample(Tree::over(&self.doc), self.time);
         self.time_errors = sample.errors;
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::CLIPS, sample.values, self.signal_stamp);
+        self.reactive.publish(Tree::over(&self.doc), ProducerId::CLIPS, sample.values);
     }
 
     /// Name a host producer of runtime signals (a simulation, a Model) and
@@ -898,8 +971,7 @@ impl StoreCore {
     /// A leaf another producer holds, or a bound leaf, is refused and listed
     /// in `signal_errors`.
     pub fn publish(&mut self, producer: ProducerId, values: std::collections::BTreeMap<Leaf, Value>) {
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), producer, values, self.signal_stamp);
+        self.reactive.publish(Tree::over(&self.doc), producer, values);
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
@@ -961,7 +1033,7 @@ impl StoreCore {
         c.marks = self.reactive.take_marks();
         c.geometry = self.geometry.take(Tree::over(&self.doc), self.reactive.take_moved());
         c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
-        c
+        c.sorted()
     }
 
     /// What `take_changes` would return now, without taking it: the
@@ -974,7 +1046,7 @@ impl StoreCore {
         c.marks = marks;
         c.geometry = self.geometry.classify(Tree::over(&self.doc), touched);
         c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
-        c
+        c.sorted()
     }
 
     /// The node's local space to document 2D space, through every live
@@ -1355,6 +1427,9 @@ impl StoreCore {
         let stamp = self.doc.version();
         let mut undo: Vec<Op> = Vec::new();
         let mut structural = false;
+        // A failure part-way puts the document back exactly, through the
+        // journal (reactive-engine handoff §4.4, stage 1).
+        self.doc.begin();
         for (i, op) in ops.iter().enumerate() {
             let in_session = match op {
                 Op::Create { id, parent, .. } => id.is_session() && parent.is_none_or(|p| p.is_session()),
@@ -1370,9 +1445,7 @@ impl StoreCore {
             match result {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
-                    for inv in undo.iter().rev() {
-                        let _ = op::apply_op(&mut self.doc, i, inv, stamp);
-                    }
+                    self.doc.rollback();
                     return Err(e);
                 }
             }
@@ -1382,6 +1455,10 @@ impl StoreCore {
                 _ => false,
             };
         }
+        // Session ops never need expansion: a derived id cannot sit under a
+        // session-tier id (`NodeId::from_path`), so no session node derives
+        // anything, and session ops touch only session nodes.
+        self.doc.commit();
         // The spatial scene learns of session nodes as of any other: a
         // session composition built after the last transaction (the Latency
         // view's) is otherwise never indexed, so presses miss it.
@@ -1445,8 +1522,8 @@ impl StoreCore {
                 .iter()
                 .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: p }))))
                 .collect();
-            // NaN is a value here ("no series"), so compare by text too.
-            if self.repeat_inputs.as_ref().is_some_and(|known| known.len() == inputs.len() && known.iter().zip(&inputs).all(|(a, b)| a == b || format!("{a:?}") == format!("{b:?}"))) {
+            // `Value`'s `==` holds NaN equal to NaN ("no series").
+            if self.repeat_inputs.as_ref() == Some(&inputs) {
                 break;
             }
             let mut counts = expand::Items::new();
@@ -1516,6 +1593,8 @@ impl StoreCore {
                 }
                 counts.insert(r, all.into_iter().map(|(k, _)| k).collect());
             }
+            let mut truncated = truncated;
+            expand::sort_problems(&mut truncated);
             self.truncated = truncated;
             self.presence.retain(|r, _| inputs.iter().any(|(n, _)| n == r));
             self.repeat_inputs = Some(inputs);
@@ -1527,13 +1606,13 @@ impl StoreCore {
                 self.expansion_problems = problems;
                 if round == expand::DEPTH_MAX + 1 && !ops.is_empty() {
                     self.expansion_problems.push(expand::Problem { node: repeats[0], kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
+                    expand::sort_problems(&mut self.expansion_problems);
                 }
                 self.geometry.note_ops(ops.iter());
                 applied.extend(ops);
             }
             if values != self.reactive.published_by(ProducerId::ITEMS) {
-                self.signal_stamp += 1;
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::ITEMS, values, self.signal_stamp);
+                self.reactive.publish(Tree::over(&self.doc), ProducerId::ITEMS, values);
             }
             // An item that has just joined starts unseen, in this same pass.
             self.publish_presence();
@@ -1563,8 +1642,7 @@ impl StoreCore {
             }
         }
         if values != self.reactive.published_by(ProducerId::PRESENCE) {
-            self.signal_stamp += 1;
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::PRESENCE, values, self.signal_stamp);
+            self.reactive.publish(Tree::over(&self.doc), ProducerId::PRESENCE, values);
         }
     }
 
@@ -1614,8 +1692,7 @@ impl StoreCore {
         let doc = &self.doc;
         self.session_state.retain(|leaf, _| doc.is_live(leaf.node));
         if self.session_state != self.reactive.published_by(ProducerId::STATE) {
-            self.signal_stamp += 1;
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::STATE, self.session_state.clone(), self.signal_stamp);
+            self.reactive.publish(Tree::over(&self.doc), ProducerId::STATE, self.session_state.clone());
         }
     }
 
@@ -1634,8 +1711,7 @@ impl StoreCore {
             values.insert(Leaf { node: n, path: leaf("count") }, Value::Number(picked.len() as f64));
         }
         if values != self.reactive.published_by(ProducerId::SELECTION) {
-            self.signal_stamp += 1;
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::SELECTION, values, self.signal_stamp);
+            self.reactive.publish(Tree::over(&self.doc), ProducerId::SELECTION, values);
         }
     }
 
@@ -1742,7 +1818,7 @@ impl StoreCore {
     /// history. `Ok(None)` when nothing listens or nothing changes the
     /// document.
     pub fn fire_at(&mut self, listens: NodeId, event: &str, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
-        let Some((writes, session, label)) = self.action_writes(listens, event)? else { return Ok(None) };
+        let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
         let mut ops: Vec<Op> = Vec::new();
         for (leaf, value) in writes {
             let (source, v) = handle::resolve_target(Tree::over(&self.doc), &self.reactive, leaf, value)?;
@@ -1754,10 +1830,13 @@ impl StoreCore {
             self.set_state(leaf, value)?;
         }
         if ops.is_empty() {
+            self.emitted.extend(emits);
             return Ok(None);
         }
         let label = label.unwrap_or_else(|| event.to_owned());
-        self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map(Some).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))
+        let applied = self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
+        self.emitted.extend(emits);
+        Ok(Some(applied))
     }
 
     /// A continuous event on `node`: `drag` (the pointer moved while held)
@@ -1778,15 +1857,15 @@ impl StoreCore {
         }
         let doc = &self.doc;
         shown.retain(|l, _| doc.is_live(l.node));
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::EVENTS, shown, self.signal_stamp);
-        let Some((writes, session, label)) = self.action_writes(listens, event)? else { return Ok(None) };
+        self.reactive.publish(Tree::over(&self.doc), ProducerId::EVENTS, shown);
+        let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
         for (leaf, value) in writes {
             self.preview_target(leaf.node, leaf.path, value)?;
         }
         for (leaf, value) in session {
             self.set_state(leaf, value)?;
         }
+        self.emitted.extend(emits);
         Ok(Some(label.unwrap_or_else(|| event.to_owned())))
     }
 
@@ -1799,18 +1878,21 @@ impl StoreCore {
     }
 
     /// What the actions listening on `listens` for `event` would write
-    /// now: the document leaves and their values, the session cells, and
-    /// the first action's name. Every value is read before any is written.
+    /// now: the document leaves and their values, the session cells, the
+    /// first action's name, and the events they emit. Every value is read
+    /// before any is written; the caller queues the events only once the
+    /// writes have applied.
     #[allow(clippy::type_complexity)]
-    fn action_writes(&mut self, listens: NodeId, event: &str) -> Result<Option<(Vec<(Leaf, Value)>, Vec<(Leaf, Value)>, Option<String>)>, String> {
+    fn action_writes(&mut self, listens: NodeId, event: &str) -> Result<Option<(Vec<(Leaf, Value)>, Vec<(Leaf, Value)>, Option<String>, Vec<(NodeId, String)>)>, String> {
         let Some(actions) = self.listeners(event).remove(&listens) else { return Ok(None) };
         let leaf_of = |f: &str| LeafPath::new(facet::FacetKind::Write, f).expect("declared leaf");
         let mut writes: Vec<(Leaf, Value)> = Vec::new();
         let mut session: Vec<(Leaf, Value)> = Vec::new();
         let mut label = None;
+        let mut emits = Vec::new();
         for on in actions {
             if let Some(name) = self.doc.get::<facet::On>(on).and_then(|f| f.emit.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()) {
-                self.emitted.push((listens, name.to_owned()));
+                emits.push((listens, name.to_owned()));
             }
             if label.is_none() {
                 label = self.doc.get::<facet::Name>(on).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()).map(str::to_owned);
@@ -1849,7 +1931,7 @@ impl StoreCore {
                 }
             }
         }
-        Ok(Some((writes, session, label)))
+        Ok(Some((writes, session, label, emits)))
     }
 
     /// Events actions asked the host to hear (`on.emit`), with the node
@@ -1979,8 +2061,7 @@ impl StoreCore {
         if values == self.reactive.published_by(ProducerId::LAYOUT) {
             return;
         }
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values, self.signal_stamp);
+        self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values);
     }
 
     /// A resolver over this document's contexts that sees nodes'
@@ -2135,8 +2216,7 @@ impl StoreCore {
                         shown.insert(*l, Value::Number(1.0 / 60.0));
                     }
                 }
-                self.signal_stamp += 1;
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown.clone(), self.signal_stamp);
+                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown.clone());
             }
             let restless = {
                 let (reactive, doc) = (&self.reactive, &self.doc);
@@ -2144,8 +2224,7 @@ impl StoreCore {
             };
             if restless {
                 shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
-                self.signal_stamp += 1;
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown, self.signal_stamp);
+                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown);
             }
         }
         let dts: BTreeMap<Leaf, Value> = self.reactive.published_by(ProducerId::STEPS).into_iter().filter(|(l, _)| leaves.contains(l)).collect();
@@ -2175,8 +2254,7 @@ impl StoreCore {
         let mut values = self.motion.targets.clone();
         self.motion.apply(&mut values);
         if values != self.reactive.published_by(ProducerId::LAYOUT) {
-            self.signal_stamp += 1;
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values, self.signal_stamp);
+            self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values);
         }
         moving
     }
@@ -2227,8 +2305,7 @@ impl StoreCore {
         if values == self.reactive.published_by(ProducerId::THEME) {
             return;
         }
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::THEME, values, self.signal_stamp);
+        self.reactive.publish(Tree::over(&self.doc), ProducerId::THEME, values);
     }
 
     /// Lay a container out in a previewed order, or stop (`None`): the
@@ -2327,8 +2404,7 @@ impl StoreCore {
         }
         self.physics_error = None;
         let values = net.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
-        self.signal_stamp += 1;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::NETWORK, values, self.signal_stamp);
+        self.reactive.publish(Tree::over(&self.doc), ProducerId::NETWORK, values);
     }
 
     /// Why the across/through network kept its last solution, if it did.
@@ -2442,7 +2518,7 @@ impl StoreCore {
         let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
             Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
-            Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path),
+            Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
             _ => false,
         });
         if structural {
@@ -2556,7 +2632,11 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let Run { mut tx, full_inverse, problems, rollback } = self.run(input)?;
+        let Run { mut tx, full_inverse, problems, shared, rollback } = self.run(input)?;
+        // `post_apply` can refuse only a document that holds a constraint;
+        // then what `after_transaction` and the pipeline change is kept to
+        // put back (reactive-engine handoff §4.4, stage 1).
+        let saved = self.can_refuse().then(|| Saved::of(self));
         if let Some(p) = problems {
             self.expansion_problems = p;
         }
@@ -2564,15 +2644,22 @@ impl StoreCore {
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
             Err(e) => {
-                // Everything after `run` is undone by putting the document
-                // back; the graph is rebuilt from it.
                 self.abort(rollback);
-                self.reactive.rebuild(Tree::over(&self.doc));
-                self.resample();
-                self.rebuild_clusters();
+                match saved {
+                    Some(saved) => saved.restore(self),
+                    // Not reached: without a constraint nothing refuses.
+                    None => {
+                        self.reactive.rebuild(Tree::over(&self.doc));
+                        self.resample();
+                        self.rebuild_clusters();
+                    }
+                }
                 return Err(e);
             }
         };
+        if shared {
+            self.machines.shared += 1;
+        }
         tx.solver = solver.clone();
         self.pending.note(Tree::over(&self.doc), tx.ops.iter().chain(&tx.derived_ops).chain(&tx.expanded), &full_inverse);
         let version = tx.version;
@@ -2607,8 +2694,11 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: mut applied, full_inverse, problems, rollback } = self.run(input)?;
+        let Run { tx: mut applied, full_inverse, problems, shared, rollback } = self.run(input)?;
         self.commit(rollback);
+        if shared {
+            self.machines.shared += 1;
+        }
         if let Some(p) = problems {
             self.expansion_problems = p;
         }
@@ -2630,7 +2720,7 @@ impl StoreCore {
         let tx = self.history.past.pop()?;
         // An undone state change snaps rather than playing back
         // (plans/specs/machines.md §6), on the instances it touches.
-        self.machines.snap.extend(args_set(&tx.undo_ops()));
+        let snap = args_set(&tx.undo_ops());
         let input = TransactionInput {
             label: format!("undo: {}", tx.label),
             actor: Actor::System,
@@ -2640,8 +2730,12 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok(Run { tx: mut applied, full_inverse, problems, rollback }) => {
+            Ok(Run { tx: mut applied, full_inverse, problems, shared, rollback }) => {
                 self.commit(rollback);
+                self.machines.snap.extend(snap);
+                if shared {
+                    self.machines.shared += 1;
+                }
                 if let Some(p) = problems {
                     self.expansion_problems = p;
                 }
@@ -2668,7 +2762,7 @@ impl StoreCore {
             self.end_gesture(GestureStatus::Cancelled("redo".into()));
         }
         let tx = self.history.future.pop()?;
-        self.machines.snap.extend(args_set(&tx.replay_ops()));
+        let snap = args_set(&tx.replay_ops());
         // Requested and derived ops, no solve: the log is the ground truth.
         let input = TransactionInput {
             label: format!("redo: {}", tx.label),
@@ -2679,8 +2773,12 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok(Run { tx: mut applied, full_inverse, problems, rollback }) => {
+            Ok(Run { tx: mut applied, full_inverse, problems, shared, rollback }) => {
                 self.commit(rollback);
+                self.machines.snap.extend(snap);
+                if shared {
+                    self.machines.shared += 1;
+                }
                 if let Some(p) = problems {
                     self.expansion_problems = p;
                 }
@@ -2793,10 +2891,10 @@ impl StoreCore {
         input.ops = expand::translate(Tree::over(&self.doc), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
+        let mut shared = false;
         if let Some(pin) = self.machines.pinned.clone() {
-            if machine::shared_edit(Tree::over(&self.doc), &pin, &input.ops) {
-                self.machines.shared += 1;
-            }
+            // Counted once the transaction is accepted (`count_shared`).
+            shared = machine::shared_edit(Tree::over(&self.doc), &pin, &input.ops);
             input.ops = machine::record(Tree::over(&self.doc), &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
         }
         // What `attachment::validate` compares against: the points attached
@@ -2902,6 +3000,7 @@ impl StoreCore {
             },
             full_inverse,
             problems,
+            shared,
             rollback,
         })
     }
@@ -2992,13 +3091,14 @@ fn args_set(ops: &[Op]) -> Vec<NodeId> {
 }
 
 /// An owner's items as they enter and leave (`Store::advance_presence`).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Presence {
     enter_ms: f64,
     exit_ms: f64,
     items: BTreeMap<String, Present>,
 }
 
+#[derive(Clone)]
 struct Present {
     /// 0, unseen, to 1, here.
     p: f64,
@@ -3044,6 +3144,14 @@ fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<
 
 /// Whether a set of this leaf changes what `@name` resolves to: a rename,
 /// or a let starting or ceasing to provide (palette.rs `provided`).
+/// Whether a set on this leaf changes what the graph derives beyond the
+/// leaf's own value: the signal a connection derives (a port's `kind` and
+/// `dir`), an anchor's position (`follow`, `port`), or a boundary's declared
+/// type (`datatype`). Each rebuilds the graph, as a structural op does.
+fn rederives(path: &LeafPath) -> bool {
+    matches!((path.facet, path.field), (FacetKind::Port, "kind" | "dir" | "datatype") | (FacetKind::Anchor, "follow" | "port"))
+}
+
 fn names_context(path: &LeafPath) -> bool {
     path.facet == FacetKind::Name || (path.facet == FacetKind::Let && path.field == "provide")
 }

@@ -35,23 +35,31 @@ pub struct NotAtomic {
 }
 
 /// Found by `IRON_ATOMICITY=1` over the suite and `tests/atomicity.rs`,
-/// 2026-11-16. The suite itself reaches only the third (in
+/// 2026-11-16. The suite itself reaches only the solver's entry (in
 /// `tests/constraints.rs`, `a_binding_that_reads_and_feeds_a_cluster_is_a_cycle`).
+/// Phase 2a fixed a refused transaction's expansion problems, in both
+/// strategies, and listed the store state outside the document that a
+/// failure leaves (reactive-engine handoff §4.3).
 pub const NOT_ATOMIC: &[NotAtomic] = &[
     NotAtomic {
         method: "apply_session",
-        situation: "an op list that fails part-way is rolled back by the inverses of the ops before it: a created session node is left as a tombstone and the session id counter has moved",
+        situation: "an op list that fails part-way is rolled back by the inverses of the ops before it: a created session node is left as a tombstone and the session id counter has moved; and the failing op's own writes stay, since `reparent`, `set` and `add_facet` write before their checks and return no inverse. Phase 2b takes `apply_session` over (spec §11.3)",
         test: "tests/atomicity.rs a_failed_session_op_list_leaves_a_tombstone",
     },
     NotAtomic {
-        method: "apply (and undo, redo, replay, and the calls that apply a transaction)",
-        situation: "a transaction that expands and is then refused by the checks keeps what its expansion found as `expansion_problems`",
-        test: "tests/atomicity.rs a_refused_transaction_keeps_its_expansion_problems",
+        method: "apply",
+        situation: "a transaction refused by `post_apply` (a cycle through a cluster, an unsolvable cluster, an exact request unmet) gets its document back, but `after_transaction` has already run: the overlay cleared, geometry noted, repeats settled (`repeats`, `presence`, `repeat_inputs`, `truncated`, the published items, and the `expansion_problems` from `run` and from `settle_repeats`), signals stamped; and rebuilding the graph leaves the leaves it touched as pending changes",
+        test: "tests/atomicity.rs a_transaction_refused_by_the_solver_leaves_a_change_pending",
     },
     NotAtomic {
-        method: "apply",
-        situation: "a transaction refused by `post_apply` (a cycle through a cluster, an unsolvable cluster, an exact request unmet) is undone by restoring the document and rebuilding the graph, which leaves the leaves it touched as pending changes",
-        test: "tests/atomicity.rs a_transaction_refused_by_the_solver_leaves_a_change_pending",
+        method: "apply (and the calls that apply a transaction)",
+        situation: "with a machine state pinned, `run` counts a shared edit (`machines.shared`) before any check, so a refused transaction still counts",
+        test: "none: listed in phase 2a from reading `lib.rs` `run`",
+    },
+    NotAtomic {
+        method: "undo, redo",
+        situation: "the machines the transaction touches are marked to snap (`machines.snap`) before `run`, and stay marked if it fails",
+        test: "none: listed in phase 2a from reading `lib.rs` `undo` and `redo`",
     },
     NotAtomic {
         method: "fire, fire_at",

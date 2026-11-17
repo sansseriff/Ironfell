@@ -78,7 +78,7 @@ pub(crate) fn compose_els(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El
 
 /// The verbs run on a scratch copy holding `before`.
 fn run_verbs(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
-    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
+    let mut scratch = store.scratch();
     if !before.is_empty() {
         scratch
             .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: before.clone(), exact: false })

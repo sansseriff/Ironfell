@@ -30,11 +30,7 @@ use crate::parts::Placed;
 use crate::*;
 use std::fmt::Debug;
 
-/// Which engine a store runs. Until phase 2b there is one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Engine {
-    Old,
-}
+pub use crate::Engine;
 
 /// The facade: `Store` with the `differential` feature.
 pub struct Store {
@@ -86,9 +82,11 @@ fn atomicity_on() -> bool {
 }
 
 impl Store {
-    fn pair(subject: StoreCore, reference: StoreCore, method: &str) -> Store {
-        debug_assert_eq!(subject.engine(), Engine::Old);
-        debug_assert_eq!(reference.engine(), Engine::Old);
+    /// The subject applies transactions in place; the reference keeps the
+    /// old engine's working copy (reactive-engine handoff §4.3).
+    fn pair(subject: StoreCore, mut reference: StoreCore, method: &str) -> Store {
+        debug_assert_eq!(subject.engine(), Engine::InPlace);
+        reference.set_engine(Engine::Old);
         let store = Store { subject, reference };
         store.agree(method);
         store

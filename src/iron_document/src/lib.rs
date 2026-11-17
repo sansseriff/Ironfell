@@ -212,8 +212,59 @@ impl History {
     }
 }
 
+/// How a store applies a transaction (reactive-engine handoff §4.3). Both
+/// are the old engine; they differ only in how `run` keeps what it may have
+/// to put back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    /// A working copy of the document, swapped in on success: the
+    /// differential harness's reference until the swap.
+    Old,
+    /// Ops applied to the store's own document, with the document's journal
+    /// to roll back.
+    InPlace,
+}
+
+/// What a store needs to put the document back after `run` succeeded and a
+/// later step failed. Consumed exactly once, by `commit` or `abort`.
+#[must_use]
+struct Rollback(Option<Undo>);
+
+enum Undo {
+    /// The document before the transaction (`Engine::Old`).
+    Clone(Document),
+    /// The document's journal is open (`Engine::InPlace`).
+    Journal,
+}
+
+impl Rollback {
+    fn take(mut self) -> Undo {
+        self.0.take().expect("a rollback token is used once")
+    }
+}
+
+impl Drop for Rollback {
+    fn drop(&mut self) {
+        // While unwinding, a second panic would abort the test binary and
+        // hide the first.
+        debug_assert!(self.0.is_none() || std::thread::panicking(), "a transaction was neither committed nor aborted");
+    }
+}
+
+/// What `run` returns on success.
+struct Run {
+    tx: Transaction,
+    /// The whole inverse, derived nodes included, for `Changes`.
+    full_inverse: Vec<Op>,
+    /// What expansion found, when `run` expanded; `None` leaves the store's
+    /// as they were.
+    problems: Option<Vec<expand::Problem>>,
+    rollback: Rollback,
+}
+
 pub struct StoreCore {
     doc: Document,
+    engine: Engine,
     history: History,
     recent_keys: VecDeque<(String, Version)>,
     reactive: graph::Reactive,
@@ -358,11 +409,41 @@ const DEFAULT_HORIZON: usize = 200;
 const RECENT_KEYS: usize = 64;
 
 impl StoreCore {
-    /// Which engine this store runs (the differential harness's choice,
-    /// `differential::Engine`). Until phase 2b there is only the old one.
-    #[cfg(feature = "differential")]
-    pub fn engine(&self) -> differential::Engine {
-        differential::Engine::Old
+    /// How this store applies transactions.
+    pub fn engine(&self) -> Engine {
+        self.engine
+    }
+
+    /// Choose how this store applies transactions: the differential
+    /// harness's reference runs `Old`, and a scratch store follows the store
+    /// it was made from.
+    pub fn set_engine(&mut self, engine: Engine) {
+        debug_assert!(!self.doc.journal_open(), "a transaction is open");
+        self.engine = engine;
+    }
+
+    /// A scratch store over a copy of this one's document, applying
+    /// transactions the way this one does.
+    pub(crate) fn scratch(&self) -> StoreCore {
+        let mut s = StoreCore::with_document(self.doc.clone());
+        s.set_engine(self.engine);
+        s
+    }
+
+    /// Keep what `run` applied.
+    fn commit(&mut self, r: Rollback) {
+        match r.take() {
+            Undo::Clone(before) => drop(before),
+            Undo::Journal => self.doc.commit(),
+        }
+    }
+
+    /// Put the document back as it was before `run`.
+    fn abort(&mut self, r: Rollback) {
+        match r.take() {
+            Undo::Clone(before) => self.doc = before,
+            Undo::Journal => self.doc.rollback(),
+        }
     }
 
     pub fn new() -> StoreCore {
@@ -372,6 +453,7 @@ impl StoreCore {
     pub fn with_document(doc: Document) -> StoreCore {
         let mut store = StoreCore {
             doc,
+            engine: Engine::InPlace,
             history: History {
                 horizon: DEFAULT_HORIZON,
                 ..Default::default()
@@ -2474,15 +2556,17 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let (mut tx, doc, full_inverse) = self.run(input)?;
-        let old = std::mem::replace(&mut self.doc, doc);
+        let Run { mut tx, full_inverse, problems, rollback } = self.run(input)?;
+        if let Some(p) = problems {
+            self.expansion_problems = p;
+        }
         self.after_transaction(&mut tx);
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
             Err(e) => {
-                // Everything after `run` is undone by putting the old
-                // document back; the graph is rebuilt from it.
-                self.doc = old;
+                // Everything after `run` is undone by putting the document
+                // back; the graph is rebuilt from it.
+                self.abort(rollback);
                 self.reactive.rebuild(Tree::over(&self.doc));
                 self.resample();
                 self.rebuild_clusters();
@@ -2504,6 +2588,7 @@ impl StoreCore {
             self.history.past.remove(0);
         }
         self.history.record(tx);
+        self.commit(rollback);
         Ok(Applied {
             version,
             replayed: false,
@@ -2522,8 +2607,11 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let (mut applied, doc, full_inverse) = self.run(input)?;
-        self.doc = doc;
+        let Run { tx: mut applied, full_inverse, problems, rollback } = self.run(input)?;
+        self.commit(rollback);
+        if let Some(p) = problems {
+            self.expansion_problems = p;
+        }
         self.after_transaction(&mut applied);
         self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
         let version = applied.version;
@@ -2552,8 +2640,11 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((mut applied, doc, full_inverse)) => {
-                self.doc = doc;
+            Ok(Run { tx: mut applied, full_inverse, problems, rollback }) => {
+                self.commit(rollback);
+                if let Some(p) = problems {
+                    self.expansion_problems = p;
+                }
                 self.after_transaction(&mut applied);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
@@ -2588,8 +2679,11 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((mut applied, doc, full_inverse)) => {
-                self.doc = doc;
+            Ok(Run { tx: mut applied, full_inverse, problems, rollback }) => {
+                self.commit(rollback);
+                if let Some(p) = problems {
+                    self.expansion_problems = p;
+                }
                 self.after_transaction(&mut applied);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
@@ -2685,17 +2779,14 @@ impl StoreCore {
         Ok((!summary.is_empty()).then_some(summary))
     }
 
-    /// Run the ops against a working copy and return it with the
-    /// transaction; the caller commits the copy.
+    /// Apply the ops, expand, and check; on success the document holds the
+    /// transaction and the token can put it back (`commit` or `abort`). On
+    /// failure the document is as it was.
     ///
-    /// Cloning per transaction is the simplest way to report every error in a
-    /// batch and leave the store untouched on failure. Transactions are
-    /// coalesced per gesture, so this is one clone per commit, not per frame.
-    /// If it ever shows up in a profile, the alternative is applying with
-    /// rollback through the inverses.
-    /// Also returns the whole inverse, derived nodes included, for
-    /// `Changes` (a deleted instance's derived nodes are named only there).
-    fn run(&mut self, input: TransactionInput) -> Result<(Transaction, Document, Vec<Op>), Vec<ApplyError>> {
+    /// `Engine::Old` applies to a working copy and swaps it in; `InPlace`
+    /// applies to the store's own document with its journal open
+    /// (reactive-engine handoff §4.3).
+    fn run(&mut self, input: TransactionInput) -> Result<Run, Vec<ApplyError>> {
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
         let mut input = input;
@@ -2708,8 +2799,18 @@ impl StoreCore {
             }
             input.ops = machine::record(Tree::over(&self.doc), &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
         }
-        let mut work = self.doc.clone();
-        let stamp = work.version().next();
+        // What `attachment::validate` compares against: the points attached
+        // before.
+        let attached: Vec<NodeId> = Tree::over(&self.doc).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
+        let mut work = None;
+        let doc = match self.engine {
+            Engine::Old => work.insert(self.doc.clone()),
+            Engine::InPlace => {
+                self.doc.begin();
+                &mut self.doc
+            }
+        };
+        let stamp = doc.version().next();
         let mut inverse = Vec::new();
         let mut errors = Vec::new();
         for (i, op) in input.ops.iter().enumerate() {
@@ -2717,7 +2818,7 @@ impl StoreCore {
                 errors.push(ApplyError { op: i, kind: ErrorKind::BadId, message: reason });
                 continue;
             }
-            match op::apply_op(&mut work, i, op, stamp) {
+            match op::apply_op(doc, i, op, stamp) {
                 Ok(inv) => inverse.extend(inv),
                 Err(e) => errors.push(e),
             }
@@ -2725,10 +2826,11 @@ impl StoreCore {
         // Instances re-derive what their definitions say, before the checks
         // that read them (a connection to an expanded port).
         let mut expanded = Vec::new();
-        if errors.is_empty() && expand::affected_by(Tree::over(&work), &input.ops) {
-            let (ops, problems) = expand::expand(&mut work, stamp, &self.repeats);
+        let mut problems = None;
+        if errors.is_empty() && expand::affected_by(Tree::over(doc), &input.ops) {
+            let (ops, found) = expand::expand(doc, stamp, &self.repeats);
             expanded = ops;
-            self.expansion_problems = problems;
+            problems = Some(found);
         }
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
@@ -2741,10 +2843,10 @@ impl StoreCore {
                 {
                     continue;
                 }
-                if let Err(e) = op::check_created(Tree::over(&work), i, op, stamp) {
+                if let Err(e) = op::check_created(Tree::over(doc), i, op, stamp) {
                     errors.push(e);
                 }
-                if let Err(message) = expand::check_scope(Tree::over(&work), op) {
+                if let Err(message) = expand::check_scope(Tree::over(doc), op) {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
                 // What may take a context declaration away (expand.rs).
@@ -2754,21 +2856,28 @@ impl StoreCore {
                     _ => None,
                 };
                 if let Some(id) = undeclares.filter(|id| !id.is_expanded())
-                    && let Err(message) = expand::check_context(Tree::over(&work), id)
+                    && let Err(message) = expand::check_context(Tree::over(doc), id)
                 {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
             }
         }
         if errors.is_empty() {
-            if let Err(message) = attachment::validate(Tree::over(&self.doc), Tree::over(&work)) {
+            if let Err(message) = attachment::validate(&attached, Tree::over(doc)) {
                 errors.push(ApplyError { op: 0, kind: ErrorKind::BadParent, message });
             }
         }
         if !errors.is_empty() {
+            if self.engine == Engine::InPlace {
+                self.doc.rollback();
+            }
             return Err(errors);
         }
-        work.set_version(stamp);
+        doc.set_version(stamp);
+        let rollback = match work {
+            Some(work) => Rollback(Some(Undo::Clone(std::mem::replace(&mut self.doc, work)))),
+            None => Rollback(Some(Undo::Journal)),
+        };
         // Derived nodes and relations come back by re-expansion, never by
         // undo: a deleted instance's expanded children are not restored by
         // its inverse (the guard would refuse them anyway).
@@ -2778,8 +2887,8 @@ impl StoreCore {
             Op::Link { rel } => !rel.id.is_expanded(),
             Op::Unlink { id } => !id.is_expanded(),
         });
-        Ok((
-            Transaction {
+        Ok(Run {
+            tx: Transaction {
                 version: stamp,
                 label: input.label,
                 actor: input.actor,
@@ -2791,9 +2900,10 @@ impl StoreCore {
                 expanded,
                 solver: None,
             },
-            work,
             full_inverse,
-        ))
+            problems,
+            rollback,
+        })
     }
 
     pub fn view(&self, q: &ViewQuery) -> Result<String, ViewError> {

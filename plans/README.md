@@ -17,9 +17,9 @@ finishes, or is superseded.
      references, a time scheduler; it began as the `std:plot` pan/zoom frame drops):
      [`handoff-reactive-structure.md`](handoff-reactive-structure.md), with the design
      in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
-     phase 0 (baselines, the differential harness, the host reference) and phase 1 (the
-     read contract: `Tree`, `take_changes()`) done 2026-11-16. Next: phase 2a, whose
-     tasks the handoff's §2 says to write first.
+     phases 0 (baselines, the harnesses), 1 (the read contract: `Tree`,
+     `take_changes()`) and 2a (transactions in place, a document journal) done
+     2026-11-16. Next: phase 2b, whose tasks the handoff's §2 says to write first.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as

@@ -55,8 +55,8 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `snapping.txt` | ~30 s |
 | `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
-| `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6 min warm, debug (6m 11s, 2026-11-16; `differential_random`'s 200 seeds are 49 s of it) |
-| ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~6 min (359 s on 10 threads, 2026-11-16) |
+| `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6–8 min warm, debug (6m 11s; 7m 55s after a `document.rs` change, 2026-11-16; `differential_random`'s 200 seeds are 49 s of it) |
+| ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
 | `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference`: the host reference (reactive-engine handoff §4.1, task 6) | ~50 s warm (48 s, 2026-11-16) |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |
@@ -76,7 +76,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `narrative.txt` | ~25 s |
 | `slider.ts`, each DPR | ~18–22 s (2026-11-16; includes hover and animation pixel checks) |
 | `timeline.txt` | ~30 s |
-| ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
+| ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–5 min (2m 28s with every test binary relinking, 2026-11-09; 5m 13s after a `document.rs` and `lib.rs` change, 2026-11-16) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |

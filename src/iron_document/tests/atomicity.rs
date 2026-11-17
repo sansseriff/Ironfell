@@ -1,9 +1,9 @@
 //! The old engine's failures of atomicity (reactive-engine handoff §4.1,
 //! task 3): calls that return an error and leave the store other than it
 //! was. Each test shows one, as it is today, and is listed in
-//! `src/differential/intended.rs` (`NOT_ATOMIC`). When the new engine takes
-//! a call over and meets atomicity for it (spec §11), the entry goes and
-//! its test is turned round to assert the store is unchanged.
+//! `src/differential/intended.rs` (`NOT_ATOMIC`). When a call meets
+//! atomicity (spec §11), the entry goes and its test is turned round to
+//! assert the store is unchanged: phase 2a did so for expansion problems.
 
 use iron_document::facet::{Composition, Name};
 use iron_document::*;
@@ -55,14 +55,9 @@ fn a_failed_session_op_list_leaves_a_tombstone() {
     assert_ne!(store.authored().next_session_ids(1)[0], id, "the session counter moved");
 }
 
-/// A transaction that expands and is then refused (here by a binding cycle
-/// found after expansion) keeps what that expansion found: `run` sets
-/// `self.expansion_problems` before the checks. Here the refused
-/// transaction deletes a nest too deep to expand quietly, so the problem it
-/// reported goes though the nest stays.
-#[test]
-fn a_refused_transaction_keeps_its_expansion_problems() {
-    let (mut store, comp) = sheet();
+/// Seventeen nested repeats of one item, deeper than expansion reports
+/// quietly, settled and expanded: the store reports a `depth` problem.
+fn deep_nest(store: &mut Store, comp: NodeId) -> BTreeMap<String, NodeId> {
     // Seventeen nested repeats of one item: deeper than expansion reports.
     let mut nest = String::from(r#"<group id="$top" repeat.count="1">"#);
     for _ in 0..16 {
@@ -72,19 +67,43 @@ fn a_refused_transaction_keeps_its_expansion_problems() {
     for _ in 0..17 {
         nest.push_str("</group>");
     }
-    let (ops, n) = draw(&store, comp, &nest);
+    let (ops, n) = draw(store, comp, &nest);
     store.apply(tx("nest", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     // Settling makes items, then a structural transaction expands them.
-    let (ops, _) = draw(&store, comp, r#"<rect w="2" h="2"/>"#);
+    let (ops, _) = draw(store, comp, r#"<rect w="2" h="2"/>"#);
     store.apply(tx("more", ops)).unwrap();
+    assert!(store.expansion_problems().iter().any(|p| p.kind == "depth"), "{:?}", store.expansion_problems());
+    n
+}
+
+/// A transaction that expands and is then refused (here by a binding cycle
+/// found after expansion) leaves the store's expansion problems as they
+/// were: `run` hands them back only on success (reactive-engine handoff
+/// §4.3, task 3; until phase 2a it stored them before its checks). Here the
+/// refused transaction deletes the nest, whose problem it would have taken
+/// away.
+#[test]
+fn a_refused_transaction_leaves_expansion_problems_alone() {
+    let (mut store, comp) = sheet();
+    let n = deep_nest(&mut store, comp);
     let before = store.expansion_problems().to_vec();
-    assert!(before.iter().any(|p| p.kind == "depth"), "{before:?}");
     let (mut ops, _) = draw(&store, comp, r#"<let id="$a" value="{= $b}"/><let id="$b" value="{= $a}"/>"#);
     ops.push(Op::Delete { id: n["top"] });
     let errs = store.apply(tx("delete and cycle", ops)).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::Cycle, "{errs:?}");
     assert!(store.tree().is_live(n["top"]), "the nest is still there");
-    assert_ne!(store.expansion_problems(), &before[..], "but the refused transaction's expansion replaced its problems");
+    assert_eq!(store.expansion_problems(), &before[..]);
+}
+
+/// A transaction that does not expand keeps the store's expansion problems:
+/// `run` reports none rather than an empty list.
+#[test]
+fn a_transaction_that_does_not_expand_leaves_expansion_problems_alone() {
+    let (mut store, comp) = sheet();
+    deep_nest(&mut store, comp);
+    let before = store.expansion_problems().to_vec();
+    store.apply(tx("rename", vec![Op::Set { id: comp, path: "name.text".parse().unwrap(), slot: Slot::Const(Value::Str("renamed".into())) }])).unwrap();
+    assert_eq!(store.expansion_problems(), &before[..]);
 }
 
 /// A transaction refused after it applied (by `post_apply`, here a binding

@@ -128,7 +128,7 @@ fn advance(next: &mut BTreeMap<u32, u64>, client: u32, n: u64) {
     *c = (*c).max(n + 1);
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Document {
     nodes: BTreeMap<NodeId, Node>,
     facets: BTreeMap<FacetKind, BTreeMap<NodeId, Facet>>,
@@ -158,6 +158,76 @@ pub struct Document {
     by_facet: BTreeMap<FacetKind, BTreeSet<NodeId>>,
     by_source: BTreeMap<NodeId, BTreeSet<RelationId>>,
     by_target: BTreeMap<NodeId, BTreeSet<RelationId>>,
+
+    /// The open transaction's undo records (reactive-engine handoff §4.3,
+    /// task 2). Outside equality and cloning: a clone has none open.
+    journal: JournalCell,
+}
+
+/// One write, as what puts it back. Recorded in the order of the writes and
+/// undone in reverse, on the raw fields, so the indexes come back exactly as
+/// they were, empty keys included.
+#[derive(Debug)]
+enum Rec {
+    Node(NodeId, Option<Node>),
+    /// `facets[kind]` was created.
+    FacetTable(FacetKind),
+    Facet(FacetKind, NodeId, Option<Facet>),
+    Relation(RelationId, Option<Relation>),
+    NextId(u32, Option<u64>),
+    NextRel(u32, Option<u64>),
+    SessionId(u64),
+    SessionRel(u64),
+    Version(Version),
+    TypeKey(TypeId),
+    /// `by_type[ty]` gained (`true`) or lost `id`.
+    ByType(TypeId, NodeId, bool),
+    FacetKey(FacetKind),
+    ByFacet(FacetKind, NodeId, bool),
+    SourceKey(NodeId),
+    BySource(NodeId, RelationId, bool),
+    TargetKey(NodeId),
+    ByTarget(NodeId, RelationId, bool),
+    ChildrenKey(NodeId),
+    /// An id was inserted into a child list (`None`: the roots) at `pos`.
+    Placed(Option<NodeId>, usize),
+    /// `id` was removed from a child list at `pos`.
+    Unplaced(Option<NodeId>, usize, NodeId),
+}
+
+#[derive(Default)]
+struct Journal {
+    recs: Vec<Rec>,
+    /// Under the differential harness, the document at `begin`: every
+    /// rollback is checked against it.
+    #[cfg(feature = "differential")]
+    shadow: Option<Box<Document>>,
+}
+
+/// A journal, or none open. Equal to any other and cloned as none, so a
+/// `Document`'s equality and clones are about its content.
+#[derive(Default)]
+struct JournalCell(Option<Journal>);
+
+impl Clone for JournalCell {
+    fn clone(&self) -> Self {
+        JournalCell(None)
+    }
+}
+
+impl PartialEq for JournalCell {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for JournalCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            Some(j) => write!(f, "journal open ({} records)", j.recs.len()),
+            None => write!(f, "no journal"),
+        }
+    }
 }
 
 impl Document {
@@ -177,6 +247,7 @@ impl Document {
     }
 
     pub(crate) fn set_scope(&mut self, scope: Option<ScopeId>) {
+        debug_assert!(self.journal.0.is_none(), "the scope is not a transaction's to change");
         self.scope = scope;
     }
 
@@ -227,6 +298,7 @@ impl Document {
 
     pub(crate) fn set_client(&mut self, client: u32) {
         assert!(client < crate::id::CLIENT_LIMIT, "client {client} is out of range");
+        debug_assert!(self.journal.0.is_none(), "the client is not a transaction's to change");
         self.client = client;
     }
 
@@ -448,19 +520,197 @@ impl Document {
             .filter_map(|r| self.relations.get(r))
     }
 
+    // ---- the journal ---------------------------------------------------
+
+    /// Open a transaction's journal: from here every write is recorded until
+    /// [`Document::commit`] or [`Document::rollback`]. One at a time.
+    pub(crate) fn begin(&mut self) {
+        debug_assert!(self.journal.0.is_none(), "a journal is already open");
+        self.journal.0 = Some(Journal {
+            recs: Vec::new(),
+            #[cfg(feature = "differential")]
+            shadow: Some(Box::new(self.clone())),
+        });
+    }
+
+    /// Keep everything written since [`Document::begin`], and close the journal.
+    pub(crate) fn commit(&mut self) {
+        debug_assert!(self.journal.0.is_some(), "no journal to commit");
+        self.journal.0 = None;
+    }
+
+    /// Put back everything written since [`Document::begin`], bit for bit,
+    /// and close the journal.
+    pub(crate) fn rollback(&mut self) {
+        let journal = self.journal.0.take().expect("no journal to roll back");
+        for r in journal.recs.into_iter().rev() {
+            self.undo(r);
+        }
+        #[cfg(feature = "differential")]
+        if let Some(shadow) = journal.shadow {
+            assert!(*self == *shadow, "journal rollback did not restore the document");
+            if let Err(e) = self.check_invariants() {
+                panic!("journal rollback broke an invariant: {e}");
+            }
+        }
+    }
+
+    pub(crate) fn journal_open(&self) -> bool {
+        self.journal.0.is_some()
+    }
+
+    fn rec(&mut self, r: Rec) {
+        if let Some(j) = &mut self.journal.0 {
+            j.recs.push(r);
+        }
+    }
+
+    fn recording(&self) -> bool {
+        self.journal.0.is_some()
+    }
+
+    fn undo(&mut self, r: Rec) {
+        fn put<K: Ord, V>(m: &mut BTreeMap<K, V>, k: K, v: Option<V>) {
+            match v {
+                Some(v) => {
+                    m.insert(k, v);
+                }
+                None => {
+                    m.remove(&k);
+                }
+            }
+        }
+        fn flip<K: Ord, T: Ord>(m: &mut BTreeMap<K, BTreeSet<T>>, k: &K, id: T, inserted: bool) {
+            let set = m.get_mut(k).expect("journaled index key");
+            if inserted {
+                set.remove(&id);
+            } else {
+                set.insert(id);
+            }
+        }
+        match r {
+            Rec::Node(id, n) => put(&mut self.nodes, id, n),
+            Rec::FacetTable(kind) => {
+                self.facets.remove(&kind);
+            }
+            Rec::Facet(kind, id, f) => put(self.facets.get_mut(&kind).expect("journaled facet table"), id, f),
+            Rec::Relation(id, r) => put(&mut self.relations, id, r),
+            Rec::NextId(client, n) => put(&mut self.next_ids, client, n),
+            Rec::NextRel(client, n) => put(&mut self.next_rels, client, n),
+            Rec::SessionId(n) => self.next_session_id = n,
+            Rec::SessionRel(n) => self.next_session_rel = n,
+            Rec::Version(v) => self.version = v,
+            Rec::TypeKey(ty) => {
+                self.by_type.remove(&ty);
+            }
+            Rec::ByType(ty, id, inserted) => flip(&mut self.by_type, &ty, id, inserted),
+            Rec::FacetKey(kind) => {
+                self.by_facet.remove(&kind);
+            }
+            Rec::ByFacet(kind, id, inserted) => flip(&mut self.by_facet, &kind, id, inserted),
+            Rec::SourceKey(n) => {
+                self.by_source.remove(&n);
+            }
+            Rec::BySource(n, r, inserted) => flip(&mut self.by_source, &n, r, inserted),
+            Rec::TargetKey(n) => {
+                self.by_target.remove(&n);
+            }
+            Rec::ByTarget(n, r, inserted) => flip(&mut self.by_target, &n, r, inserted),
+            Rec::ChildrenKey(id) => {
+                self.children.remove(&id);
+            }
+            Rec::Placed(parent, pos) => {
+                self.container(parent).remove(pos);
+            }
+            Rec::Unplaced(parent, pos, id) => self.container(parent).insert(pos, id),
+        }
+    }
+
+    fn container(&mut self, parent: Option<NodeId>) -> &mut Vec<NodeId> {
+        match parent {
+            Some(p) => self.children.get_mut(&p).expect("journaled child list"),
+            None => &mut self.roots,
+        }
+    }
+
+    // ---- recorded primitive writes ------------------------------------
+
+    /// Replace `nodes[id]`, recording what it was.
+    fn write_node(&mut self, id: NodeId, f: impl FnOnce(&mut Node)) {
+        let n = self.nodes.get_mut(&id).expect("known node");
+        let before = self.journal.0.is_some().then(|| n.clone());
+        f(n);
+        if let Some(before) = before {
+            self.rec(Rec::Node(id, Some(before)));
+        }
+    }
+
+    fn type_insert(&mut self, ty: TypeId, id: NodeId) {
+        let created = !self.by_type.contains_key(&ty);
+        let inserted = self.by_type.entry(ty).or_default().insert(id);
+        if created {
+            self.rec(Rec::TypeKey(ty));
+        }
+        if inserted {
+            self.rec(Rec::ByType(ty, id, true));
+        }
+    }
+
+    fn type_remove(&mut self, ty: TypeId, id: NodeId) {
+        if self.by_type.get_mut(&ty).is_some_and(|s| s.remove(&id)) {
+            self.rec(Rec::ByType(ty, id, false));
+        }
+    }
+
+    fn facet_index_insert(&mut self, kind: FacetKind, id: NodeId) {
+        let created = !self.by_facet.contains_key(&kind);
+        let inserted = self.by_facet.entry(kind).or_default().insert(id);
+        if created {
+            self.rec(Rec::FacetKey(kind));
+        }
+        if inserted {
+            self.rec(Rec::ByFacet(kind, id, true));
+        }
+    }
+
+    fn facet_index_remove(&mut self, kind: FacetKind, id: NodeId) {
+        if self.by_facet.get_mut(&kind).is_some_and(|s| s.remove(&id)) {
+            self.rec(Rec::ByFacet(kind, id, false));
+        }
+    }
+
+    fn children_entry(&mut self, id: NodeId) {
+        if !self.children.contains_key(&id) {
+            self.children.insert(id, Vec::new());
+            self.rec(Rec::ChildrenKey(id));
+        }
+    }
+
     // ---- crate-private mutators ---------------------------------------
 
     pub(crate) fn set_version(&mut self, v: Version) {
+        let before = self.version;
         self.version = v;
+        if before != v {
+            self.rec(Rec::Version(before));
+        }
     }
 
     pub(crate) fn advance_next_id(&mut self, past: NodeId) {
         if past.is_expanded() {
             // Derived ids are computed, never allocated.
         } else if past.is_session() {
-            self.next_session_id = self.next_session_id.max(past.raw() + 1);
+            let before = self.next_session_id;
+            self.next_session_id = before.max(past.raw() + 1);
+            if self.next_session_id != before {
+                self.rec(Rec::SessionId(before));
+            }
         } else if let Some((client, n)) = past.minted() {
+            let before = self.next_ids.get(&client).copied();
             advance(&mut self.next_ids, client, n);
+            if self.next_ids.get(&client).copied() != before {
+                self.rec(Rec::NextId(client, before));
+            }
         }
     }
 
@@ -468,18 +718,29 @@ impl Document {
         if past.is_expanded() {
             // Derived relations' ids are computed, never allocated.
         } else if past.is_session() {
-            self.next_session_rel = self.next_session_rel.max(past.raw() + 1);
+            let before = self.next_session_rel;
+            self.next_session_rel = before.max(past.raw() + 1);
+            if self.next_session_rel != before {
+                self.rec(Rec::SessionRel(before));
+            }
         } else if let Some((client, n)) = past.minted() {
+            let before = self.next_rels.get(&client).copied();
             advance(&mut self.next_rels, client, n);
+            if self.next_rels.get(&client).copied() != before {
+                self.rec(Rec::NextRel(client, before));
+            }
         }
     }
 
     pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Facet>) {
         let id = node.id;
         debug_assert!(node.is_live());
-        self.by_type.entry(node.ty).or_default().insert(id);
-        self.nodes.insert(id, node);
-        self.children.entry(id).or_default();
+        self.type_insert(node.ty, id);
+        let before = self.nodes.insert(id, node);
+        if self.recording() {
+            self.rec(Rec::Node(id, before));
+        }
+        self.children_entry(id);
         for c in comps {
             self.insert_facet(id, c);
         }
@@ -497,19 +758,18 @@ impl Document {
         comps: Vec<Facet>,
     ) {
         for kind in FacetKind::ALL {
-            if let Some(m) = self.facets.get_mut(kind) {
-                m.remove(&id);
+            if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
+                self.rec(Rec::Facet(*kind, id, Some(f)));
             }
         }
-        {
-            let n = self.nodes.get_mut(&id).expect("restore of known node");
+        self.write_node(id, |n| {
             n.ty = ty;
             n.parent = parent;
             n.order = order;
             n.tombstoned = None;
-        }
-        self.by_type.entry(ty).or_default().insert(id);
-        self.children.entry(id).or_default();
+        });
+        self.type_insert(ty, id);
+        self.children_entry(id);
         for c in comps {
             self.insert_facet(id, c);
         }
@@ -520,40 +780,42 @@ impl Document {
     /// each gets its own inverse op.
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
         self.unplace(id);
-        let n = self.nodes.get_mut(&id).expect("tombstone of known node");
-        n.tombstoned = Some(at);
-        let ty = n.ty;
-        if let Some(s) = self.by_type.get_mut(&ty) {
-            s.remove(&id);
-        }
-        for (kind, m) in &self.facets {
-            if m.contains_key(&id)
-                && let Some(s) = self.by_facet.get_mut(kind)
-            {
-                s.remove(&id);
-            }
+        self.write_node(id, |n| n.tombstoned = Some(at));
+        let ty = self.nodes[&id].ty;
+        self.type_remove(ty, id);
+        let kinds: Vec<FacetKind> = self.facets.iter().filter(|(_, m)| m.contains_key(&id)).map(|(k, _)| *k).collect();
+        for kind in kinds {
+            self.facet_index_remove(kind, id);
         }
     }
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         self.unplace(id);
-        let n = self.nodes.get_mut(&id).expect("known node");
-        n.parent = parent;
-        n.order = order;
+        self.write_node(id, |n| {
+            n.parent = parent;
+            n.order = order;
+        });
         self.place(id);
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
         self.unplace(id);
-        self.nodes.get_mut(&id).expect("known node").order = order;
+        self.write_node(id, |n| n.order = order);
         self.place(id);
     }
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let kind = c.kind();
-        self.facets.entry(kind).or_default().insert(id, c);
+        let created = !self.facets.contains_key(&kind);
+        let before = self.facets.entry(kind).or_default().insert(id, c);
+        if self.recording() {
+            if created {
+                self.rec(Rec::FacetTable(kind));
+            }
+            self.rec(Rec::Facet(kind, id, before));
+        }
         if self.is_live(id) {
-            self.by_facet.entry(kind).or_default().insert(id);
+            self.facet_index_insert(kind, id);
         }
     }
 
@@ -563,33 +825,61 @@ impl Document {
         kind: FacetKind,
     ) -> Option<Facet> {
         let c = self.facets.get_mut(&kind)?.remove(&id)?;
-        if let Some(s) = self.by_facet.get_mut(&kind) {
-            s.remove(&id);
+        if self.recording() {
+            self.rec(Rec::Facet(kind, id, Some(c.clone())));
         }
+        self.facet_index_remove(kind, id);
         Some(c)
     }
 
+    /// The facet to change in place. While a journal is open it is recorded
+    /// first, since what the caller writes through `&mut` cannot be seen.
     pub(crate) fn facet_mut(
         &mut self,
         id: NodeId,
         kind: FacetKind,
     ) -> Option<&mut Facet> {
+        if self.recording() {
+            let before = self.facets.get(&kind)?.get(&id)?.clone();
+            self.rec(Rec::Facet(kind, id, Some(before)));
+        }
         self.facets.get_mut(&kind)?.get_mut(&id)
     }
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
-        self.by_source.entry(r.from).or_default().insert(r.id);
-        self.by_target.entry(r.to).or_default().insert(r.id);
-        self.relations.insert(r.id, r);
+        let (id, from, to) = (r.id, r.from, r.to);
+        let created = !self.by_source.contains_key(&from);
+        let inserted = self.by_source.entry(from).or_default().insert(id);
+        if created {
+            self.rec(Rec::SourceKey(from));
+        }
+        if inserted {
+            self.rec(Rec::BySource(from, id, true));
+        }
+        let created = !self.by_target.contains_key(&to);
+        let inserted = self.by_target.entry(to).or_default().insert(id);
+        if created {
+            self.rec(Rec::TargetKey(to));
+        }
+        if inserted {
+            self.rec(Rec::ByTarget(to, id, true));
+        }
+        let before = self.relations.insert(id, r);
+        if self.recording() {
+            self.rec(Rec::Relation(id, before));
+        }
     }
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
         let r = self.relations.remove(&id)?;
-        if let Some(s) = self.by_source.get_mut(&r.from) {
-            s.remove(&id);
+        if self.recording() {
+            self.rec(Rec::Relation(id, Some(r.clone())));
         }
-        if let Some(s) = self.by_target.get_mut(&r.to) {
-            s.remove(&id);
+        if self.by_source.get_mut(&r.from).is_some_and(|s| s.remove(&id)) {
+            self.rec(Rec::BySource(r.from, id, false));
+        }
+        if self.by_target.get_mut(&r.to).is_some_and(|s| s.remove(&id)) {
+            self.rec(Rec::ByTarget(r.to, id, false));
         }
         Some(r)
     }
@@ -601,9 +891,12 @@ impl Document {
             let n = &self.nodes[&id];
             (n.parent, n.order.clone())
         };
+        if let Some(p) = parent {
+            self.children_entry(p);
+        }
         let nodes = &self.nodes;
         let container = match parent {
-            Some(p) => self.children.entry(p).or_default(),
+            Some(p) => self.children.get_mut(&p).expect("made above"),
             None => &mut self.roots,
         };
         let pos = container.partition_point(|&c| {
@@ -611,6 +904,7 @@ impl Document {
             (&cn.order, c) < (&key, id)
         });
         container.insert(pos, id);
+        self.rec(Rec::Placed(parent, pos));
     }
 
     fn unplace(&mut self, id: NodeId) {
@@ -624,6 +918,7 @@ impl Document {
         };
         if let Some(pos) = container.iter().position(|&c| c == id) {
             container.remove(pos);
+            self.rec(Rec::Unplaced(parent, pos, id));
         }
     }
 
@@ -788,5 +1083,246 @@ impl Document {
             }
         }
         Ok(())
+    }
+}
+
+/// The journal (reactive-engine handoff §4.3, task 2): whatever the mutators
+/// write while it is open, a rollback puts the document back exactly, its
+/// indexes and empty map keys included.
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+    use crate::facet::{Name, Transform2d};
+
+    /// A small deterministic generator (xorshift64*).
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+        fn pick<T: Copy>(&mut self, xs: &[T]) -> Option<T> {
+            (!xs.is_empty()).then(|| xs[self.below(xs.len())])
+        }
+    }
+
+    fn ty(n: &str) -> TypeId {
+        TypeId::lookup(n).unwrap()
+    }
+
+    fn name(text: &str) -> Facet {
+        let mut n = Name::default();
+        n.text = Slot::Const(Value::Str(text.into()));
+        n.wrap()
+    }
+
+    fn transform(x: f64) -> Facet {
+        let mut t = Transform2d::default();
+        t.x = Slot::Const(Value::Number(x));
+        t.wrap()
+    }
+
+    fn node(id: NodeId, parent: Option<NodeId>, order: OrderKey) -> Node {
+        Node { id, ty: ty("group"), parent, order, tombstoned: None }
+    }
+
+    fn live(doc: &Document) -> Vec<NodeId> {
+        doc.nodes.values().filter(|n| n.is_live()).map(|n| n.id).collect()
+    }
+
+    /// A live node with no live children: what a delete tombstones first.
+    fn leaves(doc: &Document) -> Vec<NodeId> {
+        live(doc).into_iter().filter(|&id| doc.children(id).is_empty()).collect()
+    }
+
+    fn new_id(doc: &Document) -> NodeId {
+        let id = doc.next_id();
+        id
+    }
+
+    /// One random mutator call, as the op applier makes them.
+    fn mutate(doc: &mut Document, rng: &mut Rng, at: Version) {
+        let live = live(doc);
+        match rng.below(12) {
+            0 | 1 => {
+                let id = new_id(doc);
+                doc.advance_next_id(id);
+                let parent = if rng.below(4) == 0 { None } else { rng.pick(&live) };
+                let order = OrderKey::between(None, None).unwrap_or_else(|_| OrderKey::first());
+                let comps = if rng.below(2) == 0 { vec![name("new")] } else { vec![] };
+                doc.insert_node(node(id, parent, order), comps);
+            }
+            2 => {
+                if let Some(id) = rng.pick(&leaves(doc)) {
+                    doc.tombstone(id, at);
+                }
+            }
+            3 => {
+                let dead: Vec<NodeId> = doc.nodes.values().filter(|n| !n.is_live()).map(|n| n.id).collect();
+                if let Some(id) = rng.pick(&dead) {
+                    let parent = rng.pick(&live).filter(|_| rng.below(3) != 0);
+                    doc.restore_node(id, ty("group"), parent, OrderKey::first(), vec![transform(rng.below(9) as f64)]);
+                }
+            }
+            4 => {
+                if let Some(id) = rng.pick(&live) {
+                    let candidates: Vec<NodeId> = live.iter().copied().filter(|&p| p != id && !doc.is_ancestor(id, p)).collect();
+                    let parent = if rng.below(3) == 0 { None } else { rng.pick(&candidates) };
+                    doc.set_parent(id, parent, OrderKey::first());
+                }
+            }
+            5 => {
+                if let Some(id) = rng.pick(&live) {
+                    let key = doc.nodes[&id].order.clone();
+                    doc.set_order(id, if rng.below(2) == 0 { OrderKey::after(&key) } else { OrderKey::first() });
+                }
+            }
+            6 => {
+                if let Some(id) = rng.pick(&doc.nodes.keys().copied().collect::<Vec<_>>()) {
+                    let f = if rng.below(2) == 0 { name(&format!("n{}", rng.below(5))) } else { transform(rng.below(5) as f64) };
+                    doc.insert_facet(id, f);
+                }
+            }
+            7 => {
+                if let Some(id) = rng.pick(&doc.nodes.keys().copied().collect::<Vec<_>>()) {
+                    let kind = if rng.below(2) == 0 { FacetKind::Name } else { FacetKind::Transform2d };
+                    doc.remove_facet(id, kind);
+                }
+            }
+            8 => {
+                if let Some(id) = rng.pick(&doc.nodes.keys().copied().collect::<Vec<_>>())
+                    && let Some(f) = doc.facet_mut(id, FacetKind::Name)
+                {
+                    f.set("text", Slot::Const(Value::Str(format!("set{}", rng.below(5))))).unwrap();
+                }
+            }
+            9 => {
+                if let (Some(from), Some(to)) = (rng.pick(&live), rng.pick(&live)) {
+                    let id = doc.next_relation_id();
+                    doc.advance_next_relation_id(id);
+                    doc.insert_relation(Relation { id, from, to, rel: RelKind::References, data: BTreeMap::new() });
+                }
+            }
+            10 => {
+                if let Some(id) = rng.pick(&doc.relations.keys().copied().collect::<Vec<_>>()) {
+                    doc.remove_relation(id);
+                }
+            }
+            _ => {
+                let session = NodeId::from_raw(crate::id::SESSION_BASE + rng.below(50) as u64);
+                doc.advance_next_id(session);
+                doc.advance_next_relation_id(RelationId::from_raw(crate::id::SESSION_BASE + rng.below(50) as u64));
+                doc.set_version(Version(doc.version().0 + 1));
+            }
+        }
+    }
+
+    #[test]
+    fn random_writes_roll_back_exactly() {
+        for seed in 1..=300u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut doc = Document::new();
+            for _ in 0..rng.below(25) {
+                mutate(&mut doc, &mut rng, Version(1));
+            }
+            doc.check_invariants().unwrap_or_else(|e| panic!("seed {seed}: base: {e}"));
+            let before = doc.clone();
+            doc.begin();
+            for _ in 0..1 + rng.below(40) {
+                mutate(&mut doc, &mut rng, Version(2));
+            }
+            doc.rollback();
+            assert!(doc == before, "seed {seed}: the rollback differs\nafter:  {doc:?}\nbefore: {before:?}");
+            doc.check_invariants().unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+            assert!(!doc.journal_open());
+        }
+    }
+
+    #[test]
+    fn committed_writes_stay() {
+        let mut doc = Document::new();
+        doc.begin();
+        let id = new_id(&doc);
+        doc.advance_next_id(id);
+        doc.insert_node(node(id, None, OrderKey::first()), vec![name("kept")]);
+        doc.commit();
+        assert!(doc.is_live(id));
+        assert!(!doc.journal_open());
+    }
+
+    /// A facet kind's first insertion makes its table, which a rollback takes
+    /// away; a table that exists empty stays.
+    #[test]
+    fn facet_tables_come_back_as_they_were() {
+        let mut doc = Document::new();
+        let id = new_id(&doc);
+        doc.advance_next_id(id);
+        doc.insert_node(node(id, None, OrderKey::first()), vec![]);
+        let before = doc.clone();
+        doc.begin();
+        doc.insert_facet(id, name("first"));
+        doc.rollback();
+        assert!(!doc.facets.contains_key(&FacetKind::Name));
+        assert!(doc == before);
+
+        doc.insert_facet(id, name("there"));
+        doc.remove_facet(id, FacetKind::Name);
+        assert!(doc.facets[&FacetKind::Name].is_empty());
+        let before = doc.clone();
+        doc.begin();
+        doc.insert_facet(id, name("again"));
+        doc.rollback();
+        assert!(doc.facets[&FacetKind::Name].is_empty(), "the empty table stays");
+        assert!(doc == before);
+    }
+
+    /// A tombstoned node loaded from a file has no child list; restoring it
+    /// makes one, and a rollback takes it away again.
+    #[test]
+    fn restoring_a_loaded_tombstone_rolls_back() {
+        let id = NodeId::authored(0, 1);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(id, Node { id, ty: ty("group"), parent: None, order: OrderKey::first(), tombstoned: Some(Version(1)) });
+        let mut facets = BTreeMap::new();
+        facets.insert(FacetKind::Name, BTreeMap::from([(id, name("old"))]));
+        let mut doc = Document::from_parts(nodes, facets, BTreeMap::new(), Counters::default(), Version(1));
+        assert!(!doc.children.contains_key(&id));
+        let before = doc.clone();
+        doc.begin();
+        doc.restore_node(id, ty("group"), None, OrderKey::first(), vec![transform(3.0)]);
+        assert!(doc.is_live(id) && doc.children.contains_key(&id));
+        doc.rollback();
+        assert!(doc == before);
+        doc.check_invariants().unwrap();
+    }
+
+    /// One node written several times: each record undoes one write, in
+    /// reverse, so the first value comes back.
+    #[test]
+    fn a_node_touched_several_times_rolls_back() {
+        let mut doc = Document::new();
+        let a = new_id(&doc);
+        doc.advance_next_id(a);
+        doc.insert_node(node(a, None, OrderKey::first()), vec![name("a")]);
+        let b = new_id(&doc);
+        doc.advance_next_id(b);
+        doc.insert_node(node(b, None, OrderKey::after(&OrderKey::first())), vec![]);
+        let before = doc.clone();
+        doc.begin();
+        for i in 0..3 {
+            doc.set_order(a, OrderKey::after(&doc.nodes[&b].order.clone()));
+            doc.set_order(b, OrderKey::after(&doc.nodes[&a].order.clone()));
+            doc.facet_mut(a, FacetKind::Name).unwrap().set("text", Slot::Const(Value::Str(format!("x{i}")))).unwrap();
+        }
+        doc.set_parent(b, Some(a), OrderKey::first());
+        doc.tombstone(b, Version(2));
+        doc.rollback();
+        assert!(doc == before);
+        doc.check_invariants().unwrap();
     }
 }

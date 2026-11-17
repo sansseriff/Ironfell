@@ -1138,7 +1138,7 @@ fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 
 /// two ends first and last): a wire ending on a wire splits it at a new
 /// junction. One transaction's worth.
 pub fn wire_between(store: &crate::StoreCore, sheet: NodeId, from: Terminal, to: Terminal, points: &[[f64; 2]]) -> Result<Vec<Op>, String> {
-    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
+    let mut scratch = store.scratch();
     let mut ops = Vec::new();
     let end = |t: Terminal, scratch: &mut crate::StoreCore, ops: &mut Vec<Op>| match t {
         Terminal::Pin(e) => Ok(e),
@@ -1195,7 +1195,7 @@ pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, S
         return Err(format!("expected <circuit>, got <{}>", circuit.name));
     }
     let sheet = sheet_named(store.tree(), circuit.need("sheet")?)?;
-    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
+    let mut scratch = store.scratch();
     let mut ops: Vec<Op> = Vec::new();
     let apply = |scratch: &mut crate::StoreCore, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
         scratch.apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: new.clone(), exact: false }).map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;

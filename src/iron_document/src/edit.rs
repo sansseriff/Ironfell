@@ -135,7 +135,7 @@ pub fn plan(store: &StoreCore, xml: &str, svg: Option<SvgImport>) -> Result<Plan
         return Err(parse(format!("text inside <edit> is not read ({:?}); write prose outside the <edit>", root.text.trim().chars().take(40).collect::<String>())));
     }
     let verbs: Vec<String> = root.children.iter().map(describe).collect();
-    let mut p = Planner { store, svg, verbs: &verbs, scratch: StoreCore::with_document(store.authored().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
+    let mut p = Planner { store, svg, verbs: &verbs, scratch: store.scratch(), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
     for (i, el) in root.children.iter().enumerate() {
         if !VERBS.contains(&el.name.as_str()) && TypeId::lookup(&el.name).is_none() {
             return Err(Failure::Errors(vec![p.error(i, "parse", format!("<{}> is not a verb or a node type; verbs: {}", el.name, VERBS.join(", ")))]));

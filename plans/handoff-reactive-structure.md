@@ -2,10 +2,11 @@
 
 **Date:** 2026-11-16 · **Branch:** `master` · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
-and its decisions settled. **Phases 0 and 1 are done** (2026-11-16; §2): baselines,
-the differential harness, the host reference, and the read contract (`Tree`,
-`take_changes()`) on the old engine. Nothing of the new engine is built. The current
-task is **phase 2a** (§4.3). This file is for whoever builds it: what to read, the order of
+and its decisions settled. **Phases 0, 1 and 2a are done** (2026-11-16; §2):
+baselines, the differential harness, the host reference, the read contract (`Tree`,
+`take_changes()`), and transactions applied in place with a document journal, all on
+the old engine. Nothing of the new engine is built. The current task is **phase 2b**,
+whose tasks are still to be written (§2). This file is for whoever builds it: what to read, the order of
 work, the phases as tasks, and the rules. Phases 0 to 2 are ready to build;
 phases 3, 4 and 5 each have design points to settle first (§4.4).
 
@@ -95,6 +96,7 @@ structural transaction re-expands every instance.
 
 | Measure | Result | Probe |
 |---|---|---|
+| A constant edit at 1,000 meters, **after phase 2a** | **1.57 ms** (1.54–1.59 over three runs; was 12.5): `run` 0.006 ms, journal included; `after_transaction` 0.97; `post_apply` and history 0.59; commit 0.000. A structural edit there is 123 ms p50 | `instance_cost.rs` `expanded_instances_cost`; temporary timers, removed |
 | Memory per placed meter beyond the first | **92.4 KiB**, 69 nodes, history cleared (100 to 700 meters) | `instance_cost.rs` `memory_per_meter` |
 | A constant edit at 1,000 meters | **12.5 ms**, of which the document clone 6.1 ms and dropping the old document 4.4 ms (84 %); `after_transaction` 1.3 ms (`rebuild_clusters` 0.81, `solve_network` 0.34, layout 0.04); `post_apply` 0.62 ms, all `solve::clusters`; `affected_by`, `attachment::validate`, `invalidate`, `resample`, `settle_repeats`, palette, contexts, selection and state each under 0.01 ms | temporary timers, removed |
 | Solver, 1 / 10 / 100 pendulums at rest | drag step **0.16 / 0.30 / 1.90 ms**; a transaction setting an unrelated constant **0.23 / 0.66 / 5.77 ms** | `solve_cost.rs` |
@@ -137,8 +139,8 @@ The spec's §17 has each phase's contents and exit. In order:
 |---|---|---|
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
-| 2a | Transactions in place on the old engine: the document journal | **Current.** Tasks in §4.3 |
-| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | |
+| 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
+| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks to be written here first, split further and put through a council review before building (the phase 0–2 readiness review, 2026-11-16) |
 | 2c | Copies leave the document: instances as references | |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
 | 4 | Observation: Dormant, Unloaded, parking, extents | |
@@ -201,6 +203,34 @@ The spec's §17 has each phase's contents and exit. In order:
   both scripts' `ready` times (1.85 to 2.54 s) overlap across the two builds. The
   regression's expected block had drifted before this phase (16 nodes in the first
   redraw, "model edit" labels on the model's links); SKILL.md is updated.
+
+**Phase 2a, as done (2026-11-16).** Exit: no document clone in `run`; a refused
+transaction leaves the document bit-identical.
+
+- `Engine { Old, InPlace }` (`lib.rs`): a store applies `InPlace` unless the
+  differential facade makes it the reference (`Old`, the clone). Scratch stores follow
+  their parent (`StoreCore::scratch`). `run` returns a `Rollback` token that
+  `commit` or `abort` consumes.
+- The journal (`document.rs`): each mutator records the write it made, and rollback
+  undoes the records in reverse on the raw fields. Under `differential`, `begin` keeps
+  a shadow copy and `rollback` asserts the document equals it.
+- `expansion_problems` are handed back by `run` (`None` when nothing expanded) and
+  stored only once it succeeds, in both strategies: one `NOT_ATOMIC` entry gone, its
+  test turned round. `attachment::validate` takes the points attached before.
+  `NOT_ATOMIC` gained the out-of-document state a failure leaves (`machines.shared`,
+  `machines.snap`) and a fuller solver entry. `INTENDED` is empty.
+- Checks:
+  - `iron_document`: 445 tests with and without `differential`, including the
+    journal tests in `document.rs` and `tests/rollback.rs` (13 refusals, one per
+    stage). Two planted faults in the journal were each caught.
+  - The 10,000 random scripts, 296 s, with 11,750 failing transactions.
+  - `iron_spatial` and `iron_svg`: 41 tests. The host reference: 2 tests.
+  - The wasm build. `smoke.txt` and `regression.txt` print the same normalised
+    output as at `bf7d13f`.
+- Measured: §1, a constant edit at 1,000 meters is 1.57 ms, down from 12.5.
+- Not built: `undo` and `redo` refusal cases in `tests/rollback.rs`. Those calls fail
+  only if something outside history changed the document, so they have no ordinary
+  route there. Their path through `run` is the one `replay` and `apply` test.
 
 At the end of each phase: its exit in the spec's §17 is met and shown by a command
 whose output is pasted into the commit or the roadmap row; this table and the

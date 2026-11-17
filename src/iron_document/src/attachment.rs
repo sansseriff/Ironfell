@@ -94,8 +94,11 @@ pub fn detach(store: &StoreCore, points: &[NodeId]) -> Result<Vec<Op>, String> {
 
 /// Keep metadata and bindings in agreement through every entry point. A
 /// reparent of attached geometry must first detach it, preserving placement.
-pub fn validate(previous: Tree<'_>, doc: Tree<'_>) -> Result<(), String> {
-    for point in previous.nodes_with(FacetKind::Attachment).filter(|point| !point.is_expanded() && doc.is_live(*point) && doc.get::<Attachment>(*point).is_none()) {
+/// Whether every attachment still holds after a transaction. `before` is the
+/// points attached before it (live, not derived, in id order): one whose
+/// attachment went must have been detached, its position made constant.
+pub fn validate(before: &[NodeId], doc: Tree<'_>) -> Result<(), String> {
+    for &point in before.iter().filter(|point| doc.is_live(**point) && doc.get::<Attachment>(**point).is_none()) {
         if ["transform2d.x", "transform2d.y"].into_iter().any(|field| doc.leaf(point, path(field)).and_then(Slot::constant).is_none()) {
             return Err(format!("{point}: detach before removing attachment metadata"));
         }

@@ -436,8 +436,8 @@ Validation, expansion, `post_apply`, `apply_session` and the graph rebuild after
 failure stay as they are.
 
 Written 2026-11-16 from the spec's §11 and §17 and the code at `bf7d13f`. Revised the
-same day after a council review (Claude Opus 5.5 and GPT-6.1 Sol, round 1: 6 and
-6/10). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
+same day after a council review (Claude Opus 5.5 and GPT-6.1 Sol; round 1: 6 and
+6/10, round 2: 8 and 9/10). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
 are private, `facet_mut` has one caller (`op.rs` `set`), `expand` and `settle_repeats`
 write through `apply_op`, and load and `set_scope` never run inside a transaction.
 
@@ -456,14 +456,16 @@ last past the call that caused it. Building that mechanism is not 2a's work.
   gains `InPlace` beside `Old`. `Old` stays as it is at phase 1's end, with the clone
   in `run`.
 - `StoreCore` holds which one it runs; only `run` and its callers (`apply_now`,
-  `undo`, `redo`, `replay`) look at it. Without the `differential` feature, `Store`
+  `undo`, `redo`, `replay`) look at it. The facade sets it with `set_engine`, which
+  `debug_assert!`s that no journal is open; `new`, `with_document` and `load` default
+  to `InPlace`. `engine()` is available without the feature. Without the `differential` feature, `Store`
   runs `InPlace`. With it, the facade builds the subject `InPlace` and the reference
   `Old`; `Store::pair`'s assertion that both are `Old` changes to match.
 - `Old` is the reference engine, not a compatibility path. It goes with the rest of
   the old engine at the swap.
 - `run` returns a rollback token in place of the working document:
-  `enum Rollback { Clone(Document), Journal }`, consumed exactly once by
-  `commit(token)` or `abort(token)`.
+  `enum Rollback { Clone(Document), Journal }`, `#[must_use]`, consumed exactly once
+  by `commit(token)` or `abort(token)`; its `Drop` `debug_assert!`s that it was.
   - **`Old`:** `run` swaps the working copy in and keeps the previous document in the
     token. `abort` puts it back; `commit` drops it.
   - **`InPlace`:** `abort` rolls the journal back and closes it; `commit` closes it.
@@ -498,6 +500,9 @@ hold tens of thousands of ids at 1,000 meters, and cloning them per transaction 
 bring back part of the cost this phase removes.
 
 - Derive `PartialEq` for `Document`, so tests compare every field, indexes included.
+  The journal and the shadow clone below live outside that comparison and outside
+  `Clone` (a wrapper whose `PartialEq` is always true and whose `Clone` is empty, or
+  fields kept beside the `Document` rather than in it).
 - **Under the `differential` feature, `begin` keeps a shadow clone** and `rollback`
   asserts `==` against it, and `check_invariants()`. Every failing call in the suite
   and in the 10,000 seeds then checks rollback at the level of the maps, which the
@@ -528,8 +533,10 @@ the old engine:
 - **The shared fix: `expansion_problems`.**
   - Today `run` stores them before its checks (`lib.rs` `run`), so a refused
     transaction keeps them (`NOT_ATOMIC`).
-  - In both strategies, `run` returns them and the caller stores them as soon as
-    `run` returns `Ok`, before `after_transaction`. `settle_repeats` there can replace
+  - In both strategies, `run` returns them as `Option<Vec<Problem>>`, `None` when
+    `expand` did not run (today it stores them only inside the `affected_by`
+    branch). The caller stores a `Some` as soon as `run` returns `Ok`, before
+    `after_transaction`; a `None` leaves the old problems in place. `settle_repeats` there can replace
     them, as it does now, so the last expansion still wins.
   - A refusal by `run` leaves them as they were, in both. A `post_apply` refusal
     behaves as today, under the solver's `NOT_ATOMIC` entry.
@@ -558,7 +565,8 @@ both strategies, so the facade cannot see them and 2a does not fix them. Each ge
 - `machines.snap`, extended by `undo` and `redo` before `run`;
 - the solver refusal's entry is broadened. `after_transaction` has already cleared
   the overlay, noted geometry, settled repeats (`repeats`, `presence`,
-  `repeat_inputs`, the published items) and stamped signals.
+  `repeat_inputs`, `truncated`, the published items, and the `expansion_problems`
+  from `run` and from `settle_repeats`) and stamped signals.
 
 **Task 5. The exit test: a failing transaction leaves the document bit-identical.**
 `tests/rollback.rs`, on a `StoreCore` running `InPlace` (not the facade). Each case
@@ -583,15 +591,19 @@ after it, so these cases need their own builders:
   - an exact request unmet after solver writes;
   - a refusal after `settle_repeats` re-expanded in `after_transaction` (change a
     repeat's count, then fail the solver);
-- the same for `undo` (including undoing a delete, the `restore_node` path), `redo`
-  and `replay`;
+- for `undo` (including undoing a delete, the `restore_node` path), `redo` and
+  `replay`, the stages before and inside `run` above. They never call `post_apply`
+  (the spec's §11.3), so the solver refusals are tested on `apply` only;
 - one node touched several times in a failing transaction.
 
 Also tests that `expansion_problems` follow the last expansion on a successful
-transaction that grows or shrinks a repeat.
+transaction that grows or shrinks a repeat, and that a transaction that does not
+expand leaves them as they were (build the depth nest of `tests/atomicity.rs`, then
+apply an unrelated `Set`).
 
 **Task 6. Measure.** Re-run §1's constant edit at 1,000 meters (`instance_cost.rs`,
-release) and the profile split, with the same temporary timers, removed afterwards.
+release, **without** the `differential` feature, whose shadow clone would put the
+clone back) and the profile split, with the same temporary timers, removed afterwards.
 Record the new number in §1 and the roadmap row. The expectation is that the clone
 and the drop (10.5 ms) go and the journal costs well under 1 ms. Report it if not.
 

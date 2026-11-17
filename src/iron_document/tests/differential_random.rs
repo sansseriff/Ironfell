@@ -55,6 +55,10 @@ const SITUATIONS: &[&str] = &[
     "preview",
     "publish",
     "clock moved",
+    "nested repeats changed together",
+    "tracked read",
+    "port_spec datatype changed",
+    "providers reordered",
 ];
 
 fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
@@ -203,7 +207,7 @@ fn build(seed: u64) -> World {
         // by a click, and a context read with a default.
         w.edit(
             r#"<definition in="$lib" id="$chip" name="chip">
-              <port_spec name="n" kind="value" dir="in" signal="2"/>
+              <port_spec id="$chip_n" name="n" kind="value" dir="in" signal="2" datatype="number"/>
               <template id="$chip_t" notation="free">
                 <let name="gap" provide="default" value="8"/>
                 <let id="$hot" name="hot" keep="session" value="false"/>
@@ -213,12 +217,20 @@ fn build(seed: u64) -> World {
               </template>
             </definition>
             <group in="$c" id="$plain" name="plain" y="400"/>
-            <group in="$c" id="$wide" name="wide" y="450"><let id="$gap" name="gap" provide="yes" value="40"/></group>
+            <group in="$c" id="$wide" name="wide" y="450"><let id="$gap" name="gap" provide="yes" value="40"/><let id="$gap2" name="gap" provide="yes" value="60"/></group>
             <let in="$c" id="$n" name="n" value="2"/>"#,
         )
         .unwrap();
         let chip = w.names["$chip"];
-        w.edit(&format!(r#"<group in="$plain" id="$cells" name="cells" repeat.count="{{= $n}}"><place def="{chip}" x="0" y="0"/></group><place def="{chip}" in="$wide" id="$chip_wide" x="0" y="20"/>"#)).unwrap();
+        w.edit(&format!(r#"<group in="$plain" id="$cells" name="cells" repeat.count="{{= $n}}"><place def="{chip}" x="0" y="0"/></group><place def="{chip}" in="$wide" id="$chip_wide" x="0" y="20" n="{{= $n + 1}}"/>"#)).unwrap();
+    }
+    if w.rng.chance(50) {
+        // A repeat in each item of another, both counted by one value.
+        w.edit(r#"<let in="$c" id="$k" name="k" value="2"/><group in="$c" id="$outer" name="outer" y="600" repeat.count="{= $k}"><group id="$inner" name="inner" repeat.count="{= $k}"><rect name="cell" x="{= $inner.repeat.index * 4}" w="3" h="3"/></group></group>"#).unwrap();
+    }
+    if w.rng.chance(50) {
+        // Two rects a tracked read can join into a cycle and part again.
+        w.edit(r#"<rect in="$c" id="$da" name="da" x="0" y="700" w="1" h="1"/><rect in="$c" id="$db" name="db" x="10" y="700" w="1" h="1"/>"#).unwrap();
     }
     if clip {
         w.edit(
@@ -257,7 +269,7 @@ fn connect(w: &mut World) {
 /// does, and notes the situations it reached.
 fn step(w: &mut World) {
     let doc_has = |w: &World, n: &str| w.id(n).is_some();
-    match w.rng.below(25) {
+    match w.rng.below(29) {
         // Value-driven structure.
         0 if doc_has(w, "$lo") => {
             let v = (w.rng.below(40) as f64) * if w.rng.chance(30) { 0.5 } else { 1.0 };
@@ -490,6 +502,49 @@ fn step(w: &mut World) {
         20 => {
             w.store.take_changes();
             w.store.take_emitted();
+        }
+        // Nested repeats whose counts change in one round.
+        25 if doc_has(w, "$k") => {
+            let v = 1.0 + w.rng.below(3) as f64;
+            let was = w.store.resolved(w.names["$k"], path("let.value"));
+            if w.set(w.names["$k"], "let.value", num(v)).is_ok() && was != Some(Value::Number(v)) {
+                w.reach("nested repeats changed together");
+            }
+        }
+        // A tracked read, which can close a cycle with the other rect and
+        // open it again.
+        26 if doc_has(w, "$da") => {
+            let (a, b) = (w.names["$da"], w.names["$db"]);
+            let ops = match w.rng.below(4) {
+                0 => vec![Op::Set { id: a, path: path("size.w"), slot: Slot::Bound(Expr::parse(&format!("deref({b}, 'size.w')")).unwrap()) }],
+                1 => vec![Op::Set { id: b, path: path("size.w"), slot: Slot::Bound(Expr::parse(&format!("{a}.size.w + 1")).unwrap()) }],
+                2 => vec![Op::Set { id: b, path: path("size.w"), slot: num(w.rng.below(9) as f64) }],
+                _ => vec![Op::Set { id: a, path: path("size.w"), slot: num(1.0) }],
+            };
+            if w.store.apply(tx("deref", ops)).is_ok() {
+                w.reach("tracked read");
+            }
+        }
+        // A definition's input changes type: instances' arguments are
+        // checked again.
+        27 if doc_has(w, "$chip_n") => {
+            let to = ["number", "bool", ""][w.rng.below(3)];
+            if w.set(w.names["$chip_n"], "port.datatype", Slot::Const(Value::Str(to.into()))).is_ok() {
+                w.reach("port_spec datatype changed");
+            }
+        }
+        // The other provider first: `@gap` answers from it.
+        28 if doc_has(w, "$gap2") && doc_has(w, "$gap") => {
+            let (gap, gap2) = (w.names["$gap"], w.names["$gap2"]);
+            let doc = w.store.tree();
+            let (Some(a), Some(b)) = (doc.live(gap), doc.live(gap2)) else { return };
+            if a.parent != b.parent {
+                return;
+            }
+            let (moved, before) = if a.order < b.order { (gap2, a.order.clone()) } else { (gap, b.order.clone()) };
+            if w.store.apply(tx("reorder", vec![Op::Reorder { id: moved, order: OrderKey::before(&before) }])).is_ok() {
+                w.reach("providers reordered");
+            }
         }
         // A constant on an authored node, the most common edit.
         _ => {

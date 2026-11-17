@@ -123,6 +123,11 @@ pub struct Reactive {
     derived: BTreeMap<Leaf, Expr>,
     /// Bound leaves whose expression reads context (`@name`).
     token_readers: BTreeSet<Leaf>,
+    /// Bindings that failed on a tracked-read cycle or did not settle.
+    /// Nothing tells them when that ends (the read that closed the cycle
+    /// was never made an edge), so `restructure` runs them again (the
+    /// spec's §6.3; the rebuild ran everything).
+    blocked: BTreeSet<Leaf>,
 }
 
 impl Reactive {
@@ -291,12 +296,10 @@ impl Reactive {
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);
             }
-            let mut tracks = false;
-            expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
             // A boundary's type check reads the instance's arguments
             // (`like(…)`) while it evaluates: those reads are tracked, so an
             // argument that changes checks it again.
-            tracks |= crate::types::declared(doc, leaf).is_some();
+            let tracks = tracks_reads(doc, leaf, expr);
             self.nodes.insert(
                 leaf,
                 BoundNode {
@@ -413,11 +416,35 @@ impl Reactive {
         // read again.
         for &n in nodes {
             let own: Vec<Leaf> = self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).collect();
+            // What a binding tracks follows its node (a datatype set makes
+            // its check read arguments), not only its expression.
+            for l in &own {
+                let tracks = self.nodes.get(l).is_some_and(|b| tracks_reads(doc, *l, &b.expr));
+                if let Some(b) = self.nodes.get_mut(l) {
+                    b.tracks = tracks;
+                }
+            }
             primed.extend(own);
             let readers: Vec<Leaf> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
             primed.extend(readers);
         }
+        primed.extend(self.blocked.iter().copied());
         primed.retain(|l| self.nodes.contains_key(l));
+        // A cell that tracks its reads starts again from none, as the
+        // rebuild starts every cell: what it reads is found afresh, and a
+        // read that now closes a cycle is caught (it would not be if the
+        // read were already known).
+        for l in &primed {
+            let old: Vec<Leaf> = self.nodes.get_mut(l).map(|n| std::mem::take(&mut n.tracked).into_iter().collect()).unwrap_or_default();
+            for t in old {
+                if let Some(ds) = self.dependents.get_mut(&t) {
+                    ds.remove(l);
+                    if ds.is_empty() {
+                        self.dependents.remove(&t);
+                    }
+                }
+            }
+        }
         if !self.raise(&made) {
             self.compute_heights();
         }
@@ -448,9 +475,7 @@ impl Reactive {
         for d in &deps {
             self.dependents.entry(*d).or_default().insert(leaf);
         }
-        let mut tracks = false;
-        expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
-        tracks |= crate::types::declared(doc, leaf).is_some();
+        let tracks = tracks_reads(doc, leaf, &expr);
         let height = 1 + deps.iter().filter_map(|d| self.nodes.get(d).map(|n| n.height)).max().unwrap_or(0);
         self.nodes.insert(leaf, BoundNode { expr: std::sync::Arc::new(expr), deps, ctx, tracks, tracked: BTreeSet::new(), height });
     }
@@ -467,6 +492,7 @@ impl Reactive {
             }
         }
         self.token_readers.remove(&leaf);
+        self.blocked.remove(&leaf);
     }
 
     /// Raise the readers of `made` until every edge goes upward (spec
@@ -653,6 +679,7 @@ impl Reactive {
             }
             if budget == 0 {
                 self.errors.insert(leaf, "did not settle: tracked reads keep changing each other".into());
+                self.blocked.insert(leaf);
                 continue;
             }
             budget -= 1;
@@ -710,6 +737,7 @@ impl Reactive {
                     let old = node.tracked.clone();
                     if let Some(own) = tracked.iter().find(|t| **t == leaf || self.reaches(**t, leaf)) {
                         result = Err(format!("reads {own} through deref, which depends on this leaf: a cycle"));
+                        self.blocked.insert(leaf);
                     } else {
                         for gone in old.difference(&tracked) {
                             if let Some(ds) = self.dependents.get_mut(gone) {
@@ -741,6 +769,9 @@ impl Reactive {
             // Readers run again when this value changes, and when it starts
             // or stops failing (a recovery to the same value still clears
             // their errors).
+            if result.is_ok() {
+                self.blocked.remove(&leaf);
+            }
             let changed = match result {
                 Ok(v) => {
                     let recovered = self.errors.remove(&leaf).is_some();
@@ -767,6 +798,15 @@ impl Reactive {
             }
         }
     }
+}
+
+/// Whether a binding's evaluation records what it reads: it holds a
+/// `deref`, or it is a boundary whose type check reads the instance's
+/// arguments (`types::declared`).
+fn tracks_reads(doc: Tree<'_>, leaf: Leaf, expr: &Expr) -> bool {
+    let mut tracks = false;
+    expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
+    tracks || crate::types::declared(doc, leaf).is_some()
 }
 
 fn read_with(

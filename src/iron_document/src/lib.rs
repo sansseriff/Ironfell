@@ -573,6 +573,7 @@ impl StoreCore {
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
             rescope |= match op {
+                Op::Reorder { id, .. } => provides(doc, *id),
                 Op::Create { ty, .. } => matches!(ty.name(), "let" | "token"),
                 Op::Delete { id } => doc.node(*id).is_some_and(|n| matches!(n.ty.name(), "let" | "token")),
                 Op::Set { path, .. } => names_context(path),
@@ -580,6 +581,18 @@ impl StoreCore {
                 Op::RemoveFacet { kind, .. } => matches!(kind, FacetKind::Let | FacetKind::Name),
                 _ => false,
             };
+        }
+        // A boundary check on an instance's argument reads its definition's
+        // port_specs (`types::declared`): an edit inside a definition
+        // reaches the arguments of every entity naming it.
+        let defs: BTreeSet<NodeId> = nodes.iter().filter(|n| !n.is_expanded()).filter_map(|&n| expand::definition_of(doc, n)).collect();
+        if !defs.is_empty() {
+            let entity = TypeId::lookup("entity").expect("registered");
+            let naming: Vec<NodeId> = doc
+                .nodes_of_type(entity)
+                .filter(|&e| doc.is_live(e) && doc.get::<facet::Instance>(e).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()).is_some_and(|d| defs.contains(&d)))
+                .collect();
+            nodes.extend(naming);
         }
         self.reactive.restructure(doc, &nodes, rescope, rederive);
     }
@@ -2728,7 +2741,8 @@ impl StoreCore {
             // A link can be a connection's end, which derives a signal.
             Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
             Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
-            _ => false,
+            // The first provider among siblings answers `@name`.
+            Op::Reorder { id, .. } => provides(Tree::over(&self.doc), *id),
         });
         if structural {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(tx.expanded.iter()));
@@ -3396,6 +3410,13 @@ fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<
 /// type (`datatype`). Each rebuilds the graph, as a structural op does.
 fn rederives(path: &LeafPath) -> bool {
     matches!((path.facet, path.field), (FacetKind::Port, "kind" | "dir" | "datatype") | (FacetKind::Anchor, "follow" | "port"))
+}
+
+/// Whether `id` may answer an `@name`: a let (it provides when its flag
+/// says so) or a colour token. Their order among siblings decides which
+/// answers (palette.rs `provided`).
+fn provides(doc: Tree<'_>, id: NodeId) -> bool {
+    doc.node(id).is_some_and(|n| matches!(n.ty.name(), "let" | "token"))
 }
 
 fn names_context(path: &LeafPath) -> bool {

@@ -108,8 +108,16 @@ impl Owners {
     /// want meets the budget or a nesting limit. An op that fails to apply
     /// is repaired by expanding its owner whole, in the same call.
     pub(crate) fn expand_items(&self, doc: &mut Document, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+        // The whole-document rules (`expand`): any owner's failed or cut
+        // expansion is tried again on every update, and past the budget
+        // everything expands in id order. Neither is this path's.
+        if self.problems.values().flatten().any(|p| matches!(p.kind, "expansion" | "budget")) {
+            return None;
+        }
+        // A repeat inside another one that changed is expanded with it.
+        let outer: BTreeSet<NodeId> = repeats.iter().copied().filter(|&r| !repeats.iter().any(|&o| o != r && r.item_of(o).is_some())).collect();
         let mut by_owner: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
-        for &r in repeats {
+        for &r in &outer {
             by_owner.entry(*r.path().first()?).or_default().insert(r);
         }
         if by_owner.keys().any(|o| self.problems.contains_key(o) || self.readers.get(o).is_some_and(|rs| !rs.is_empty())) {
@@ -119,7 +127,9 @@ impl Owners {
         if by_owner.keys().any(|o| !self.counts.contains_key(o)) {
             return None;
         }
-        let held: usize = self.counts.values().sum();
+        // What every owner holds, kept as each one's items change, so two
+        // owners never spend the same room.
+        let mut held: usize = self.counts.values().sum();
         let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
         let mut ops = Vec::new();
         let mut repair: BTreeSet<NodeId> = BTreeSet::new();
@@ -137,6 +147,7 @@ impl Owners {
             };
             ops.extend(done.ops);
             let whole = (self.counts[owner] + done.wanted).saturating_sub(done.held);
+            held = (held + whole).saturating_sub(self.counts[owner]);
             delta.counts.insert(*owner, whole);
             delta.defs.extend(done.defs.iter().map(|&d| (d, *owner)));
             delta.reads.extend(done.reads.iter().map(|&r| (r, *owner)));

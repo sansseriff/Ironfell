@@ -857,6 +857,33 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
     boundary check accepts with no change of expression; a touched node's own
     bindings now always run again (`tests/rederive.rs`).
 
+- **Council review of stages 3a and 3b (2026-11-17):** Claude Opus 5.5 6/10 (four
+  findings confirmed by running), GPT-6.1 Sol 6/10. Fixed, with tests in
+  `tests/restructure.rs` (each failed before its fix):
+  - a cell that failed on a tracked-read cycle, or did not settle, is run again on
+    every structural update (`Reactive::blocked`; the spec's §6.3), so a cycle that
+    ends no longer leaves it failed;
+  - a cell that tracks its reads starts again from none when `restructure` runs it,
+    as the rebuild does, so a read that now closes a cycle is caught (found by the
+    extended random scripts);
+  - a binding's `tracks` is recomputed when its node is touched (a datatype set to
+    `like(xs)` makes its check read the argument);
+  - an edit inside a definition re-runs the argument bindings of every entity naming
+    it (`types::declared` reads the definition's port_specs);
+  - **shared fix, both engines:** a reorder of a `let` or colour token is structural
+    and resolves `@name` again, since the first provider among siblings answers;
+  - the item-level path keeps a running total of what owners hold, so two owners
+    cannot spend the same room; it is not taken while any owner has a budget or
+    expansion problem; a repeat nested in another changed repeat is expanded with it,
+    not twice.
+
+  The random scripts now also generate tracked reads that make and break cycles, a
+  definition's port_spec changing type under a bound argument, sibling providers
+  reordered, and nested repeats changing in one round: four more situations, each
+  counted. Recorded, not fixed: heights only rise, so `New` can order a pass
+  differently from a rebuild and spend its "did not settle" budget differently
+  (`dirty × 4 + 1024` against `all × 4 + 1024`); no script has shown a difference.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

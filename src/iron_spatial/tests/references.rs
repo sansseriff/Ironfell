@@ -28,8 +28,8 @@ fn compare(text: &str) {
     let (mut fs, fc) = load(text, false);
     let (mut ss, sc) = load(text, true);
     let (mut fscene, mut sscene) = (Scene::default(), Scene::default());
-    fscene.update(&mut fs);
-    sscene.update(&mut ss);
+    update(&mut fscene, &mut fs);
+    update(&mut sscene, &mut ss);
     let round = |r: kurbo::Rect| [r.x0, r.y0, r.x1, r.y1].map(|v| (v * 100.0).round() / 100.0);
     let (fb, sb) = (fscene.content_bounds(fc).map(round), sscene.content_bounds(sc).map(round));
     println!("content flat {fb:?} shared {sb:?}");
@@ -59,3 +59,10 @@ fn a_large_file() {
     compare(&text);
 }
 
+
+/// What the host does each frame: take the store's changes and give the
+/// scene their geometry.
+fn update(scene: &mut iron_spatial::Scene, store: &mut iron_document::Store) {
+    let changes = store.take_changes().geometry;
+    scene.update(store, changes);
+}

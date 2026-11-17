@@ -205,7 +205,7 @@ fn roots_of(store: &Store, composition: NodeId, loose: NodeId) -> Vec<NodeId> {
 fn queries_match_the_reference_and_painter_order() {
     let mut f = fixture(3, 5);
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.len(), 1 + 3 + 15 + 1, "field, cells, rects, loose");
     let roots = roots_of(&f.store, f.composition, f.loose);
     check_flat(&scene, &f.store, &roots);
@@ -223,18 +223,18 @@ fn queries_match_the_reference_and_painter_order() {
 fn rotating_the_field_touches_one_entry_not_its_descendants() {
     let mut f = fixture(4, 25);
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let roots = roots_of(&f.store, f.composition, f.loose);
     // A preview, as a slider scrub would.
     f.store.preview(f.field, "transform2d.rot".parse().unwrap(), Value::Number(0.7));
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.updated, 1, "the field's own entry; its 104 descendants are untouched");
     check_conservative(&scene, &f.store, &roots);
     // And a transaction, which also re-solves nothing here.
     f.store.cancel_gesture();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     f.store.apply(tx("rotate", vec![set(f.field, "transform2d.rot", -1.1), set(f.field, "transform2d.x", 300.0)])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.updated, 1);
     check_conservative(&scene, &f.store, &roots);
     assert!(scene.damage.len() >= 2, "old and new painted bounds of the field: {:?}", scene.damage);
@@ -245,18 +245,18 @@ fn rotating_the_field_touches_one_entry_not_its_descendants() {
 fn a_leaf_edit_updates_its_entry_and_the_unions_above_it() {
     let mut f = fixture(2, 3);
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let roots = roots_of(&f.store, f.composition, f.loose);
     let before = scene.painted(f.field).unwrap();
     f.store.apply(tx("grow", vec![set(f.rects[5], "size.w", 500.0)])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     // The rect, its cell, and the field: one entry per level.
     assert_eq!(scene.updated, 3, "rect, cell, field");
     assert!(scene.painted(f.field).unwrap().x1 > before.x1, "the field's box grew with its content");
     check_flat(&scene, &f.store, &roots);
     // Moving the rect is a placement of the rect, still three entries.
     f.store.preview(f.rects[5], "transform2d.y".parse().unwrap(), Value::Number(900.0));
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.updated, 3);
     check_flat(&scene, &f.store, &roots);
 }
@@ -267,17 +267,17 @@ fn a_leaf_at_a_nan_position_is_left_out_until_its_position_is_a_number() {
     // the scene must not panic, and the leaf comes back once it is finite.
     let mut f = fixture(2, 3);
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let roots = roots_of(&f.store, f.composition, f.loose);
     let everything = Rect::new(-1e6, -1e6, 1e6, 1e6);
     assert!(scene.candidates(&roots, None, everything).contains(&f.rects[5]));
     f.store.apply(tx("nan", vec![set(f.rects[5], "transform2d.y", f64::NAN)])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert!(scene.bounds(f.rects[5]).is_none());
     assert!(scene.painted(f.field).is_some_and(|r| r.is_finite()), "the field's union leaves it out");
     assert!(!scene.candidates(&roots, None, everything).contains(&f.rects[5]));
     f.store.apply(tx("back", vec![set(f.rects[5], "transform2d.y", 40.0)])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert!(scene.bounds(f.rects[5]).is_some());
     assert!(scene.candidates(&roots, None, everything).contains(&f.rects[5]));
 }
@@ -286,14 +286,14 @@ fn a_leaf_at_a_nan_position_is_left_out_until_its_position_is_a_number() {
 fn structure_rebuilds_and_deletion_drops_entries() {
     let mut f = fixture(2, 3);
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let roots = roots_of(&f.store, f.composition, f.loose);
     f.store.apply(tx("delete", vec![Op::Delete { id: f.cells[0] }])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.len(), 1 + 1 + 3 + 1);
     check_flat(&scene, &f.store, &roots);
     f.store.undo(0).unwrap().unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.len(), 1 + 2 + 6 + 1);
     check_flat(&scene, &f.store, &roots);
     let all: BTreeSet<NodeId> = scene.candidates(&roots, None, Rect::new(-1000.0, -1000.0, 5000.0, 5000.0)).into_iter().collect();
@@ -317,14 +317,14 @@ fn an_embeds_region_follows_its_sources_content() {
         ))
         .unwrap();
     let mut scene = Scene::default();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     assert_eq!(scene.embeds(), &[embed]);
     let content = scene.content_bounds(f.composition).unwrap();
     let region = scene.painted(embed).unwrap();
     assert!((region.x0 - (1000.0 + content.x0 - 2.0)).abs() < 1e-9, "{region:?} vs content {content:?}");
     // Grow the source's content: the embed's box follows, without structure.
     f.store.apply(tx("grow", vec![set(f.rects[1], "size.h", 800.0)])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let region2 = scene.painted(embed).unwrap();
     assert!(region2.y1 > region.y1 + 700.0, "{region2:?}");
     assert_eq!(scene.candidates(&[embed], Some(Point::new(1000.0 + content.x0 + 5.0, content.y0 + 5.0)), Rect::ZERO), vec![embed]);
@@ -333,7 +333,7 @@ fn an_embeds_region_follows_its_sources_content() {
     frame.x1 = n(50.0);
     frame.y1 = n(50.0);
     f.store.apply(tx("frame", vec![Op::AddFacet { id: embed, facet: frame.wrap() }])).unwrap();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let framed = scene.painted(embed).unwrap();
     assert!((framed.width() - 54.0).abs() < 1e-9, "{framed:?}");
 }
@@ -345,7 +345,7 @@ fn ten_thousand_shapes_rotate_as_one_entry() {
     let mut f = fixture(100, 100);
     let mut scene = Scene::default();
     let t = std::time::Instant::now();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let built = t.elapsed();
     assert_eq!(scene.len(), 1 + 100 + 10_000 + 1);
     let roots = roots_of(&f.store, f.composition, f.loose);
@@ -353,7 +353,7 @@ fn ten_thousand_shapes_rotate_as_one_entry() {
     f.store.preview(f.field, "transform2d.rot".parse().unwrap(), Value::Number(0.3));
     let previewed = t.elapsed();
     let t = std::time::Instant::now();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let rotated = t.elapsed();
     assert_eq!(scene.updated, 1);
     let t = std::time::Instant::now();
@@ -362,10 +362,17 @@ fn ten_thousand_shapes_rotate_as_one_entry() {
     assert!(!visible.is_empty());
     f.store.preview(f.rects[5050], "transform2d.x".parse().unwrap(), Value::Number(1.0));
     let t = std::time::Instant::now();
-    scene.update(&mut f.store);
+    update(&mut scene, &mut f.store);
     let dragged = t.elapsed();
     // The rect alone when the cell's union still covers it; the cell and
     // the field only when their unions grew.
     assert!((1..=3).contains(&scene.updated), "{}", scene.updated);
     eprintln!("10k scene: build {built:?}, preview {previewed:?}, rotate update {rotated:?}, visible query {queried:?} ({} hits), drag update {dragged:?}", visible.len());
+}
+
+/// What the host does each frame: take the store's changes and give the
+/// scene their geometry.
+fn update(scene: &mut iron_spatial::Scene, store: &mut iron_document::Store) {
+    let changes = store.take_changes().geometry;
+    scene.update(store, changes);
 }

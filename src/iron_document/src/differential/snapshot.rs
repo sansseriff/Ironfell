@@ -79,22 +79,16 @@ struct Other {
     session_state: BTreeMap<Leaf, Value>,
 }
 
-/// What each drain would return now, and what is buffered for the host.
+/// What `take_changes` would return now, and what is buffered for the
+/// host.
 #[derive(PartialEq, Debug)]
 struct Pending {
-    /// `take_derived_ops`.
-    derived_ops: Vec<Op>,
-    /// `drain_changes` (and `has_changes`).
-    changes: BTreeMap<Leaf, Value>,
-    /// `take_geometry_changes`: the revisions and their pending sets, and
-    /// the leaves the reactive graph touched since the last take.
+    /// `take_changes`, unless it is taken (and `changes_pending`).
+    changes: Changes,
+    /// The revision counters `take_changes` bumps (`revisions`).
     revisions: geom::Revisions,
-    touched: std::collections::BTreeSet<Leaf>,
     /// `take_emitted`.
     emitted: Vec<(NodeId, String)>,
-    /// The document's version and the session version: the revisions a
-    /// host reports (`ui::publish`).
-    version: Version,
 }
 
 /// Public `&self` methods of `StoreCore` the snapshot does not call, and
@@ -105,7 +99,7 @@ pub const NOT_COMPARED: &[(&str, &str)] = &[
     ("save", "compared as `saved`"),
     ("resolved", "compared for every leaf as `values`"),
     ("signals, signal_errors, problems, view", "compared as their own fields"),
-    ("has_changes, has_derived_ops", "functions of `pending.changes` and `pending.derived_ops`"),
+    ("changes_pending", "a function of `pending.changes`"),
     ("revisions", "compared as `pending.revisions`"),
     ("reactive", "the graph's internals (heights, evaluation counts) are not compared (§16.1); its values, errors, signals and pending changes are"),
     ("expansion_problems", "compared in `other`"),
@@ -195,14 +189,7 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         hover_listeners: live.iter().map(|&n| (n, s.hover_listeners(n))).filter(|(_, r)| !r.is_empty()).collect(),
         session_state: s.session_state.clone(),
     };
-    let pending = Pending {
-        derived_ops: s.derived_ops.clone(),
-        changes: s.reactive().peek_changes().clone(),
-        revisions: s.revisions().clone(),
-        touched: s.reactive().peek_touched().clone(),
-        emitted: s.emitted.clone(),
-        version: doc.version(),
-    };
+    let pending = Pending { changes: s.peek_changes(), revisions: s.revisions().clone(), emitted: s.emitted.clone() };
     Snapshot {
         saved: s.save(),
         nodes,
@@ -263,7 +250,7 @@ impl Snapshot {
             session_version, selection, scope, client, horizon, session_state,
         ]);
         let (pa, pb) = (&self.pending, &r.pending);
-        let p = fields!("pending", pa, pb, [derived_ops, changes, revisions, touched, emitted, version]);
+        let p = fields!("pending", pa, pb, [changes, revisions, emitted]);
         text("saved", &self.saved, &r.saved)
             .or_else(|| list("nodes", &self.nodes, &r.nodes))
             .or_else(|| list("relations", &self.relations, &r.relations))

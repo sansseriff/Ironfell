@@ -78,7 +78,7 @@ impl<T, E> Outcome for Option<Result<T, E>> {
 macro_rules! never_fails {
     ($($t:ty),* $(,)?) => { $(impl Outcome for $t {})* };
 }
-never_fails!((), bool, DragHandle, SolveReport, ProducerId, GestureId, geom::GeometryChanges, Vec<ResolvedChange>, Vec<NodeId>, Vec<(NodeId, String)>, Vec<Op>, Vec<machine::Running>, Vec<query::Request>);
+never_fails!((), bool, DragHandle, SolveReport, ProducerId, GestureId, Changes, Vec<NodeId>, Vec<(NodeId, String)>, Vec<machine::Running>, Vec<query::Request>);
 
 fn atomicity_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -215,16 +215,8 @@ impl Store {
         self.call("freeze", |s| s.freeze(producer, label.clone(), actor, ts))
     }
 
-    pub fn take_geometry_changes(&mut self) -> geom::GeometryChanges {
-        self.call("take_geometry_changes", |s| s.take_geometry_changes())
-    }
-
     pub fn refresh_text(&mut self) -> bool {
         self.call("refresh_text", |s| s.refresh_text())
-    }
-
-    pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
-        self.call("drain_changes", |s| s.drain_changes())
     }
 
     pub fn preview(&mut self, id: NodeId, path: LeafPath, value: Value) {
@@ -294,12 +286,12 @@ impl Store {
         self.call("pointer_action", |s| s.pointer_action(node, event, payload))
     }
 
-    pub fn take_emitted(&mut self) -> Vec<(NodeId, String)> {
-        self.call("take_emitted", |s| s.take_emitted())
+    pub fn take_changes(&mut self) -> Changes {
+        self.call("take_changes", |s| s.take_changes())
     }
 
-    pub fn take_derived_ops(&mut self) -> Vec<Op> {
-        self.call("take_derived_ops", |s| s.take_derived_ops())
+    pub fn take_emitted(&mut self) -> Vec<(NodeId, String)> {
+        self.call("take_emitted", |s| s.take_emitted())
     }
 
     pub fn resolve_physics(&mut self) {

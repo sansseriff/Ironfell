@@ -107,13 +107,13 @@ fn a_transaction_refused_by_the_solver_leaves_a_change_pending() {
     ops.push(link(rels[1], n["d"], n["p"], "a"));
     ops.push(link(rels[2], n["d"], n["q"], "b"));
     store.apply(tx("pair", ops)).unwrap_or_else(|e| panic!("{e:?}"));
-    store.drain_changes();
-    assert!(!store.has_changes());
+    store.take_changes();
+    assert!(!store.changes_pending());
     let errs = store
         .apply(tx("loop", vec![Op::Set { id: n["d"], path: "constraint.value".parse().unwrap(), slot: Slot::Bound(Expr::parse(&format!("{}.transform2d.x + 50", n["q"])).unwrap()) }]))
         .unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::Cycle, "{errs:?}");
-    assert!(store.has_changes(), "the refused transaction left a change to drain");
+    assert!(store.changes_pending(), "the refused transaction left a change to take");
 }
 
 /// An action that emits an event and then fails on a later write has

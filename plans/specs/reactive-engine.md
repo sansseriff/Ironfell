@@ -1198,19 +1198,26 @@ fn take_changes(&mut self) -> Changes;
 struct Changes {
     values: BTreeSet<Leaf>,              // leaves whose resolved value moved
     created: Vec<NodeId>,                // authored and derived, parents first
-    removed: Vec<(NodeId, NodeId)>,      // (node, the parent it had), deepest first
-    moved: Vec<(NodeId, NodeId)>,        // (node, old parent): reparented or reordered
+    removed: Vec<(NodeId, Option<NodeId>)>, // (node, the parent it had; None: a root), deepest first
+    moved: Vec<(NodeId, Option<NodeId>)>,   // (node, old parent): reparented or reordered
     relations: Vec<(NodeId, NodeId)>,    // ends of relations linked or unlinked
     slots: BTreeSet<Leaf>,               // a slot or facet changed with no change of value:
                                          // a binding became an equal constant, a facet was added
     marks: BTreeSet<Leaf>,               // reported as changed on request (a table's tracks, a
                                          // text whose font arrived: `Reactive::mark` today)
-    structure: BTreeSet<NodeId>,         // owners and authored parents whose children changed
+    structure: BTreeSet<Option<NodeId>>, // owners and authored parents whose children changed
+                                         // (None: the roots)
     loaded: Vec<NodeId>,
     unloaded: Vec<NodeId>,
+    geometry: GeometryChanges,           // what moved spatially, classified for the spatial
+                                         // index: structure, placements, local shapes
     revisions: Revisions,                // authored, session and resolved, as `ui::publish` reads them
 }
 ```
+
+Built in phase 1 as `src/iron_document/src/changes.rs` (2026-11-16). `geometry` was added
+there: it carries `take_geometry_changes`'s classification, which the spatial scene needs
+and the other fields do not give it.
 
 It replaces `take_derived_ops`, `drain_changes`, `has_changes`, `take_touched` and
 `take_geometry_changes`, and the chaining of `tx.expanded` and `tx.inverse` into
@@ -1223,6 +1230,26 @@ relation's ends, `mod.rs:520`).
   `Set` ops whatever the value (`mod.rs:646`): editability and render analysis change
   when a binding does, even to an equal value.
 - Phase 1 lists, for each field, every consumer it feeds, before the old drains go.
+  The table below is that list as of phase 1's end (2026-11-16). The host takes
+  `Changes` once per pull and keeps what each consumer has not used yet in
+  `document_bridge::ChangeInbox`: `geometry` waits for the spatial scene, the rest
+  for the reconciler. The two run at different points in a frame, which is why
+  `graph.rs` kept two pending sets before; the inbox keeps them apart now.
+
+  | Field | Consumers in phase 1 |
+  |---|---|
+  | `values` | Reconciler (`sync_document`, via `Changes::nodes`): `materialize::reconcile` rewrites the node, `GeometryRevision::touch`, `UiChanges` (UI `StateChanged` nodes), the 2D layer's changed set (`render.rs` redraw and damage) |
+  | `created`, `removed`, `moved` | Reconciler, as for `values`; and `Changes::structural`, which sets `structure` for `paint_order`, `UiChanges::structure` and `render.rs`'s re-cut of chunk homes. `removed` names derived descendants, so `materialize::reconcile` drops their drawables |
+  | `relations` | Reconciler: both ends are re-examined (link figures, hover lighting) |
+  | `slots` | Reconciler: editability and render analysis follow a `Set` or a facet even when the value is equal |
+  | `marks` | Reconciler: a table's tracks, a text whose font arrived |
+  | `structure` | Read only as a whole (`structural`) in phase 1; per-parent use waits for `paint_order` per subtree (§12.3) |
+  | `loaded`, `unloaded` | None yet: empty until owners unload (phase 4) |
+  | `geometry` | Spatial scene (`spatial::prepare_spatial` → `iron_spatial::Scene::update`); `select.rs`'s overlay staleness check (`changes_pending` or the scene's `unreconciled` flag) |
+  | `revisions` | None in the host yet: `ui::publish` still reads the store's versions directly. The differential facade compares it |
+
+  `Store::changes_pending` answers whether `take_changes` would return anything, without
+  taking it (`select.rs` polls it). Tests read `take_changes` directly.
 - `removed` lists derived ids as well, since a disposed owner's nodes can no longer be
   enumerated afterwards; `materialize::reconcile` needs them to drop drawables.
 - `structure` is per parent, so paint order and the spatial index can update one

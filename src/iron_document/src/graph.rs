@@ -26,14 +26,6 @@ use crate::expr::{Expr, Leaf};
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A leaf whose resolved value changed. Consumers (the reconciler) rewrite
-/// whatever they derived from it.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ResolvedChange {
-    pub leaf: Leaf,
-    pub value: Value,
-}
-
 /// Who publishes a runtime signal. Three producers are built in; a host
 /// registers more through `Store::register_producer`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -108,11 +100,14 @@ pub struct Reactive {
     /// Leaves a producer asked for while another held them, by producer.
     signal_errors: BTreeMap<Leaf, String>,
     changes: BTreeMap<Leaf, Value>,
-    /// Every leaf whose resolved value moved since `take_touched`. Unlike
+    /// Every leaf whose resolved value moved since `take_moved`. Unlike
     /// `changes`, which the reconciler drains, this feeds the store's
     /// geometry revisions (`geom::Revisions`), so the two consumers never
     /// starve each other.
     touched: BTreeSet<Leaf>,
+    /// Leaves reported as changed on request with no change of value
+    /// (`mark`): `Changes::marks`.
+    marked: BTreeSet<Leaf>,
     /// Bindings that failed, by leaf, with why. A leaf in error keeps its
     /// last good value for whoever draws it (`read`), but a binding that
     /// reads it fails too, "depends on …, which failed" (reactivity.md
@@ -374,14 +369,28 @@ impl Reactive {
         self.invalidate(doc, leaves);
     }
 
-    pub fn has_changes(&self) -> bool {
-        !self.changes.is_empty()
+    /// Whether a value change or a mark is waiting to be taken.
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.changes.is_empty() || !self.marked.is_empty()
     }
 
     /// Report a leaf as changed with no change to its value: something it
     /// derives (a text's glyphs, when a font arrives) moved.
-    pub(crate) fn mark(&mut self, leaf: Leaf, value: Value) {
-        self.note(leaf, value);
+    pub(crate) fn mark(&mut self, leaf: Leaf, _value: Value) {
+        self.touched.insert(leaf);
+        self.marked.insert(leaf);
+    }
+
+    /// What `take_changed`, `take_marks` and `take_moved` would return,
+    /// without taking them.
+    #[cfg_attr(not(feature = "differential"), allow(dead_code))]
+    pub(crate) fn peek(&self) -> (BTreeSet<Leaf>, BTreeSet<Leaf>, &BTreeSet<Leaf>) {
+        (self.changes.keys().copied().collect(), self.marked.clone(), &self.touched)
+    }
+
+    /// The leaves marked since the last take.
+    pub(crate) fn take_marks(&mut self) -> BTreeSet<Leaf> {
+        std::mem::take(&mut self.marked)
     }
 
     /// The one place a resolved change is recorded.
@@ -390,28 +399,15 @@ impl Reactive {
         self.changes.insert(leaf, value);
     }
 
-    /// What `drain_changes` would return, without draining it.
-    #[cfg_attr(not(feature = "differential"), allow(dead_code))]
-    pub(crate) fn peek_changes(&self) -> &BTreeMap<Leaf, Value> {
-        &self.changes
-    }
-
-    /// What `take_touched` would return, without taking it.
-    #[cfg_attr(not(feature = "differential"), allow(dead_code))]
-    pub(crate) fn peek_touched(&self) -> &BTreeSet<Leaf> {
-        &self.touched
-    }
 
     /// Leaves whose resolved value moved since the last take.
-    pub fn take_touched(&mut self) -> BTreeSet<Leaf> {
+    pub(crate) fn take_moved(&mut self) -> BTreeSet<Leaf> {
         std::mem::take(&mut self.touched)
     }
 
-    pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
-        std::mem::take(&mut self.changes)
-            .into_iter()
-            .map(|(leaf, value)| ResolvedChange { leaf, value })
-            .collect()
+    /// The leaves whose resolved value moved since the last take.
+    pub(crate) fn take_changed(&mut self) -> BTreeSet<Leaf> {
+        std::mem::take(&mut self.changes).into_keys().collect()
     }
 
     fn compute_heights(&mut self) {

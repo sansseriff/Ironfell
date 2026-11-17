@@ -21,6 +21,7 @@ pub mod analysis;
 pub mod composition;
 pub mod compose;
 pub mod constraint;
+pub mod changes;
 pub mod commands;
 pub mod contexts;
 pub mod contour;
@@ -81,7 +82,8 @@ pub use document::{Document, Node, RelKind, Relation};
 pub use expr::{Expr, Leaf};
 pub use geom::{Affine2, Affine3};
 pub use gesture::{GestureId, GestureStatus};
-pub use graph::{ProducerId, ResolvedChange, Signal};
+pub use changes::Changes;
+pub use graph::{ProducerId, Signal};
 pub use handle::Handle;
 pub use id::{NodeId, RelationId, ScopeId, Version};
 pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
@@ -276,8 +278,11 @@ pub struct StoreCore {
     truncated: Vec<expand::Problem>,
     /// Derived structure made outside a transaction (a repeat that grew
     /// during a drag, or when a producer published), for the host to
-    /// materialise (`take_derived_ops`). Never history.
-    derived_ops: Vec<Op>,
+    /// materialise. Never history.
+    /// What moved since the last `take_changes`, from the ops applied
+    /// (reactive-engine.md §12.2); the values, marks and geometry are added
+    /// when it is taken.
+    pending: Changes,
     settling: bool,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
@@ -394,7 +399,7 @@ impl StoreCore {
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
-            derived_ops: Vec::new(),
+            pending: Changes::default(),
             settling: false,
             gesture: None,
             ended: None,
@@ -411,7 +416,7 @@ impl StoreCore {
         store.reactive.rebuild(Tree::over(&store.doc));
         store.resample();
         store.settle_repeats();
-        store.derived_ops.clear();
+        store.pending = Changes::default();
         store.rebuild_clusters();
         store.resolve_physics();
         store
@@ -855,8 +860,36 @@ impl StoreCore {
         self.reactive.read(Tree::over(&self.doc), Leaf { node: id, path })
     }
 
-    pub fn has_changes(&self) -> bool {
-        self.reactive.has_changes()
+    /// Whether `take_changes` would return anything: for a consumer that
+    /// polls without taking (a cache of overlay geometry, the sync's early
+    /// out).
+    pub fn changes_pending(&self) -> bool {
+        !self.pending.is_empty() || self.reactive.has_pending() || self.geometry.has_pending()
+    }
+
+    /// What moved since the last take (reactive-engine.md §12.2): one set
+    /// for every consumer, taken once. A host with several consumers keeps
+    /// what each has not yet used, so none takes what another needs.
+    pub fn take_changes(&mut self) -> Changes {
+        let mut c = std::mem::take(&mut self.pending);
+        c.values = self.reactive.take_changed();
+        c.marks = self.reactive.take_marks();
+        c.geometry = self.geometry.take(Tree::over(&self.doc), self.reactive.take_moved());
+        c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
+        c
+    }
+
+    /// What `take_changes` would return now, without taking it: the
+    /// differential snapshot's view of what is pending.
+    #[cfg(feature = "differential")]
+    pub(crate) fn peek_changes(&self) -> Changes {
+        let mut c = self.pending.clone();
+        let (values, marks, touched) = self.reactive.peek();
+        c.values = values;
+        c.marks = marks;
+        c.geometry = self.geometry.classify(Tree::over(&self.doc), touched);
+        c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
+        c
     }
 
     /// The node's local space to document 2D space, through every live
@@ -896,18 +929,9 @@ impl StoreCore {
     }
 
     /// Per-node placement and local revisions and the structure revision,
-    /// as of the last `take_geometry_changes`.
+    /// as of the last `take_changes`.
     pub fn revisions(&self) -> &geom::Revisions {
         &self.geometry
-    }
-
-    /// Everything that moved spatially since the last take, classified
-    /// (`geom::GeometryChanges`), with the revisions bumped to match. One
-    /// consumer owns this: the spatial scene. It is independent of
-    /// `drain_changes`, which the reconciler owns.
-    pub fn take_geometry_changes(&mut self) -> geom::GeometryChanges {
-        let touched = self.reactive.take_touched();
-        self.geometry.take(Tree::over(&self.doc), touched)
     }
 
     /// Re-measure every text node if the fonts changed since the last
@@ -931,11 +955,6 @@ impl StoreCore {
         // New faces measure differently: layouts holding text reflow.
         self.resolve_layout();
         !ids.is_empty()
-    }
-
-    /// Leaves whose resolved value changed since the last drain.
-    pub fn drain_changes(&mut self) -> Vec<ResolvedChange> {
-        self.reactive.drain_changes()
     }
 
     /// Preview a leaf's value for the duration of a gesture. Bindings that
@@ -1281,6 +1300,7 @@ impl StoreCore {
         // The spatial scene learns of session nodes as of any other: a
         // session composition built after the last transaction (the Latency
         // view's) is otherwise never indexed, so presses miss it.
+        self.pending.note(Tree::over(&self.doc), ops.iter(), &undo);
         self.geometry.note_ops(ops.iter());
         if structural {
             self.repeat_inputs = None;
@@ -1783,14 +1803,6 @@ impl StoreCore {
         out
     }
 
-    pub fn has_derived_ops(&self) -> bool {
-        !self.derived_ops.is_empty()
-    }
-
-    pub fn take_derived_ops(&mut self) -> Vec<Op> {
-        std::mem::take(&mut self.derived_ops)
-    }
-
     /// Everything wrong that a node can show (reactivity.md §4.3): what
     /// expansion could not derive or derived past a limit, repeats cut at
     /// their `max`, and bindings that failed.
@@ -1829,7 +1841,7 @@ impl StoreCore {
         // Structure first: what follows places and styles the new items.
         self.publish_selection();
         let derived = self.settle_repeats();
-        self.derived_ops.extend(derived);
+        self.pending.note(Tree::over(&self.doc), derived.iter(), &[]);
         self.publish_state();
         self.solve_network();
         self.resolve_theme();
@@ -2457,7 +2469,7 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let (mut tx, doc) = self.run(input)?;
+        let (mut tx, doc, full_inverse) = self.run(input)?;
         let old = std::mem::replace(&mut self.doc, doc);
         self.after_transaction(&mut tx);
         let solver = match self.post_apply(&mut tx, exact) {
@@ -2473,6 +2485,7 @@ impl StoreCore {
             }
         };
         tx.solver = solver.clone();
+        self.pending.note(Tree::over(&self.doc), tx.ops.iter().chain(&tx.derived_ops).chain(&tx.expanded), &full_inverse);
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -2504,9 +2517,10 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let (mut applied, doc) = self.run(input)?;
+        let (mut applied, doc, full_inverse) = self.run(input)?;
         self.doc = doc;
         self.after_transaction(&mut applied);
+        self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -2533,9 +2547,10 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((mut applied, doc)) => {
+            Ok((mut applied, doc, full_inverse)) => {
                 self.doc = doc;
                 self.after_transaction(&mut applied);
+                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -2568,9 +2583,10 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok((mut applied, doc)) => {
+            Ok((mut applied, doc, full_inverse)) => {
                 self.doc = doc;
                 self.after_transaction(&mut applied);
+                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -2672,7 +2688,9 @@ impl StoreCore {
     /// coalesced per gesture, so this is one clone per commit, not per frame.
     /// If it ever shows up in a profile, the alternative is applying with
     /// rollback through the inverses.
-    fn run(&mut self, input: TransactionInput) -> Result<(Transaction, Document), Vec<ApplyError>> {
+    /// Also returns the whole inverse, derived nodes included, for
+    /// `Changes` (a deleted instance's derived nodes are named only there).
+    fn run(&mut self, input: TransactionInput) -> Result<(Transaction, Document, Vec<Op>), Vec<ApplyError>> {
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
         let mut input = input;
@@ -2749,6 +2767,7 @@ impl StoreCore {
         // Derived nodes and relations come back by re-expansion, never by
         // undo: a deleted instance's expanded children are not restored by
         // its inverse (the guard would refuse them anyway).
+        let full_inverse = inverse.clone();
         inverse.retain(|op| match op {
             Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => !id.is_expanded(),
             Op::Link { rel } => !rel.id.is_expanded(),
@@ -2768,6 +2787,7 @@ impl StoreCore {
                 solver: None,
             },
             work,
+            full_inverse,
         ))
     }
 

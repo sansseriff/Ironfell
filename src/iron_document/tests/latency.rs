@@ -23,8 +23,8 @@ fn the_square_drags_as_session_state_never_in_history() {
     assert!(!h.is_locked(), "the square is draggable: {h:?}");
     store.drag_to(&h, [before + 20.0 + 100.0, 220.0]);
     assert_eq!(x(&store), before + 100.0, "previewed");
-    let changes = store.drain_changes();
-    assert!(changes.iter().any(|c| c.leaf.node == target), "the preview is reported for redraw");
+    let changes = store.take_changes();
+    assert!(changes.values.iter().any(|l| l.node == target), "the preview is reported for redraw");
     assert!(store.commit_gesture("move", Actor::Human, 0).is_none(), "no transaction");
     assert_eq!(x(&store), before + 100.0, "kept after release");
     assert!(store.history().log().all(|tx| tx.version <= version), "nothing in history");
@@ -33,19 +33,19 @@ fn the_square_drags_as_session_state_never_in_history() {
 #[test]
 fn recentring_reports_the_move_for_redraw_and_picking() {
     let (mut store, target) = build();
-    let _ = store.drain_changes();
-    let _ = store.take_geometry_changes();
+    let _ = store.take_changes();
     let set = |path: &str, n: f64| iron_document::Op::Set { id: target, path: path.parse().unwrap(), slot: iron_document::Slot::Const(iron_document::Value::Number(n)) };
     store.apply_session(vec![set("transform2d.x", 500.0), set("transform2d.y", 300.0)]).unwrap();
-    assert!(store.drain_changes().iter().any(|c| c.leaf.node == target), "redrawn");
-    assert!(!store.take_geometry_changes().is_empty(), "re-indexed for picking");
+    let c = store.take_changes();
+    assert!(c.nodes().contains(&target), "redrawn");
+    assert!(!c.geometry.is_empty(), "re-indexed for picking");
 }
 
 #[test]
 fn building_it_reaches_the_spatial_scene() {
     let mut store = Store::new();
-    let _ = store.take_geometry_changes();
+    let _ = store.take_changes();
     let first = store.authored().next_session_ids(1)[0];
     store.apply_session(standard::latency_ops(first, OrderKey::first())).unwrap();
-    assert!(store.take_geometry_changes().structure, "a session composition's creation is a structure change");
+    assert!(store.take_changes().geometry.structure, "a session composition's creation is a structure change");
 }

@@ -73,7 +73,7 @@ fn scene() -> Scene {
             ],
         ))
         .unwrap();
-    store.drain_changes();
+    store.take_changes();
     Scene { store, slider, bar, rect, v }
 }
 
@@ -95,7 +95,7 @@ fn x_equals_two_v_plus_ten_sets_v() {
     assert_eq!(resolved(&store, v, "slider.value"), 50.0);
     assert_eq!(resolved(&store, rect, "transform2d.x"), 110.0);
     assert_eq!(store.tree().leaf(v, path("slider.value")).unwrap().constant(), Some(&Value::Number(5.0)));
-    let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
+    let changed: Vec<Leaf> = store.take_changes().values.into_iter().collect();
     assert!(changed.contains(&leaf(v, "slider.value")) && changed.contains(&leaf(rect, "transform2d.x")), "{changed:?}");
 
     // The commit writes the source, once, and undo restores it.

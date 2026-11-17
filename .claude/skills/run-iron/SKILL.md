@@ -781,14 +781,14 @@ selection's SVG on the clipboard; undo; the same SVG imported by a paste event a
 by the model's `<import-svg>`, each undone; each count is the Controls
 composition's nodes). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines (2026-11-09; `regression.txt`, then
-`gestures.txt`, re-run whole 2026-11-14; a long number's last digits and a hunt's found
+`gestures.txt`, re-run whole 2026-11-14; `regression.txt` re-checked 2026-11-16, where the first redraw counts 16 nodes and the model's link steps are labelled "model edit", both already so before reactive-engine phase 1; a long number's last digits and a hunt's found
 point may vary). Run it with nothing else loading the machine: a `cargo check` alongside
 made the Thermal tab activate late, so its readings came back empty:
 
 ```
 {"enabled":false,"guides":[]}
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-DEBUG src/document_bridge/render.rs:408 redraw (document): 2 of 36 nodes changed [#M #U]; damage 560,340–800,460
+DEBUG src/document_bridge/render.rs:408 redraw (document): 2 of 16 nodes changed [#M #U]; damage 560,340–800,460
 "<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
 "<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
 "value=\"0.8\"/>"
@@ -937,9 +937,9 @@ DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (2 ops, Human) -> v1
 DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (2 ops, System) -> v20
 DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Human) -> v21
 DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (4 ops, System) -> v22
-DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Model) -> v23
-DEBUG src/document_bridge/mod.rs:492 applied "link" (5 ops, Model) -> v24
-DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (5 ops, System) -> v25
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (4 ops, Model) -> v23
+DEBUG src/document_bridge/mod.rs:492 applied "model edit" (5 ops, Model) -> v24
+DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (5 ops, System) -> v25
 DEBUG src/document_bridge/mod.rs:433 loaded document v25 (274 live nodes)
 (no page errors)
 ```

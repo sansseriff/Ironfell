@@ -5,7 +5,7 @@
 //! placements from Bevy globals until phase 2; the store's drift check
 //! (`check_world_affine`) keeps the two equal meanwhile.
 
-use super::DocumentStore;
+use super::{ChangeInbox, DocumentStore};
 use bevy::prelude::*;
 use iron_spatial::Scene;
 
@@ -15,11 +15,15 @@ pub struct SpatialScene {
     /// reference for the regression checks. Bounds are maintained either way.
     pub enabled: bool,
     scene: Scene,
+    /// The last update took changes from the store that the reconciler has
+    /// not used yet (they wait in the [`ChangeInbox`]): what overlay caches
+    /// read as "the store has moved since the last sync".
+    pub unreconciled: bool,
 }
 
 impl Default for SpatialScene {
     fn default() -> Self {
-        Self { enabled: true, scene: Scene::default() }
+        Self { enabled: true, scene: Scene::default(), unreconciled: false }
     }
 }
 
@@ -30,13 +34,16 @@ impl std::ops::Deref for SpatialScene {
     }
 }
 
-pub fn prepare_spatial(mut store: ResMut<DocumentStore>, mut scene: ResMut<SpatialScene>) {
+pub fn prepare_spatial(mut store: ResMut<DocumentStore>, mut scene: ResMut<SpatialScene>, mut inbox: ResMut<ChangeInbox>) {
     let timing = crate::perf::span(crate::perf::Phase::Bounds);
     // Change detection by hand: a frame that moves nothing must not mark
     // the scene changed, or every view would rebuild its display list.
     let inner = scene.bypass_change_detection();
     let before = inner.scene.generation;
-    inner.scene.update(&mut store.bypass_change_detection().0);
+    inbox.pull(&mut store.bypass_change_detection().0);
+    inner.unreconciled = inbox.reconcile_pending();
+    let changes = inbox.take_spatial();
+    inner.scene.update(&store.0, changes);
     if inner.scene.generation == before {
         timing.discard();
         return;

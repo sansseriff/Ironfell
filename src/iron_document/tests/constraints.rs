@@ -324,7 +324,7 @@ fn a_binding_that_reads_and_feeds_a_cluster_is_a_cycle() {
         ))
         .unwrap();
     assert!((dist(pos(&p.store, p.joints[2]), pos(&p.store, p.ball)) - 100.0).abs() < 1e-6);
-    p.store.drain_changes();
+    p.store.take_changes();
     p.store.preview(slider, path("slider.value"), Value::Number(0.25));
     assert!((dist(pos(&p.store, p.joints[2]), pos(&p.store, p.ball)) - 50.0).abs() < 1e-6, "a scrub re-solves live");
     p.store.cancel_gesture();
@@ -378,7 +378,7 @@ fn dragging_the_ball_moves_the_chain_and_commits_one_transaction() {
     let mut p = pendulum();
     let before = content(&p.store);
     let authored_x = p.store.tree().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned();
-    p.store.drain_changes();
+    p.store.take_changes();
     let h = p.store.begin_drag(p.ball, [0.0, 0.0]);
     assert_eq!(h.mode, DragMode::Cluster(p.group));
     let report = p.store.drag_to(&h, [420.0, 300.0]);
@@ -388,7 +388,7 @@ fn dragging_the_ball_moves_the_chain_and_commits_one_transaction() {
     assert_chain_holds(&p);
     // Everything moved is previewed, nothing is written, the arms follow.
     assert_eq!(p.store.tree().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned(), authored_x);
-    let changed: Vec<NodeId> = p.store.drain_changes().into_iter().map(|c| c.leaf.node).collect();
+    let changed: Vec<NodeId> = p.store.take_changes().values.into_iter().map(|l| l.node).collect();
     assert!(changed.contains(&p.joints[1]) && changed.contains(&p.arms[2]) && changed.contains(&p.bar), "{changed:?}");
     let rot = p.store.resolved(p.arms[2], path("transform2d.rot")).unwrap().as_f64().unwrap();
     assert!(rot.abs() > 0.1, "the last arm turned: {rot}");

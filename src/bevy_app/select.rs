@@ -348,7 +348,7 @@ impl SelectionGeometryCache {
         // before propagation must be finalized by drawing afterwards, but the
         // next idle cursor test can reuse that finalized entry.
         if cached.is_none_or(|c| c.stamp != stamp || (after_propagation && !c.after_propagation) || c.reaches.len() != items.len()
-            || c.reaches.iter().zip(items).any(|(a, b)| a != *b)) || geo.store.has_changes()
+            || c.reaches.iter().zip(items).any(|(a, b)| a != *b)) || geo.moving()
         {
             let timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
             if items.is_empty() { timing.discard(); }
@@ -392,7 +392,7 @@ impl SelectionGeometryCache {
     /// document's embeds, never over a panel's content.
     fn lit<'a>(&'a mut self, geo: &Geo, view: &PanelView, embeds: &[NodeId], highlights: &crate::document_bridge::Highlights, boxed: Vec<Vec<NodeId>>, stamp: GeometryStamp) -> &'a [LitMark] {
         let key = (&highlights.selected, &highlights.hovered);
-        if self.lit.get(&view.panel).is_none_or(|c| c.stamp != stamp || (&c.highlights.0, &c.highlights.1) != key || c.boxed != boxed) || geo.store.has_changes() {
+        if self.lit.get(&view.panel).is_none_or(|c| c.stamp != stamp || (&c.highlights.0, &c.highlights.1) != key || c.boxed != boxed) || geo.moving() {
             let timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
             if highlights.selected.is_empty() && highlights.hovered.is_empty() { timing.discard(); }
             let doc = geo.doc();
@@ -425,7 +425,7 @@ impl SelectionGeometryCache {
     }
 
     fn hover(&mut self, geo: &Geo, reach: &Reach, stamp: GeometryStamp) -> Option<Affine> {
-        if self.hover.as_ref().is_none_or(|(s, r, _)| *s != stamp || r != reach) || geo.store.has_changes() {
+        if self.hover.as_ref().is_none_or(|(s, r, _)| *s != stamp || r != reach) || geo.moving() {
             let _timing = crate::perf::span(crate::perf::Phase::OverlayGeometry);
             self.hover = Some((stamp, reach.clone(), geo.frame(&reach.chain)));
         }
@@ -1062,6 +1062,15 @@ pub(crate) struct Geo<'a> {
     pub spatial: &'a crate::document_bridge::SpatialScene,
 }
 
+
+impl Geo<'_> {
+    /// The store has moved since the last sync: what a geometry stamp
+    /// cannot see yet. Changes the store still holds, or ones the spatial
+    /// scene took that the reconciler has not used.
+    fn moving(&self) -> bool {
+        self.store.changes_pending() || self.spatial.unreconciled
+    }
+}
 
 pub(crate) fn leaf(s: &str) -> LeafPath {
     s.parse().expect("declared leaf")
@@ -5173,7 +5182,7 @@ mod tests {
     use iron_document::{LeafStruct as _, OrderKey, Slot, TypeId, contour};
 
     fn ids(n: u32) -> Vec<NodeId> {
-        let mut store = Store::new();
+        let store = Store::new();
         store.authored().next_ids(n as usize)
     }
 

@@ -209,7 +209,7 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
         .unwrap();
     let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
     let copy = store.tree().children(u)[0];
-    store.drain_changes();
+    store.take_changes();
     store.preview(slider, path("slider.value"), Value::Number(0.9));
     assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.9));
     assert_eq!(resolved(&store, copy, "size.h"), Value::Number(270.0));

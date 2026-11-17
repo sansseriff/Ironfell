@@ -54,8 +54,8 @@ fn plot_pan_and_zoom_cost() {
     let mut step = |event: &str, payload: [f64; 5]| {
         let t = Instant::now();
         store.pointer_action(area, event, payload).unwrap().unwrap();
-        let ops = store.take_derived_ops();
-        (t.elapsed().as_secs_f64() * 1e3, ops.len())
+        let c = store.take_changes();
+        (t.elapsed().as_secs_f64() * 1e3, c.created.len() + c.removed.len() + c.slots.len())
     };
     // Pan right steadily, then zoom in and out in bursts of 30.
     let pan: Vec<(f64, usize)> = (0..400).map(|_| step("drag", [-3.0, 0.0, 0.0, 0.0, 0.0])).collect();
@@ -64,6 +64,6 @@ fn plot_pan_and_zoom_cost() {
         let values = steps.iter().filter(|s| s.1 == 0).map(|s| s.0).collect();
         let structure = steps.iter().filter(|s| s.1 > 0).map(|s| s.0).collect();
         let ops = steps.iter().map(|s| s.1).filter(|&n| n > 0).max().unwrap_or(0);
-        println!("{label}: values only {}; tick count changed {} (up to {ops} ops)", stat(values), stat(structure));
+        println!("{label}: values only {}; tick count changed {} (up to {ops} nodes made, gone or set)", stat(values), stat(structure));
     }
 }

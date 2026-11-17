@@ -159,12 +159,12 @@ fn items_follow_a_drag_and_a_publish_without_a_transaction() {
     let (s, g, data, h) = (n["s"], n["g"], n["data"], n["h"]);
     assert_eq!(items(&store, g).len(), 2);
     let version = store.authored().version();
-    let _ = store.take_derived_ops();
+    let _ = store.take_changes();
     // A drag previews the slider's value.
     store.preview(s, path("slider.value"), Value::Number(5.0));
     assert_eq!(items(&store, g).len(), 5);
     assert_eq!(x_of(&store, store.tree().children(items(&store, g)[4])[0]), 80.0);
-    assert!(!store.take_derived_ops().is_empty(), "the host is told what to materialise");
+    assert!(store.take_changes().structural(), "the host is told what to materialise");
     assert_eq!(store.authored().version(), version, "no transaction");
     store.unpreview(s, path("slider.value"));
     assert_eq!(items(&store, g).len(), 2);
@@ -648,14 +648,14 @@ fn steady_stepped_producers_are_at_rest() {
     store.advance_steps(0.0, &Default::default());
     store.advance_presence(0.0);
     store.advance_steps(0.01, &Default::default());
-    store.drain_changes();
+    store.take_changes();
     for i in 1..20 {
         let now = i as f64 * 0.0163 + (i % 3) as f64 * 0.001;
         assert_eq!(store.advance_steps(now, &Default::default()), vec![], "steps at frame {i}");
         assert_eq!(store.advance_presence(now), vec![], "presence at frame {i}");
         assert!(store.advance_queries(now).is_empty() && store.pending_queries().is_empty());
         assert!(store.advance_motion(now).is_empty(), "motion at frame {i}");
-        let moved: Vec<String> = store.drain_changes().iter().map(|c| c.leaf.to_string()).collect();
+        let moved: Vec<String> = store.take_changes().values.iter().map(|l| l.to_string()).collect();
         assert!(moved.is_empty(), "frame {i} changed {moved:?}");
     }
 }
@@ -802,21 +802,20 @@ fn a_plot_s_new_tick_writes_nothing_outside_it() {
     let plot = store.place_standard("plot", comp, [0.0, 0.0], Actor::Human).unwrap();
     let other = store.place_standard("plot", comp, [0.0, 400.0], Actor::Human).unwrap();
     let area = named(&store, plot, "plot area")[0];
-    store.take_derived_ops();
+    store.take_changes();
     let mut seen = 0;
     for _ in 0..200 {
         store.pointer_action(area, "drag", [-3.0, 0.0, 0.0, 0.0, 0.0]).unwrap().unwrap();
-        let ops = store.take_derived_ops();
-        if ops.is_empty() {
+        let c = store.take_changes();
+        // What the store wrote, as opposed to values it re-evaluated: the
+        // nodes made, gone and moved, and the slots set.
+        let written: Vec<NodeId> = c.created.iter().copied().chain(c.removed.iter().chain(&c.moved).map(|(n, _)| *n)).chain(c.slots.iter().map(|l| l.node)).collect();
+        if written.is_empty() {
             continue;
         }
         seen += 1;
-        for op in &ops {
-            let id = match op {
-                Op::Create { id, .. } | Op::Delete { id } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Reparent { id, .. } => *id,
-                other => panic!("unexpected {other:?}"),
-            };
-            assert_eq!(id.path()[0], plot, "{op:?} is outside the panned plot (the other is {other})");
+        for id in written {
+            assert_eq!(id.path()[0], plot, "{id} is outside the panned plot (the other is {other})");
         }
     }
     assert!(seen > 0, "the pan changed the tick count at least once");

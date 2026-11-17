@@ -206,6 +206,39 @@ impl DocumentChanges {
     }
 }
 
+/// What the store reported moved (`Store::take_changes`), kept per consumer
+/// until each has used it. The reconciler (`sync_document`) and the spatial
+/// scene (`spatial::prepare_spatial`) run at different points of a frame;
+/// either may take the store's changes, and neither takes what the other
+/// still needs (reactive-engine.md §12.2).
+#[derive(Resource, Default)]
+pub struct ChangeInbox {
+    reconcile: iron_document::Changes,
+    spatial: iron_document::geom::GeometryChanges,
+}
+
+impl ChangeInbox {
+    /// Take what the store has, for both consumers.
+    pub fn pull(&mut self, store: &mut Store) {
+        let mut c = store.take_changes();
+        self.spatial.merge(std::mem::take(&mut c.geometry));
+        self.reconcile.merge(c);
+    }
+
+    /// Something waits for the reconciler.
+    pub fn reconcile_pending(&self) -> bool {
+        !self.reconcile.is_empty()
+    }
+
+    pub fn take_reconcile(&mut self) -> iron_document::Changes {
+        std::mem::take(&mut self.reconcile)
+    }
+
+    pub fn take_spatial(&mut self) -> iron_document::geom::GeometryChanges {
+        std::mem::take(&mut self.spatial)
+    }
+}
+
 /// Monotonic projection generation, including resolved previews and document
 /// replacement. Unlike DocumentChanges this is never drained by rendering.
 /// Consumers can retain derived geometry across unchanged frames.
@@ -311,6 +344,7 @@ impl Plugin for DocumentPlugin {
             .init_resource::<inspector::InspectorOptions>()
             .init_resource::<PropagateTimer>()
             .init_resource::<SpatialScene>()
+            .init_resource::<ChangeInbox>()
             .init_resource::<HistoryRequests>()
             .init_resource::<PendingLoad>()
             .init_resource::<GestureRequests>()
@@ -390,7 +424,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>),
+    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen, mut inbox, mut spatial): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>, ResMut<ChangeInbox>, ResMut<SpatialScene>),
 ) {
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
@@ -408,8 +442,8 @@ pub(crate) fn sync_document(
         && history.0.is_empty()
         && load.0.is_none()
         && gestures.0.is_empty()
-        && !store.0.has_changes()
-        && !store.0.has_derived_ops()
+        && !store.0.changes_pending()
+        && !inbox.reconcile_pending()
         && store.0.authored().version() == synced.0
         // The session alone changing counts: the timeline draws what is
         // selected (a transition's picked slices).
@@ -438,6 +472,10 @@ pub(crate) fn sync_document(
         }
         drawables.0.clear();
         store.0 = loaded;
+        // What was waiting belongs to the old document; the spatial scene
+        // rebuilds for the new one.
+        *inbox = ChangeInbox::default();
+        inbox.spatial.structure = true;
         *origin = DocumentOrigin::for_scope(store.0.scope());
         synced.0 = store.0.authored().version();
         affected.extend(store.0.tree().live_nodes().map(|n| n.id));
@@ -520,14 +558,6 @@ pub(crate) fn sync_document(
                 }
             );
         }
-        for op in tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()) {
-            structure |= collect_ids(op, &mut affected);
-        }
-    }
-    // Structure derived outside a transaction: a repeat's items following a
-    // drag, a published value or the clock (reactivity.md §3.3).
-    for op in store.0.take_derived_ops() {
-        structure |= collect_ids(&op, &mut affected);
     }
     // The Library tab's composition (component-authoring.md §6): session
     // state, built when missing (at start, and after a load replaces the store).
@@ -540,14 +570,8 @@ pub(crate) fn sync_document(
             let first = doc.next_session_ids(1)[0];
             let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order));
             let ops = build(first, order);
-            let ids: Vec<NodeId> = ops.iter().filter_map(|op| match op {
-                Op::Create { id, .. } => Some(*id),
-                _ => None,
-            }).collect();
             match store.0.apply_session(ops) {
                 Ok(()) => {
-                    affected.extend(ids);
-                    structure = true;
                     if name == iron_document::standard::LIBRARY {
                         *library_light = None;
                     }
@@ -560,49 +584,33 @@ pub(crate) fn sync_document(
     // labels follow the shell's theme as the timeline does.
     if *library_light != Some(light) {
         let ops = iron_document::standard::library_theme_ops(store.0.tree(), light);
-        let mut ids = BTreeSet::new();
-        for op in &ops {
-            collect_ids(op, &mut ids);
-        }
-        match store.0.apply_session(ops) {
-            Ok(()) => affected.extend(ids),
-            Err(e) => warn!("library theme: {e}"),
+        if let Err(e) = store.0.apply_session(ops) {
+            warn!("library theme: {e}");
         }
         *library_light = Some(light);
     }
     // The timeline (timeline.md §4.3): a session composition generated from
     // the clips, regenerated when what it shows changes.
-    match iron_document::timeline_view::sync_themed(&mut store.0, &mut timeline, light) {
-        Ok(Some(ids)) => {
-            affected.extend(ids);
-            structure = true;
-        }
-        Ok(None) => {}
-        Err(e) => warn!("timeline composition: {e}"),
+    if let Err(e) = iron_document::timeline_view::sync_themed(&mut store.0, &mut timeline, light) {
+        warn!("timeline composition: {e}");
     }
     synced.0 = store.0.authored().version();
     *session_seen = store.0.session_version();
-    // Resolved values that moved: bindings re-evaluated, or a gesture
-    // previewed. Their nodes are rewritten like any other change.
-    for change in store.0.drain_changes() {
-        affected.insert(change.leaf.node);
-    }
+    // Everything that moved since the last sync, however it was applied
+    // (queued transaction, undo, a synchronous FFI apply from the model
+    // surface, a session op, a repeat following a drag, a published value):
+    // its nodes are rewritten (reactive-engine.md §12.2).
+    inbox.pull(&mut store.0);
+    spatial.bypass_change_detection().unreconciled = false;
+    let moved = inbox.take_reconcile();
+    affected.extend(moved.nodes());
+    structure |= moved.structural();
     for (leaf, err) in &store.0.reactive().errors {
         warn!("binding {leaf}: {err}");
     }
     let version = store.0.authored().version();
     if version != version_before {
         events.document_changed(version.0 as u32);
-    }
-    // A deleted node's derived descendants go with it, and no op names
-    // them: the transaction's inverse leaves derived nodes out, and a
-    // tombstoned node is no longer its parent's child. So when something
-    // went, every drawable and entity whose node is no longer live goes
-    // too (found by the host reference, `host_reference.rs`).
-    if affected.iter().any(|&n| !store.0.tree().is_live(n)) {
-        let doc = store.0.tree();
-        let dead: Vec<NodeId> = drawables.0.keys().copied().chain(map.ids()).filter(|&n| !doc.is_live(n)).collect();
-        affected.extend(dead);
     }
     ui.record(&store.0, &affected, structure);
     if affected.is_empty() {
@@ -650,37 +658,6 @@ fn report_late_work(
     }
     if !late.is_empty() {
         warn!("queued after this frame's sync, drawn a frame late: {}", late.join(", "));
-    }
-}
-
-/// The nodes an op touches. Returns whether it changed the tree's shape
-/// (existence, parent, or sibling order), which is what invalidates the
-/// painter order.
-fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) -> bool {
-    match op {
-        Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
-            out.insert(*id);
-            if let Some(p) = parent {
-                out.insert(*p);
-            }
-            true
-        }
-        Op::Delete { id } | Op::Reorder { id, .. } => {
-            out.insert(*id);
-            true
-        }
-        Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
-            out.insert(*id);
-            false
-        }
-        // A `figures` link changes what a figure highlights with, so both
-        // ends redraw. An unlink's inverse is the link, which names them.
-        Op::Link { rel } => {
-            out.insert(rel.from);
-            out.insert(rel.to);
-            false
-        }
-        Op::Unlink { .. } => false,
     }
 }
 

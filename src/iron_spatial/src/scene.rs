@@ -6,7 +6,7 @@
 //! group entries, mapping the query through each group's inverse affine, and
 //! return leaves in painter order.
 //!
-//! What the store reports (`Store::take_geometry_changes`) is what moves:
+//! What the store reports (`Changes::geometry`) is what moves:
 //! a **placement** change rewrites one entry and the unions above it; a
 //! **local** change recomputes one leaf; **structure** rebuilds. Nothing here
 //! walks a moved group's descendants, which is the point.
@@ -17,6 +17,7 @@
 use iron_document::Tree;
 use crate::{Bounds, BoundsIndex, Record};
 use iron_document::composition::{self, Dims};
+use iron_document::geom::GeometryChanges;
 use iron_document::{NodeId, Store, TypeId};
 use kurbo::{Affine, Point, Rect};
 use std::collections::{BTreeMap, BTreeSet};
@@ -288,9 +289,9 @@ impl Scene {
 
     // ---- Updates ----------------------------------------------------------
 
-    /// Bring the scene up to date with everything the store reports moved.
-    pub fn update(&mut self, store: &mut Store) {
-        let changes = store.take_geometry_changes();
+    /// Bring the scene up to date with what moved: `changes`, the geometry
+    /// part of what the host took from the store (`Store::take_changes`).
+    pub fn update(&mut self, store: &Store, changes: GeometryChanges) {
         if changes.structure || !self.built {
             self.rebuild(store);
             return;

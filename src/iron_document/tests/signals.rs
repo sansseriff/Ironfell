@@ -82,7 +82,7 @@ fn scene() -> Scene {
             ],
         ))
         .unwrap();
-    store.drain_changes();
+    store.take_changes();
     Scene { store, gauge, bar, rect }
 }
 
@@ -97,7 +97,7 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
     store.publish(gas, BTreeMap::from([(leaf(gauge, "slider.value"), Value::Number(0.5))]));
     assert_eq!(f64_of(&store, gauge, "slider.value"), 0.5);
     assert_eq!(f64_of(&store, bar, "size.w"), 100.0, "the binding re-evaluated");
-    let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
+    let changed: Vec<Leaf> = store.take_changes().values.into_iter().collect();
     assert_eq!(changed, vec![leaf(gauge, "slider.value"), leaf(bar, "size.w")]);
     assert!(store.signal_errors().is_empty());
     let signal = store.signals()[&leaf(gauge, "slider.value")].clone();
@@ -109,10 +109,10 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
 
     // Republishing the same value is silent; a moved value reports once.
     store.publish(gas, BTreeMap::from([(leaf(gauge, "slider.value"), Value::Number(0.5))]));
-    assert!(!store.has_changes());
+    assert!(!store.changes_pending());
     store.publish(gas, BTreeMap::from([(leaf(gauge, "slider.value"), Value::Number(0.75))]));
     assert_eq!(f64_of(&store, bar, "size.w"), 150.0);
-    assert_eq!(store.drain_changes().len(), 2);
+    assert_eq!(store.take_changes().values.len(), 2);
 
     // A driven leaf is locked to gestures, naming the producer.
     assert!(matches!(store.handle(gauge, path("slider.value")), Handle::Locked(reason) if reason.contains(&format!("producer {}", gas.0))));
@@ -130,7 +130,7 @@ fn two_producers_on_one_leaf_is_an_error_the_first_claim_wins() {
     let gas = store.register_producer("gas");
     store.set_time(2.0);
     assert_eq!(f64_of(&store, rect, "transform2d.x"), 200.0, "the clip drives x");
-    store.drain_changes();
+    store.take_changes();
 
     store.publish(gas, BTreeMap::from([(leaf(rect, "transform2d.x"), Value::Number(0.0)), (leaf(gauge, "slider.value"), Value::Number(1.0))]));
     assert_eq!(f64_of(&store, rect, "transform2d.x"), 200.0, "the clip keeps it");
@@ -164,7 +164,7 @@ fn a_freeze_commits_the_published_values_as_one_transaction() {
     let gas = store.register_producer("gas");
     assert!(store.freeze(gas, "freeze".into(), Actor::Human, 1).is_none(), "nothing to freeze");
     store.publish(gas, BTreeMap::from([(leaf(gauge, "slider.value"), Value::Number(0.6))]));
-    store.drain_changes();
+    store.take_changes();
 
     let applied = store.freeze(gas, "freeze gas".into(), Actor::Human, 1).unwrap().unwrap();
     assert_eq!(applied.version, Version(2));
@@ -174,8 +174,8 @@ fn a_freeze_commits_the_published_values_as_one_transaction() {
     // The release reports the gauge (as a resolved change) and the set
     // reaches readers through the transaction, like any authored change;
     // either way they rewrite from the resolved value, which is 0.6.
-    let changes = store.drain_changes();
-    assert!(changes.iter().any(|c| c.leaf == leaf(gauge, "slider.value")));
+    let changes = store.take_changes();
+    assert!(changes.values.contains(&leaf(gauge, "slider.value")));
     assert_eq!(f64_of(&store, gauge, "slider.value"), 0.6);
     let last = store.history().log().last().unwrap();
     assert_eq!((last.label.as_str(), last.ops.len()), ("freeze gas", 1));

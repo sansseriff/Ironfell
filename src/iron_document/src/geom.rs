@@ -333,6 +333,13 @@ impl GeometryChanges {
     pub fn is_empty(&self) -> bool {
         !self.structure && self.placement.is_empty() && self.local.is_empty()
     }
+
+    /// Add `later`, taken after this.
+    pub fn merge(&mut self, later: GeometryChanges) {
+        self.structure |= later.structure;
+        self.placement.extend(later.placement);
+        self.local.extend(later.local);
+    }
 }
 
 /// Monotonic counters per node and for the tree, bumped as changes are
@@ -390,6 +397,11 @@ impl Revisions {
         }
     }
 
+    /// Whether a take would find anything pending from ops.
+    pub(crate) fn has_pending(&self) -> bool {
+        self.pending_structure || !self.pending_leaves.is_empty()
+    }
+
     pub(crate) fn note_structure(&mut self) {
         self.pending_structure = true;
     }
@@ -397,12 +409,25 @@ impl Revisions {
     /// Classify everything pending plus `touched` from the reactive graph,
     /// bump the counters, and hand the change set to the caller.
     pub(crate) fn take(&mut self, doc: Tree<'_>, touched: BTreeSet<Leaf>) -> GeometryChanges {
-        let mut out = GeometryChanges::default();
-        if std::mem::take(&mut self.pending_structure) {
+        let out = self.classify(doc, &touched);
+        self.pending_structure = false;
+        self.pending_leaves.clear();
+        if out.structure {
             self.structure += 1;
-            out.structure = true;
         }
-        for leaf in std::mem::take(&mut self.pending_leaves).into_iter().chain(touched) {
+        for &n in &out.placement {
+            *self.placement.entry(n).or_insert(0) += 1;
+        }
+        for &n in &out.local {
+            *self.local.entry(n).or_insert(0) += 1;
+        }
+        out
+    }
+
+    /// What `take` would return now, without taking it or bumping anything.
+    pub(crate) fn classify(&self, doc: Tree<'_>, touched: &BTreeSet<Leaf>) -> GeometryChanges {
+        let mut out = GeometryChanges { structure: self.pending_structure, ..Default::default() };
+        for &leaf in self.pending_leaves.iter().chain(touched) {
             match effect_of(doc, leaf) {
                 GeometryEffect::Placement(n) => {
                     out.placement.insert(n);
@@ -413,15 +438,8 @@ impl Revisions {
                 GeometryEffect::None => {}
             }
         }
-        for &n in &out.placement {
-            *self.placement.entry(n).or_insert(0) += 1;
-        }
-        for &n in &out.local {
-            *self.local.entry(n).or_insert(0) += 1;
-        }
         out
-    }
-}
+    }}
 
 #[cfg(test)]
 mod tests {
@@ -588,10 +606,10 @@ mod tests {
     fn revisions_separate_placement_from_local_and_structure() {
         let mut store = StoreCore::new();
         let [root, group, rect] = nested(&mut store);
-        let first = store.take_geometry_changes();
+        let first = store.take_changes().geometry;
         assert!(first.structure, "creation is structure");
         let s0 = store.revisions().structure();
-        assert!(store.take_geometry_changes().is_empty(), "nothing moved since");
+        assert!(store.take_changes().geometry.is_empty(), "nothing moved since");
 
         // Rotating the group is one placement change; the rect's local
         // revision and the chain stamp of anything outside the group stay.
@@ -607,7 +625,7 @@ mod tests {
                 exact: false,
             })
             .unwrap();
-        let c = store.take_geometry_changes();
+        let c = store.take_changes().geometry;
         assert_eq!((c.structure, c.placement.len(), c.local.len()), (false, 1, 0), "{c:?}");
         assert!(c.placement.contains(&group));
         assert_eq!(store.revisions().local(rect), rect_local);
@@ -617,16 +635,16 @@ mod tests {
 
         // A size preview is a local change of the rect, through the graph.
         store.preview(rect, "size.w".parse().unwrap(), Value::Number(99.0));
-        let c = store.take_geometry_changes();
+        let c = store.take_changes().geometry;
         assert_eq!((c.placement.len(), c.local.len()), (0, 1), "{c:?}");
         assert!(c.local.contains(&rect));
         assert_eq!(store.local_bounds(rect).unwrap().geometry, kurbo::Rect::new(0.0, 0.0, 99.0, 30.0));
 
         // Undo is structure-free but moves the group back: a placement.
         store.cancel_gesture();
-        let _ = store.take_geometry_changes();
+        let _ = store.take_changes().geometry;
         store.undo(0).unwrap().unwrap();
-        let c = store.take_geometry_changes();
+        let c = store.take_changes().geometry;
         assert!(!c.structure && c.placement.contains(&group), "{c:?}");
     }
 
@@ -653,9 +671,9 @@ mod tests {
                 exact: false,
             })
             .unwrap();
-        let _ = store.take_geometry_changes();
+        let _ = store.take_changes().geometry;
         store.preview(point, "transform2d.y".parse().unwrap(), Value::Number(40.0));
-        let c = store.take_geometry_changes();
+        let c = store.take_changes().geometry;
         assert_eq!(c.placement.len(), 0, "{c:?}");
         assert_eq!(c.local.iter().copied().collect::<Vec<_>>(), vec![path]);
         let b = store.local_bounds(path).unwrap();

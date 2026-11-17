@@ -115,11 +115,11 @@ fn font_arrival_remeasures_text() {
     inter();
     let mut store = Store::new();
     let id = text(&mut store, str_slot("abc"), "auto_width");
-    store.drain_changes();
-    let _ = store.take_geometry_changes();
+    store.take_changes();
     assert!(!store.refresh_text(), "no font change yet");
     iron_text::engine().register(std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../public/fonts/SpaceGrotesk.ttf")).unwrap());
     assert!(store.refresh_text());
-    assert!(store.drain_changes().iter().any(|c| c.leaf.node == id));
-    assert!(store.take_geometry_changes().local.contains(&id));
+    let c = store.take_changes();
+    assert!(c.marks.iter().any(|l| l.node == id), "reported as changed with no change of value");
+    assert!(c.geometry.local.contains(&id));
 }

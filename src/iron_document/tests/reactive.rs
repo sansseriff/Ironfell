@@ -78,16 +78,16 @@ fn bindings_resolve_on_apply_and_on_change() {
     // The authored slot is still the binding, not the value.
     assert!(store.tree().leaf(bar, path("size.h")).unwrap().expr().is_some());
     // Changes for the two bound leaves were reported once.
-    let changes = store.drain_changes();
+    let changes = store.take_changes().values;
     assert_eq!(changes.len(), 2, "{changes:?}");
-    assert!(!store.has_changes());
+    assert!(!store.changes_pending());
 
     store.apply(tx("set", vec![Op::Set { id: slider, path: path("slider.value"), slot: num(0.5) }])).unwrap();
     assert_eq!(resolved_num(&store, bar, "size.h"), 150.0);
     assert_eq!(resolved_num(&store, bar, "transform2d.y"), 490.0);
-    let changes = store.drain_changes();
+    let changes = store.take_changes().values;
     assert_eq!(changes.len(), 2);
-    assert!(changes.iter().all(|c| c.leaf.node == bar));
+    assert!(changes.iter().all(|l| l.node == bar));
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn diamond_is_glitch_free_and_cutoff_stops_propagation() {
         .unwrap();
     assert_eq!(store.reactive().height(Leaf { node: bar, path: path("size.w") }), Some(1));
     assert_eq!(store.reactive().height(Leaf { node: bar, path: path("size.h") }), Some(2));
-    store.drain_changes();
+    store.take_changes();
 
     let before = store.reactive().evaluations;
     store.apply(tx("set", vec![Op::Set { id: slider, path: path("slider.value"), slot: num(1.0) }])).unwrap();
@@ -158,14 +158,14 @@ fn diamond_is_glitch_free_and_cutoff_stops_propagation() {
         ))
         .unwrap();
     assert_eq!(resolved_num(&store, other, "fill.opacity"), 0.5);
-    store.drain_changes();
+    store.take_changes();
     let before = store.reactive().evaluations;
     store.apply(tx("nudge", vec![Op::Set { id: bar, path: path("size.w"), slot: num(160.0) }])).unwrap();
     // Two readers of size.w ran: the threshold (unchanged result) and size.h.
     // The threshold's dependent on the other node did not, which is the cutoff.
     assert_eq!(store.reactive().evaluations - before, 2);
     assert_eq!(resolved_num(&store, other, "fill.opacity"), 0.5);
-    let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
+    let changed: Vec<Leaf> = store.take_changes().values.into_iter().collect();
     assert_eq!(changed, vec![Leaf { node: bar, path: path("size.h") }]);
 }
 
@@ -215,7 +215,7 @@ fn invalid_bindings_are_rejected() {
 #[test]
 fn gestures_preview_then_commit_once() {
     let Scene { mut store, slider, bar } = scene();
-    store.drain_changes();
+    store.take_changes();
     let v0 = store.authored().version();
 
     // Preview: dependents follow, nothing is written, changes are reported.
@@ -227,7 +227,7 @@ fn gestures_preview_then_commit_once() {
     assert_eq!(resolved_num(&store, bar, "size.h"), 150.0);
     assert_eq!(store.tree().leaf(slider, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.25)));
     assert_eq!(store.authored().version(), v0);
-    let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
+    let changed: Vec<Leaf> = store.take_changes().values.into_iter().collect();
     assert_eq!(changed.len(), 3, "{changed:?}");
 
     // Commit: one labelled transaction with one op; overlay gone.
@@ -245,15 +245,16 @@ fn gestures_preview_then_commit_once() {
     assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
 
     // Cancel reverts previews without a transaction.
-    store.drain_changes();
+    store.take_changes();
     let v1 = store.authored().version();
     store.preview(slider, path("slider.value"), Value::Number(0.9));
     assert_eq!(resolved_num(&store, bar, "size.h"), 270.0);
     store.cancel_gesture();
     assert_eq!(store.authored().version(), v1);
     assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
-    let changed = store.drain_changes();
-    assert!(changed.iter().any(|c| c.leaf.node == bar && c.value == Value::Number(75.0)));
+    let changed = store.take_changes().values;
+    assert!(changed.iter().any(|l| l.node == bar && l.path == path("size.h")), "the cancel is reported");
+    assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
 
     // A preview on a bound leaf never becomes a write.
     store.preview(bar, path("size.h"), Value::Number(1.0));
@@ -266,7 +267,7 @@ fn undoing_a_binding_makes_the_slot_constant_again() {
     let Scene { mut store, slider, bar } = scene();
     store.apply(tx("unbind", vec![Op::Set { id: bar, path: path("size.h"), slot: num(10.0) }])).unwrap();
     assert_eq!(resolved_num(&store, bar, "size.h"), 10.0);
-    store.drain_changes();
+    store.take_changes();
     store.apply(tx("set", vec![Op::Set { id: slider, path: path("slider.value"), slot: num(0.9) }])).unwrap();
     assert_eq!(resolved_num(&store, bar, "size.h"), 10.0, "unbound slot ignores the slider");
     store.undo(1).unwrap().unwrap(); // slider back to 0.25

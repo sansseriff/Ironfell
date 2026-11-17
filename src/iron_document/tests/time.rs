@@ -77,7 +77,7 @@ fn scene(easing: &str) -> Scene {
             ],
         ))
         .unwrap();
-    store.drain_changes();
+    store.take_changes();
     Scene { store, rect, bar, clip, rel, keys }
 }
 
@@ -90,7 +90,7 @@ fn playhead_samples_clips_and_bindings_follow() {
     assert_eq!(x_of(&store, rect), 100.0);
     store.set_time(2.0);
     assert_eq!(x_of(&store, rect), 200.0);
-    let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
+    let changed: Vec<Leaf> = store.take_changes().values.into_iter().collect();
     assert!(changed.contains(&Leaf { node: rect, path: path("transform2d.x") }));
     assert!(changed.contains(&Leaf { node: bar, path: path("size.h") }), "the binding followed: {changed:?}");
     assert_eq!(store.resolved(bar, path("size.h")).unwrap(), Value::Number(400.0));

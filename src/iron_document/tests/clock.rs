@@ -74,7 +74,7 @@ fn scene() -> Scene {
             ],
         ))
         .unwrap();
-    store.drain_changes();
+    store.take_changes();
     Scene { store, rect, clip, view }
 }
 

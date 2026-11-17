@@ -2,9 +2,10 @@
 
 **Date:** 2026-11-16 · **Branch:** `master` · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
-and its decisions settled. **Phase 0 is done** (2026-11-16; §2): baselines, the
-differential harness and the host reference. Nothing of the new engine is built. The
-current task is **phase 1** (§4.2). This file is for whoever builds it: what to read, the order of
+and its decisions settled. **Phases 0 and 1 are done** (2026-11-16; §2): baselines,
+the differential harness, the host reference, and the read contract (`Tree`,
+`take_changes()`) on the old engine. Nothing of the new engine is built. The current
+task is **phase 2a**, whose tasks are still to be written here (§2). This file is for whoever builds it: what to read, the order of
 work, the first two phases as tasks, and the rules. Phases 0 to 2 are ready to build;
 phases 3, 4 and 5 each have design points to settle first (§4.3).
 
@@ -135,8 +136,8 @@ The spec's §17 has each phase's contents and exit. In order:
 | | Phase | State |
 |---|---|---|
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
-| 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Current.** Tasks in §4.2 |
-| 2a | Transactions in place on the old engine: the document journal | Tasks written when phase 1 ends |
+| 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
+| 2a | Transactions in place on the old engine: the document journal | **Current.** Tasks to be written here from the spec's §11.1 before it starts |
 | 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | |
 | 2c | Copies leave the document: instances as references | |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
@@ -170,6 +171,36 @@ The spec's §17 has each phase's contents and exit. In order:
 - Baselines in §1. Two findings for the user: the 1,000-meter probe is truncated by
   `expand::NODE_BUDGET`, and A10's growth (about 530 bytes per value-keyed item, never
   freed).
+
+**Phase 1, as done (2026-11-16).** Exit: no behaviour change, every reader moved.
+
+- `Tree` (`src/tree.rs`): `Store::tree()` and `Tree::over(&doc)`, forwarding to the
+  document. `Store::document()` is now `authored()`; the uses were sorted by hand
+  between the two (crate `src`: 84 `tree()`, 21 `authored()`; tests: 605 and 250; the
+  host, `iron_svg`, `iron_spatial` and `src-native`: 158 and 71). Read-only
+  `&Document` parameters in the crate and the host became `Tree`.
+- `Changes` (`src/changes.rs`) and `Store::take_changes()` / `changes_pending()`
+  replace `take_derived_ops`, `drain_changes`, `has_changes`, `take_touched` and
+  `take_geometry_changes`, and `collect_ids`' chaining of `expanded` and `inverse`.
+  The store notes changes at its four mutation points: transactions, `apply_session`,
+  `settle_repeats` outside a transaction, and the solver's writes in `post_apply`.
+  Two departures from the spec's sketch, now written into its §12.2: parents are
+  `Option<NodeId>` (`None` for a root), and a `geometry` field carries the spatial
+  classification. The consumers table is in §12.2.
+- The host keeps one `ChangeInbox` (`document_bridge/mod.rs`): `geometry` waits for
+  the spatial scene, the rest for the reconciler, so neither takes what the other
+  needs. `iron_spatial::Scene::update` takes its changes as an argument. The host
+  reference's scan for dead derived drawables is gone: `Changes::removed` names a
+  deleted node's derived descendants.
+- The snapshot reads through `Tree` (task 5 came with task 2) and compares
+  `take_changes()` with `==`, through a non-consuming `peek_changes`.
+- Checks: `iron_document` 426 tests with and without `differential`; `iron_spatial`
+  and `iron_svg` 41; the host reference 2; wasm and native builds. `git grep` finds
+  none of the five drains and no `.document()` call. `smoke.txt` and `regression.txt`
+  print the same normalised output as on `8fc772d` (built and run as the baseline);
+  both scripts' `ready` times (1.85 to 2.54 s) overlap across the two builds. The
+  regression's expected block had drifted before this phase (16 nodes in the first
+  redraw, "model edit" labels on the model's links); SKILL.md is updated.
 
 At the end of each phase: its exit in the spec's §17 is met and shown by a command
 whose output is pasted into the commit or the roadmap row; this table and the

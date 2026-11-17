@@ -488,9 +488,7 @@ fn step(w: &mut World) {
         }
         // What the host drains each frame.
         20 => {
-            w.store.drain_changes();
-            w.store.take_derived_ops();
-            w.store.take_geometry_changes();
+            w.store.take_changes();
             w.store.take_emitted();
         }
         // A constant on an authored node, the most common edit.

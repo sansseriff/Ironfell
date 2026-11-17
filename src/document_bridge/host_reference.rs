@@ -122,11 +122,10 @@ fn rebuild(store: Store, modes: &Modes) -> (Store, Derived, iron_spatial::Scene)
         .expect("rebuild");
     world.flush();
     let derived = derived(&world);
-    let mut store = world.remove_resource::<DocumentStore>().expect("store").0;
-    // The incremental scene has taken the store's geometry changes already,
-    // so a new scene builds from the store alone.
+    let store = world.remove_resource::<DocumentStore>().expect("store").0;
+    // A new scene builds from the store alone.
     let mut scene = iron_spatial::Scene::default();
-    scene.update(&mut store);
+    scene.update(&store, Default::default());
     (store, derived, scene)
 }
 
@@ -152,6 +151,7 @@ impl Host {
         world.insert_resource(ClearColor(crate::bevy_app::CANVAS_LIGHT));
         world.init_resource::<LatencyRequested>();
         world.init_resource::<SpatialScene>();
+        world.init_resource::<ChangeInbox>();
         let sync = world.register_system(sync_document);
         let spatial = world.register_system(spatial::prepare_spatial);
         let mut host = Host { world, sync, spatial, steps: 0 };

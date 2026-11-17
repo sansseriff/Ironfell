@@ -675,7 +675,8 @@ reader and the comparison with the old engine stay exact (the spec's §17).
 
 Written 2026-11-16 from the spec (§5–§7, §11, §14, §15, §16) and the code at
 `d9ec4ea`. Revised after a council review: Claude Opus 5.5 alone, since GPT Sol was
-unavailable, with the user's agreement. Rounds 1 to 3 scored it 6, 7.5 and 8.5/10.
+unavailable, with the user's agreement. Rounds 1 to 4 scored it 6, 7.5, 8.5 and
+8.5/10; round 4's last points are applied.
 
 **The new engine need not copy the old one's quirks** (the user, 2026-11-16). Where
 the old behaviour is a quirk, the new engine does the reasonable, expected thing.
@@ -772,13 +773,17 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
       so the Latency view's per-frame constant `Set` runs no whole-document
       `expand`. Its expanded ops reach `pending.note`, `geometry.note_ops` and its
       structural check, as a transaction's do, and its journal rollback covers them.
+      Its expansion problems replace `expansion_problems` when it expanded, as
+      `run`'s do.
 
     Each becomes structural (or expanding, or a dependency) in shared code. Any
     further case found later is handled the same way and recorded.
   - **Each `NOT_ATOMIC` entry is fixed,** with its test turned round. None of these
     depends on the new engine:
     - `apply_session` rolls back by the journal;
-    - `machines.shared` and `machines.snap` change only on success;
+    - `machines.shared` and `machines.snap` change only on success: once
+      `post_apply` has accepted the transaction (counted at commit, not in `run`),
+      and for undo and redo once `run` has;
     - an action's `emit` is queued only once its writes succeed;
     - **after a `post_apply` refusal, under `Old` and `InPlace`,** the state that
       `after_transaction`, `post_apply` and the pipeline changed is put back, with no
@@ -794,6 +799,12 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
 
       `InPlace` takes the same restore (it is the same code in `apply_now`), so the
       plain suite passes the turned-round test and the app is atomic now.
+      - **The copy is taken only when `post_apply` can refuse:** when the document
+        holds a constraint. Without one, `post_apply` accepts every transaction.
+      - Re-measure §1's constant edit at 1,000 meters on `InPlace` (meters hold no
+        constraint), and the solver baseline's unrelated constant edit with 1 and
+        100 pendulums, which do pay for the copy.
+      - Stop and report if the copy adds more than half to either.
 
     Then `NOT_ATOMIC` is empty and the reference is atomic. **Until stage 4, `New`
     restores the same state the same way:** by copy, with its owners by their undo
@@ -802,13 +813,14 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
     transaction, so stages 2 and 3a time it separately and report each
     transaction's cost with and without it. The plot path applies no transaction
     and is unaffected.
-- **Intended differences the harness can run.** `INTENDED` is descriptive today:
+- **Intended differences the harness can run.** `intended.rs`'s module comment is
+  rewritten to the user's rule (the spec's §16.1). `INTENDED` is descriptive today:
   `Store::call` compares return values and then whole snapshots, and reads neither
   table. Each entry gets an executable form, one of two kinds:
   - a **normaliser** applied before every comparison, to return values, the snapshot
-    and the `view` text alike. It is for genuinely new message kinds only: the new
-    engine reproduces the old message strings exactly, including which root a
-    "depends on" message names;
+    and the `view` text alike. The new engine reproduces the old message strings
+    where that is cheap; a message quirk that is costly to reproduce becomes an
+    entry, under the user's rule, rather than a hard requirement;
   - a **divergence test** on one call's results. When it matches, the facade records
     the entry, stops comparing that script, and counts it, since the stores then
     legitimately differ (an id accepted by one store and refused by the other leaves
@@ -885,7 +897,8 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
 - **The node budget** (50,000) needs a rule for which owner is refused and when one
   is let back in. Today it cuts in `wanted`'s global order. Write the rule in the
   spec's §7.5. If the old cut cannot be reproduced exactly, the budget becomes a
-  §16.1 entry, which needs the user's approval. Until then, measure the 1,000-meter
+  §16.1 entry that needs the user's approval: the cut decides which instances a user
+  sees past 50,000 nodes, which is visible and may be relied on. Until then, measure the 1,000-meter
   numbers at 700 meters, where nothing is cut.
 - **Under `differential`, after each op's owner updates, and after each settle round
   that changed counts** (`wanted` is whole-document, so once per op or round, not
@@ -1032,7 +1045,10 @@ when:**
 - an assumption in the spec's §14 turns out false;
 - the old engine does something the spec does not describe and the new design cannot
   reproduce (say what, with the test that shows it);
-- a difference from the old engine is needed that the spec's §16.1 does not list;
+- a difference from the old engine where it is unclear which behaviour is right, or
+  that alters something a user can see and may rely on. Any other difference is fixed
+  in both engines or recorded in `intended.rs` with a test (the spec's §16.1, the
+  user's rule of 2026-11-16);
 - a settled decision (spec §19) blocks the work;
 - a phase's exit cannot be met, or a target in the spec's §15 is missed by more than
   a factor of two after a real attempt;

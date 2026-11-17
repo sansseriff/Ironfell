@@ -1398,26 +1398,27 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
 **Intended differences** are listed in one file,
 `src/iron_document/src/differential/intended.rs`, as data the harness reads: each
 entry names the difference, where the comparison is relaxed for it and how narrowly,
-and the test of the new behaviour. A difference not in that file fails the harness;
-adding an entry is a stop-and-report unless it is one of these:
+and the test of the new behaviour. A difference not in that file fails the harness.
+Adding an entry follows the rule above: it is a stop-and-report only when it is
+unclear which behaviour is right, or when it alters something a user can see and may
+rely on. The entries known now:
 
 - the prototype is not evaluated unless observed;
-- a derived id inside an item validates by its template path, whatever keys exist
-  (§11.1);
+- from 2c: a derived id inside an item validates by its template path, whatever keys
+  exist (§11.1);
 - from 2b: the text of problem and error messages (nodes and kinds are still
   compared), and ops emitted for derived structure;
-- a failed `apply_session` leaves no tombstone, no advanced session counter and none
-  of the failing op's own writes (today it rolls back by inverse ops, `lib.rs`
-  `apply_session`; from 2b). A transaction rejected after it expanded leaving
-  `expansion_problems` as they were is no longer a difference: phase 2a fixes it in
-  both engines (handoff §4.3). A failed `apply` already leaves no document change,
-  since it works on a clone;
+- no longer differences, since both engines are fixed: a failed `apply_session`
+  (rolled back by the journal in both from 2b's stage 1); a transaction rejected
+  after it expanded keeping `expansion_problems` (fixed in 2a); a `post_apply`
+  refusal's leftovers (restored in both from 2b's stage 1);
 - from 5: `SolveReport` and `SolverSummary` counts of clusters solved and of
   iterations;
 - an inner picture's definition follows an override of its entity's `instance.def`
   (today the body does, `expand.rs:487`, and the picture does not, `expand.rs:587`);
-- the old engine's text comparison of NaN inputs in `settle_repeats`, its 4-round
-  machine loop, and its 129-round cut for Collections that read each other;
+- the old engine's 4-round machine loop (phase 3), and its 129-round cut for
+  Collections that read each other (2b's stage 3b). Its text comparison of NaN inputs
+  in `settle_repeats` was dead code, deleted in 2b's stage 1;
 - from phase 3: events are recorded at each commit and advance, where the old steppers
   sample once a frame (`step.rs:136`).
 

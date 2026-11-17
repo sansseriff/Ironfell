@@ -55,8 +55,9 @@ tracked reads, context, queries, presence) is kept as behaviour and re-implement
 
 - Chunked storage, partial loading over the network, and rooms that hold part of a
   scope (iron-platform). §13 says what this engine provides for them and builds none.
-- The renderer's share of a frame, and path data built as text and parsed back each
-  frame (`graph::as_leaf_kind`); the handoff lists both as follow-ups.
+- The renderer's share of a frame (render-cache.md). Path data built as text and
+  parsed back each frame is gone: the helpers build geometry (plot.md §2.1,
+  2026-11-17).
 - New constraint kinds, the solver's numerical method, and a live simulation over
   constraints (constraint-system.md §11). §9.4 covers how the solver that exists is
   driven by this engine and where a simulation would attach.

@@ -262,6 +262,15 @@ drag. Build it when the inspector shows such frames costing more than budget:
 **Exit:** two independently changing live chunks cost the sum of their own encodes, not
 the view's.
 
+**Measurement asks (2026-11-17).** The gallery's Fourier page, playing: its phasors,
+cursor and link move every frame, and the page is one chunk, so both static 801-point
+curves and the bars are re-encoded with them, about 1.5 ms of encode a frame
+(reactive-engine handoff, "Playback, the Fourier page"). So phase 3 is to be built,
+after the reactive engine's 2b swap (it reads `Changes` for what moved), beside 2c.
+It needs one more forced boundary in §4.1: nodes whose values change every frame
+while the clock plays (what a clip animates and what reads it) apart from the rest
+of their composition, so the static remainder is a chunk that keeps its encode.
+
 ## 7. Later, not in this spec
 
 - **Built 2026-10-24** ([`instance-cache.md`](instance-cache.md) phase B), for a group split

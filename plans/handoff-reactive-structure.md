@@ -947,6 +947,23 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   Unseen pictures costing evaluation is phase 4's (a hidden tab's pure pictures
   cost 0 evaluations); 2b does not change it.
 
+- **Four frame fixes, placed by the user (2026-11-17):**
+  1. **Paths as geometry, before the stage 5 swap.** The helpers (`points`,
+     `smooth`, …) build `Value::Geometry` directly instead of SVG text parsed back
+     (plot.md §2.1). Shared by both engines, so the comparison stays exact. It is
+     the largest piece of the plot-target shortfall and most of a hidden animated
+     page's cost. Then the plot targets are measured again and the stop rule
+     re-applied.
+  2. **The fixed ~2 ms a frame, measured at stage 5** (its "a changed frame's
+     time"), and fixed where it lands: phase 3 if it is the store's per-frame
+     polling (`advance_*`, settle checks, steppers at rest), the rendering track if
+     it is the host.
+  3. **Unchanged paths re-encoded in a moving view: render-cache.md phase 3**
+     (vector retention for live layers), after the swap, beside 2c. Measurement now
+     asks for it: the Fourier view re-encodes two static 801-point curves each
+     frame (~1.5 ms).
+  4. **Hidden pages' evaluation: phase 4,** as planned; nothing partial before it.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

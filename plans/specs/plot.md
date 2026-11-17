@@ -18,7 +18,7 @@ that knows its size) also serve hand-built components and the agent generally.
 |---|---|
 | D1 | A **series** is a new value: numbers with one unit, `Value::Series(Arc<[f64]>, Dim)`. Not a general list. |
 | D2 | **Floor functions broadcast** over series, as NumPy's do: `pow(cos(pi * #s.xs / d), 2)` is a series. A function plot is a `ys` bound to an expression over `xs`. ~~No lambdas~~ *(superseded the same day: lambdas `x => …` were adopted, §1.4; they close over their references when evaluated, so dependencies stay static).* |
-| D3 | **`path.d` may be bound** to an expression that returns **SVG path data**, a string (`'M ' + points(xs, ys)`), which the engine parses after each change. Agents already write SVG fluently; helpers only write path-data text. A bound path is a third path form beside packed and expanded: drawn from its resolved value, never point-edited. Draw-on is SVG's own `pathLength` plus dash trick (`stroke.path_length`). |
+| D3 | **`path.d` may be bound** to an expression that returns geometry (`points(xs, ys)`) or **SVG path data**, a string, which the engine parses after each change. Agents already write SVG fluently, and may; the helpers build geometry directly (§2.1, changed 2026-11-17 from helpers that wrote path-data text). A bound path is a third path form beside packed and expanded: drawn from its resolved value, never point-edited. Draw-on is SVG's own `pathLength` plus dash trick (`stroke.path_length`). |
 | D3b | **Functions are values**: `x => body`, JavaScript's arrow. A lambda's references are ordinary dependencies of the binding that holds it; its parameter is not. A plot given `f` samples it at its own resolution (one sample per 2 px), so resizing or rescaling an axis resamples. (Decided 2026-11-08.) |
 | D4 | **An instance can have a size.** A template may carry `size` (its default box); its parts bind to the template's `size.w/h`, which expansion maps to the `use`'s own `size`. Dragging a corner of such a use writes the use's `size`, not its parts. Text never stretches, because only positions bind to the size. |
 | D5 | **`std:plot` is a standard component**, not a node type (registry.rs: "domain things such as a bar chart … are definitions"). It is built from primitives in `standard.rs`, like `std:meter`. |
@@ -110,28 +110,44 @@ share keys; with summaries that collides, so `Value` gets a real content hash fi
 
 ## 2. Paths drawn from an expression
 
-### 2.1 SVG path data
+### 2.1 Paths from numbers
 
-A bound `path.d` evaluates to a string of **SVG path data** (`M 0 0 L 10 5 …`, every SVG
-command, absolute and relative), parsed after each change. A constant `path.d` written
-as path data in an edit is parsed the same way, so
-`<path d="M 0 0 C 20 0 20 40 40 40"/>` works. Helpers only write
-path-data text, so the engine reads one format:
+A bound `path.d` evaluates to **geometry** (`Value::Geometry`, the packed contours of
+packed-paths.md), or to text, which is **SVG path data** (`M 0 0 L 10 5 …`, every SVG
+command, absolute and relative) and is parsed into geometry. A constant `path.d`
+written as path data in an edit is parsed the same way, so
+`<path d="M 0 0 C 20 0 20 40 40 40"/>` works.
 
-| Function | Writes |
+The helpers build geometry from numbers directly. They never write text: a curve that
+moves every frame is not formatted as text and parsed back (2026-11-17; before, each
+helper wrote path data, and a 10-plot pan or a playing page spent a sixth to a half
+of its store time printing and re-reading coordinates).
+
+| Function | Gives |
 |---|---|
-| `points(xs, ys)` | `x,y x,y …`, SVG's `points` list: `'M ' + points(xs, ys)` is a polyline |
-| `smooth(xs, ys)` | `M`, then `C` segments through the points (Catmull-Rom) |
-| `circles(xs, ys, r)` | one closed circle per point (two `A` arcs each): a scatter plot as one path |
-| `segments(x0s, y0s, x1s, y1s)` | `M x0 y0 L x1 y1` per index (any argument may be a number): ticks, grid lines, error bars |
-| `line(x0, y0, x1, y1)` | the same, the name for one line (2026-11-14) |
-| `arc(cx, cy, r, a0, a1)` | `M` then an `A` arc of the circle from angle `a0` to `a1` (radians from +x towards +y, clockwise on screen); a whole turn is two arcs (2026-11-14) |
+| `points(xs, ys)` | the polyline through the points, one open contour per run |
+| `polygon(xs, ys)` | the same, each run closed |
+| `smooth(xs, ys)` | per run, a curve through the points: Catmull-Rom as cubic Béziers |
+| `circles(xs, ys, r)` | one closed circle per point: a scatter plot as one path |
+| `segments(x0s, y0s, x1s, y1s)` | one two-point line per index (any argument may be a number): ticks, grid lines, error bars |
+| `line(x0, y0, x1, y1)` | the same, the name for one line |
+| `arc(cx, cy, r, a0, a1)` | the circle's arc from angle `a0` to `a1` (radians from +x towards +y, clockwise on screen) |
 | `bars(xs, ys, base, w)` | one closed rectangle per point |
-| `area(xs, ys, base)` | the polyline closed down to `y = base` |
+| `area(xs, ys, base)` | each run closed down to `y = base` |
 
-Non-finite samples break the line (a new `M`), as plotting libraries do with NaN.
-Numbers print with at most 4 decimals, so a 2,000-point curve is about 30 kB of text,
-parsed in well under a millisecond.
+- **Runs.** Non-finite samples break the line: the points between breaks are a run,
+  and each run is its own contour, as plotting libraries do with NaN.
+- **`+` joins paths.** `a + b` is `a`'s contours followed by `b`'s. Text on either
+  side is path data, parsed first, so `''` is the empty path and
+  `cond ? '' : circles(…)` still works; text that does not parse alone (`'M '`) is an
+  error naming it. Text joined to text is still text: path data built with `fmt`
+  (`'M ' + fmt(x, 2) + ' 330 …'`) is parsed once it reaches `path.d`.
+- **The same geometry as the text gave,** less its rounding: arcs and circles become
+  cubics exactly as the SVG parser makes them (kurbo's arc conversion), and a closed
+  run whose last point repeats its first keeps one anchor there. Coordinates are no
+  longer rounded to 4 decimals.
+- **`kind()`** of a helper's value is `geometry`; `str()` and `fmt()` of it give the
+  summary the model surface shows (`2 contours, 801 anchors`), not path data.
 
 **Draw-on** is SVG's own idiom: `stroke.path_length="1"` (SVG's `pathLength`, new)
 with `stroke.dash="1 1"` and `stroke.dash_offset="{= 1 - t}"`.

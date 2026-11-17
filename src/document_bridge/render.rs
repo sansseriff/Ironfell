@@ -727,17 +727,15 @@ impl Draw<'_> {
             return;
         }
         if let Shape2d::Slider { w, h, t } = d.shape.clone() {
-            // Track, filled part, knob. The hit shape stays the whole w×h
-            // box so the knob is easy to grab.
+            // Shared geometry also supplies export and the overflowing thumb hit.
             let (w, h, t) = (w as f64, h as f64, t as f64);
-            let mid = h * 0.5;
-            let track = kurbo::RoundedRect::new(0.0, mid - 3.0, w, mid + 3.0, 3.0);
-            b.fill(affine, peniko::Color::new([0.75, 0.76, 0.8, 1.0]), track);
-            let filled = kurbo::RoundedRect::new(0.0, mid - 3.0, (w * t).max(6.0), mid + 3.0, 3.0);
-            b.fill(affine, peniko::Color::new(d.fill.unwrap_or([0.2, 0.5, 0.9, 1.0])), filled);
-            let knob = kurbo::Circle::new((w * t, mid), mid.min(12.0));
-            b.fill(affine, peniko::Color::new([1.0, 1.0, 1.0, 1.0]), knob);
-            b.stroke(affine, kurbo::Stroke::new(1.5), peniko::Color::new([0.3, 0.3, 0.35, 1.0]), knob);
+            let color = |leaf: &str| peniko::Color::new(self.store.resolved(id, leaf.parse().unwrap()).and_then(|v| v.as_color()).unwrap_or([0.0; 4]));
+            b.fill(affine, color("slider.track_color"), iron_document::slider::track(w, h));
+            if t > 0.0 {
+                b.fill(affine, color("slider.color"), iron_document::slider::track(w * t, h));
+            }
+            b.fill(affine, color("slider.thumb_color"), iron_document::slider::thumb(w, h, t));
+            b.stroke(affine, kurbo::Stroke::new(0.75), color("slider.track_color"), iron_document::slider::thumb(w, h, t));
         } else {
             // A path fills its closed contours by its rule; an open contour
             // has no inside.

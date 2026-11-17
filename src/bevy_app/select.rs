@@ -3242,22 +3242,19 @@ pub fn select_tool_system(
             // A control: its context says a drag drives its value along its
             // track (`affords.drag`); a slider's shape says where that is.
             let track = |chain: &[NodeId]| cx.get(chain, chain.len() - 1, Field::DRAG) == "track";
-            let is_slider = track(&chain[..=k]) && drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
+            let is_slider = view.dims != Dims::Two && track(&chain[..=k]) && drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
             let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
-            // A slider's knob inside a component scrubs it, as a control
-            // (the standard slider, component-authoring.md §6); its track
-            // still selects and moves the component.
+            // Using a handle does not select it. The track selects/moves
+            // either a plain slider or its enclosing component.
             let deepest = *chain.last().expect("a chain is never empty");
-            if !is_slider
-                && k + 1 < chain.len()
-                && view.dims == Dims::Two
+            if view.dims == Dims::Two
                 && track(&chain)
                 && let Some(Shape2d::Slider { w, h, t }) = drawables.0.get(&deepest).map(|d| d.shape.clone())
                 && let Source::Overlay(i) = source
             {
                 let p = hits.overlay[i].space * (view.affine().inverse() * screen);
                 let local = geo.world(deepest).inverse() * p;
-                if (local - Point::new((t * w) as f64, h as f64 * 0.5)).hypot() <= h as f64 * 0.75 {
+                if iron_document::slider::thumb_hit(w as f64, h as f64, t as f64, local) {
                     if let Some(m) = manipulate::hand_off(&mut store.0, deepest, view.panel.clone(), hits.overlay[i].space, None, None, true, &pointer, &spatial, &cameras, &views, &planes) {
                         tool.gesture = Gesture::Edit(m);
                     }

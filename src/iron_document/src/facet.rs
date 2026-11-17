@@ -46,7 +46,7 @@ macro_rules! facets {
 
             impl Default for $name {
                 fn default() -> Self {
-                    Self { $( $field: Slot::Const($default), )* }
+                    Self { $( $field: ($default).into(), )* }
                 }
             }
 
@@ -649,6 +649,9 @@ facets! {
         max: Number = Value::Number(1.0),
         step: Number = Value::Number(0.01),
         value: Number = Value::Number(0.5),
+        color: Color = Slot::Bound(crate::expr::Expr::parse("@slider-accent").expect("built-in token")),
+        track_color: Color = Slot::Bound(crate::expr::Expr::parse("@slider-track").expect("built-in token")),
+        thumb_color: Color = Slot::Bound(crate::expr::Expr::parse("@slider-thumb").expect("built-in token")),
     }
 
     /// Scripted time (doc 05 §2): where a clip's keys are measured from, on

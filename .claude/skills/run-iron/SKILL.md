@@ -74,6 +74,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
+| `slider.ts`, each DPR | ~9 s (2026-11-16) |
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
@@ -3606,3 +3607,21 @@ Settings polish: the focused fixture additionally captures Performance, Workspac
 and Developer sections as `settings-{performance,workspace,developer}.png` under
 each DPR directory, alongside light/dark Appearance and narrow-window captures.
 The expected output and fast-smoke assertions are unchanged.
+
+
+## Slider handles and resizing (2026-11-16)
+
+`slider.ts` creates a plain slider and a Library instance, then uses the real
+pointer to grab their left/right thumb overhangs outside the nominal bounds.
+Using a thumb leaves selection unchanged; the track selects/moves the control.
+Both plain and Library controls resize with the bottom-right selection grip.
+Captures under `.agents/slider/` cover light/dark at each DPR.
+
+```sh
+bun run .claude/skills/run-iron/slider.ts
+DPR=2 bun run .claude/skills/run-iron/slider.ts
+```
+
+Expected for each DPR: `PASS slider DPR <1|2>: endpoint grabs, no selection on use,
+track move, plain/library width grips, light/dark; no page errors`. About 9 s each.
+The fast smoke's six assertions and expected output are unchanged.

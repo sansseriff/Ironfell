@@ -1,6 +1,6 @@
 # Component authoring
 
-**Status:** foundation built 2026-10-18; 2D control redesign built 2026-11-13. **Builds on:**
+**Status:** foundation built 2026-10-18; 2D control redesign built 2026-11-13; slider refresh built 2026-11-16. **Builds on:**
 [`component-model.md`](component-model.md) (definitions, linked instances, overrides,
 ports, anchors, plugging and mates). **Goal:** every part of the Components tab's demo
 (laser, fiber, dial meter, slider, their wiring) can be made from the UI, without code.
@@ -210,3 +210,30 @@ DPR 1 and 2: create/cancel/Escape, click and centre placement, pivot preservatio
 undo, name-tag movement, rotation about the origin, snapping to centres/path anchors,
 selection cancellation, visible binding refusal, visibility synchronization and light/
 dark screenshots. Run-iron fast smoke and the broad gesture fixture remain gates.
+
+
+## 9. Slider design and interaction (2026-11-16)
+
+The built-in slider uses a 5 px rounded track and a 16 px rounded-square thumb at
+its default 24 px height. `slider.color`, `slider.track_color` and
+`slider.thumb_color` default to bindings to `@slider-accent`, `@slider-track` and
+`@slider-thumb`. The built-in accent is warm tan (light `#ae743e`, dark `#d5a06a`);
+all three fields accept custom colours or token bindings. The standard component
+exposes a typed `color | auto` input; Auto follows the theme token. Schema 13 adds
+these fields; older schemas are refused.
+
+One geometry module supplies rendering, SVG export and hit testing. The whole
+visible thumb, including its overhang beyond either endpoint, plus a 3 px grab
+margin, is interactive; spatial broad-phase bounds include that margin. In 2D,
+dragging the thumb edits the value without changing the selection. Clicking or
+dragging the track selects/moves the slider or enclosing instance, so its normal
+selection grips remain available for authoring. There is no extra usage mode.
+The Library slider has a sized template whose child follows its width/height;
+its instance's selection grips now resize the control rather than a fixed box.
+
+Verification: `tests/slider.rs` covers endpoint geometry, palette defaults, theme
+switching, custom colours and reload; `tests/standard.rs` covers Library previews
+and typed placement. SVG export and its golden match the new geometry and colours.
+`run-iron/slider.ts` checks actual endpoint grabs outside the bounds, selection-free
+use, track movement and plain/Library width grips, with light/dark captures at DPR
+1 and 2. Fast smoke passes with unchanged expected output.

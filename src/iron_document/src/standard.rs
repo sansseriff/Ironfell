@@ -306,6 +306,8 @@ const PREVIEW_DARK: &[(u32, u32)] = &[
     (0xe1e0d9, 0x2c2c2a), // @grid
     (0x0b0b0b, 0xf0efec), // @ink
     (0xc3c2b7, 0x383835), // @axis
+    (0xae743e, 0xd5a06a), // @slider-accent
+    (0xd5d2cc, 0x5b5853), // @slider-track
 ];
 
 /// A preview colour in the theme (`light`): its partner in
@@ -416,6 +418,13 @@ pub fn library_theme_ops(doc: Tree<'_>, light: bool) -> Vec<Op> {
                         for (kind, have) in [(FacetKind::Fill, fill), (FacetKind::Stroke, edge)] {
                             if let Some(Value::Color(was)) = have {
                                 set(id, kind, "color", preview_colour(was, light), Some(&Value::Color(was)));
+                            }
+                        }
+                        if let Some(slider) = doc.get::<crate::facet::Slider>(id) {
+                            for (field, have) in [("color", &slider.color), ("track_color", &slider.track_color), ("thumb_color", &slider.thumb_color)] {
+                                if let Some(Value::Color(was)) = have.constant() {
+                                    set(id, FacetKind::Slider, field, preview_colour(*was, light), Some(&Value::Color(*was)));
+                                }
                             }
                         }
                     }

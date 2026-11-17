@@ -670,16 +670,21 @@ impl Writer<'_> {
         let (min, max) = (self.f(id, "slider.min", 0.0), self.f(id, "slider.max", 1.0));
         let value = self.f(id, "slider.value", 0.0);
         let t = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
-        let mid = h * 0.5;
-        let r = mid.min(12.0);
+        let track = iron_document::slider::track(w, h).rect();
+        let knob = iron_document::slider::thumb(w, h, t);
+        let color = |leaf: &str| hex(self.color(id, leaf).unwrap_or([0.0; 4])).0;
+        let (accent, background, thumb) = (color("slider.color"), color("slider.track_color"), color("slider.thumb_color"));
         self.line(depth, &element("g", &attrs, false));
-        let bar = |width: f64, fill: &str| -> Attrs { vec![("y", num(mid - 3.0)), ("width", num(width)), ("height", "6".into()), ("rx", "3".into()), ("fill", fill.into())] };
-        self.line(depth + 1, &element("rect", &bar(w, &hex([0.75, 0.76, 0.8, 1.0]).0), true));
-        self.line(depth + 1, &element("rect", &bar((w * t).max(6.0), &hex([0.2, 0.5, 0.9, 1.0]).0), true));
-        let knob: Attrs = vec![("cx", num(w * t)), ("cy", num(mid)), ("r", num(r)), ("fill", "#ffffff".into()), ("stroke", hex([0.3, 0.3, 0.35, 1.0]).0), ("stroke-width", "1.5".into())];
-        self.line(depth + 1, &element("circle", &knob, true));
+        let bar = |width: f64, fill: &str| -> Attrs { vec![("y", num(track.y0)), ("width", num(width)), ("height", num(track.height())), ("rx", num(track.height() * 0.5)), ("fill", fill.into())] };
+        self.line(depth + 1, &element("rect", &bar(w, &background), true));
+        if t > 0.0 {
+            self.line(depth + 1, &element("rect", &bar(w * t, &accent), true));
+        }
+        let r = knob.rect();
+        let attrs: Attrs = vec![("x", num(r.x0)), ("y", num(r.y0)), ("width", num(r.width())), ("height", num(r.height())), ("rx", num(knob.radii().top_left)), ("fill", thumb), ("stroke", background), ("stroke-width", "0.75".into())];
+        self.line(depth + 1, &element("rect", &attrs, true));
         self.line(depth, "</g>");
-        let own = Rect::new(0.0, mid - 3.0, w, mid + 3.0).union(Rect::new(w * t - r, mid - r, w * t + r, mid + r)).inflate(0.75, 0.75);
+        let own = track.union(r.inflate(0.375, 0.375));
         self.bounds = union(self.bounds, (parent * self.local(id)).transform_rect_bbox(own));
     }
 
@@ -710,7 +715,7 @@ impl Writer<'_> {
                         + 1.5 * self.f(n, "shadow.blur", 4.0).max(0.0);
                 }
                 if node.ty.name() == "slider" {
-                    pad = pad.max((self.f(n, "size.h", 24.0) * 0.5).min(12.0) + 3.0);
+                    pad = pad.max(iron_document::slider::thumb_half(self.f(n, "size.h", 24.0)) + 0.375);
                 }
                 out = union(out, Affine::new(self.store.world_affine(n).0).transform_rect_bbox(bb.inflate(pad, pad)));
             }

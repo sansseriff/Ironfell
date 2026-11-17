@@ -35,6 +35,7 @@ pub mod markup;
 pub mod make;
 pub mod expr;
 pub mod geom;
+pub mod slider;
 pub mod geometry;
 pub mod interaction;
 pub mod gesture;

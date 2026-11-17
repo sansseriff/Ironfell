@@ -240,8 +240,8 @@ fn the_fixture_composition_matches_its_golden_file() {
     assert_eq!(
         out.cuts,
         vec![
+            "a bound value is exported at its current value (×4)".to_owned(),
             "slider level is exported as a picture of itself; it imports as shapes".to_owned(),
-            "a bound value is exported at its current value".to_owned(),
             "constraints are not exported".to_owned(),
             "embed badge view is exported as a copy of badge; it imports as shapes, not a live embed".to_owned(),
             format!("embed {} shows a 3D composition and is left out", store.tree().children(comp).last().unwrap()),

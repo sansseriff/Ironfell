@@ -77,9 +77,11 @@ fn bindings_resolve_on_apply_and_on_change() {
     assert_eq!(resolved_num(&store, bar, "transform2d.y"), 565.0);
     // The authored slot is still the binding, not the value.
     assert!(store.tree().leaf(bar, path("size.h")).unwrap().expr().is_some());
-    // Changes for the two bound leaves were reported once.
+    // The bar's two bound leaves, plus the slider's theme bindings and
+    // the palette publications introduced with it, were reported once.
     let changes = store.take_changes().values;
-    assert_eq!(changes.len(), 2, "{changes:?}");
+    assert_eq!(changes.iter().filter(|l| l.node == bar).count(), 2, "{changes:?}");
+    assert!(changes.iter().any(|l| l.node == slider && l.path == path("slider.color")));
     assert!(!store.changes_pending());
 
     store.apply(tx("set", vec![Op::Set { id: slider, path: path("slider.value"), slot: num(0.5) }])).unwrap();

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="472" height="425" viewBox="8 20 472 425" data-iron="1">
+<svg xmlns="http://www.w3.org/2000/svg" width="472" height="421" viewBox="8 20 472 421" data-iron="1">
   <defs>
     <filter id="shadow-1" filterUnits="userSpaceOnUse" x="18" y="182" width="124" height="84" color-interpolation-filters="sRGB">
       <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
@@ -20,9 +20,9 @@
   <path id="path-1" data-iron-type="path" transform="translate(260 300) rotate(5.7296)" d="M0 0 L80 0 C80 0 75.5 60 60 60 C44.5 60 10 50 10 50 C10 50 -20 10 0 0 Z" fill="#4db366" fill-opacity="0.8" stroke="#1a1a1f" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
   <path id="frame" data-iron-type="path" data-iron-name="frame" transform="translate(380 300)" d="M0 0 L60 0 L60 60 L0 60 Z M15 15 L45 15 L45 45 L15 45 Z" fill-rule="evenodd" fill="#3366e6"/>
   <g id="level" data-iron-type="slider" data-iron-name="level" transform="translate(20 420)">
-    <rect y="9" width="160" height="6" rx="3" fill="#bfc2cc"/>
-    <rect y="9" width="40" height="6" rx="3" fill="#3380e6"/>
-    <circle cx="40" cy="12" r="12" fill="#ffffff" stroke="#4d4d59" stroke-width="1.5"/>
+    <rect y="9.5" width="160" height="5" rx="2.5" fill="#d5d2cc"/>
+    <rect y="9.5" width="40" height="5" rx="2.5" fill="#ae743e"/>
+    <rect x="32" y="4" width="16" height="16" rx="2" fill="#ffffff" stroke="#d5d2cc" stroke-width="0.75"/>
   </g>
   <rect id="bar" data-iron-type="rect" data-iron-name="bar" transform="translate(220 420)" width="50" height="20" fill="#3366e6"/>
   <g id="badge-view" data-iron-type="embed" data-iron-name="badge view" transform="translate(400 20)" clip-path="url(#clip-1)">

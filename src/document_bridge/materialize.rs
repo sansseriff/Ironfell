@@ -165,7 +165,8 @@ impl Shape2d {
                 use kurbo::Shape;
                 super::nest::rounded_rect(w, h, radii).contains(kurbo::Point::new(p.x as f64, p.y as f64))
             }
-            &Shape2d::Rect { w, h, .. } | &Shape2d::Slider { w, h, .. } | &Shape2d::Text { w, h, .. } | &Shape2d::Table { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
+            &Shape2d::Slider { w, h, t } => iron_document::slider::contains(w as f64, h as f64, t as f64, kurbo::Point::new(p.x as f64, p.y as f64)),
+            &Shape2d::Rect { w, h, .. } | &Shape2d::Text { w, h, .. } | &Shape2d::Table { w, h, .. } => p.x >= 0.0 && p.y >= 0.0 && p.x <= w && p.y <= h,
             &Shape2d::Ellipse { rx, ry, arc: None } => (p / Vec2::new(rx, ry).max(Vec2::splat(1e-6))).length_squared() <= 1.0,
             Shape2d::Ellipse { .. } => {
                 use kurbo::Shape;

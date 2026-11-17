@@ -83,7 +83,7 @@ fn the_library_recolours_its_cards_for_the_theme() {
     // ink and light surfaces: the Readout's figure, the Laser's body, the
     // dial's face, rim and reading, and eleven of the Plot's baked tokens
     // (its reference lines and marks among them).
-    assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 11);
+    assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 11 + 2);
     store.apply_session(dark).unwrap();
     assert!(standard::library_theme_ops(store.tree(), false).is_empty());
 }

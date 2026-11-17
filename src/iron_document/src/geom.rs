@@ -240,7 +240,7 @@ pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
         pad += num("shadow.dx", 0.0).abs().max(num("shadow.dy", 4.0).abs()) + 3.0 * (num("shadow.blur", 4.0).max(0.0) * 0.5);
     }
     if store.tree().live(id).is_some_and(|n| n.ty.name() == "slider") {
-        pad = pad.max((num("size.h", 24.0) * 0.5).min(12.0) + 3.0);
+        pad = pad.max(crate::slider::thumb_half(num("size.h", 24.0)) + 0.375);
     }
     pad
 }
@@ -255,7 +255,7 @@ pub fn local_bounds(store: &StoreCore, id: NodeId) -> Option<LocalBounds> {
     let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
     let (geometry, hit_pad) = match node.ty.name() {
         "rect" => (Rect::new(0.0, 0.0, num("size.w", 100.0), num("size.h", 100.0)), 0.0),
-        "slider" => (Rect::new(0.0, 0.0, num("size.w", 200.0), num("size.h", 24.0)), 0.0),
+        "slider" => (Rect::new(0.0, 0.0, num("size.w", 200.0), num("size.h", 24.0)), crate::slider::thumb_half(num("size.h", 24.0)) + 3.0),
         "ellipse" => {
             let outline = crate::shape::outline(store, id)?;
             (crate::shape::to_bez(&outline).bounding_box(), 0.0)

@@ -488,6 +488,15 @@ impl NodeId {
 impl RelationId {
     /// The relation `owner` (an instance) derives from the definition's
     /// relation `local`, named by the owner's path and the relation's id.
+    /// The authored owner a derived relation's path starts with: the
+    /// entity, `use` or repeat that derives it.
+    pub fn root(self) -> Option<NodeId> {
+        if !self.is_expanded() {
+            return None;
+        }
+        expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
+    }
+
     pub fn expanded(owner: NodeId, local: RelationId) -> RelationId {
         let mut path: Vec<u64> = owner.path().iter().map(|n| n.0).collect();
         // A relation that is itself derived (a repeat inside a picture)

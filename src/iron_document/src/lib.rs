@@ -17,6 +17,7 @@
 //! ```
 
 pub mod facet;
+mod engine;
 pub mod analysis;
 pub mod composition;
 pub mod compose;
@@ -106,7 +107,7 @@ pub type Store = StoreCore;
 #[cfg(feature = "differential")]
 pub use differential::Store;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Result of a successful apply.
 #[derive(Clone, Debug, PartialEq)]
@@ -212,17 +213,46 @@ impl History {
     }
 }
 
-/// How a store applies a transaction (reactive-engine handoff §4.3). Both
-/// are the old engine; they differ only in how `run` keeps what it may have
-/// to put back.
+/// Which engine a store runs, chosen when it is built (reactive-engine
+/// handoff §4.3, §4.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
-    /// A working copy of the document, swapped in on success: the
-    /// differential harness's reference until the swap.
+    /// The old engine with a working copy of the document, swapped in on
+    /// success: the differential harness's reference until the swap.
     Old,
-    /// Ops applied to the store's own document, with the document's journal
-    /// to roll back.
+    /// The old engine, ops applied to the store's own document with the
+    /// document's journal to roll back: what the app runs until phase 2b's
+    /// stage 5.
     InPlace,
+    /// The new engine as far as it is built (handoff §4.4): today
+    /// `InPlace` with owners in place of the whole-document expansion.
+    New,
+}
+
+impl Engine {
+    /// The engine a store is built with by default: `InPlace`, or `New`
+    /// with the `engine-new` feature (a wasm build) or `IRON_ENGINE=new`
+    /// (a native probe).
+    pub fn default_choice() -> Engine {
+        if cfg!(feature = "engine-new") {
+            return Engine::New;
+        }
+        static CHOICE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+        *CHOICE.get_or_init(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            if std::env::var("IRON_ENGINE").as_deref() == Ok("new") {
+                return Engine::New;
+            }
+            Engine::InPlace
+        })
+    }
+}
+
+/// What expansion found in `run` or in settling, stored once it is
+/// accepted: the old engine's whole list, or the owners' changes.
+enum Found {
+    Problems(Vec<expand::Problem>),
+    Owners(engine::owners::Delta),
 }
 
 /// What a store needs to put the document back after `run` succeeded and a
@@ -263,6 +293,7 @@ struct Saved {
     repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
     truncated: Vec<expand::Problem>,
     expansion_problems: Vec<expand::Problem>,
+    owners: engine::owners::Owners,
     session_state: BTreeMap<Leaf, Value>,
     tables: BTreeMap<NodeId, table::Grid>,
     motion: Motion,
@@ -284,6 +315,7 @@ impl Saved {
             repeat_inputs: s.repeat_inputs.clone(),
             truncated: s.truncated.clone(),
             expansion_problems: s.expansion_problems.clone(),
+            owners: s.owners.clone(),
             session_state: s.session_state.clone(),
             tables: s.tables.clone(),
             motion: s.motion.clone(),
@@ -304,6 +336,7 @@ impl Saved {
         s.repeat_inputs = self.repeat_inputs;
         s.truncated = self.truncated;
         s.expansion_problems = self.expansion_problems;
+        s.owners = self.owners;
         s.session_state = self.session_state;
         s.tables = self.tables;
         s.motion = self.motion;
@@ -322,7 +355,7 @@ struct Run {
     full_inverse: Vec<Op>,
     /// What expansion found, when `run` expanded; `None` leaves the store's
     /// as they were.
-    problems: Option<Vec<expand::Problem>>,
+    problems: Option<Found>,
     /// Whether it edited parts a pinned machine state shares, to count once
     /// the transaction is accepted.
     shared: bool,
@@ -332,6 +365,8 @@ struct Run {
 pub struct StoreCore {
     doc: Document,
     engine: Engine,
+    /// The new engine's owners (`Engine::New`; empty otherwise).
+    owners: engine::owners::Owners,
     history: History,
     recent_keys: VecDeque<(String, Version)>,
     reactive: graph::Reactive,
@@ -492,10 +527,37 @@ impl StoreCore {
     /// A scratch store over a copy of this one's document, applying
     /// transactions the way this one does.
     pub(crate) fn scratch(&self) -> StoreCore {
-        let mut s = StoreCore::with_document(self.doc.clone());
-        s.set_engine(self.engine);
-        s
+        StoreCore::with_engine(self.doc.clone(), self.engine)
     }
+
+    /// Store what an accepted expansion found.
+    fn store_found(&mut self, found: Found) {
+        match found {
+            Found::Problems(p) => self.expansion_problems = p,
+            Found::Owners(d) => {
+                self.owners.apply(d);
+                self.expansion_problems = self.owners.problems();
+            }
+        }
+    }
+
+    /// Under the differential harness with `IRON_OWNER_CHECK=1`: the owners'
+    /// copies equal what the whole-document expansion would make, checked
+    /// after each owner update (handoff §4.4, stage 2).
+    #[cfg(feature = "differential")]
+    fn check_owners(&self, after: &str) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if self.engine != Engine::New || !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) {
+            return;
+        }
+        let mut whole = self.doc.clone();
+        let stamp = whole.version();
+        let (ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
+        assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
+    }
+
+    #[cfg(not(feature = "differential"))]
+    fn check_owners(&self, _after: &str) {}
 
     /// Whether `post_apply` could refuse what is in the document now: only
     /// a constraint can be malformed, close a cycle through a cluster, or
@@ -526,9 +588,15 @@ impl StoreCore {
     }
 
     pub fn with_document(doc: Document) -> StoreCore {
+        StoreCore::with_engine(doc, Engine::default_choice())
+    }
+
+    /// A store over `doc` running `engine`.
+    pub fn with_engine(doc: Document, engine: Engine) -> StoreCore {
         let mut store = StoreCore {
             doc,
-            engine: Engine::InPlace,
+            engine,
+            owners: Default::default(),
             history: History {
                 horizon: DEFAULT_HORIZON,
                 ..Default::default()
@@ -570,7 +638,12 @@ impl StoreCore {
         };
         // A loaded document holds only authored nodes: derive its instances.
         let stamp = store.doc.version();
-        store.expansion_problems = expand::expand(&mut store.doc, stamp, &BTreeMap::new()).1;
+        if engine == Engine::New {
+            let (_, delta) = store.owners.expand(&mut store.doc, stamp, &BTreeMap::new(), engine::owners::Which::All);
+            store.store_found(Found::Owners(delta));
+        } else {
+            store.expansion_problems = expand::expand(&mut store.doc, stamp, &BTreeMap::new()).1;
+        }
         store.geometry.note_structure();
         store.reactive.rebuild(Tree::over(&store.doc));
         store.resample();
@@ -1600,10 +1673,26 @@ impl StoreCore {
             self.repeat_inputs = Some(inputs);
             let structural = counts != self.repeats;
             if structural {
+                // The owners of the repeats whose items changed.
+                let changed: BTreeSet<NodeId> = counts
+                    .iter()
+                    .filter(|(r, k)| self.repeats.get(r) != Some(k))
+                    .map(|(r, _)| *r)
+                    .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
+                    .filter_map(|r| r.path().first().copied())
+                    .collect();
                 self.repeats = counts;
                 let stamp = self.doc.version();
-                let (ops, problems) = expand::expand(&mut self.doc, stamp, &self.repeats);
-                self.expansion_problems = problems;
+                let ops = if self.engine == Engine::New {
+                    let (ops, delta) = self.owners.expand(&mut self.doc, stamp, &self.repeats, engine::owners::Which::Some(changed));
+                    self.store_found(Found::Owners(delta));
+                    self.check_owners("settling repeats");
+                    ops
+                } else {
+                    let (ops, problems) = expand::expand(&mut self.doc, stamp, &self.repeats);
+                    self.expansion_problems = problems;
+                    ops
+                };
                 if round == expand::DEPTH_MAX + 1 && !ops.is_empty() {
                     self.expansion_problems.push(expand::Problem { node: repeats[0], kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
                     expand::sort_problems(&mut self.expansion_problems);
@@ -2637,9 +2726,10 @@ impl StoreCore {
         // then what `after_transaction` and the pipeline change is kept to
         // put back (reactive-engine handoff §4.4, stage 1).
         let saved = self.can_refuse().then(|| Saved::of(self));
-        if let Some(p) = problems {
-            self.expansion_problems = p;
+        if let Some(found) = problems {
+            self.store_found(found);
         }
+        self.check_owners("a transaction");
         self.after_transaction(&mut tx);
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
@@ -2699,9 +2789,10 @@ impl StoreCore {
         if shared {
             self.machines.shared += 1;
         }
-        if let Some(p) = problems {
-            self.expansion_problems = p;
+        if let Some(found) = problems {
+            self.store_found(found);
         }
+        self.check_owners("a transaction");
         self.after_transaction(&mut applied);
         self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
         let version = applied.version;
@@ -2736,9 +2827,10 @@ impl StoreCore {
                 if shared {
                     self.machines.shared += 1;
                 }
-                if let Some(p) = problems {
-                    self.expansion_problems = p;
+                if let Some(found) = problems {
+                    self.store_found(found);
                 }
+                self.check_owners("a transaction");
                 self.after_transaction(&mut applied);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
@@ -2779,9 +2871,10 @@ impl StoreCore {
                 if shared {
                     self.machines.shared += 1;
                 }
-                if let Some(p) = problems {
-                    self.expansion_problems = p;
+                if let Some(found) = problems {
+                    self.store_found(found);
                 }
+                self.check_owners("a transaction");
                 self.after_transaction(&mut applied);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
@@ -2903,7 +2996,7 @@ impl StoreCore {
         let mut work = None;
         let doc = match self.engine {
             Engine::Old => work.insert(self.doc.clone()),
-            Engine::InPlace => {
+            Engine::InPlace | Engine::New => {
                 self.doc.begin();
                 &mut self.doc
             }
@@ -2925,10 +3018,19 @@ impl StoreCore {
         // that read them (a connection to an expanded port).
         let mut expanded = Vec::new();
         let mut problems = None;
-        if errors.is_empty() && expand::affected_by(Tree::over(doc), &input.ops) {
-            let (ops, found) = expand::expand(doc, stamp, &self.repeats);
-            expanded = ops;
-            problems = Some(found);
+        if errors.is_empty() {
+            if self.engine == Engine::New {
+                // Only the owners these ops can change (stage 2).
+                if let Some(which) = self.owners.affected(Tree::over(doc), &input.ops, &inverse) {
+                    let (ops, delta) = self.owners.expand(doc, stamp, &self.repeats, which);
+                    expanded = ops;
+                    problems = Some(Found::Owners(delta));
+                }
+            } else if expand::affected_by(Tree::over(doc), &input.ops) {
+                let (ops, found) = expand::expand(doc, stamp, &self.repeats);
+                expanded = ops;
+                problems = Some(Found::Problems(found));
+            }
         }
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
@@ -2966,7 +3068,7 @@ impl StoreCore {
             }
         }
         if !errors.is_empty() {
-            if self.engine == Engine::InPlace {
+            if self.engine != Engine::Old {
                 self.doc.rollback();
             }
             return Err(errors);
@@ -3016,6 +3118,11 @@ impl StoreCore {
     /// A store over a loaded document, with empty history.
     pub fn load(text: &str) -> Result<StoreCore, LoadError> {
         serial::load(text).map(StoreCore::with_document)
+    }
+
+    /// `load`, running `engine`.
+    pub fn load_with(text: &str, engine: Engine) -> Result<StoreCore, LoadError> {
+        serial::load(text).map(|doc| StoreCore::with_engine(doc, engine))
     }
 
     // ---- Scopes (plans/specs/scopes.md) ---------------------------------

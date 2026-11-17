@@ -66,6 +66,9 @@ webgpu = ["bevy/webgpu"]
 webgl2 = ["bevy/webgl2"]
 # Native engine execution is independent of the window host.
 native = ["bevy/multi_threaded", "iron_text/system"]
+# Stores run the new reactive engine (reactive-engine handoff §4.4) instead of
+# the old one, for measuring it in the app before it becomes the default.
+engine-new = ["iron_document/engine-new"]
 
 
 [dependencies]

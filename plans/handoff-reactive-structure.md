@@ -720,6 +720,39 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   - Measured: the solver baseline's unrelated constant edit with 100 pendulums is
     6.2 ms (phase 0: 5.77; before 2a), within the threshold. The meter numbers were
     noisy (load average about 6 from an unrelated process): re-measure at stage 2.
+- **Stage 2 done (2026-11-17).**
+  - `src/engine/owners.rs` and `expand::expand_owners`: each op expands again only
+    the owners it can change. The existing want functions run per owner, and the
+    shared diff (`apply_wanted`) applies the result, so the copies are the same
+    code's output. An owner's holdings are read from the document (derived
+    descendants, and derived relations by `RelationId::root`). The definition index
+    only grows. Reparents, and definitions or the library made or removed, fall
+    back to every owner.
+  - `Engine::New`, chosen at construction (`with_engine`, `load_with`;
+    `IRON_ENGINE=new`; the `engine-new` feature in `iron_document` and the app;
+    `build.sh`'s `EXTRA_FEATURES`). The facade pairs `New` with `Old`.
+  - Shared fixes found on the way, in both engines:
+    - a failed expansion op is retried once the rest of its pass has applied. The
+      old engine relied on its next whole-document pass to repair an op that read
+      a copy made later in the pass;
+    - `reparent`, `set` and `add_facet` undo their own write when their check
+      fails. An expansion op that failed used to leave a half-applied facet.
+  - **For the user's approval: the node budget.** Past 50,000 derived nodes, the
+    cut now falls per owner in id order, not in the old whole-document walk's
+    order. At 1,000 meters this keeps 50,000 derived nodes where the old engine
+    kept 50,506. Nothing changes below the budget.
+  - Checks:
+    - the differential suite, 457 tests, with `IRON_OWNER_CHECK=1` (the whole
+      expansion run after every owner update finds nothing to do) and
+      `IRON_ATOMICITY=1`;
+    - the plain suite, 453 tests; the 10,000 random scripts (318 s); the host
+      reference;
+    - `smoke.txt` and `regression.txt` identical to `HEAD`'s on both `InPlace` and
+      an `engine-new` app build.
+  - Measured (load average about 15, so the ratio is what counts): at 1,000
+    meters a structural edit goes from 134 to 38 ms and a placement from 85 to
+    24 ms; at 100 meters, 15.2 to 4.4 ms. What is left is mostly the old graph's
+    rebuild, which stage 3a removes.
 
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:

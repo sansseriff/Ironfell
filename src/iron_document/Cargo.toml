@@ -24,6 +24,9 @@ iron_layout = { path = "../iron_layout" }
 # becomes a facade over two stores compared after every call, so every test
 # is a differential script. Test-only; the app never enables it.
 differential = []
+# Build stores with the new engine by default (reactive-engine handoff §4.4):
+# for a wasm-bench app build, where `IRON_ENGINE` cannot be read.
+engine-new = []
 
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform

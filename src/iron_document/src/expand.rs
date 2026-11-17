@@ -132,7 +132,6 @@ struct RelWant {
 }
 
 /// What every scope derives, nodes parents first, then relations.
-#[derive(Default)]
 struct Wanted {
     nodes: Vec<Want>,
     /// Where each wanted node is in `nodes`.
@@ -140,12 +139,22 @@ struct Wanted {
     rels: Vec<RelWant>,
     problems: Vec<Problem>,
     full: bool,
+    /// How many nodes may be wanted: the document's budget, less what other
+    /// owners hold when one owner is expanded alone.
+    cap: usize,
+    /// Every definition what was wanted reads: an owner is expanded again
+    /// when one of them is edited (`engine::owners`).
+    defs: BTreeSet<NodeId>,
 }
 
 impl Wanted {
+    fn new(cap: usize) -> Wanted {
+        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new() }
+    }
+
     /// Want a node, within the document's budget of derived nodes.
     fn push(&mut self, w: Want) -> bool {
-        if self.nodes.len() >= NODE_BUDGET {
+        if self.nodes.len() >= self.cap {
             if !self.full {
                 self.full = true;
                 self.problems.push(Problem { node: w.parent, kind: "budget", message: format!("the document derives more than {NODE_BUDGET} nodes; the rest are left out, from {} on", w.id) });
@@ -208,7 +217,7 @@ pub type Items = BTreeMap<NodeId, Vec<String>>;
 
 /// Whether a facet makes its node's children a template whose copies are
 /// its items: a repeat, or a conditional (`when`).
-fn owns_items(kind: FacetKind) -> bool {
+pub(crate) fn owns_items(kind: FacetKind) -> bool {
     matches!(kind, FacetKind::Repeat | FacetKind::When)
 }
 
@@ -220,7 +229,7 @@ pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
 /// Every expanded node and relation a document should have, with
 /// `counts[r]` the items of each repeat and conditional `r`.
 fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
-    let mut out = Wanted::default();
+    let mut out = Wanted::new(NODE_BUDGET);
     let entity_ty = TypeId::lookup("entity").expect("registered");
     for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e) && !e.is_expanded()).collect::<Vec<_>>() {
         if let Some(def) = linked_definition(doc, entity) {
@@ -240,7 +249,114 @@ fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
         let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { continue };
         want_use(doc, u, doc.facet(u, FacetKind::Size).is_some(), Some(entity), def, &notation, &mut out);
     }
-    want_scopes(doc, counts, &mut out);
+    let repeats = drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()).collect();
+    want_scopes(doc, counts, &mut out, repeats);
+    out
+}
+
+/// What one top-level owner derives (reactive-engine handoff §4.4, stage
+/// 2): an authored entity's body, an authored `use`'s picture, or an
+/// authored drawn repeat's or conditional's items, with every scope nested
+/// in them. `wanted` is these for every owner; each is computed the same
+/// way, so an owner expanded alone gets exactly the copies the whole
+/// document would give it.
+fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wanted {
+    let mut out = Wanted::new(cap);
+    let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
+    match node.ty.name() {
+        "entity" => {
+            if let Some(def) = linked_definition(doc, owner) {
+                want_entity(doc, owner, def, &mut out);
+            }
+        }
+        "use" => {
+            let notation = doc.get::<Use>(owner).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+            let sized = doc.facet(owner, FacetKind::Size).is_some();
+            if let Some(def) = main_definition(doc, owner) {
+                if let Some(notation) = notation {
+                    want_use(doc, owner, sized, None, def, &notation, &mut out);
+                }
+            } else if let Some(entity) = use_entity(doc, owner)
+                && let Some(def) = linked_definition(doc, entity)
+                && let Some(notation) = notation
+            {
+                want_use(doc, owner, sized, Some(entity), def, &notation, &mut out);
+            }
+        }
+        "group" => {
+            if is_item_owner(doc, owner) && draws_repeat(doc, owner, &doc.facets_of(owner).cloned().collect::<Vec<_>>()) && !in_repeat_template(doc, owner) {
+                want_items(doc, owner, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out);
+            }
+        }
+        _ => {}
+    }
+    want_scopes(doc, counts, &mut out, Vec::new());
+    out
+}
+
+/// Every authored node that may own derived structure now: an entity, a
+/// `use`, a drawn repeat or conditional, and every root of a derived node
+/// or relation the document holds (an owner that no longer derives, or is
+/// gone, keeps its copies until it is expanded again).
+pub(crate) fn top_owners(doc: Tree<'_>) -> BTreeSet<NodeId> {
+    let mut out: BTreeSet<NodeId> = BTreeSet::new();
+    for ty in ["entity", "use"] {
+        let ty = TypeId::lookup(ty).expect("registered");
+        out.extend(doc.nodes_of_type(ty).filter(|&n| doc.is_live(n) && !n.is_expanded()));
+    }
+    out.extend(drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()));
+    out.extend(doc.expanded_ids().filter(|&d| doc.is_live(d)).filter_map(|d| d.path().first().copied()));
+    out.extend(doc.relations().filter_map(|r| r.id.root()));
+    out
+}
+
+/// What expanding some owners did: the ops applied, and per owner its
+/// problems, how many nodes it derives, and the definitions it reads.
+pub(crate) struct OwnersExpanded {
+    pub ops: Vec<Op>,
+    pub problems: BTreeMap<NodeId, Vec<Problem>>,
+    pub counts: BTreeMap<NodeId, usize>,
+    pub defs: Vec<(NodeId, NodeId)>,
+}
+
+/// Bring `owners`' derived nodes to what they derive now, and touch
+/// nothing else (reactive-engine handoff §4.4, stage 2). `room` is how many
+/// nodes they may derive together, taken in id order: the budget less what
+/// other owners hold.
+pub(crate) fn expand_owners(doc: &mut Document, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
+    let mut want: Vec<Want> = Vec::new();
+    let mut rels: Vec<RelWant> = Vec::new();
+    let mut problems: Vec<Problem> = Vec::new();
+    let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new() };
+    for &owner in owners {
+        let w = wanted_for(Tree::over(doc), owner, counts, room);
+        room = room.saturating_sub(w.nodes.len());
+        out.counts.insert(owner, w.nodes.len());
+        out.defs.extend(w.defs.iter().map(|&d| (d, owner)));
+        want.extend(w.nodes);
+        rels.extend(w.rels);
+        problems.extend(w.problems);
+    }
+    // What the owners hold now: their live derived nodes and the derived
+    // relations from them.
+    let have: Vec<NodeId> = {
+        let tree = Tree::over(doc);
+        owners.iter().flat_map(|&o| tree.descendants(o).into_iter().filter(move |d| d.is_expanded() && d.path().first() == Some(&o))).collect()
+    };
+    // Relations by the owner their id names: one from a node already gone
+    // is still the owner's to unlink.
+    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
+    out.ops = apply_wanted(doc, stamp, want, rels, have, have_rels, &mut problems);
+    for o in owners {
+        out.problems.insert(*o, Vec::new());
+    }
+    for p in problems {
+        let root = p.node.path().first().copied().unwrap_or(p.node);
+        out.problems.entry(root).or_default().push(p);
+    }
+    for v in out.problems.values_mut() {
+        sort_problems(v);
+    }
     out
 }
 
@@ -303,8 +419,7 @@ fn in_template(doc: Tree<'_>, out: &Wanted, id: NodeId) -> bool {
 /// ports of an instance and the picture of a `use`. So a component in a
 /// repeat's template, a repeat in a component's, and repeats in repeats
 /// all expand, each scope under the one that made it.
-fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted) {
-    let mut repeats: Vec<NodeId> = drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()).collect();
+fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec<NodeId>) {
     let mut done = BTreeSet::new();
     let mut seen = 0;
     loop {
@@ -465,6 +580,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
 /// derives from `def`: its ports and equations, and its inner entities and
 /// connections, each inner entity in turn deriving its own.
 fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
+    out.defs.insert(def);
     if !out.enter(entity) {
         return;
     }
@@ -532,6 +648,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
 /// copy figures that entity's copy and derives that entity's picture. A
 /// main has no entity: references to the definition's body stay on it.
 fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted) {
+    out.defs.insert(def);
     if !out.enter(u) {
         return;
     }
@@ -740,18 +857,31 @@ fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<
 /// that node out rather than failing the transaction.
 pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
     let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::over(doc), counts);
+    let have: Vec<NodeId> = doc.expanded_ids().filter(|id| doc.is_live(*id)).collect();
+    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.is_expanded()).cloned().collect();
+    let ops = apply_wanted(doc, stamp, want, want_rels, have, have_rels, &mut problems);
+    sort_problems(&mut problems);
+    (ops, problems)
+}
+
+/// Bring the derived nodes and relations in `have` and `have_rels` to
+/// `want` and `want_rels`: stale nodes deleted deepest first, wanted ones
+/// created or brought up to date one field at a time, relations unlinked
+/// and linked. An op that fails is a problem on its node, not an error.
+fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>) -> Vec<Op> {
     let wanted_ids: BTreeSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
+    // An op can fail on something wanted later in the pass (a copy's
+    // binding reading a port copied after it): failed ops are tried again
+    // once everything else has applied, and only what still fails is a
+    // problem.
+    let mut failed: Vec<Op> = Vec::new();
     let mut run = |doc: &mut Document, op: Op, ops: &mut Vec<Op>| match op::apply_op(doc, 0, &op, stamp) {
         Ok(_) => ops.push(op),
-        Err(e) => {
-            if let Some(node) = op_node(Tree::over(doc), &op) {
-                problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
-            }
-        }
+        Err(_) => failed.push(op),
     };
     // Gone: deepest first, so a parent's delete never meets a dead child.
-    let stale: Vec<NodeId> = doc.expanded_ids().filter(|id| doc.is_live(*id) && !wanted_ids.contains(id)).collect();
+    let stale: Vec<NodeId> = have.into_iter().filter(|id| doc.is_live(*id) && !wanted_ids.contains(id)).collect();
     let mut stale: Vec<(usize, NodeId)> = stale.into_iter().map(|id| (doc.depth(id), id)).collect();
     stale.sort_by(|a, b| b.cmp(a));
     for (_, id) in stale {
@@ -801,7 +931,6 @@ pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, V
     }
     // Relations: stale ones unlinked, changed ones relinked, new ones linked.
     let wanted_rels: BTreeMap<RelationId, Relation> = want_rels.into_iter().map(|w| (w.rel.id, w.rel)).collect();
-    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.is_expanded()).cloned().collect();
     for r in &have_rels {
         if wanted_rels.get(&r.id) != Some(r) {
             run(doc, Op::Unlink { id: r.id }, &mut ops);
@@ -812,8 +941,17 @@ pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, V
             run(doc, Op::Link { rel }, &mut ops);
         }
     }
-    sort_problems(&mut problems);
-    (ops, problems)
+    for op in failed {
+        match op::apply_op(doc, 0, &op, stamp) {
+            Ok(_) => ops.push(op),
+            Err(e) => {
+                if let Some(node) = op_node(Tree::over(doc), &op) {
+                    problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
+                }
+            }
+        }
+    }
+    ops
 }
 
 /// The node a failed op's problem is shown on.
@@ -844,7 +982,7 @@ pub fn affected_by(doc: Tree<'_>, ops: &[Op]) -> bool {
     })
 }
 
-fn in_library(doc: Tree<'_>, mut id: NodeId) -> bool {
+pub(crate) fn in_library(doc: Tree<'_>, mut id: NodeId) -> bool {
     while let Some(n) = doc.node(id) {
         if n.ty.name() == "library" {
             return true;
@@ -1112,7 +1250,7 @@ pub fn check_context(doc: Tree<'_>, node: NodeId) -> Result<(), String> {
 }
 
 /// The definition a node belongs to, if it is part of one.
-fn definition_of(doc: Tree<'_>, mut id: NodeId) -> Option<NodeId> {
+pub(crate) fn definition_of(doc: Tree<'_>, mut id: NodeId) -> Option<NodeId> {
     while let Some(n) = doc.node(id) {
         if n.ty.name() == "definition" {
             return Some(id);

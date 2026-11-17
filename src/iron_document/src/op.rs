@@ -529,7 +529,11 @@ fn reparent(
     }
     check_parent(Tree::over(doc), cx, parent, ty)?;
     doc.set_parent(id, parent, order.clone());
-    check_embeds(Tree::over(doc), cx, id)?;
+    // A refused op leaves the document as it was.
+    if let Err(e) = check_embeds(Tree::over(doc), cx, id) {
+        doc.set_parent(id, old_parent, old_order);
+        return Err(e);
+    }
     Ok(vec![Op::Reparent {
         id,
         parent: old_parent,
@@ -632,8 +636,14 @@ fn set(
     let old = comp
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
-    if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
-        check_entity(Tree::over(doc), cx, id)?;
+    if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera)
+        && let Err(e) = check_entity(Tree::over(doc), cx, id)
+    {
+        // A refused op leaves the document as it was.
+        if let Some(comp) = doc.facet_mut(id, path.facet) {
+            let _ = comp.set(path.field, old);
+        }
+        return Err(e);
     }
     Ok(vec![Op::Set {
         id,
@@ -651,7 +661,7 @@ fn set(
 /// path then accepts or refuses it).
 fn catch_up_args(doc: &mut Document, cx: &Ctx, id: NodeId, field: &str, slot: &Slot) -> Result<Option<Vec<Op>>, ApplyError> {
     use crate::facet::{Args, Instance};
-    let Some(old) = doc.get::<Args>(id) else { return Ok(None) };
+    let Some(old) = doc.get::<Args>(id).cloned() else { return Ok(None) };
     if old.slots.contains_key(field) {
         return Ok(None);
     }
@@ -670,7 +680,11 @@ fn catch_up_args(doc: &mut Document, cx: &Ctx, id: NodeId, field: &str, slot: &S
     args.insert(field, slot.clone());
     doc.remove_facet(id, FacetKind::Args);
     doc.insert_facet(id, crate::facet::LeafStruct::wrap(args));
-    check_entity(Tree::over(doc), cx, id)?;
+    if let Err(e) = check_entity(Tree::over(doc), cx, id) {
+        doc.remove_facet(id, FacetKind::Args);
+        doc.insert_facet(id, crate::facet::LeafStruct::wrap(old));
+        return Err(e);
+    }
     Ok(Some(vec![Op::Set { id, path: LeafPath::new(FacetKind::Args, field).expect("an argument path"), slot: default }]))
 }
 
@@ -705,8 +719,15 @@ fn add_comp(
         doc.remove_facet(id, kind);
     }
     doc.insert_facet(id, comp.clone());
-    check_facet_bindings(Tree::over(doc), cx, id, std::slice::from_ref(comp))?;
-    check_entity(Tree::over(doc), cx, id)?;
+    let checked = check_facet_bindings(Tree::over(doc), cx, id, std::slice::from_ref(comp)).and_then(|_| check_entity(Tree::over(doc), cx, id));
+    if let Err(e) = checked {
+        // A refused op leaves the document as it was.
+        doc.remove_facet(id, kind);
+        if let Some(old) = replaced {
+            doc.insert_facet(id, old);
+        }
+        return Err(e);
+    }
     Ok(vec![match replaced {
         Some(old) => Op::AddFacet { id, facet: old },
         None => Op::RemoveFacet { id, kind },

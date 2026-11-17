@@ -85,11 +85,11 @@ fn atomicity_on() -> bool {
 }
 
 impl Store {
-    /// The subject applies transactions in place; the reference keeps the
-    /// old engine's working copy (reactive-engine handoff §4.3).
-    fn pair(subject: StoreCore, mut reference: StoreCore, method: &str) -> Store {
-        debug_assert_eq!(subject.engine(), Engine::InPlace);
-        reference.set_engine(Engine::Old);
+    /// The subject runs the new engine as far as it is built; the reference
+    /// the old engine with its working copy (reactive-engine handoff §4.4).
+    fn pair(subject: StoreCore, reference: StoreCore, method: &str) -> Store {
+        debug_assert_eq!(subject.engine(), Engine::New);
+        debug_assert_eq!(reference.engine(), Engine::Old);
         let store = Store { subject, reference, diverged: None };
         store.agree(method);
         store
@@ -161,15 +161,15 @@ impl Store {
     }
 
     pub fn new() -> Store {
-        Store::pair(StoreCore::new(), StoreCore::new(), "new")
+        Store::pair(StoreCore::with_engine(Document::new(), Engine::New), StoreCore::with_engine(Document::new(), Engine::Old), "new")
     }
 
     pub fn with_document(doc: Document) -> Store {
-        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_document(doc), "with_document")
+        Store::pair(StoreCore::with_engine(doc.clone(), Engine::New), StoreCore::with_engine(doc, Engine::Old), "with_document")
     }
 
     pub fn load(text: &str) -> Result<Store, LoadError> {
-        match (StoreCore::load(text), StoreCore::load(text)) {
+        match (StoreCore::load_with(text, Engine::New), StoreCore::load_with(text, Engine::Old)) {
             (Ok(subject), Ok(reference)) => Ok(Store::pair(subject, reference, "load")),
             (Err(a), Err(b)) => {
                 assert_eq!(a.to_string(), b.to_string(), "differential: `load` failed differently");

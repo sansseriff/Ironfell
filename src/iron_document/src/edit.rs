@@ -55,9 +55,13 @@ use crate::{Actor, StoreCore, TransactionInput};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+#[path = "math_edit.rs"]
+mod math_edit;
+pub use math_edit::{MathPath, valid_key as valid_math_part_key};
+
 /// The verbs; any other top-level element is a node.
 pub const VERBS: &[&str] = &[
-    "set", "add", "delete", "reparent", "link", "unlink", "place", "make-component", "circuit", "table", "context", "import-svg", "link-figures", "write", "rewrite",
+    "set", "add", "delete", "reparent", "link", "unlink", "place", "make-component", "circuit", "table", "context", "import-svg", math_edit::VERB, "link-figures", "write", "rewrite",
 ];
 
 /// The verbs that only write ops, which may be planned together.
@@ -113,9 +117,29 @@ impl Failure {
 /// SVG text to a fragment and what it could not carry (iron_svg, which
 /// this crate does not depend on).
 pub type SvgImport<'a> = &'a dyn Fn(&str) -> Result<(crate::copy::Fragment, Vec<String>), String>;
+pub type MathImport<'a> = &'a dyn Fn(usize, &str, &str, f64) -> Result<Vec<MathPath>, String>;
+
+/// TeX attributes, as decoded by the same reader that will plan the edit.
+pub fn math_sources(doc: crate::Tree<'_>, xml: &str) -> Vec<(usize, String, String)> {
+    let Ok(els) = crate::parts::elements(xml) else { return Vec::new() };
+    let [root] = els.as_slice() else { return Vec::new() };
+    if root.name != "edit" { return Vec::new() }
+    root.children.iter().enumerate()
+        .filter(|(_, el)| el.name == math_edit::VERB)
+        .filter_map(|(i, el)| {
+            let existing = el.attr("id").and_then(|id| id.parse().ok());
+            let (source, font) = math_edit::source_and_font(doc, el, existing).ok()?;
+            Some((i, source.to_owned(), font.to_owned()))
+        })
+        .collect()
+}
 
 /// Plan `xml` (one `<edit>`) against `store`: nothing is applied.
 pub fn plan(store: &StoreCore, xml: &str, svg: Option<SvgImport>) -> Result<Plan, Failure> {
+    plan_with_math(store, xml, svg, None)
+}
+
+pub fn plan_with_math(store: &StoreCore, xml: &str, svg: Option<SvgImport>, math: Option<MathImport>) -> Result<Plan, Failure> {
     let parse = |m: String| Failure::Errors(vec![VerbError { op: None, kind: "parse".into(), message: m, verb: None }]);
     let els = crate::parts::elements(xml).map_err(|e| parse(format!("not well-formed: {e}")))?;
     let root = match els.as_slice() {
@@ -135,7 +159,7 @@ pub fn plan(store: &StoreCore, xml: &str, svg: Option<SvgImport>) -> Result<Plan
         return Err(parse(format!("text inside <edit> is not read ({:?}); write prose outside the <edit>", root.text.trim().chars().take(40).collect::<String>())));
     }
     let verbs: Vec<String> = root.children.iter().map(describe).collect();
-    let mut p = Planner { store, svg, verbs: &verbs, scratch: store.scratch(), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
+    let mut p = Planner { store, svg, math, verbs: &verbs, scratch: store.scratch(), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
     for (i, el) in root.children.iter().enumerate() {
         if !VERBS.contains(&el.name.as_str()) && TypeId::lookup(&el.name).is_none() {
             return Err(Failure::Errors(vec![p.error(i, "parse", format!("<{}> is not a verb or a node type; verbs: {}", el.name, VERBS.join(", ")))]));
@@ -220,6 +244,7 @@ fn describe(el: &El) -> String {
 struct Planner<'a, 'v> {
     store: &'a StoreCore,
     svg: Option<SvgImport<'a>>,
+    math: Option<MathImport<'a>>,
     verbs: &'v [String],
     /// The document with every op so far applied: what each verb reads.
     scratch: StoreCore,
@@ -855,6 +880,29 @@ impl Planner<'_, '_> {
                 self.push(i, pasted.ops).map_err(Failure::Errors)?;
                 self.summary.push(format!("  <imported roots=\"{}\"/>", pasted.roots.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(" ")));
                 self.summary.extend(cuts.iter().map(|c| format!("  <cut>{}</cut>", escape(c))));
+                Ok(())
+            }
+            math_edit::VERB => {
+                let fail_math = |p: &Self, error| fail(p, "typeset_math", error);
+                let target = if let Some(id) = el.attr("id").filter(|id| id.starts_with('#')) {
+                    math_edit::Target::Existing(self.node(id).map_err(|e| fail_math(self, e))?)
+                } else {
+                    let parent = self.node(el.need("in").map_err(|e| fail_math(self, e))?).map_err(|e| fail_math(self, e))?;
+                    let doc = self.scratch.tree();
+                    if let Some(comp) = crate::composition::composition_of(doc, parent)
+                        && crate::composition::dims(doc, comp) != Some(crate::composition::Dims::Two) {
+                        return Err(fail_math(self, "LaTeX outlines belong in a 2D composition".into()));
+                    }
+                    let first = el.attr("first").is_some_and(|v| matches!(v, "true" | "yes" | "1"));
+                    let order = self.keys(Some(parent), el.attr("after"), first, 1, &[], &[])
+                        .map_err(|e| fail_math(self, e))?.remove(0);
+                    math_edit::Target::New { parent, order }
+                };
+                let (ops, aliases) = math_edit::build(self.scratch.tree(), &self.names(), self.scratch.authored().next_id(), el, target, |source, font, size| {
+                    self.math.ok_or("LaTeX typesetting is unavailable")?(i, source, font, size)
+                }).map_err(|e| fail_math(self, e))?;
+                self.push(i, ops).map_err(Failure::Errors)?;
+                self.nodes.extend(aliases);
                 Ok(())
             }
             "link-figures" => {

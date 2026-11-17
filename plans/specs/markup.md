@@ -55,6 +55,7 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
   <place def="$d" in="#C" id="$p"/>  <make-component of="#a #b" id="$m"/>
   <circuit sheet="$s">…</circuit>  <table in="#C">a | b</table>
   <context name="…">…</context>  <import-svg in="#C"><svg>…</svg></import-svg>
+  <typeset-math in="#C" source="E=mc^2" x="80" y="100"/>
   <link-figures a="#l" b="#Q"/>  <write narrative="#N">markdown</write>  <rewrite block="#B">…</rewrite>
 </edit>
 ```
@@ -102,6 +103,62 @@ plot's ports only by a raw expanded id (`#95/5z.port.signal`).
   `<rewrite>` and `<import-svg>` hold text (markdown, SVG) that is not read as markup.
   Markdown's entities are decoded; SVG goes to its parser as written, which decodes its
   own.
+
+### LaTeX in 2D compositions
+
+**Built 2026-11-17.** The top-level `<typeset-math>` verb typesets one TeX
+expression in display style. Give it a `source` attribute without math
+delimiters. Escape XML characters like `&amp;` for an alignment tab. The
+`size` is the em size in composition pixels (default 48). The equation uses
+the usual group transform and defaults to the theme's `@ink` color.
+Use `font="fira"` for MathJax's Fira and Fira Math variant, or `font="tex"`
+for the default TeX font.
+
+```xml
+<edit>
+  <let in="#C" id="$write" value="0"/>
+  <typeset-math in="#C" id="$eq" x="80" y="120" size="48"
+    source="\frac{\ironpart{num}{x+1}}{\ironpart{den}{x-1}}">
+    <part key="num" id="$num" fill.color="#47a8ff" draw.bind="$write"/>
+    <part key="den" id="$den" fill.color="#f4a261"/>
+  </typeset-math>
+  <clip in="#T" id="$clip" start="0" prop="let.value">
+    <key t="0" value="0"/><key t="1" value="1"/>
+    <key t="2" value="1"/><key t="3" value="0"/>
+  </clip>
+  <link from="$clip" to="$write" rel="animates"/>
+</edit>
+```
+
+`\ironpart{key}{term}` labels a balanced subexpression within the same
+typesetting pass. Keys are unique ASCII letters, digits, underscores and
+hyphens. Each visible mark becomes a group. Marks can share a line or sit
+within a fraction, but cannot nest. Optional `<part>` elements give the
+group an alias and override its `fill.color`, `draw`, or group properties.
+The equation and part aliases are available to subsequent verbs in the edit.
+
+`draw` accepts a value or binding in `0..1` on the equation or a part.
+The paths stagger within each part. They trace their contours, then fade
+in the complete fills while fading out the tracing strokes. Decreasing
+progress reverses the effect. The named groups also accept ordinary
+animation clips for location, rotation, scale and opacity.
+
+To revise the source, use `<typeset-math id="#equation" source="…"/>`.
+It replaces the generated paths in one transaction, retains the equation
+group and existing named part groups, and preserves their controls and
+animation links. To change only the font, use
+`<typeset-math id="#equation" font="fira"/>`. A missing mark leaves its group empty so a later
+revision can reuse it. Use the same verb with a `<part key="…">` to
+update color and progress controls. Use `<set>` to change an existing
+group's transform or opacity.
+
+The shared web and desktop model API loads MathJax and the chosen
+bundled font on demand. It gives the Rust planner a restricted SVG, which
+`iron_svg` converts to packed paths. The document saves the source in
+an ordinary `let` alongside its baked outlines. Playback and export
+use normal groups, paths and timeline values. Unsupported glyphs and
+invalid TeX produce an edit diagnostic and leave the document unchanged.
+The built-in agent's `math` topic gives the same authoring example.
 
 ## 4. Planning and applying
 

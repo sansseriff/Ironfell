@@ -64,7 +64,9 @@ export default defineConfig(({ mode }) => ({
     include: ['bits-ui', 'dockview-core'],
     // Icons are deep imports, one per file: pre-bundled, every new one
     // would re-optimise and reload. They are plain ESM Svelte, served as is.
-    exclude: ['@lucide/svelte'],
+    // MathJax font subsets register data on the same font class used by
+    // the typesetter. Serving source modules keeps that identity in dev.
+    exclude: ['@lucide/svelte', '@mathjax/src', '@mathjax/mathjax-tex-font', '@mathjax/mathjax-fira-font'],
   },
   // Worktrees and agent scratch live in .agents/ (AGENTS.md): another
   // agent's edits there (a tsconfig, an html) made Vite reload this app

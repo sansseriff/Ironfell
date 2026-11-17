@@ -948,13 +948,40 @@ pub fn document_table_edit(app: &mut WorkerApp, table: String, verb: String, cel
 /// "version", "errors": [{op, kind, message, verb}]}`, or `{"ok": false,
 /// "version", "failure": markup}` (a question for the model).
 pub fn document_edit_plan(app: &mut WorkerApp, xml: String) -> String {
+    plan_edit(app, &xml, None)
+}
+
+pub fn document_edit_math_sources(app: &mut WorkerApp, xml: String) -> String {
+    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+        return "[]".into();
+    };
+    serde_json::to_string(&iron_document::edit::math_sources(store.0.tree(), &xml)).expect("source list")
+}
+
+pub fn document_edit_plan_math(app: &mut WorkerApp, xml: String, equations: serde_json::Value) -> String {
+    let math = |index: usize, source: &str, font: &str, size: f64| {
+        let answer = equations.get(index.to_string()).ok_or("missing MathJax result")?;
+        if answer.get("source").and_then(serde_json::Value::as_str) != Some(source)
+            || answer.get("font").and_then(serde_json::Value::as_str) != Some(font) {
+            return Err("LaTeX source or font changed while typesetting. Specify both and retry.".into());
+        }
+        if let Some(error) = answer.get("error").and_then(serde_json::Value::as_str) {
+            return Err(error.to_owned());
+        }
+        let svg = answer.get("svg").and_then(serde_json::Value::as_str).ok_or("missing MathJax SVG")?;
+        iron_svg::import_math(svg, size)
+    };
+    plan_edit(app, &xml, Some(&math))
+}
+
+fn plan_edit(app: &mut WorkerApp, xml: &str, math: Option<iron_document::edit::MathImport<'_>>) -> String {
     use iron_document::edit::{self, Failure};
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "no_store", "message": "document bridge not installed"}]}).to_string();
     };
     let version = store.0.authored().version().0;
     let svg = |text: &str| iron_svg::import(text).map(|i| (i.fragment, i.cuts));
-    match edit::plan(&store.0, &xml, Some(&svg)) {
+    match edit::plan_with_math(&store.0, xml, Some(&svg), math) {
         Ok(plan) => serde_json::json!({"ok": true, "version": version, "plan": plan}),
         Err(Failure::Errors(errors)) => serde_json::json!({"ok": false, "version": version, "errors": errors}),
         Err(Failure::Markup(failure)) => serde_json::json!({"ok": false, "version": version, "failure": failure}),

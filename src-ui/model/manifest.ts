@@ -32,7 +32,7 @@ function parts(schema: Schema) {
   return { types, comps, contextFields, standard };
 }
 
-export type TopicName = 'components' | 'data' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'repeats' | 'state' | 'tables' | 'time' | 'narratives';
+export type TopicName = 'components' | 'data' | 'math' | 'machines' | 'ports' | 'schematic' | 'contexts' | 'constraints' | 'layout' | 'repeats' | 'state' | 'tables' | 'time' | 'narratives';
 
 /** A topic: what it covers (listed in the core), its text, and when it is
  *  relevant without being asked for: the document holding what it is about
@@ -160,6 +160,50 @@ ${p.standard}
   ys, base); a non-finite sample breaks the line. Map data to pixels with scale(xs,
   lo, hi, 0, w). Colours: rgb(r, g, b[, a]) 0–255, hsl(h, s, l[, a]) degrees and 0–100,
   mix(c1, c2, t), spectrum(λ) visible light's colour for a wavelength.`,
+  },
+  math: {
+    summary: 'editable LaTeX in 2D compositions, named equation parts, coloring and write-on/off',
+    doc: /LaTeX source|<typeset-math\b/,
+    request: /\b(?:latex|tex|mathjax|fira math|equations?|formula|formulas|fractions?|integrals?|typeset|write-on|write-off)\b/i,
+    text: () => String.raw`LATEX IN 2D COMPOSITIONS
+  Use <typeset-math> at the top level of an <edit>. Give source as TeX math
+  without dollar delimiters. Use a single backslash in an XML attribute and
+  escape ampersands (including alignment tabs), less-than signs and quotes as
+  XML entities. size is the em size in composition pixels (default 48).
+  x and y place the top-left. The default fill is @ink. Use font="fira"
+  for MathJax's sans-serif Fira Math variant, or font="tex" for the default.
+
+  Wrap balanced terms with \ironpart{key}{term}, using a unique key made
+  of ASCII letters, digits, underscores or hyphens. Marked terms may be
+  adjacent or inside fractions, but cannot enclose another marked term.
+  A <part> names and styles its matching term. fill.color applies to that
+  term's paths. Each named group can move and fade independently. draw is
+  progress 0..1, from invisible through a traced outline to a solid fill.
+  It can live on the whole equation or on any part. Animate an ordinary let
+  with a clip, and bind draw to that let. A falling key range writes off.
+
+    <edit>
+      <let in="#C" id="$write" value="0"/>
+      <typeset-math in="#C" id="$eq" x="80" y="120" size="48"
+        source="\frac{\ironpart{num}{x+1}}{\ironpart{den}{x-1}}">
+        <part key="num" id="$num" fill.color="@series-1" draw.bind="$write"/>
+        <part key="den" id="$den" fill.color="@series-2"/>
+      </typeset-math>
+      <clip in="#T" id="$clip" start="0" prop="let.value">
+        <key t="0" value="0"/><key t="1" value="1"/>
+        <key t="2" value="1"/><key t="3" value="0"/>
+      </clip>
+      <link from="$clip" to="$write" rel="animates"/>
+    </edit>
+
+  Replace #C and #T with the composition and timeline ids from LOOK. Equation
+  and part aliases are available to subsequent verbs in the edit. To replace
+  the TeX, use <typeset-math id="#group" source="…"/> with the equation's
+  existing group id. To change only the font, use <typeset-math id="#group"
+  font="fira"/>. Keep the same part keys to retain their colors, controls
+  and animation targets. Use <set> to change an existing group's transforms
+  or opacity. Use the color/draw attributes on a re-typeset to update those
+  settings. The saved composition contains the source and standard paths.`,
   },
   machines: {
     summary: "a component's states and animated transitions (channels, machines, states, transitions, tweens)",
@@ -591,6 +635,9 @@ EDITS, inside <edit expect-version="N">  (N = the version you read)
       SVG's shapes as new nodes under #comp (or a group), the SVG's origin at x, y.
       Paths stay paths; what SVG cannot carry (text, images, gradients beyond their
       first colour, filters) is listed as <cut> lines.
+  <typeset-math in="#comp" source="E=mc^2" x="100" y="50"/>
+      Editable LaTeX rendered as vector paths. See the math topic for named
+      terms, coloring, write-on and write-off.
   Inside a new node every element is a node, except <place>, <make-component> and
   <link>; at the top of the edit set, table and context are verbs, and <place>,
   <circuit>, <table>, <write> (topics) may share an edit with anything.

@@ -28,7 +28,7 @@ use iron_document::geometry::{Geometry, PackedContour};
 use iron_document::shape::{self, Anchor};
 use iron_document::{Actor, Affine2, Facet, LeafStruct, NodeId, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
 use kurbo::{Affine, Point, Vec2};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 use usvg::roxmltree;
@@ -140,6 +140,71 @@ pub fn import_with(text: &str, share: bool) -> Result<Imported, String> {
     let references = nodes.iter().chain(&definitions).map(INode::references).fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
     let fragment = fragment(nodes, definitions, count)?;
     Ok(Imported { fragment, cuts, nodes: count, anchors, definitions: references.1, references: references.0 })
+}
+
+/// MathJax's restricted SVG vocabulary, kept in typesetting order with
+/// named groups intact. All transforms are baked into em-scaled outlines.
+pub fn import_math(svg: &str, size: f64) -> Result<Vec<iron_document::edit::MathPath>, String> {
+    use iron_document::edit::{MathPath, valid_math_part_key};
+    const PREFIX: &str = "iron-part-";
+    if svg.len() > 4_000_000 {
+        return Err("LaTeX produced too much geometry".into());
+    }
+    let xml = roxmltree::Document::parse(svg).map_err(|e| format!("invalid MathJax SVG: {e}"))?;
+    let mut keys = BTreeSet::new();
+    for node in xml.descendants().filter(|node| node.is_element()) {
+        if !matches!(node.tag_name().name(), "svg" | "g" | "path" | "rect" | "line" | "polygon" | "polyline" | "circle" | "ellipse") {
+            return Err(format!("unsupported MathJax SVG element: {}", node.tag_name().name()));
+        }
+        let Some(key) = node.attribute("id").and_then(|id| id.strip_prefix(PREFIX)) else { continue };
+        if node.tag_name().name() != "g" || !valid_math_part_key(key) || !keys.insert(key) {
+            return Err(format!("invalid or duplicate LaTeX part key {key:?}"));
+        }
+        if node.ancestors().skip(1).any(|parent| parent.attribute("id").is_some_and(|id| id.starts_with(PREFIX))) {
+            return Err(format!("LaTeX part {key:?} is nested in another marked part"));
+        }
+    }
+    let tree = usvg::Tree::from_xmltree(&xml, &usvg::Options::default()).map_err(|e| format!("could not read MathJax SVG: {e}"))?;
+    fn collect(group: &usvg::Group, part: Option<&str>, scale: Affine, paths: &mut Vec<MathPath>) {
+        let part = group.id().strip_prefix(PREFIX).or(part);
+        for node in group.children() {
+            match node {
+                usvg::Node::Group(child) => collect(child, part, scale, paths),
+                usvg::Node::Path(path) if path.is_visible() && path.fill().is_some() => {
+                    let transform = scale * affine(path.abs_transform());
+                    let [a, b, c, d, ..] = transform.as_coeffs();
+                    let linear = Affine::new([a, b, c, d, 0.0, 0.0]);
+                    let contours = usvg_contours(path).into_iter().map(|(mut anchors, _)| {
+                        for anchor in &mut anchors {
+                            anchor.at = transform * anchor.at;
+                            anchor.inn = (linear * anchor.inn.to_point()).to_vec2();
+                            anchor.out = (linear * anchor.out.to_point()).to_vec2();
+                        }
+                        PackedContour { closed: true, anchors }
+                    }).collect();
+                    let geometry = Geometry::new(contours);
+                    if geometry.anchor_count() > 0 {
+                        let even_odd = path.fill().is_some_and(|f| f.rule() == usvg::FillRule::EvenOdd);
+                        paths.push(MathPath { part: part.map(str::to_owned), geometry, even_odd });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    collect(tree.root(), None, Affine::scale(size / 1000.0), &mut paths);
+    if paths.is_empty() {
+        return Err("LaTeX produced no visible outlines".into());
+    }
+    if paths.len() > 2048 || paths.iter().map(|path| path.geometry.anchor_count()).sum::<usize>() > 131_072 {
+        return Err("LaTeX produced too much geometry".into());
+    }
+    let visible: BTreeSet<_> = paths.iter().filter_map(|path| path.part.as_deref()).collect();
+    if let Some(key) = keys.difference(&visible).next() {
+        return Err(format!("LaTeX part {key:?} has no visible outline"));
+    }
+    Ok(paths)
 }
 
 /// The fewest nodes (or path anchors) a repeated piece holds to become a

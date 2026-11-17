@@ -117,7 +117,21 @@ export function makeDocumentApi(call: DocumentCall): DocumentApi {
     })),
     view: q => call({ op: 'view', query_json: JSON.stringify({ scope: null, depth: null, ...q }) }),
     version: async () => (await json<{ version: number }>({ op: 'version' })).version,
-    plan: xml => json({ op: 'edit_plan', xml }),
+    plan: async xml => {
+      if (!/<typeset-math[\s/>]/.test(xml)) return json({ op: 'edit_plan', xml });
+      const sources = await json<[number, string, string][]>({ op: 'edit_math_sources', xml });
+      if (!sources.length) return json({ op: 'edit_plan', xml });
+      const equations: Record<number, { source: string; font: string } & ({ svg: string } | { error: string })> = {};
+      for (const [index, source, font] of sources) {
+        try {
+          const { mathSvg } = await import('./math');
+          equations[index] = { source, font, svg: await mathSvg(source, font) };
+        } catch (error) {
+          equations[index] = { source, font, error: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      return json({ op: 'edit_plan_math', xml, equations });
+    },
     apply: (tx, expect) => json({ op: 'apply', transaction_json: JSON.stringify(tx), expect_version: expect }),
     logSince: async since => {
       const r = await json<{ pending?: boolean; gap?: boolean; ndjson?: string; version?: number }>({ op: 'scope_log', since });

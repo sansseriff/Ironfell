@@ -58,6 +58,8 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "picture" => { arity(args,1)?; crate::engine_api::document_picture(app,argument::<String>(args,0)?) },
         "picture_poll" => { arity(args,2)?; crate::engine_api::document_picture_poll(app,argument::<u64>(args,0)?,argument::<bool>(args,1)?) },
         "edit_plan" => { arity(args,1)?; crate::engine_api::document_edit_plan(app,argument::<String>(args,0)?) },
+        "edit_math_sources" => { arity(args,1)?; crate::engine_api::document_edit_math_sources(app,argument::<String>(args,0)?) },
+        "edit_plan_math" => { arity(args,2)?; crate::engine_api::document_edit_plan_math(app,argument::<String>(args,0)?,argument::<serde_json::Value>(args,1)?) },
         "netlist" => { arity(args,1)?; crate::engine_api::document_netlist(app,argument::<String>(args,0)?) },
         "netlists" => { arity(args,0)?; crate::engine_api::document_netlists(app) },
         "edit_revise" => { arity(args,2)?; crate::engine_api::document_edit_revise(argument::<String>(args,0)?,argument::<String>(args,1)?) },

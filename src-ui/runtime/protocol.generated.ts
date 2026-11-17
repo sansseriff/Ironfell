@@ -47,6 +47,8 @@ export type DocumentCommand =
   | { op: 'picture'; source: string }
   | { op: 'picture_poll'; ticket: number; cancel: boolean }
   | { op: 'edit_plan'; xml: string }
+  | { op: 'edit_math_sources'; xml: string }
+  | { op: 'edit_plan_math'; xml: string; equations: unknown }
   | { op: 'netlist'; sheet: string }
   | { op: 'netlists' }
   | { op: 'edit_revise'; rejected: string; patch: string }
@@ -135,6 +137,8 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'picture': return { fn: command.op, args: [command.source] };
     case 'picture_poll': return { fn: command.op, args: [command.ticket, command.cancel] };
     case 'edit_plan': return { fn: command.op, args: [command.xml] };
+    case 'edit_math_sources': return { fn: command.op, args: [command.xml] };
+    case 'edit_plan_math': return { fn: command.op, args: [command.xml, command.equations] };
     case 'netlist': return { fn: command.op, args: [command.sheet] };
     case 'netlists': return { fn: command.op, args: [] };
     case 'edit_revise': return { fn: command.op, args: [command.rejected, command.patch] };

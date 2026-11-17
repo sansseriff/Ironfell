@@ -682,6 +682,15 @@ results are polled with a five-second timeout instead of fixed post-command slee
 
 Run the relevant focused fixture alongside it when changing a feature (for example,
 `attachments.ts` for shared point controls, `timeline.txt` for timeline behavior).
+
+`math.txt` exercises LaTeX through the document edit API. Run it in the
+worker and with `&contractRuntime=main`. Expect these three results and
+`(no page errors)`.
+
+- `LaTeX colors, fraction rule, outline, fill and reversible scrub passed`
+- `Editable source, invalid-input rejection, stable part id and undo passed`
+- `Fira Math font switch, retained part id and extended glyphs passed`
+
 Use the broad pair for cross-cutting changes or before a release:
 
 ```sh

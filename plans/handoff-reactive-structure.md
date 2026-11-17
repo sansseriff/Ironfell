@@ -884,6 +884,18 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   differently from a rebuild and spend its "did not settle" budget differently
   (`dirty × 4 + 1024` against `all × 4 + 1024`); no script has shown a difference.
 
+- **Stage 5's other exit checks, run ahead of stage 4 (2026-11-17, `b717e13`),
+  nothing swapped or deleted.** A dev-opt webgl2 app build with `engine-new` and one
+  without, both from the same exported commit, each served on its own and driven by
+  the same scripts: `smoke.txt`, `regression.txt`, `plot-view.txt`, `actions.txt`,
+  `query.txt`, `fiber.txt` and `pulses.txt` all pass on `New`, with no page errors,
+  and their output matches `InPlace`'s line for line except two sampled-in-time
+  readings that differ from run to run on either engine (the pendulum's position in
+  the sixth decimal, pulse phases a frame apart). The host reference
+  (`IRON_ENGINE=new`, `engine-new`) and `bun test` (116) pass. With the differential
+  suite and the 10,000 random scripts green, **the plot targets are the only stage 5
+  exit not met** (above).
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

@@ -675,7 +675,7 @@ reader and the comparison with the old engine stay exact (the spec's §17).
 
 Written 2026-11-16 from the spec (§5–§7, §11, §14, §15, §16) and the code at
 `d9ec4ea`. Revised after a council review: Claude Opus 5.5 alone, since GPT Sol was
-unavailable, with the user's agreement. Round 1 scored it 6/10.
+unavailable, with the user's agreement. Round 1 scored it 6/10, round 2 7.5/10.
 
 **Needs the user's approval: two moves from 2b to 2c** (the review's findings 11 and
 12). Both change the spec's §17 row; the tasks below assume them.
@@ -699,10 +699,13 @@ unavailable, with the user's agreement. Round 1 scored it 6/10.
   new engine has been built so far.
 - Without the `differential` feature, `Store` builds `InPlace`. With it, the facade's
   subject is `New` and its reference `Old`.
-- A switch, `IRON_ENGINE=new`, read once, lets `plot_perf.rs` and a wasm-bench app
-  build run `New` before stage 5.
+- Two switches run `New` before stage 5, since `std::env` cannot be read on wasm:
+  - `IRON_ENGINE=new`, read once, for `plot_perf.rs` and the native probes;
+  - a cargo feature, `engine-new`, for a wasm-bench app build.
 - `StoreCore::scratch` uses its parent's engine. Tests that read evaluation counts
   branch on `engine()` until stage 5.
+- **"Frozen" means no new-engine work.** `InPlace` still takes stage 1's shared
+  fixes, which change shared code.
 
 **One type in front of both graphs.** `StoreCore`'s `reactive` becomes
 `enum Graph { Old(graph::Reactive), New(engine::Engine) }`. Its methods are the read
@@ -711,7 +714,9 @@ surface the crate and host call on `Reactive` today, with the same meaning:
   `signal_errors`;
 - `expr_of`, `is_bound`, `is_read`, `errors`, `contexts`, `transitive_deps`;
 - `overlay`, `preview`, `unpreview`, `clear_overlay`, `mark`;
-- the pending sets behind `take_changes`.
+- the pending sets behind `take_changes`;
+- what tests read today: `height`, and `evaluations` and `errors`, which become
+  methods.
 
 Callers do not branch.
 
@@ -728,20 +733,57 @@ allowed for with a normaliser.
   - **Sort `Changes`' lists** in `take_changes` and `peek_changes`: `created` parents
     first, `removed` deepest first, then by id; `moved` and `relations` by id. Today
     they are in op order, which follows how expansion happened to walk the document.
-  - **Sort `expansion_problems`** by (node, kind, message). `problem_notes` keeps the
+  - **Sort `Changes`' tie-breaks fully:**
+    - `moved` and `relations` by the whole tuple;
+    - `removed` deepest first, by the depth each node had where it was held when the
+      change was noted, then by id.
+  - **Sort `expansion_problems` and `truncated`** by (node, kind, message).
+    `problems()` lists them before binding errors, and `problem_notes` keeps the
     first three per node, so the order can be seen.
+  - **Treat a changed error message as a change.** Today `graph.rs` replaces a
+    failing leaf's message without telling its readers (`errors.insert(..).is_none()`).
+    So a reader keeps "depends on X, which failed: <the old reason>" until the next
+    `rebuild`, which the new engine never does.
   - **Re-derive where the old engine leaves derived state stale** until its next
     whole-document pass. The new engine works per op, so it would be right early and
     differ. The known cases:
-    - a constant set on an authored repeat's template child outside the library:
-      `affected_by` is false, and `settle_repeats` re-expands only when counts
-      change;
-    - a set on a port's `kind` or `dir`, which `derived_signals` reads but
-      `after_transaction` treats as non-structural;
-    - `apply_session`, which never expands.
+    - **any** `Set`, constant or expression, on an authored repeat's template child
+      outside the library: `affected_by` is false, and `settle_repeats` re-expands
+      only when counts change;
+    - a set on a port's `kind` or `dir`, or on an anchor's `follow` or `port`: each
+      is read by `derived_signals` or `anchor::derived`, but `after_transaction`
+      treats a set on it as non-structural;
+    - a set on a port's `datatype`, or on an argument a boundary check reads:
+      `types::declared` and `ty.check` read them during evaluation without a
+      dependency. They become dependencies of the boundary binding;
+    - `apply_session`, which never expands. It expands when `affected_by` says so,
+      so the Latency view's per-frame constant `Set` runs no whole-document
+      `expand`.
 
-    Each becomes structural (or expanding) in shared code. Any further case found
-    later is handled the same way and recorded.
+    Each becomes structural (or expanding, or a dependency) in shared code. Any
+    further case found later is handled the same way and recorded.
+  - **Each `NOT_ATOMIC` entry is fixed,** with its test turned round. None of these
+    depends on the new engine:
+    - `apply_session` rolls back by the journal;
+    - `machines.shared` and `machines.snap` change only on success;
+    - an action's `emit` is queued only once its writes succeed;
+    - **after a `post_apply` refusal, under `Old`,** the state that
+      `after_transaction`, `post_apply` and the pipeline changed is copied before
+      `after_transaction` and put back on refusal, with no rebuild. That state is:
+      - the whole `Reactive` (the graph's structure, its resolved values, errors,
+        overlay, signals and pending sets);
+      - `clusters`, and the geometry revisions with their pending structure and
+        leaves;
+      - `repeats`, `presence`, `repeat_inputs`, `truncated`, `expansion_problems`,
+        `session_state`, `tables`, `motion`, `contexts`, `time_errors`,
+        `physics_error`, `signal_stamp` (until it goes), and the pending `Changes`.
+
+      `InPlace` is not compared and keeps its rebuild.
+
+    Then `NOT_ATOMIC` is empty and the reference is atomic. **Until stage 4, `New`
+    restores the same state the same way:** by copy, with its owners by their undo
+    log and its cells by copy or re-derivation. Stage 4 replaces that copy with
+    "tell the engine the reverse changes".
 - **Intended differences the harness can run.** `INTENDED` is descriptive today:
   `Store::call` compares return values and then whole snapshots, and reads neither
   table. Each entry gets an executable form, one of two kinds:
@@ -794,9 +836,17 @@ allowed for with a normaliser.
   `after_transaction`'s structural check, its invalidation, the geometry notes, and
   `pending.note`. The ids are `expand`'s path ids.
 - **Owner state rolls back with the document.** Owners, the template cache and
-  per-owner problems change in step 2. On a refusal they are put back by an undo log
-  kept beside the journal; the spec's §11.2 step 3 says to discard templates compiled
-  in the step.
+  per-owner problems change in step 2, and again in `after_transaction`. On any
+  refusal (by `run`'s checks or by `post_apply`) they are put back by an undo log kept
+  beside the journal. The spec's §11.2 step 3 says to discard templates compiled in
+  the step.
+- **Disposal deletes explicitly, across nested owners** (the spec's §7.3). Disposing
+  an owner, an item scope included, deletes every live derived node under it
+  explicitly, deepest first, including the copies of the owners nested inside it.
+  Otherwise the cascade tombstones them and `Changes::removed` never hears of them,
+  since `Changes` learns of a derived removal only from an explicit `Delete`. All
+  deletes of one step are sorted deepest first before any create, as `expand`'s
+  diff does.
 - **Which owners an op affects** is the spec's §7.2 table, plus what `wanted` covers
   today that the table misses:
   - instances and uses inside a node that gains a `repeat` or `when` facet, or is
@@ -807,15 +857,19 @@ allowed for with a normaliser.
   - `size` added to or removed from a `use` (the key includes "sized");
   - a definition created, or its deletion undone, for entities that name it;
   - a node moved into or out of the library.
-- **Kept whole-document in 2b:** `port::derived_signals`, `anchor::derived` and
-  `@name` resolution. They are recomputed on structural ops only, as now. They cost
-  O(connections + anchors + readers), and they are not on the plot's path.
+- **Kept whole-document in 2b:** `port::derived_signals` and `anchor::derived`,
+  recomputed on structural ops, as now. A tick-count change is a structural op, so
+  they are on the plot's path. They cost O(connections + anchors), and stage 3a
+  measures them. `@name` resolution is re-done from an index of the cells that read
+  each name, not by enumerating `bound_slots` (which walks every facet) and walking
+  up from each reader.
 - **The node budget** (50,000) needs a rule for which owner is refused and when one
   is let back in. Today it cuts in `wanted`'s global order. Write the rule in the
   spec's §7.5. If the old cut cannot be reproduced exactly, the budget becomes a
   §16.1 entry, which needs the user's approval. Until then, measure the 1,000-meter
   numbers at 700 meters, where nothing is cut.
-- **Under `differential`, after each owner update** the old `wanted` runs on the
+- **Under `differential`, after each op's owner updates** (`wanted` is
+  whole-document, so once per op, not once per owner), the old `wanted` runs on the
   subject's document and must equal the owners' copies. This names the op that was
   missed, not a later snapshot.
 - Exit:
@@ -839,17 +893,21 @@ allowed for with a normaliser.
 - **A derived cell evaluates its stored copy's expression,** borrowed.
 - **No rebuild on the success path.** `after_transaction` tells the engine each op
   and each expanded op instead of calling `rebuild` or `invalidate`, and loading is
-  the same pass with everything new. **After a `post_apply` refusal,** until stage 4,
-  `New` re-derives its cells from the document while keeping its inputs (signals and
-  the overlay), as the old engine's rebuild does.
+  the same pass with everything new. After a refusal, `New` restores as stage 1 says.
 - **`settle_repeats`' rounds still drive structure** through the owner layer. The
   sequence of publishes is unchanged, so published items and the 129-round cut
-  match. A round after the first only re-reads repeat inputs, so the plot fix is
-  measurable here.
+  match.
+  - Today every structural round, and `after_transaction` itself, clears
+    `repeat_inputs`. Each round then calls `drawn_repeats`, which scans every group
+    (item scopes included).
+  - Under `New` the repeat list comes from the owner layer's Collection index,
+    sorted by `NodeId` as `nodes_of_type` sorts. The 129-round problem names
+    `repeats[0]`, so the order must match.
 - Exit:
   - the differential suite is green;
-  - `plot_perf.rs` at 1 and 10 plots, and `plot-perf.txt` in a wasm-bench build with
-    `IRON_ENGINE=new`, measured and reported.
+  - `plot_perf.rs` at 1 and 10 plots (`IRON_ENGINE=new`), and `plot-perf.txt` in a
+    wasm-bench build with `engine-new`, measured and reported, with the share of
+    `derived_signals` and `anchor::derived` split out.
 
 **Stage 3b. Collections as Structure cells** (§7.1), replacing `settle_repeats`.
 - Keys, `max` with its `truncated` problem, key fallback with its `keys` problem,
@@ -863,23 +921,6 @@ allowed for with a normaliser.
 - Exit: the differential suite is green; the plot probes measured again.
 
 **Stage 4. The transaction steps in full** (§11.2 steps 4 to 7).
-- **First, each `NOT_ATOMIC` entry is fixed, in shared code where it can be,** with
-  its test turned round:
-  - `apply_session` rolls back by the journal;
-  - `machines.shared` and `machines.snap` change only on success;
-  - an action's `emit` is queued only once its writes succeed;
-  - after a `post_apply` refusal, **under `Old` only**, the state `after_transaction`
-    and the pipeline changed is copied beforehand and put back on refusal, with no
-    rebuild. That state is everything outside the document that
-    `after_transaction` and `resolve_physics` write:
-    - the overlay, geometry revisions, `repeats`, `presence`, `repeat_inputs`,
-      `truncated`, `expansion_problems`, `session_state`, `tables`, `motion`,
-      `contexts`, `time_errors`, `physics_error`;
-    - every producer's signals;
-    - the pending changes.
-
-  `InPlace` is not compared and keeps its rebuild. Then `NOT_ATOMIC` is empty and the
-  reference is atomic.
 - **The new engine:**
   - tell it each op, set the transaction's drivers, and stabilise;
   - owners it disposes are **held** with their state;
@@ -887,7 +928,7 @@ allowed for with a normaliser.
     each cluster's writes;
   - on failure: roll back the journal and the owner log, tell the engine the reverse
     changes, re-attach held owners, stabilise, and discard the pending `Changes`.
-    This removes stage 3a's re-derive;
+    This replaces `New`'s restore-by-copy from stage 1;
   - commit: close the journal, drop held owners, release buffered effects (a query's
     request, `on.emit`), publish `Changes`, push history.
 - `Transaction::expanded` goes away, in both engines. Its consumers read the owners'
@@ -913,7 +954,8 @@ allowed for with a normaliser.
   - also recorded:
     - a changed frame's time, which includes the host's paint order and spatial
       rebuild;
-    - a structural edit and a placement at 700 and 1,000 meters;
+    - a structural edit and a placement at 700 meters, and at 1,000 once the budget
+      rule is approved;
     - the demo's load time (no slower);
     - memory per meter (not expected to change until 2c).
 - Then `Store` builds `New` by default, and `InPlace` is deleted. The old engine goes
@@ -927,8 +969,11 @@ allowed for with a normaliser.
 - a difference appears that neither a shared fix nor a §16.1 entry settles;
 - a stage's exit cannot be met;
 - the plot targets are missed. Report the shortfall split between the engine and the
-  whole-document passes, which are phase 5's: `rebuild_clusters`, `resolve_layout`,
-  `solve_network`, palette, contexts.
+  whole-document passes:
+  - phase 5's: `rebuild_clusters`, `resolve_layout`, `solve_network`, palette,
+    contexts;
+  - those kept whole-document in 2b: `port::derived_signals` and
+    `anchor::derived`.
 
 ### 4.5 Before phases 3, 4 and 5
 

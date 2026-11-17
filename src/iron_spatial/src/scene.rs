@@ -68,7 +68,7 @@ enum Kind {
     Group,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Entry {
     /// The scope that holds this entry: the node's parent.
     scope: Option<NodeId>,
@@ -142,6 +142,35 @@ fn affine_of(a: iron_document::Affine2) -> Affine {
 }
 
 impl Scene {
+    /// The first way this scene differs from `other`, or `None`: entries
+    /// (kind, scope, affine, bounds, order), chains, embeds, and each
+    /// scope's union and depth. For the app's host reference
+    /// (reactive-engine handoff §4.1, task 6), which compares a scene kept
+    /// incrementally with one built from scratch.
+    #[doc(hidden)]
+    pub fn diff(&self, other: &Scene) -> Option<String> {
+        fn first<K: Ord + std::fmt::Debug, V: PartialEq + std::fmt::Debug>(what: &str, a: &BTreeMap<K, V>, b: &BTreeMap<K, V>) -> Option<String> {
+            for (k, x) in a {
+                match b.get(k) {
+                    None => return Some(format!("{what} {k:?}: only the incremental scene has {x:?}")),
+                    Some(y) if x != y => return Some(format!("{what} {k:?}:\n  incremental: {x:?}\n  rebuilt:     {y:?}")),
+                    _ => {}
+                }
+            }
+            b.iter().find(|(k, _)| !a.contains_key(k)).map(|(k, y)| format!("{what} {k:?}: only the rebuilt scene has {y:?}"))
+        }
+        let scopes = |s: &Scene| s.scopes.iter().map(|(k, v)| (*k, (v.union, v.depth))).collect::<BTreeMap<_, _>>();
+        let mut embeds = (self.embeds.clone(), other.embeds.clone());
+        embeds.0.sort();
+        embeds.1.sort();
+        first("entry", &self.entries, &other.entries)
+            .or_else(|| first("chain", &self.chains, &other.chains))
+            .or_else(|| (embeds.0 != embeds.1).then(|| format!("embeds: incremental {:?}, rebuilt {:?}", embeds.0, embeds.1)))
+            .or_else(|| first("shown_by", &self.shown_by, &other.shown_by))
+            .or_else(|| first("camera_embeds", &self.camera_embeds, &other.camera_embeds))
+            .or_else(|| first("scope", &scopes(self), &scopes(other)))
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

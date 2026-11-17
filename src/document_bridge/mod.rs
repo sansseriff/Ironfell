@@ -27,6 +27,8 @@ pub use demo::{demo_scene, showcase, template_snapshot};
 pub mod inspector;
 pub mod gas;
 mod highlight;
+#[cfg(test)]
+mod host_reference;
 pub mod liveness;
 mod materialize;
 mod motion;
@@ -590,6 +592,16 @@ pub(crate) fn sync_document(
     let version = store.0.document().version();
     if version != version_before {
         events.document_changed(version.0 as u32);
+    }
+    // A deleted node's derived descendants go with it, and no op names
+    // them: the transaction's inverse leaves derived nodes out, and a
+    // tombstoned node is no longer its parent's child. So when something
+    // went, every drawable and entity whose node is no longer live goes
+    // too (found by the host reference, `host_reference.rs`).
+    if affected.iter().any(|&n| !store.0.document().is_live(n)) {
+        let doc = store.0.document();
+        let dead: Vec<NodeId> = drawables.0.keys().copied().chain(map.ids()).filter(|&n| !doc.is_live(n)).collect();
+        affected.extend(dead);
     }
     ui.record(&store.0, &affected, structure);
     if affected.is_empty() {

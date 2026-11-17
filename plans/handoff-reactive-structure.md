@@ -2,8 +2,9 @@
 
 **Date:** 2026-11-16 · **Branch:** `master` · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
-and its decisions settled. **Nothing of the engine is built.** The current task is
-**phase 0** (§4.1). This file is for whoever builds it: what to read, the order of
+and its decisions settled. **Phase 0 is done** (2026-11-16; §2): baselines, the
+differential harness and the host reference. Nothing of the new engine is built. The
+current task is **phase 1** (§4.2). This file is for whoever builds it: what to read, the order of
 work, the first two phases as tasks, and the rules. Phases 0 to 2 are ready to build;
 phases 3, 4 and 5 each have design points to settle first (§4.3).
 
@@ -133,8 +134,8 @@ The spec's §17 has each phase's contents and exit. In order:
 
 | | Phase | State |
 |---|---|---|
-| 0 | Baselines and the differential harness, run old against old | **Current.** Tasks in §4.1 |
-| 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | Tasks in §4.2 |
+| 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
+| 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Current.** Tasks in §4.2 |
 | 2a | Transactions in place on the old engine: the document journal | Tasks written when phase 1 ends |
 | 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | |
 | 2c | Copies leave the document: instances as references | |
@@ -142,6 +143,33 @@ The spec's §17 has each phase's contents and exit. In order:
 | 4 | Observation: Dormant, Unloaded, parking, extents | |
 | 5 | The pipeline as cells: layout, the network solve, clips, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters | |
 | 6 | Value slices | |
+
+**Phase 0, as done (2026-11-16).** Exit: both harnesses green on old-vs-old.
+
+- `cargo test -p iron_document --features differential --target aarch64-apple-darwin`:
+  420 tests, 0 failed. `Store` is `StoreCore` without the feature; with it, the facade in
+  `src/differential/` (59 forwarded `&mut` methods; the snapshot and its
+  `NOT_COMPARED` list in `snapshot.rs`; `intended.rs`, whose `INTENDED` is empty and
+  whose `NOT_ATOMIC` has four entries).
+- Three faults in the reference alone each failed it (commit `91f0eba` has the output):
+  skipping `settle_repeats`, at `pending.derived_ops`; dropping an emit, at
+  `pending.emitted` (the suite had no `on.emit` test; one was added); leaving a change
+  undrained, as a different `drain_changes` return.
+- Atomicity, measured with `IRON_ATOMICITY=1`: four failures, each shown by a test in
+  `tests/atomicity.rs`. The handoff's three are confirmed; the fourth is new: a
+  transaction the solver refuses leaves a pending change, since `apply_now` rolls back
+  by rebuilding the graph.
+- `tests/differential_random.rs`: 10,000 seeds green in 359 s (release, 10 threads),
+  each of the 15 situations reached at least 376 times; 200 seeds in the normal suite.
+  A seed with `std:plot` reaches about 380 nodes, since placing it brings 281.
+- `document_bridge/host_reference.rs`: green over the smoke's operations and a script
+  of value- and op-driven structure. It found a host bug, fixed: a deleted node's
+  derived descendants kept their drawables, since no op names them.
+- A12 holds (`tests/id_order.rs`): with the document's derived ids numbered in
+  reverse in a second process, the saved text and the full view are equal.
+- Baselines in §1. Two findings for the user: the 1,000-meter probe is truncated by
+  `expand::NODE_BUDGET`, and A10's growth (about 530 bytes per value-keyed item, never
+  freed).
 
 At the end of each phase: its exit in the spec's §17 is met and shown by a command
 whose output is pasted into the commit or the roadmap row; this table and the

@@ -17,8 +17,8 @@ finishes, or is superseded.
      references, a time scheduler; it began as the `std:plot` pan/zoom frame drops):
      [`handoff-reactive-structure.md`](handoff-reactive-structure.md), with the design
      in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
-     nothing built but a reference model of the core pass (`src/iron_engine_kernel`).
-     Next: phase 0, the handoff's §4.1.
+     phase 0 (baselines, the differential harness, the host reference) done 2026-11-16.
+     Next: phase 1, the handoff's §4.2.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as

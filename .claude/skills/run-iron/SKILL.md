@@ -55,6 +55,9 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `snapping.txt` | ~30 s |
 | `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
+| `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6 min warm, debug (6m 11s, 2026-11-16; `differential_random`'s 200 seeds are 49 s of it) |
+| ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~6 min (359 s on 10 threads, 2026-11-16) |
+| `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference`: the host reference (reactive-engine handoff §4.1, task 6) | ~50 s warm (48 s, 2026-11-16) |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |
 | `keys.txt` | ~30 s |

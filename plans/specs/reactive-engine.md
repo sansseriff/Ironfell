@@ -3,8 +3,9 @@
 **Status:** Approved for building 2026-11-15; the decisions in §19 are settled.
 Revised 2026-11-16 after a third review; phases 0 to 2 are ready to build, and phases
 3, 4 and 5 each have points to settle first (§14, "Open before a phase starts").
-**Nothing is built** except a reference model of the core pass
-(`src/iron_engine_kernel`, §6). Work order, the current task and the rules for whoever
+**Nothing of the engine is built** except a reference model of the core pass
+(`src/iron_engine_kernel`, §6); phase 0 (baselines and the differential harness) is
+done. Work order, the current task and the rules for whoever
 builds it: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
 What is assumed and not yet verified: §14. How the design was reached:
 [`reactive-engine-review.md`](reactive-engine-review.md).
@@ -1281,9 +1282,9 @@ fails, stop and report before designing around it (handoff §5).
 | A7 | A machine's tween, a trace's `out` and a stateful item's exit can each be computed from a log of events and the clocks, matching the old steppers' sampled results within the differences §16.1 lists | §9.3, §10.4 | 3 | That stepper stays a per-frame stepper while necessary, and is Integrating |
 | A8 | An extent cell reading what `geom::local_bounds` reads is cheap enough to keep necessary for every loaded owner | §8.5 | 4: measured on the demo document and at 1,000 meters | Extents only for owners above a size; smaller ones stay Live |
 | A9 | Taffy can lay out a contained box's interior as a separate run that gives the same placements as the single nested run today | §9.2 | 5: `layout` and `table` suites | Containment only at sized `use` boundaries, which are already separate templates |
-| A10 | The interned path registry's growth under churned value keys is small enough to leave unreclaimed for now | §5.4, D5 | 0: measured | Reclaiming becomes part of 2c |
+| A10 | The interned path registry's growth under churned value keys is small enough to leave unreclaimed for now. **Measured 2026-11-16:** about 530 bytes per value-keyed item made, never freed (10,000 moves of an eight-item repeat: +40,662 paths, +20,331 keys, about 5.2 MiB; `tests/id_growth.rs`). Whether that is small enough is the user's call (handoff §1) | §5.4, D5 | 0: measured | Reclaiming becomes part of 2c |
 | A11 | No constraint cluster spans two compositions. constraint-system.md §0 says so and `implied_mates` checks it for mates (`plug.rs:251`), but nothing validates an explicit constraint's operands (`constraint.rs:97`, `op.rs:721`), and today's grouping is one union-find over the document (`solve.rs:130`) | §9.4 | 5: a scan of the demo and standard library, and a validation check added to the old engine first | One Clusters cell for the document, or refusing such constraints as a listed difference; the user chooses |
-| A12 | Nothing that can be seen depends on the numeric order of derived ids. A derived id's number is its slot in a process-wide registry in order of first use (`id.rs:255`), so `BTreeMap` order over derived ids, sibling ties (`document.rs:590`) and anything emitted in that order can differ between two processes holding the same document. The differential harness cannot see this: its two stores share the registry | §2 item 3, §13 | 0: one test that builds the same document in two processes with different ids interned first, and compares saved text and views | Order by path wherever the order can be seen |
+| A12 | Nothing that can be seen depends on the numeric order of derived ids. A derived id's number is its slot in a process-wide registry in order of first use (`id.rs:255`), so `BTreeMap` order over derived ids, sibling ties (`document.rs:590`) and anything emitted in that order can differ between two processes holding the same document. The differential harness cannot see this: its two stores share the registry | §2 item 3, §13 | 0: one test that builds the same document in two processes with different ids interned first, and compares saved text and views. **Holds, 2026-11-16** (`tests/id_order.rs`: the second process numbers the derived ids in reverse; saved text and view equal) | Order by path wherever the order can be seen |
 | A13 | The wake cell's reads and the list of things addressed into an owner (§8.3) are everything that could have made a parked owner record an event | §8.3 | 4: §8.8's property test with parking on | That owner kind is not parked; it stays Dormant |
 
 **Open before a phase starts.** A third review (2026-11-16) found these parts

@@ -132,7 +132,7 @@
   }
   .attachment :global(.attachment-remove:hover) { background: var(--danger); color: var(--accent-fg); }
   .image-error { color: var(--danger); margin: 8px 16px; font-size: var(--text-md); }
-  .composer { flex: none; padding: 6px 12px 12px; background: var(--bg); }
+  .composer { flex: none; padding: 10px 20px 20px; background: var(--bg); }
   .surface {
     max-width: 736px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-xl);
     background: var(--bg-input); overflow: hidden;
@@ -167,7 +167,6 @@
   .footer :global(.round.stop svg) { fill: currentColor; }
   .footer :global(.round.stop:hover) { background: var(--fg); color: var(--bg); opacity: 0.85; }
   .hint { margin: 6px 16px 0; color: var(--fg-muted); font-size: var(--text-sm); }
-  .compact { padding: 10px 20px 20px; }
   .compact .surface :global(textarea.ui-input) { max-height: 120px; }
   @media (prefers-reduced-motion: reduce) { .surface { transition: none; } }
 </style>

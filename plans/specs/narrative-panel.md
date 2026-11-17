@@ -455,3 +455,8 @@ not a document edit. Minimum heights keep the composer and document usable.
 Validation: `chat-layout.ts` passes at DPR 1/2, covering dragging, keyboard
 bounds/reset, mode switching, compact spacing and light/dark captures. Frontend
 checking has zero errors; fast smoke retains all six assertions and no page errors.
+
+Spacing follow-up: all chat modes now share the same 20 CSS px composer inset,
+10 px upper gap, 20 px bottom gap, and borderless inset chat header. Switching
+between Authoring and Hybrid preserves the composer’s width and bottom edge.
+`chat-layout.ts` checks those positions at DPR 1/2.

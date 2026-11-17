@@ -36,7 +36,12 @@ try {
   for (const theme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: theme });
     await page.screenshot({ path: `.agents/chat-layout/dpr${dpr}/hybrid-${theme}.png` });
+    const hybridSurface = (await narrative.locator('.composer .surface').boundingBox())!;
     await narrative.locator('[data-mode-button="authoring"]').click();
+    const authoringSurface = (await narrative.locator('.composer .surface').boundingBox())!;
+    assert.equal(authoringSurface.x, hybridSurface.x, 'mode switching preserves composer inset');
+    assert.equal(authoringSurface.width, hybridSurface.width, 'mode switching preserves composer width');
+    assert.equal(authoringSurface.y + authoringSurface.height, hybridSurface.y + hybridSurface.height, 'mode switching preserves composer bottom');
     const composer = narrative.locator('.composer');
     assert.equal(await composer.evaluate(el => getComputedStyle(el).paddingBottom), '20px');
     assert.equal(await narrative.locator('.chat-threads').evaluate(el => getComputedStyle(el).borderBottomWidth), '0px');

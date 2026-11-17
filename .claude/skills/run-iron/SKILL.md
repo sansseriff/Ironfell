@@ -3641,3 +3641,6 @@ Lesson exists. Each run takes about 6–10 s. Expected per DPR:
 `PASS chat layout DPR <1|2>: drag, keyboard bounds/reset, mode switching, compact spacing, light/dark; no page errors`.
 Captures are under `.agents/chat-layout/dpr<n>/`. The fast smoke expected output
 is unchanged: six `assertion passed` lines and `(no page errors)`.
+
+The chat-layout fixture also compares composer width, left inset and bottom edge
+between Hybrid and Authoring, so switching modes cannot change those spacings.

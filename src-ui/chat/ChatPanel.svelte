@@ -83,5 +83,6 @@
 
 <style>
   .chat-panel { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; background: var(--bg); }
-  .compact { flex: none; height: auto; max-height: 280px; }
+  .compact { flex: none; height: auto; max-height: 320px; padding-top: 8px; }
+  .compact :global(.chat-threads) { border-bottom: 0; background: transparent; padding: 0 20px; }
 </style>

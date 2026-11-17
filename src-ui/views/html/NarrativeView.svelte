@@ -80,6 +80,39 @@
     }
   });
 
+  // Session-only split, independent of the document and preserved across modes.
+  let body: HTMLDivElement;
+  let documentShare = $state(0.6);
+  let resizingChat = $state(false);
+  function resizeChat(event: PointerEvent) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    resizingChat = true;
+    const move = (e: PointerEvent) => {
+      const rect = body.getBoundingClientRect();
+      documentShare = Math.max(0.18, Math.min(0.78, (e.clientY - rect.top) / rect.height));
+    };
+    const end = () => {
+      resizingChat = false;
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('lostpointercapture', end);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('lostpointercapture', end);
+  }
+  function resizeChatKey(event: KeyboardEvent) {
+    const next = event.key === 'ArrowUp' ? documentShare - 0.04
+      : event.key === 'ArrowDown' ? documentShare + 0.04
+      : event.key === 'Home' ? 0.18 : event.key === 'End' ? 0.78
+      : event.key === 'Enter' ? 0.6 : undefined;
+    if (next === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    documentShare = Math.max(0.18, Math.min(0.78, next));
+  }
+
   // svelte-ignore state_referenced_locally
   let source = $state(spec.source);
   let host: HTMLDivElement | undefined = $state();
@@ -504,7 +537,7 @@
     </EmptyState>
   {/if}
 
-  <div class="body" class:hidden={missing}>
+  <div class="body" class:hidden={missing} bind:this={body} style:--document-share={documentShare} style:--chat-share={1 - documentShare}>
     <div class="doc" class:collapsed={mode === "exploration"}>
       {#if mode !== "exploration"}
         <div class="tools" role="toolbar" aria-label="Formatting" bind:clientWidth={toolsWidth}>
@@ -584,6 +617,18 @@
       </div>
     </div>
 
+    {#if mode === 'hybrid'}
+      <!-- Focusable separators implement the WAI-ARIA window splitter pattern. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex a11y_no_noninteractive_element_interactions -->
+      <div class="chat-divider" class:dragging={resizingChat} role="separator" tabindex="0"
+        aria-label="Resize document and chat history" aria-orientation="horizontal"
+        aria-valuemin={18} aria-valuemax={78} aria-valuenow={Math.round(documentShare * 100)}
+        aria-valuetext={`Document ${Math.round(documentShare * 100)}%, chat ${Math.round((1 - documentShare) * 100)}%`}
+        title="Drag to resize chat · Arrow keys to adjust · Enter to reset"
+        onpointerdown={resizeChat} onkeydown={resizeChatKey} ondblclick={() => documentShare = 0.6}>
+        <span></span>
+      </div>
+    {/if}
     <div class="conversation-host" class:compact={mode === 'authoring'}>
       <ChatPanel {session} {history} bind:this={chat} compact={mode === 'authoring'} target={targetLabel}
         targets={[{ value: "cursor", label: cursorLabel }, { value: "conversation", label: "Conversation only" }]}
@@ -672,7 +717,8 @@
     flex-direction: column;
   }
   .narrative[data-mode="hybrid"] .doc {
-    flex: 3;
+    flex: var(--document-share) 1 0;
+    min-height: min(100px, 25%);
   }
   .doc.collapsed {
     flex: none;
@@ -862,7 +908,7 @@
     box-shadow: -3px 0 0 var(--accent);
   }
   .conversation-host {
-    flex: 2;
+    flex: var(--chat-share) 1 0;
     min-height: 0;
     border-top: 1px solid var(--border);
     display: flex;
@@ -870,8 +916,17 @@
   }
   .conversation-host.compact {
     flex: none;
-    max-height: 280px;
+    max-height: 320px;
+    border-top: none;
   }
+  .narrative[data-mode="hybrid"] .conversation-host { border-top: none; min-height: min(220px, 50%); }
+  .chat-divider {
+    flex: none; height: 12px; display: flex; align-items: center; justify-content: center;
+    cursor: row-resize; touch-action: none; outline: none;
+  }
+  .chat-divider span { width: 40px; height: 3px; border-radius: 2px; background: var(--border-strong); }
+  .chat-divider:hover span, .chat-divider.dragging span, .chat-divider:focus-visible span { background: var(--accent); }
+  .chat-divider:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
   .narrative[data-mode="exploration"] .conversation-host {
     flex: 1;
   }

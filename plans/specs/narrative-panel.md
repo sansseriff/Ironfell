@@ -437,3 +437,21 @@ checkout. Native packaging and live Claude validation remain pending. Native CSP
 permits passive blob snapshots and opt-in HTTPS images; native frontend wiring
 does not imply a packaged-native test. Nothing is pushed.
 
+
+
+## Chat spacing and Hybrid resizing (2026-11-16)
+
+Authoring keeps the shared conversation components, with a quiet borderless chat
+header and 20 CSS px of inset around the rounded composer. The outer conversation
+divider is removed in this mode. The global Settings button has a 32 px hit target,
+rounded hover treatment and a title.
+
+Hybrid has a horizontal splitter between the document and conversation. Drag it
+up to enlarge chat history or down to enlarge the document. It supports Up/Down,
+Home/End and Enter to restore the 60/40 split; double-click also resets it. Its
+ratio stays in the mounted panel across layout-mode changes; it is session UI,
+not a document edit. Minimum heights keep the composer and document usable.
+
+Validation: `chat-layout.ts` passes at DPR 1/2, covering dragging, keyboard
+bounds/reset, mode switching, compact spacing and light/dark captures. Frontend
+checking has zero errors; fast smoke retains all six assertions and no page errors.

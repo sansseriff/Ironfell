@@ -167,7 +167,7 @@
   .footer :global(.round.stop svg) { fill: currentColor; }
   .footer :global(.round.stop:hover) { background: var(--fg); color: var(--bg); opacity: 0.85; }
   .hint { margin: 6px 16px 0; color: var(--fg-muted); font-size: var(--text-sm); }
-  .compact { padding: 4px 10px 8px; }
+  .compact { padding: 10px 20px 20px; }
   .compact .surface :global(textarea.ui-input) { max-height: 120px; }
   @media (prefers-reduced-motion: reduce) { .surface { transition: none; } }
 </style>

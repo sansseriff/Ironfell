@@ -3625,3 +3625,19 @@ DPR=2 bun run .claude/skills/run-iron/slider.ts
 Expected for each DPR: `PASS slider DPR <1|2>: endpoint grabs, no selection on use,
 track move, plain/library width grips, light/dark; no page errors`. About 9 s each.
 The fast smoke's six assertions and expected output are unchanged.
+
+
+## Narrative chat layout (2026-11-16)
+
+With Vite serving this checkout (default fixture URL uses port 5189):
+
+```sh
+bun .claude/skills/run-iron/chat-layout.ts
+DPR=2 bun .claude/skills/run-iron/chat-layout.ts
+```
+
+`URL` overrides the URL; keep `?gfx=webgl2&demo` with the showcase enabled so
+Lesson exists. Each run takes about 6–10 s. Expected per DPR:
+`PASS chat layout DPR <1|2>: drag, keyboard bounds/reset, mode switching, compact spacing, light/dark; no page errors`.
+Captures are under `.agents/chat-layout/dpr<n>/`. The fast smoke expected output
+is unchanged: six `assertion passed` lines and `(no page errors)`.

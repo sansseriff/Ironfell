@@ -27,6 +27,7 @@
           type="button"
           class="ui-icon-button is-nav"
           aria-label="Settings"
+          title="Settings"
           onclick={() => { hoverOpen = false; settingsOpen = true; }}
         >
           <Settings size={16} strokeWidth={1.75} />
@@ -56,6 +57,8 @@
   /* A single workspace action at the foot of the left view selector. It
      remains reachable even when that group's tabs are hidden or closed. */
   .global-settings { position: absolute; left: 0; bottom: 0; width: 40px; height: 44px; display: flex; align-items: center; justify-content: center; box-sizing: border-box; border-right: 1px solid var(--border); background: var(--bg-rail); pointer-events: auto; z-index: 6; }
+  .global-settings :global(.is-nav) { width: 32px; height: 32px; border-radius: var(--radius-lg); }
+  .global-settings :global(.is-nav:hover), .global-settings :global(.is-nav[aria-expanded="true"]) { background: var(--hover); color: var(--fg); }
   /* Plain buttons, not menu items, so they take the menu's highlight on hover
      and focus themselves. */
   :global(.appearance-menu) { min-width: 140px; }

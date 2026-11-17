@@ -919,6 +919,16 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
     unclear what holding would add.
   Measure the copy on a constraint-heavy document before building it.
 
+- **The whole frame, re-measured (2026-11-17, `7af66ef`, wasm-bench webgl2, one
+  700 × 420 plot, three runs per engine).** The frame-pacing note above is
+  resolved: every rerun counts 13–14 rAF gaps over 24 ms per pan on both engines
+  (none on zoom), so the earlier 25 and 49 were one-off runs, not the engine. Zoom,
+  `New` (p50 per changed frame, ms): store `action` 1.29, spatial `bounds` 1.49,
+  `display_list` 0.63, `encode` 0.37, `gesture_reconcile` 0.23, `render` 0.14,
+  `pick` 0.06, unattributed about 2.0; worker frame 6.26 (`InPlace` 8.56, its
+  `action` 4.70). `action` p95 across the runs: slow pan 1.53–1.62, fast pan
+  1.10–1.22, zoom 1.68–1.81 (`InPlace` 6.3–6.8, 6.2, 5.3–6.8).
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

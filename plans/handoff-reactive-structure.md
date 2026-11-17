@@ -437,7 +437,7 @@ failure stay as they are.
 
 Written 2026-11-16 from the spec's §11 and §17 and the code at `bf7d13f`. Revised the
 same day after a council review (Claude Opus 5.5 and GPT-6.1 Sol; round 1: 6 and
-6/10, round 2: 8 and 9/10). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
+6/10, round 2: 8 and 9/10, round 3: 8 and 10/10, its last four points applied). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
 are private, `facet_mut` has one caller (`op.rs` `set`), `expand` and `settle_repeats`
 write through `apply_op`, and load and `set_scope` never run inside a transaction.
 
@@ -458,14 +458,21 @@ last past the call that caused it. Building that mechanism is not 2a's work.
 - `StoreCore` holds which one it runs; only `run` and its callers (`apply_now`,
   `undo`, `redo`, `replay`) look at it. The facade sets it with `set_engine`, which
   `debug_assert!`s that no journal is open; `new`, `with_document` and `load` default
-  to `InPlace`. `engine()` is available without the feature. Without the `differential` feature, `Store`
+  to `InPlace`. `engine()` is available without the feature. Scratch stores built
+  from a store (`edit.rs`, `compose.rs`, and the two in `parts.rs` that call
+  `StoreCore::with_document(store.authored().clone())`) take the parent's engine
+  (`set_engine(store.engine())`), so the reference's scratch work stays `Old`. Without the `differential` feature, `Store`
   runs `InPlace`. With it, the facade builds the subject `InPlace` and the reference
   `Old`; `Store::pair`'s assertion that both are `Old` changes to match.
 - `Old` is the reference engine, not a compatibility path. It goes with the rest of
   the old engine at the swap.
 - `run` returns a rollback token in place of the working document:
-  `enum Rollback { Clone(Document), Journal }`, `#[must_use]`, consumed exactly once
-  by `commit(token)` or `abort(token)`; its `Drop` `debug_assert!`s that it was.
+  `#[must_use] struct Rollback(Option<Undo>)` with `enum Undo { Clone(Document),
+  Journal }`, consumed exactly once by `commit(token)` or `abort(token)`, which
+  `take()` the `Undo`. Its `Drop` `debug_assert!`s `self.0.is_none() ||
+  std::thread::panicking()`. The `Option` lets `abort` move the document out, and the
+  `panicking` test keeps a panic between `run` and `commit` from becoming a
+  double panic that aborts the test binary.
   - **`Old`:** `run` swaps the working copy in and keeps the previous document in the
     token. `abort` puts it back; `commit` drops it.
   - **`InPlace`:** `abort` rolls the journal back and closes it; `commit` closes it.
@@ -500,9 +507,9 @@ hold tens of thousands of ids at 1,000 meters, and cloning them per transaction 
 bring back part of the cost this phase removes.
 
 - Derive `PartialEq` for `Document`, so tests compare every field, indexes included.
-  The journal and the shadow clone below live outside that comparison and outside
-  `Clone` (a wrapper whose `PartialEq` is always true and whose `Clone` is empty, or
-  fields kept beside the `Document` rather than in it).
+  The journal and the shadow clone below are `Document` fields (the mutators write
+  the journal) kept outside that comparison and outside `Clone`: a wrapper whose
+  `PartialEq` is always true and whose `Clone` is empty.
 - **Under the `differential` feature, `begin` keeps a shadow clone** and `rollback`
   asserts `==` against it, and `check_invariants()`. Every failing call in the suite
   and in the 10,000 seeds then checks rollback at the level of the maps, which the
@@ -592,7 +599,9 @@ after it, so these cases need their own builders:
   - a refusal after `settle_repeats` re-expanded in `after_transaction` (change a
     repeat's count, then fail the solver);
 - for `undo` (including undoing a delete, the `restore_node` path), `redo` and
-  `replay`, the stages before and inside `run` above. They never call `post_apply`
+  `replay`, the stages before and inside `run` above that each can reach. For example,
+  undo never meets `expand::refuse` (its inverse holds no derived ids), and undoing
+  the top entry fails only if something outside history changed the document. They never call `post_apply`
   (the spec's §11.3), so the solver refusals are tested on `apply` only;
 - one node touched several times in a failing transaction.
 

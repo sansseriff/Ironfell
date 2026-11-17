@@ -19,26 +19,26 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 /// A 2D composition holding `markup`; answers the store and the markup's named nodes.
 fn sheet(markup: &str) -> (Store, std::collections::BTreeMap<String, NodeId>) {
     let mut store = Store::new();
-    let comp = store.document().next_id();
+    let comp = store.authored().next_id();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
     name.text = Slot::Const(Value::Str("sheet".into()));
     store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![name.wrap(), c.wrap()] }])).unwrap();
-    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.document().next_id()).unwrap();
+    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.authored().next_id()).unwrap();
     store.apply(tx("draw", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     (store, built.named)
 }
 
 /// A repeat's items, in order.
 fn items(store: &Store, g: NodeId) -> Vec<NodeId> {
-    let doc = store.document();
+    let doc = store.tree();
     doc.children(g).iter().copied().filter(|c| c.is_item_scope() && doc.is_live(*c)).collect()
 }
 
 /// The copies a repeat has, in order, and each one's resolved `x`.
 fn copies(store: &Store, g: NodeId) -> Vec<f64> {
-    let doc = store.document();
+    let doc = store.tree();
     let items = items(store, g);
     // Each item is a group holding its copy of the template's one shape.
     items.iter().map(|&i| store.resolved(doc.children(i)[0], path("transform2d.x")).unwrap().as_f64().unwrap()).collect()
@@ -50,18 +50,18 @@ fn a_repeat_draws_one_copy_per_count_and_settles_with_undo() {
     let g = named["g"];
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0]);
     // The template is a child too, but no copy; it is never drawn.
-    let template = store.document().children(g).iter().copied().find(|c| !c.is_expanded()).unwrap();
-    assert!(expand::in_repeat_template(store.document(), template));
-    assert!(store.document().children(g).iter().filter(|c| c.item_of(g).is_some()).all(|&c| !expand::in_repeat_template(store.document(), c)));
+    let template = store.tree().children(g).iter().copied().find(|c| !c.is_expanded()).unwrap();
+    assert!(expand::in_repeat_template(store.tree(), template));
+    assert!(store.tree().children(g).iter().filter(|c| c.item_of(g).is_some()).all(|&c| !expand::in_repeat_template(store.tree(), c)));
     store.apply(tx("more", vec![Op::Set { id: g, path: path("repeat.count"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap();
     assert_eq!(copies(&store, g), vec![0.0, 20.0, 40.0, 60.0, 80.0]);
     // A copy's value can differ: it is the repeat's override of that item,
     // one undo step. Its structure is the template's: that is refused.
     let item = items(&store, g)[0];
-    let copy = store.document().children(item)[0];
+    let copy = store.tree().children(item)[0];
     store.apply(tx("nudge", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: Slot::Const(Value::Number(5.0)) }])).unwrap();
     assert_eq!(store.resolved(copy, path("transform2d.y")), Some(Value::Number(5.0)));
-    let other = store.document().children(items(&store, g)[1])[0];
+    let other = store.tree().children(items(&store, g)[1])[0];
     assert_eq!(store.resolved(other, path("transform2d.y")), Some(Value::Number(0.0)));
     store.undo(0).unwrap().unwrap();
     assert_eq!(store.resolved(copy, path("transform2d.y")), Some(Value::Number(0.0)));
@@ -94,13 +94,13 @@ fn each_copy_reads_its_own_element_and_nothing_derived_is_saved() {
 fn a_wider_plot_gets_more_tick_labels_in_one_transaction() {
     let (mut store, named) = sheet(r#"<group name="holder"/>"#);
     let _ = named;
-    let model = store.document().next_id();
+    let model = store.authored().next_id();
     store.apply(tx("model", vec![Op::Create { id: model, ty: ty("model"), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![] }])).unwrap();
     let (ops, summary) = place_ops(&store, r#"<place def="std:plot" in="sheet" x="0" y="0"/>"#).unwrap();
     store.apply(tx("place", ops)).unwrap();
     let start = summary.find("use=\"").unwrap() + 5;
     let u: NodeId = summary[start..start + summary[start..].find('"').unwrap()].parse().unwrap();
-    let count = |s: &Store| s.document().descendants(u).into_iter().filter(|n| n.to_string().contains("/~") && s.document().get::<Name>(*n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("x tick")).count();
+    let count = |s: &Store| s.tree().descendants(u).into_iter().filter(|n| n.to_string().contains("/~") && s.tree().get::<Name>(*n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("x tick")).count();
     let narrow = count(&store);
     store.apply(tx("wider", vec![Op::Set { id: u, path: path("size.w"), slot: Slot::Const(Value::Number(900.0)) }])).unwrap();
     let wide = count(&store);

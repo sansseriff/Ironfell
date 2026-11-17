@@ -84,7 +84,7 @@ fn speed(store: Res<DocumentStore>, mut speed: ResMut<Speed>, trace: Res<Trace>)
     let name = LeafPath::new(FacetKind::Name, "text").unwrap();
     let x = LeafPath::new(FacetKind::Transform2d, "x").unwrap();
     let source =
-        store.0.document().live_nodes().find(
+        store.0.tree().live_nodes().find(
             |n| matches!(store.0.resolved(n.id,name),Some(Value::Str(s)) if s=="native test"),
         );
     let value = source

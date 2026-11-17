@@ -20,9 +20,9 @@
 //! `query.initial` (a constant or a formula) is what readers see before the
 //! first answer.
 
+use crate::Tree;
 use std::collections::BTreeMap;
 
-use crate::document::Document;
 use crate::expr::Leaf;
 use crate::facet::{FacetKind, LeafPath};
 use crate::id::NodeId;
@@ -71,7 +71,7 @@ impl Queries {
     /// What to publish at `now` (seconds on the host's clock), and the
     /// requests that became due. `wanted` says whether anything reads a
     /// query.
-    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, wanted: &dyn Fn(NodeId) -> bool, now: f64) -> (BTreeMap<Leaf, Value>, Vec<Request>) {
+    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, wanted: &dyn Fn(NodeId) -> bool, now: f64) -> (BTreeMap<Leaf, Value>, Vec<Request>) {
         let nodes: Vec<NodeId> = doc.nodes_with(FacetKind::Query).filter(|&n| doc.is_live(n)).collect();
         self.states.retain(|n, _| nodes.contains(n));
         let mut out = BTreeMap::new();

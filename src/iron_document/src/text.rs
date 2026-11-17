@@ -112,7 +112,7 @@ pub fn measure_with(store: &StoreCore, id: NodeId, text: &str, runs: &[StyleRun]
 /// How far a text's words sit inside its box: a table's cell padding, or
 /// nothing for any other text.
 pub fn cell_pad(store: &StoreCore, id: NodeId) -> [f64; 2] {
-    let doc = store.document();
+    let doc = store.tree();
     let row = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "row"));
     match row.and_then(|r| crate::table::table_of(doc, r)) {
         Some(t) => {
@@ -135,7 +135,7 @@ pub fn fragment(text: &str, centre: [f64; 2]) -> Result<crate::copy::Fragment, S
     let text = text.trim_end_matches('\n');
     let l = iron_text::engine().layout(text, &TextStyle::default(), &[], None);
     let mut store = StoreCore::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut t = Transform2d::default();
     t.x = Slot::Const(Value::Number((centre[0] - l.width * 0.5).round()));
     t.y = Slot::Const(Value::Number((centre[1] - l.height * 0.5).round()));
@@ -151,7 +151,7 @@ pub fn fragment(text: &str, centre: [f64; 2]) -> Result<crate::copy::Fragment, S
         .apply(TransactionInput { label: "paste text".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false })
         .map_err(|e| format!("the text did not apply: {e:?}"))?;
     Ok(crate::copy::Fragment {
-        doc: store.document().clone(),
+        doc: store.authored().clone(),
         roots: vec![id],
         extras: Vec::new(),
         homes: BTreeMap::from([(id, (None, OrderKey::first()))]),

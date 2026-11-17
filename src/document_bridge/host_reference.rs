@@ -115,7 +115,7 @@ fn rebuild(store: Store, modes: &Modes) -> (Store, Derived, iron_spatial::Scene)
     world.insert_resource(Modes { live: modes.live.clone() });
     world
         .run_system_once(|store: Res<DocumentStore>, mut map: ResMut<NodeMap>, mut layers: ResMut<CompositionLayers>, mut commands: Commands, assets: Res<MeshAssets>, mut drawables: ResMut<Drawables>, modes: Res<Modes>| {
-            let all: BTreeSet<NodeId> = store.0.document().live_nodes().map(|n| n.id).collect();
+            let all: BTreeSet<NodeId> = store.0.tree().live_nodes().map(|n| n.id).collect();
             materialize::reconcile(&store.0, &all, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
             map.paint_index = paint_order(&store.0);
         })
@@ -164,7 +164,7 @@ impl Host {
     }
 
     fn doc_named(&self, name: &str) -> NodeId {
-        let doc = self.world.resource::<DocumentStore>().0.document();
+        let doc = self.world.resource::<DocumentStore>().0.tree();
         doc.live_nodes()
             .find(|n| !n.id.is_expanded() && doc.get::<iron_document::facet::Name>(n.id).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name))
             .unwrap_or_else(|| panic!("no node named {name}"))
@@ -273,7 +273,7 @@ fn host_reference_follows_derived_structure() {
     set(&mut host, "close", open, "let.value", iron_document::Slot::Const(Value::Bool(false)));
     // Pan the plot: its ticks come and go outside any transaction.
     let area = {
-        let doc = host.world.resource::<DocumentStore>().0.document();
+        let doc = host.world.resource::<DocumentStore>().0.tree();
         let plot = doc.roots().iter().flat_map(|&r| doc.descendants(r)).find(|&d| doc.live(d).is_some_and(|n| n.ty.name() == "use")).unwrap();
         doc.descendants(plot)
             .into_iter()
@@ -294,7 +294,7 @@ fn host_reference_follows_derived_structure() {
     host.frame("cancel");
     // Instances placed and deleted, and undone.
     host.apply("place", &format!(r#"<place def="std:meter" in="{c}" x="0" y="300"/><place def="std:laser" in="{c}" x="200" y="300"/>"#));
-    let plot = host.world.resource::<DocumentStore>().0.document().children(c).iter().copied().find(|&n| host.world.resource::<DocumentStore>().0.document().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let plot = host.world.resource::<DocumentStore>().0.tree().children(c).iter().copied().find(|&n| host.world.resource::<DocumentStore>().0.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
     host.world.resource_mut::<PendingTransactions>().push("delete the plot", Actor::Human, vec![Op::Delete { id: plot }]);
     host.frame("delete the plot");
     for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {

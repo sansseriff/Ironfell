@@ -1,3 +1,4 @@
+use iron_document::Tree;
 use bevy::shape::RayCast3d;
 use bevy::prelude::*;
 
@@ -74,7 +75,7 @@ pub fn pick_document_2d_system(
     mut cache: Local<Pick2dCache>,
     spatial: Res<crate::document_bridge::SpatialScene>,
 ) {
-    let key = (pointer.screen, views.get(hits.panel.as_deref().unwrap_or("")).cloned(), store.0.document().version(), revision.0, spatial.generation, spatial.enabled);
+    let key = (pointer.screen, views.get(hits.panel.as_deref().unwrap_or("")).cloned(), store.0.authored().version(), revision.0, spatial.generation, spatial.enabled);
     if cache.key.as_ref() == Some(&key) && !embeds.is_changed() {
         // The 3D picker may have replaced overlay with hits on a plane last
         // frame. Restore the 2D base independently, before that pass runs again.
@@ -94,7 +95,7 @@ pub fn pick_document_2d_system(
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)).filter(|v| v.dims == Dims::Two && v.observes.is_none()) else { return };
     let Some(p) = view.to_doc(pointer.screen) else { return };
     let _timing = crate::perf::span(crate::perf::Phase::Pick);
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let roots = nest::panel_roots(doc, view);
     let screen = kurbo::Point::new(pointer.screen.x as f64, pointer.screen.y as f64);
     let mut walk = Pick { store: &store.0, doc, drawables: &drawables, embeds: &embeds, spatial: &spatial, screen, z: 0, examined: 0, out: Vec::new(), embed: None };
@@ -127,7 +128,7 @@ fn sort_hits(hits: &mut [crate::Hit2D]) {
 
 pub(crate) struct Pick<'a> {
     pub store: &'a iron_document::Store,
-    pub doc: &'a iron_document::Document,
+    pub doc: Tree<'a>,
     pub drawables: &'a crate::document_bridge::Drawables,
     pub embeds: &'a EmbedViews,
     pub spatial: &'a crate::document_bridge::SpatialScene,
@@ -228,7 +229,7 @@ pub fn pick_world_3d_system(
 ) {
     hits.world3d.clear();
     let Some(view) = hits.panel.as_deref().and_then(|p| views.get(p)) else { return };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     // The chain down to the 3D view's content: nothing in a 3D panel, the
     // embed's own chain when looking into a 3D embed.
     let prefix: Vec<NodeId> = if view.dims == Dims::Two { hits.embed_chain.clone() } else { Vec::new() };

@@ -43,7 +43,7 @@ pub struct Two {
 /// model, library { definition "thing" }.
 fn two_compositions() -> Two {
     let mut store = Store::new();
-    let ids = store.document().next_ids(8);
+    let ids = store.authored().next_ids(8);
     let (cartoon, group, boxed, assembly, torus, model, library, thing) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7]);
     let k = OrderKey::first();
     let k1 = OrderKey::after(&k);
@@ -80,7 +80,7 @@ fn entity_ops(t: &Two, id: NodeId, figures: &[(RelationId, NodeId)]) -> Vec<Op> 
 #[test]
 fn compositions_are_roots_with_dimensions() {
     let t = two_compositions();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     assert_eq!(composition::compositions(doc), vec![t.cartoon, t.assembly]);
     assert_eq!(composition::dims(doc, t.cartoon), Some(Dims::Two));
     assert_eq!(composition::dims(doc, t.assembly), Some(Dims::Three));
@@ -94,7 +94,7 @@ fn compositions_are_roots_with_dimensions() {
 #[test]
 fn compositions_and_the_model_only_live_at_the_root() {
     let mut t = two_compositions();
-    let id = t.store.document().next_id();
+    let id = t.store.authored().next_id();
     // A composition inside a group, a model inside a composition, and a
     // rect inside the model are all refused.
     for (ty_name, parent, comps) in [
@@ -122,13 +122,13 @@ fn compositions_and_the_model_only_live_at_the_root() {
 #[test]
 fn a_figure_lifts_to_its_entity_through_its_ancestors() {
     let mut t = two_compositions();
-    let entity = t.store.document().next_id();
-    let rels = t.store.document().next_relation_ids(2);
+    let entity = t.store.authored().next_id();
+    let rels = t.store.authored().next_relation_ids(2);
     // The group (not the rect) is the cartoon's figure; the torus is the
     // assembly's.
     let ops = entity_ops(&t, entity, &[(rels[0], t.group), (rels[1], t.torus)]);
     t.store.apply(tx("entity", ops)).unwrap();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     assert_eq!(composition::figures_of(doc, entity), vec![t.group, t.torus]);
     assert_eq!(composition::figure_of(doc, t.boxed), Some((t.group, entity)));
     assert_eq!(composition::figure_of(doc, t.torus), Some((t.torus, entity)));
@@ -136,9 +136,9 @@ fn a_figure_lifts_to_its_entity_through_its_ancestors() {
     // Deleting the entity leaves the figures pointing at a tombstone: no
     // longer a figure of anything until the delete is undone.
     t.store.apply(tx("delete", vec![Op::Delete { id: entity }])).unwrap();
-    assert_eq!(composition::figure_of(t.store.document(), t.boxed), None);
+    assert_eq!(composition::figure_of(t.store.tree(), t.boxed), None);
     t.store.undo(1).unwrap().unwrap();
-    assert_eq!(composition::figure_of(t.store.document(), t.boxed), Some((t.group, entity)));
+    assert_eq!(composition::figure_of(t.store.tree(), t.boxed), Some((t.group, entity)));
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn linking_two_bare_pictures_creates_one_entity_and_undoes_in_one_step() {
     let mut t = two_compositions();
     let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
     t.store.apply(tx).unwrap();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     let (_, entity) = composition::figure_of(doc, t.boxed).unwrap();
     assert_eq!(composition::figure_of(doc, t.torus), Some((t.torus, entity)));
     assert_eq!(composition::figures_of(doc, entity), vec![t.boxed, t.torus]);
@@ -159,14 +159,14 @@ fn linking_two_bare_pictures_creates_one_entity_and_undoes_in_one_step() {
     assert_eq!(t.store.link(t.torus, t.boxed, None, Actor::Human).unwrap_err(), composition::LinkError::AlreadyLinked(entity));
     // One undo removes the entity and both relations.
     t.store.undo(1).unwrap().unwrap();
-    assert_eq!(composition::figure_of(t.store.document(), t.boxed), None);
-    assert_eq!(composition::figure_of(t.store.document(), t.torus), None);
+    assert_eq!(composition::figure_of(t.store.tree(), t.boxed), None);
+    assert_eq!(composition::figure_of(t.store.tree(), t.torus), None);
 }
 
 #[test]
 fn linking_creates_the_model_library_and_thing_when_missing() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let k = OrderKey::first();
     store
         .apply(tx(
@@ -180,11 +180,11 @@ fn linking_creates_the_model_library_and_thing_when_missing() {
         .unwrap();
     let tx = store.link(ids[1], ids[2], None, Actor::Model).unwrap();
     store.apply(tx).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let model = composition::model_root(doc).unwrap();
     let entity = doc.children(model)[0];
     assert_eq!(composition::summarize(doc, entity).name.as_deref(), Some("thing"));
-    doc.check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
     // Not a picture: the composition itself, or the model.
     assert!(matches!(store.link(ids[0], ids[1], None, Actor::Model), Err(composition::LinkError::Invalid(_))));
 }
@@ -193,8 +193,8 @@ fn linking_creates_the_model_library_and_thing_when_missing() {
 fn linking_two_entities_asks_which_survives_then_merges() {
     let mut t = two_compositions();
     // Two entities: the box's and the torus's.
-    let ids = t.store.document().next_ids(2);
-    let rels = t.store.document().next_relation_ids(2);
+    let ids = t.store.authored().next_ids(2);
+    let rels = t.store.authored().next_relation_ids(2);
     let mut ops = entity_ops(&t, ids[0], &[(rels[0], t.boxed)]);
     ops.extend(entity_ops(&t, ids[1], &[(rels[1], t.torus)]));
     // Entities need distinct order keys.
@@ -215,11 +215,11 @@ fn linking_two_entities_asks_which_survives_then_merges() {
     // entity is deleted; one undo puts both back.
     let tx = t.store.link(t.boxed, t.torus, Some(eb), Actor::Model).unwrap();
     t.store.apply(tx).unwrap();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     assert!(!doc.is_live(ea));
     assert_eq!(composition::figures_of(doc, eb), vec![t.torus, t.boxed]);
     t.store.undo(1).unwrap().unwrap();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     assert!(doc.is_live(ea));
     assert_eq!(composition::figures_of(doc, ea), vec![t.boxed]);
     assert_eq!(composition::figures_of(doc, eb), vec![t.torus]);
@@ -239,7 +239,7 @@ fn the_model_and_composition_views_match_their_golden_files() {
     let mut t = two_compositions();
     let tx = t.store.link(t.boxed, t.torus, None, Actor::Human).unwrap();
     t.store.apply(tx).unwrap();
-    let (_, entity) = composition::figure_of(t.store.document(), t.boxed).unwrap();
+    let (_, entity) = composition::figure_of(t.store.tree(), t.boxed).unwrap();
     let q = |relation| ViewQuery { omit_defaults: false, expand: Vec::new(), relation, scope: None, fidelity: Fidelity::Full, depth: None };
 
     // The model view lists the entity with both figures (the phase 2 exit's

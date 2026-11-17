@@ -183,7 +183,7 @@ pub fn utf16_of(s: &str, byte: usize) -> u32 {
 /// bound so that typed words invert onto a source (a readout of
 /// `fmt(level * 100, 0)`: typing 75 sets the level to 0.75).
 fn editable(store: &iron_document::Store, id: NodeId) -> bool {
-    let doc = store.document();
+    let doc = store.tree();
     let chain = iron_document::contexts::chain_of(doc, id);
     !chain.is_empty()
         && store.resolver().get(&chain, chain.len() - 1, iron_document::contexts::Field::EDIT) == "text"
@@ -282,8 +282,8 @@ pub fn text_tool_system(
 
     // A node the tool made, once it exists.
     if let Some((id, panel, space)) = text.made.take() {
-        if store.0.document().live(id).is_some() {
-            let created = Some(store.0.document().version());
+        if store.0.tree().live(id).is_some() {
+            let created = Some(store.0.authored().version());
             text.request = Some(EditRequest { id, panel, space, at: None, created });
         } else if pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if *c == id))) {
             text.made = Some((id, panel, space));
@@ -328,7 +328,7 @@ pub fn text_tool_system(
     };
 
     // ---- Editing ----
-    if store.0.document().live(edit.id).is_none() {
+    if store.0.tree().live(edit.id).is_none() {
         text.edit = None;
         store.0.cancel_gesture();
         return;
@@ -479,7 +479,7 @@ fn arm(
     let to_comp = press.to_comp * view.affine().inverse();
     let (a, b) = (to_comp * press.start, to_comp * screen);
     let r = Rect::from_points(a, b);
-    let doc = store.document();
+    let doc = store.tree();
     let id = doc.next_ids(1)[0];
     let mut t = Transform2d::default();
     t.x = n(if press.dragged { r.x0 } else { a.x });
@@ -518,7 +518,7 @@ fn finish_edit(text: &mut TextTool, store: &mut iron_document::Store, gestures: 
         sel.selected.clear();
         // Nothing typed: the node goes, with no trace in history when its
         // creation is still the latest edit.
-        if store.document().version() == v {
+        if store.authored().version() == v {
             history.0.push(HistoryOp::Undo);
         } else {
             gestures.0.push(GestureRequest::Cancel);
@@ -528,7 +528,7 @@ fn finish_edit(text: &mut TextTool, store: &mut iron_document::Store, gestures: 
     let label = "edit text".to_owned();
     // Bound words: the draft was shown on the words themselves; what is
     // written is the source their binding reads, through its handle.
-    if store.document().leaf(edit.id, content_path()).is_some_and(|s| s.expr().is_some()) {
+    if store.tree().leaf(edit.id, content_path()).is_some_and(|s| s.expr().is_some()) {
         store.unpreview(edit.id, content_path());
         if let Err(why) = store.preview_target(edit.id, content_path(), Value::Str(edit.draft.clone())) {
             warn!("{}: {why}", edit.id);

@@ -47,9 +47,9 @@ struct Scene {
 
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(8);
+    let ids = store.authored().next_ids(8);
     let [group, a, other, slider, bar, p, q, link] = ids.try_into().unwrap();
-    let rels = store.document().next_relation_ids(2);
+    let rels = store.authored().next_relation_ids(2);
     let mut key = OrderKey::first();
     let mut order = || {
         let k = key.clone();
@@ -122,9 +122,9 @@ fn a_model_pose_edit_mid_drag_survives_cancel_and_release() {
     assert_eq!(get(&s.store, s.a, "transform2d.x"), 500.0);
     assert_eq!(get(&s.store, s.a, "transform2d.y"), 20.0);
     // Release commits nothing.
-    let version = s.store.document().version();
+    let version = s.store.authored().version();
     assert!(s.store.commit_gesture("move rect", Actor::Human, 0).is_none());
-    assert_eq!(s.store.document().version(), version);
+    assert_eq!(s.store.authored().version(), version);
     assert_eq!(get(&s.store, s.a, "transform2d.x"), 500.0);
 }
 
@@ -264,7 +264,7 @@ fn an_alt_drag_duplicates_moves_the_copy_and_undoes_in_one_step() {
     // Alt comes up: the copy is taken back, the original drags again.
     s.store.cancel_gesture();
     assert!(s.store.retract(dup, 0));
-    assert!(!s.store.document().is_live(copy));
+    assert!(!s.store.tree().is_live(copy));
     assert!(!s.store.history().can_redo());
     // And down again, then release.
     let pasted = copy::duplicate(&s.store, &[a]).unwrap();
@@ -281,7 +281,7 @@ fn an_alt_drag_duplicates_moves_the_copy_and_undoes_in_one_step() {
     assert_eq!(get(&s.store, a, "transform2d.x"), 10.0);
     // One undo removes the copy; one redo brings it back where it was left.
     s.store.undo(0).unwrap().unwrap();
-    assert!(!s.store.document().is_live(copy));
+    assert!(!s.store.tree().is_live(copy));
     s.store.redo(0).unwrap().unwrap();
     assert_eq!(get(&s.store, copy, "transform2d.x"), 240.0);
     // Merging is refused when the previous entry is another.

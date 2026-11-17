@@ -53,7 +53,7 @@ fn num(store: &Store, id: NodeId, leaf: &str) -> f64 {
 
 /// A group at (100, 50) laid out by `layout`, holding `kids` (type, facets).
 fn group(store: &mut Store, layout: Layout, kids: Vec<(&str, Vec<Facet>)>) -> (NodeId, Vec<NodeId>) {
-    let ids = store.document().next_ids(1 + kids.len());
+    let ids = store.authored().next_ids(1 + kids.len());
     let mut ops = vec![Op::Create { id: ids[0], ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![at(100.0, 50.0), layout.wrap()] }];
     let mut order = OrderKey::first();
     for (i, (t, facets)) in kids.into_iter().enumerate() {
@@ -92,7 +92,7 @@ fn a_stack_reflows_when_content_grows_and_stores_nothing() {
     store.apply(tx("grow", vec![Op::Set { id: kids[1], path: path("text.content"), slot: Slot::Const(Value::Str("Body\nmore".into())) }])).unwrap();
     let grown = num(&store, kids[2], "transform2d.y");
     assert!((grown - footer - line).abs() < 0.5, "{footer} -> {grown}");
-    assert_eq!(store.document().leaf(kids[2], path("transform2d.y")).and_then(|s| s.constant()).cloned(), Some(Value::Number(0.0)));
+    assert_eq!(store.tree().leaf(kids[2], path("transform2d.y")).and_then(|s| s.constant()).cloned(), Some(Value::Number(0.0)));
 
     // Undo restores the footer's place.
     store.undo(0).unwrap().unwrap();
@@ -101,8 +101,8 @@ fn a_stack_reflows_when_content_grows_and_stores_nothing() {
     // Saving writes the authored positions only, and no published size.
     let saved = store.save();
     let reloaded = Store::load(&saved).unwrap();
-    assert_eq!(reloaded.document().leaf(kids[2], path("transform2d.y")).and_then(|s| s.constant()).cloned(), Some(Value::Number(0.0)));
-    assert!(reloaded.document().facet(g, FacetKind::Size).is_none());
+    assert_eq!(reloaded.tree().leaf(kids[2], path("transform2d.y")).and_then(|s| s.constant()).cloned(), Some(Value::Number(0.0)));
+    assert!(reloaded.tree().facet(g, FacetKind::Size).is_none());
     // And the reloaded store lays out again.
     assert!((num(&reloaded, kids[2], "transform2d.y") - footer).abs() < 1e-6);
 }
@@ -155,7 +155,7 @@ fn text_in_a_fixed_width_stack_wraps() {
     let mut store = Store::new();
     let mut layout = stack(0.0, 0.0);
     layout.sizing_w = e("fixed");
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut size = Size::default();
     size.w = n(80.0);
     let mut fill = LayoutItem::default();
@@ -179,7 +179,7 @@ fn text_in_a_fixed_width_stack_wraps() {
 #[test]
 fn add_auto_layout_keeps_the_arrangement_it_was_given() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let comp = ids[0];
     let mut ops = vec![Op::Create { id: comp, ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![] }];
     // Three 40-wide rects, 10 apart, top-aligned at y = 30, created out of
@@ -196,12 +196,12 @@ fn add_auto_layout_keeps_the_arrangement_it_was_given() {
     let world = |store: &Store, id: NodeId| store.world_affine(id).translation();
     let before: Vec<[f64; 2]> = ids[1..].iter().map(|&r| world(&store, r)).collect();
     let extent = |n: NodeId| store.extent(n);
-    let (ops, g) = iron_document::layout::add_ops(store.document(), &extent, &ids[1..]).unwrap();
+    let (ops, g) = iron_document::layout::add_ops(store.tree(), &extent, &ids[1..]).unwrap();
     store.apply(tx("add auto layout", ops)).unwrap();
     assert_eq!(store.resolved(g, path("layout.mode")), Some(Value::Enum("stack_x".into())));
     assert_eq!(num(&store, g, "layout.gap"), 10.0);
     // Ordered as they sit, and nothing moved.
-    assert_eq!(store.document().children(g), &[ids[2], ids[3], ids[1]]);
+    assert_eq!(store.tree().children(g), &[ids[2], ids[3], ids[1]]);
     for (r, b) in ids[1..].iter().zip(&before) {
         assert_eq!(&world(&store, *r), b);
     }

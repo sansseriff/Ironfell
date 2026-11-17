@@ -47,7 +47,7 @@ struct Card {
 /// disappear (shown → hidden, 400 ms linear). Its panel's opacity is fade.
 fn card() -> Card {
     let mut store = Store::new();
-    let ids = store.document().next_ids(14);
+    let ids = store.authored().next_ids(14);
     let [bench, model, library, def, vis, fade, reveal, machine, hidden, shown, appear, tween, disappear, template] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -104,7 +104,7 @@ fn card() -> Card {
         ))
         .unwrap();
     // The template: one panel whose opacity is the fade channel.
-    let panel = store.document().next_id();
+    let panel = store.authored().next_id();
     let mut op = Appearance::default();
     op.opacity = Slot::Bound(Expr::parse(&format!("{fade}.channel.value")).unwrap());
     store
@@ -170,7 +170,7 @@ fn a_state_change_plays_its_transition_and_interruptions_start_where_things_are(
     store.advance_machines(4.2);
     assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "mid-way now");
     let saved = Store::load(&store.save()).unwrap();
-    assert_eq!(saved.document().get::<Channel>(fade).unwrap().value.constant(), Some(&Value::Number(1.0)), "channel values are presentation state");
+    assert_eq!(saved.tree().get::<Channel>(fade).unwrap().value.constant(), Some(&Value::Number(1.0)), "channel values are presentation state");
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn a_change_without_a_transition_snaps() {
     let Card { mut store, entity, fade, .. } = card();
     store.advance_machines(0.0);
     // Remove disappear: shown → hidden has no transition now.
-    let doc = store.document();
+    let doc = store.tree();
     let disappear = doc.nodes_of_type(ty("transition")).find(|&t| doc.get::<Name>(t).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("disappear")).unwrap();
     store.apply(tx("drop", vec![Op::Delete { id: disappear }])).unwrap();
     set_vis(&mut store, entity, "hidden");
@@ -201,7 +201,7 @@ fn an_unrelated_undo_does_not_snap_the_next_transition() {
 }
 
 fn named_child(store: &Store, parent: NodeId, ty_name: &str, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.nodes_of_type(ty(ty_name)).find(|&n| !n.is_expanded() && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name) && doc.is_ancestor(parent, n)).unwrap()
 }
 
@@ -211,16 +211,16 @@ fn named_child(store: &Store, parent: NodeId, ty_name: &str, name: &str) -> Node
 #[test]
 fn an_instance_times_its_transitions_by_an_input_or_an_override() {
     let Card { mut store, entity, fade, .. } = card();
-    let doc = store.document();
+    let doc = store.tree();
     let def = doc.get::<facet::Instance>(entity).unwrap().def.constant().unwrap().as_ref().unwrap();
     let disappear = named_child(&store, def, "transition", "disappear");
     // (b) An input `out_ms` (default 400) the transition's length reads.
-    let spec = store.document().next_id();
+    let spec = store.authored().next_id();
     let mut p = Port::default();
     p.kind = str_("value");
     p.dir = Slot::Const(Value::Enum("in".into()));
     p.signal = n(400.0);
-    let after = store.document().children(def).iter().filter_map(|&c| store.document().live(c)).map(|x| x.order.clone()).max().unwrap();
+    let after = store.tree().children(def).iter().filter_map(|&c| store.tree().live(c)).map(|x| x.order.clone()).max().unwrap();
     store
         .apply(tx(
             "input",
@@ -242,7 +242,7 @@ fn an_instance_times_its_transitions_by_an_input_or_an_override() {
     let appear = named_child(&store, def, "transition", "appear");
     let copy = NodeId::expanded(entity, appear).unwrap();
     store.apply(tx("override", vec![Op::Set { id: copy, path: path("transition.ms"), slot: n(100.0) }])).unwrap();
-    assert!(store.document().nodes_of_type(ty("override")).any(|o| store.document().is_live(o)), "an override on the instance");
+    assert!(store.tree().nodes_of_type(ty("override")).any(|o| store.tree().is_live(o)), "an override on the instance");
     assert_eq!(store.resolved(appear, path("transition.ms")), Some(Value::Number(1000.0)), "the definition keeps its own");
     set_vis(&mut store, entity, "shown");
     store.advance_machines(6.0);
@@ -256,7 +256,7 @@ fn an_instance_times_its_transitions_by_an_input_or_an_override() {
 #[test]
 fn keyed_state_scrubs_and_one_occurrence_retimes() {
     let Card { mut store, entity, fade, .. } = card();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (timeline, clip, k0, k1) = (ids[0], ids[1], ids[2], ids[3]);
     let key = |t: f64, v: &str| {
         let mut k = facet::Key::default();
@@ -268,7 +268,7 @@ fn keyed_state_scrubs_and_one_occurrence_retimes() {
     let mut c = facet::Clip::default();
     c.prop = str_("args.vis");
     let first = OrderKey::first();
-    let last = store.document().roots().iter().filter_map(|&r| store.document().live(r)).map(|x| x.order.clone()).max().unwrap();
+    let last = store.tree().roots().iter().filter_map(|&r| store.tree().live(r)).map(|x| x.order.clone()).max().unwrap();
     store
         .apply(tx(
             "key the state",
@@ -277,7 +277,7 @@ fn keyed_state_scrubs_and_one_occurrence_retimes() {
                 Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: first.clone(), facets: vec![facet::Timing::default().wrap(), c.wrap()] },
                 Op::Create { id: k0, ty: ty("key"), parent: Some(clip), order: first.clone(), facets: vec![key(0.0, "shown")] },
                 Op::Create { id: k1, ty: ty("key"), parent: Some(clip), order: OrderKey::after(&first), facets: vec![key(2.0, "hidden")] },
-                Op::Link { rel: Relation { id: store.document().next_relation_id(), from: clip, to: entity, rel: RelKind::Animates, data: Default::default() } },
+                Op::Link { rel: Relation { id: store.authored().next_relation_id(), from: clip, to: entity, rel: RelKind::Animates, data: Default::default() } },
             ],
         ))
         .unwrap();
@@ -309,7 +309,7 @@ fn keyed_state_scrubs_and_one_occurrence_retimes() {
 #[test]
 fn a_parents_transition_sequences_its_childrens_own() {
     let Card { mut store, entity: a, fade, reveal, u: ua, .. } = card();
-    let doc = store.document();
+    let doc = store.tree();
     let def = expand::linked_definition(doc, a).unwrap();
     let machine = doc.children(def).iter().copied().find(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")).unwrap();
     let bench = doc.roots()[0];
@@ -329,13 +329,13 @@ fn a_parents_transition_sequences_its_childrens_own() {
         .unwrap_or_else(|e| panic!("{e:?}"));
     let (ops, _) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="40" y="0"/>"#)).unwrap();
     store.apply(tx("second", ops)).unwrap();
-    let ub = *store.document().children(bench).last().unwrap();
+    let ub = *store.tree().children(bench).last().unwrap();
     let (made, input) = store.make_component(&[ua, ub], "pair", Actor::Human).unwrap();
     store.apply(input).unwrap_or_else(|e| panic!("{e:?}"));
     // The pair: a `vis` input, a channel per card, and a machine whose
     // appear brings the first card in over its first half, the second after.
     let pair = made.definition;
-    let doc = store.document();
+    let doc = store.tree();
     let inner: Vec<NodeId> = doc.children(pair).iter().copied().filter(|&c| !c.is_expanded() && doc.live(c).is_some_and(|n| n.ty.name() == "entity")).collect();
     assert_eq!(inner.len(), 2);
     let ids = doc.next_ids(10);
@@ -395,7 +395,7 @@ fn a_parents_transition_sequences_its_childrens_own() {
         ]))
         .unwrap_or_else(|e| panic!("{e:?}"));
     let e = made.entity;
-    let card_of = |s: &Store, i: usize| NodeId::expanded(e, inner[i]).filter(|c| s.document().is_live(*c)).unwrap();
+    let card_of = |s: &Store, i: usize| NodeId::expanded(e, inner[i]).filter(|c| s.tree().is_live(*c)).unwrap();
     let fades = |s: &Store| [0, 1].map(|i| (channel(s, card_of(s, i), fade) * 1000.0).round() / 1000.0);
     let reveals = |s: &Store| [0, 1].map(|i| (channel(s, card_of(s, i), reveal) * 1000.0).round() / 1000.0);
     store.advance_machines(0.0);

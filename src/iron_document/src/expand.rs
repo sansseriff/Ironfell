@@ -22,6 +22,7 @@
 //! follow ops (the Bevy bridge, geometry revisions) see the change. They are
 //! not history: undo and redo re-expand from the authored state.
 
+use crate::Tree;
 use crate::definition;
 use crate::document::{Document, RelKind, Relation};
 use crate::expr::{Expr, Leaf};
@@ -64,7 +65,7 @@ pub const DEPTH_MAX: usize = 128;
 pub const NODE_BUDGET: usize = 50_000;
 
 /// The definition a linked entity instantiates, if it is one.
-pub fn linked_definition(doc: &Document, entity: NodeId) -> Option<NodeId> {
+pub fn linked_definition(doc: Tree<'_>, entity: NodeId) -> Option<NodeId> {
     let inst = doc.get::<Instance>(entity)?;
     if inst.mode.constant().and_then(|v| v.as_str()) != Some("linked") {
         return None;
@@ -79,7 +80,7 @@ pub fn linked_definition(doc: &Document, entity: NodeId) -> Option<NodeId> {
 /// and never expanded: its picture costs no nodes. SVG import makes one for
 /// every repeated piece of a drawing. Its template, for `notation`, if `u`
 /// is one.
-pub fn reference_template(doc: &Document, u: NodeId) -> Option<NodeId> {
+pub fn reference_template(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     if doc.live(u)?.ty.name() != "use" || doc.relations_from(u).any(|r| r.rel == RelKind::Figures) {
         return None;
     }
@@ -96,7 +97,7 @@ pub fn reference_template(doc: &Document, u: NodeId) -> Option<NodeId> {
 /// The definition a `use` is the main of (component-authoring.md §1): its
 /// `instance` facet says `main`. A main figures no entity; edits inside it
 /// are edits to the definition.
-pub fn main_definition(doc: &Document, u: NodeId) -> Option<NodeId> {
+pub fn main_definition(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     let inst = doc.get::<Instance>(u)?;
     if inst.mode.constant().and_then(|v| v.as_str()) != Some("main") {
         return None;
@@ -106,14 +107,14 @@ pub fn main_definition(doc: &Document, u: NodeId) -> Option<NodeId> {
 }
 
 /// The template a main shows, for its notation.
-pub fn main_template(doc: &Document, u: NodeId) -> Option<NodeId> {
+pub fn main_template(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     let def = main_definition(doc, u)?;
     let notation = doc.get::<Use>(u)?.notation.constant()?.as_str()?.to_owned();
     definition::template_of(doc, def, &notation)
 }
 
 /// The entity a `use` figures.
-pub fn use_entity(doc: &Document, u: NodeId) -> Option<NodeId> {
+pub fn use_entity(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     doc.relations_from(u).find(|r| r.rel == RelKind::Figures && doc.is_live(r.to)).map(|r| r.to)
 }
 
@@ -182,13 +183,13 @@ fn relocate(owner: NodeId, n: NodeId) -> Option<NodeId> {
 
 /// A definition's own content an entity derives: its port_specs,
 /// equations, inner entities and connections.
-fn is_body(doc: &Document, def: NodeId, node: NodeId) -> bool {
+fn is_body(doc: Tree<'_>, def: NodeId, node: NodeId) -> bool {
     doc.node(node).is_some_and(|n| n.parent == Some(def) && matches!(n.ty.name(), "port_spec" | "equation" | "entity" | "connection" | "channel" | "machine" | "let" | "trace" | "accumulate" | "query"))
 }
 
 /// The definition an entity instantiates and is linked to, read from an
 /// authored or derived entity's facets.
-fn linked_def_of(doc: &Document, facets: &[Facet]) -> Option<NodeId> {
+fn linked_def_of(doc: Tree<'_>, facets: &[Facet]) -> Option<NodeId> {
     facets.iter().find_map(|f| match f {
         Facet::Instance(inst) if inst.mode.constant().and_then(|v| v.as_str()) == Some("linked") => inst.def.constant()?.as_ref(),
         _ => None,
@@ -205,13 +206,13 @@ fn owns_items(kind: FacetKind) -> bool {
 }
 
 /// Whether `id` is a repeat or a conditional.
-pub fn is_item_owner(doc: &Document, id: NodeId) -> bool {
+pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
     doc.facet(id, FacetKind::Repeat).is_some() || doc.facet(id, FacetKind::When).is_some()
 }
 
 /// Every expanded node and relation a document should have, with
 /// `counts[r]` the items of each repeat and conditional `r`.
-fn wanted(doc: &Document, counts: &Items) -> Wanted {
+fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
     let mut out = Wanted::default();
     let entity_ty = TypeId::lookup("entity").expect("registered");
     for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e) && !e.is_expanded()).collect::<Vec<_>>() {
@@ -239,7 +240,7 @@ fn wanted(doc: &Document, counts: &Items) -> Wanted {
 /// Whether `id` is part of a repeat's template (plans/specs/repeat.md):
 /// inside a group with a `repeat` facet but in none of its items. A
 /// template is never drawn; its copies are.
-pub fn in_repeat_template(doc: &Document, id: NodeId) -> bool {
+pub fn in_repeat_template(doc: Tree<'_>, id: NodeId) -> bool {
     let mut at = doc.node(id).and_then(|n| n.parent);
     while let Some(p) = at {
         let Some(node) = doc.node(p) else { return false };
@@ -257,13 +258,13 @@ type TemplateNode = (NodeId, NodeId, TypeId, OrderKey, Vec<Facet>);
 /// Whether `id` holds a repeat that draws: a group with a `repeat` facet,
 /// outside the library (a definition's template copies it into each
 /// picture, and the picture's copy is the one that repeats).
-pub(crate) fn draws_repeat(doc: &Document, id: NodeId, facets: &[Facet]) -> bool {
+pub(crate) fn draws_repeat(doc: Tree<'_>, id: NodeId, facets: &[Facet]) -> bool {
     facets.iter().any(|f| owns_items(f.kind())) && !id.path().first().is_some_and(|&root| in_library(doc, root))
 }
 
 /// Every drawn repeat of a document: the authored ones and the derived
 /// ones it has now.
-pub(crate) fn drawn_repeats(doc: &Document) -> Vec<NodeId> {
+pub(crate) fn drawn_repeats(doc: Tree<'_>) -> Vec<NodeId> {
     let group = TypeId::lookup("group").expect("registered");
     doc.nodes_of_type(group)
         .filter(|&g| doc.is_live(g) && is_item_owner(doc, g) && !g.path().first().is_some_and(|&root| in_library(doc, root)) && !in_repeat_template(doc, g))
@@ -274,7 +275,7 @@ pub(crate) fn drawn_repeats(doc: &Document) -> Vec<NodeId> {
 /// repeat's template: under a repeat, in none of its items. A template is
 /// what items copy; it derives nothing itself, or every level of nesting
 /// would double what is derived.
-fn in_template(doc: &Document, out: &Wanted, id: NodeId) -> bool {
+fn in_template(doc: Tree<'_>, out: &Wanted, id: NodeId) -> bool {
     let parent_of = |n: NodeId| out.get(n).map(|w| w.parent).or_else(|| doc.node(n).and_then(|x| x.parent));
     let is_repeat = |n: NodeId| match out.get(n) {
         Some(w) => w.facets.iter().any(|f| owns_items(f.kind())),
@@ -295,7 +296,7 @@ fn in_template(doc: &Document, out: &Wanted, id: NodeId) -> bool {
 /// ports of an instance and the picture of a `use`. So a component in a
 /// repeat's template, a repeat in a component's, and repeats in repeats
 /// all expand, each scope under the one that made it.
-fn want_scopes(doc: &Document, counts: &Items, out: &mut Wanted) {
+fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted) {
     let mut repeats: Vec<NodeId> = drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()).collect();
     let mut done = BTreeSet::new();
     let mut seen = 0;
@@ -346,7 +347,7 @@ fn want_scopes(doc: &Document, counts: &Items, out: &mut Wanted) {
 /// Repeat `r`'s template: its children that are not its items, and their
 /// subtrees, parents first, with the relations from them. A derived
 /// repeat's come from what is wanted, an authored one's from the document.
-fn template_of_repeat(doc: &Document, r: NodeId, out: &Wanted) -> (Vec<TemplateNode>, Vec<Relation>) {
+fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNode>, Vec<Relation>) {
     let mut nodes = Vec::new();
     let mut rels = Vec::new();
     if r.is_expanded() {
@@ -379,7 +380,7 @@ fn template_of_repeat(doc: &Document, r: NodeId, out: &Wanted) -> (Vec<TemplateN
 /// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
 /// which the store publishes (`Store::settle_repeats`): so an item
 /// re-evaluates when its own element changes, not when any does.
-fn want_items(doc: &Document, r: NodeId, keys: &[String], out: &mut Wanted) {
+fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
     if keys.is_empty() || !out.enter(r) {
         return;
     }
@@ -456,7 +457,7 @@ fn want_items(doc: &Document, r: NodeId, keys: &[String], out: &mut Wanted) {
 /// What entity `entity` (authored, or derived for an outer instance)
 /// derives from `def`: its ports and equations, and its inner entities and
 /// connections, each inner entity in turn deriving its own.
-fn want_entity(doc: &Document, entity: NodeId, def: NodeId, out: &mut Wanted) {
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
     if !out.enter(entity) {
         return;
     }
@@ -523,7 +524,7 @@ fn want_entity(doc: &Document, entity: NodeId, def: NodeId, out: &mut Wanted) {
 /// the template pictures one of the definition's inner entities, so its
 /// copy figures that entity's copy and derives that entity's picture. A
 /// main has no entity: references to the definition's body stay on it.
-fn want_use(doc: &Document, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted) {
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted) {
     if !out.enter(u) {
         return;
     }
@@ -606,7 +607,7 @@ fn want_use(doc: &Document, u: NodeId, sized: bool, entity: Option<NodeId>, def:
 /// step's own overrides apply when their target path is the rest of the
 /// way down. So the innermost definition's opinion comes first and the
 /// outermost instance's last, and the last applied wins.
-fn overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
+fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
     let path = owner.path();
     let mut out = Vec::new();
     for j in (0..path.len()).rev() {
@@ -623,11 +624,11 @@ fn overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Va
 
 /// The overrides reaching `owner`'s copies, as (definition-local target,
 /// leaf, value), weakest first: for render analysis (`analysis.rs`).
-pub fn overrides_of(doc: &Document, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
+pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
     overrides(doc, owner).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
 }
 
-fn own_overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
+fn own_overrides(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
     doc.children(owner)
         .iter()
         .copied()
@@ -644,7 +645,7 @@ fn own_overrides(doc: &Document, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath
 /// Apply `owner`'s overrides of `local` to the facets its copy will have
 /// (component-model.md §5.3): each sets one leaf to a constant, adding the
 /// facet when the node type admits it and the copy lacks it.
-fn apply_overrides(doc: &Document, owner: NodeId, local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
+fn apply_overrides(doc: Tree<'_>, owner: NodeId, local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
     for (_, target, leaf, value) in overrides(doc, owner) {
         if target != local {
             continue;
@@ -664,7 +665,7 @@ fn apply_overrides(doc: &Document, owner: NodeId, local: NodeId, ty: TypeId, fac
 /// Overrides that apply nothing (component-model.md §5.3): their instance
 /// is not linked, their target is gone from the definition, or their leaf
 /// is not one the target can have. Kept, inert, and listed with why.
-pub fn stale_overrides(doc: &Document) -> Vec<(NodeId, String)> {
+pub fn stale_overrides(doc: Tree<'_>) -> Vec<(NodeId, String)> {
     let ty = TypeId::lookup("override").expect("registered");
     let mut out = Vec::new();
     for o in doc.nodes_of_type(ty).filter(|&o| doc.is_live(o)) {
@@ -703,7 +704,7 @@ pub fn stale_overrides(doc: &Document) -> Vec<(NodeId, String)> {
 
 /// `node`'s facets with every reference passed through `follow`: those in
 /// bindings, and node references held as constants (an anchor's `port`).
-fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
+fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
     doc.facets_of(node)
         .map(|c| {
             let mut c = c.clone();
@@ -731,13 +732,13 @@ fn rewritten(doc: &Document, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec
 /// met (a template node the registry no longer admits, say), which leave
 /// that node out rather than failing the transaction.
 pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
-    let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(doc, counts);
+    let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::over(doc), counts);
     let wanted_ids: BTreeSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
     let mut run = |doc: &mut Document, op: Op, ops: &mut Vec<Op>| match op::apply_op(doc, 0, &op, stamp) {
         Ok(_) => ops.push(op),
         Err(e) => {
-            if let Some(node) = op_node(doc, &op) {
+            if let Some(node) = op_node(Tree::over(doc), &op) {
                 problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
             }
         }
@@ -808,7 +809,7 @@ pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, V
 }
 
 /// The node a failed op's problem is shown on.
-fn op_node(doc: &Document, op: &Op) -> Option<NodeId> {
+fn op_node(doc: Tree<'_>, op: &Op) -> Option<NodeId> {
     match op {
         Op::Create { id, parent, .. } => Some(parent.unwrap_or(*id)),
         Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
@@ -827,14 +828,14 @@ fn op_target(op: &Op) -> String {
 
 /// Whether a transaction's ops can change what instances derive: anything
 /// structural, or a set on an instance, a `use`, or a node of a definition.
-pub fn affected_by(doc: &Document, ops: &[Op]) -> bool {
+pub fn affected_by(doc: Tree<'_>, ops: &[Op]) -> bool {
     ops.iter().any(|op| match op {
         Op::Set { id, path, .. } => matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || in_library(doc, *id),
         _ => true,
     })
 }
 
-fn in_library(doc: &Document, mut id: NodeId) -> bool {
+fn in_library(doc: Tree<'_>, mut id: NodeId) -> bool {
     while let Some(n) = doc.node(id) {
         if n.ty.name() == "library" {
             return true;
@@ -872,7 +873,7 @@ pub fn refuse(op: &Op) -> Option<String> {
 ///   inside an instance; the definition needs an `in` port for it.
 ///
 /// Every other op passes through; `refuse` turns away structural edits.
-pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>) -> Result<Vec<Op>, crate::op::ApplyError> {
+pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>) -> Result<Vec<Op>, crate::op::ApplyError> {
     use crate::op::{ApplyError, ErrorKind};
     // A repeat's items are copies of its template. A value set on a copy
     // is the repeat's override of that item, as for an instance's part
@@ -1021,7 +1022,7 @@ pub fn translate(doc: &Document, reactive: &crate::graph::Reactive, ops: Vec<Op>
 /// The scope rules (component-model.md §8), for a binding written by `op`:
 /// inside a definition, a binding reads only that definition's own nodes;
 /// outside, a binding reads an instance's insides only through its ports.
-pub fn check_scope(doc: &Document, op: &Op) -> Result<(), String> {
+pub fn check_scope(doc: Tree<'_>, op: &Op) -> Result<(), String> {
     let (node, exprs): (NodeId, Vec<&Expr>) = match op {
         Op::Create { id, facets, .. } => (*id, facets.iter().flat_map(|f| f.field_names().into_iter().filter_map(move |n| f.get(n).and_then(|s| s.expr()))).collect()),
         Op::Set { id, slot, .. } => (*id, slot.expr().into_iter().collect()),
@@ -1068,7 +1069,7 @@ pub fn check_scope(doc: &Document, op: &Op) -> Result<(), String> {
 /// in a template, and only a name the template itself declares with a
 /// `let` that provides it (`provide="default"` is the fallback). Colour
 /// tokens are the theme and need neither.
-fn context_fault(doc: &Document, def: NodeId, node: NodeId, expr: &Expr) -> Result<(), String> {
+fn context_fault(doc: Tree<'_>, def: NodeId, node: NodeId, expr: &Expr) -> Result<(), String> {
     for name in expr.tokens() {
         if crate::palette::is_token(doc, &name) {
             continue;
@@ -1091,7 +1092,7 @@ fn context_fault(doc: &Document, def: NodeId, node: NodeId, expr: &Expr) -> Resu
 
 /// Every context fault in the definition `node` is part of: checked when a
 /// rename, a delete or a change of `provide` may have removed a declaration.
-pub fn check_context(doc: &Document, node: NodeId) -> Result<(), String> {
+pub fn check_context(doc: Tree<'_>, node: NodeId) -> Result<(), String> {
     let Some(def) = definition_of(doc, node) else { return Ok(()) };
     for (leaf, expr) in doc.bound_slots() {
         if !leaf.node.is_expanded() && doc.is_ancestor(def, leaf.node) {
@@ -1102,7 +1103,7 @@ pub fn check_context(doc: &Document, node: NodeId) -> Result<(), String> {
 }
 
 /// The definition a node belongs to, if it is part of one.
-fn definition_of(doc: &Document, mut id: NodeId) -> Option<NodeId> {
+fn definition_of(doc: Tree<'_>, mut id: NodeId) -> Option<NodeId> {
     while let Some(n) = doc.node(id) {
         if n.ty.name() == "definition" {
             return Some(id);

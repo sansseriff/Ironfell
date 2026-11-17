@@ -215,7 +215,7 @@ pub(crate) fn apply_focus(
 ) {
     use iron_document::composition::{self, Dims};
     for id in requests.0.drain(..) {
-        let doc = store.0.document();
+        let doc = store.0.tree();
         let target = composition::composition_of(doc, id);
         for view in &views.0 {
             match view.dims {

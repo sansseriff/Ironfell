@@ -11,7 +11,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 }
 
 fn rect(store: &Store, n: usize) -> (Vec<NodeId>, Vec<Op>) {
-    let ids = store.document().next_ids(n);
+    let ids = store.authored().next_ids(n);
     let mut key = OrderKey::first();
     let ops = ids
         .iter()
@@ -34,8 +34,8 @@ fn the_selection_lives_in_the_session_and_nowhere_else() {
     let (ids, ops) = rect(&store, 2);
     store.apply(tx("two rects", ops)).unwrap();
     let saved = store.save();
-    let version = store.document().version();
-    let next = store.document().next_id();
+    let version = store.authored().version();
+    let next = store.authored().next_id();
 
     store.set_selection(&[(ids[1], reached("viewer")), (ids[0], reached("viewer"))]).unwrap();
     // In pick order, with how each was reached.
@@ -44,8 +44,8 @@ fn the_selection_lives_in_the_session_and_nowhere_else() {
     assert_eq!(sel[0].1.get("panel"), Some(&Value::Str("viewer".into())));
     // Not content: the version, the next content id, the file and the views
     // are as they were, and there is nothing new to undo.
-    assert_eq!(store.document().version(), version);
-    assert_eq!(store.document().next_id(), next);
+    assert_eq!(store.authored().version(), version);
+    assert_eq!(store.authored().next_id(), next);
     assert_eq!(store.save(), saved);
     let view = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Tree }).unwrap();
     assert!(!view.contains("selection"), "{view}");
@@ -77,5 +77,5 @@ fn content_ops_are_refused_as_session_ops() {
     store.apply(tx("rect", ops)).unwrap();
     let err = store.apply_session(vec![Op::Delete { id: ids[0] }]).unwrap_err();
     assert_eq!(err.kind, ErrorKind::BadId);
-    assert!(store.document().is_live(ids[0]));
+    assert!(store.tree().is_live(ids[0]));
 }

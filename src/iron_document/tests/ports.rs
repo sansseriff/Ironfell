@@ -45,17 +45,17 @@ struct Lab {
 
 impl Lab {
     fn port(&self, entity: NodeId, name: &str) -> NodeId {
-        let doc = self.store.document();
+        let doc = self.store.tree();
         doc.children(entity).iter().copied().find(|&p| doc.get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
     }
     fn signal(&self, entity: NodeId, name: &str) -> Value {
         self.store.resolved(self.port(entity, name), path("port.signal")).unwrap()
     }
     fn connect(&mut self, from: NodeId, to: NodeId) -> Result<Applied, Vec<ApplyError>> {
-        let id = self.store.document().next_ids(1)[0];
-        let rels = self.store.document().next_relation_ids(2);
+        let id = self.store.authored().next_ids(1)[0];
+        let rels = self.store.authored().next_relation_ids(2);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
-        let key = self.store.document().children(self.model).last().map(|&c| OrderKey::after(&self.store.document().live(c).unwrap().order)).unwrap_or_else(OrderKey::first);
+        let key = self.store.tree().children(self.model).last().map(|&c| OrderKey::after(&self.store.tree().live(c).unwrap().order)).unwrap_or_else(OrderKey::first);
         self.store.apply(tx(
             "connect",
             vec![
@@ -71,7 +71,7 @@ impl Lab {
 /// "cartoon" composition, and the two connections of the chain.
 fn lab() -> Lab {
     let mut store = Store::new();
-    let ids = store.document().next_ids(16);
+    let ids = store.authored().next_ids(16);
     let [library, cartoon, model, laser_def, power, laser_out, laser_t, laser_box, fiber_def, loss, length, fiber_in, fiber_out, meter_def, meter_in, meter_t] =
         ids.clone().try_into().unwrap();
     let k = |n: u32| {
@@ -125,7 +125,7 @@ fn lab() -> Lab {
     store.apply(tx("library", ops)).unwrap();
     // The fiber and meter templates draw one bar each; the meter's width
     // reads its in-port.
-    let more = store.document().next_ids(2);
+    let more = store.authored().next_ids(2);
     let mut s = Size::default();
     s.w = Slot::Bound(Expr::parse(&format!("{meter_in}.port.signal / 1 mW * 20")).unwrap());
     let fiber_t = more[0];
@@ -140,10 +140,10 @@ fn lab() -> Lab {
         .unwrap();
     let mut entities = Vec::new();
     for (def, name) in [(laser_def, "laser"), (fiber_def, "fiber"), (meter_def, "meter")] {
-        let after = store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone());
-        let fafter = store.document().children(cartoon).last().map(|&c| store.document().live(c).unwrap().order.clone());
+        let after = store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone());
+        let fafter = store.tree().children(cartoon).last().map(|&c| store.tree().live(c).unwrap().order.clone());
         let place = Placement { entity_parent: Some(model), entity_after: after, figure_parent: Some(cartoon), figure_after: fafter };
-        let (e, ops) = definition::instantiate(store.document(), def, "cartoon", name, &place).unwrap();
+        let (e, ops) = definition::instantiate(store.tree(), def, "cartoon", name, &place).unwrap();
         store.apply(tx(name, ops)).unwrap();
         entities.push(e);
     }
@@ -172,8 +172,8 @@ fn power_flows_down_the_chain_and_follows_every_parameter() {
     assert!((watts(&lab.signal(lab.meter, "in")) - 0.010 * 10f64.powf(-0.5)).abs() < 1e-12);
     // The meter's figure (a `use`, its rect expanded from the template)
     // reads its port: width = reading / 1 mW · 20.
-    let u = lab.store.document().children(lab.store.document().roots()[1]).iter().copied().find(|&n| composition::figured_by(lab.store.document(), n) == Some(lab.meter)).unwrap();
-    let bar = lab.store.document().children(u)[0];
+    let u = lab.store.tree().children(lab.store.tree().roots()[1]).iter().copied().find(|&n| composition::figured_by(lab.store.tree(), n) == Some(lab.meter)).unwrap();
+    let bar = lab.store.tree().children(u)[0];
     assert!(bar.is_expanded());
     let w = lab.store.resolved(bar, path("size.w")).unwrap().as_f64().unwrap();
     assert!((w - 0.010 * 10f64.powf(-0.5) / 0.001 * 20.0).abs() < 1e-9, "{w}");
@@ -211,11 +211,11 @@ fn connections_must_join_one_kind_one_way_once() {
     let err = lab.connect(fiber_in, meter_in).unwrap_err();
     assert!(err[0].message.contains("out port to an in port"), "{err:?}");
     // An rf_voltage output cannot drive an optical input.
-    let rf = lab.store.document().next_ids(1)[0];
-    let key = OrderKey::after(&lab.store.document().live(laser_out).unwrap().order);
+    let rf = lab.store.authored().next_ids(1)[0];
+    let key = OrderKey::after(&lab.store.tree().live(laser_out).unwrap().order);
     lab.store.apply(tx("rf port", vec![Op::Create { id: rf, ty: ty("port"), parent: Some(lab.laser), order: key, facets: vec![named("rf"), port("rf_voltage", "out", None)] }])).unwrap();
-    let spare = lab.store.document().next_ids(1)[0];
-    let key = OrderKey::after(&lab.store.document().live(meter_in).unwrap().order);
+    let spare = lab.store.authored().next_ids(1)[0];
+    let key = OrderKey::after(&lab.store.tree().live(meter_in).unwrap().order);
     lab.store.apply(tx("spare in", vec![Op::Create { id: spare, ty: ty("port"), parent: Some(lab.meter), order: key, facets: vec![named("in2"), port("optical_power", "in", None)] }])).unwrap();
     let err = lab.connect(rf, spare).unwrap_err();
     assert!(err[0].message.contains("cannot connect rf_voltage"), "{err:?}");
@@ -231,7 +231,7 @@ fn a_heater_settles_through_its_thermal_link() {
     let mut store = Store::new();
     let q = |s: &str| Value::parse_quantity(s).unwrap();
     let k = |n: u32| (0..n).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
-    let ids = store.document().next_ids(19);
+    let ids = store.authored().next_ids(19);
     let [library, model, heater, power, h_out, h_eq, h_t, link, r, l_a, l_b, l_eq1, l_eq2, l_t, ambient, t, a_p, a_eq, a_t] = ids.try_into().unwrap();
     let param = |id, parent, order, name: &str, v: Value| {
         let mut p = Port::default();
@@ -281,9 +281,9 @@ fn a_heater_settles_through_its_thermal_link() {
         .unwrap();
     let mut entities = Vec::new();
     for (def, name) in [(heater, "heater"), (link, "link"), (ambient, "ambient")] {
-        let after = store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone());
+        let after = store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone());
         let place = Placement { entity_parent: Some(model), entity_after: after, figure_parent: None, figure_after: None };
-        let (e, ops) = definition::instantiate(store.document(), def, "cartoon", name, &place).unwrap();
+        let (e, ops) = definition::instantiate(store.tree(), def, "cartoon", name, &place).unwrap();
         store.apply(tx(name, ops)).unwrap();
         entities.push(e);
     }
@@ -309,10 +309,10 @@ fn a_heater_settles_through_its_thermal_link() {
 /// The entity's first figure; the lab's fiber template draws nothing, so
 /// the fiber gets a plain rect for one.
 fn figure_of_entity(store: &mut Store, entity: NodeId) -> NodeId {
-    if let Some(&f) = composition::figures_of(store.document(), entity).first() {
+    if let Some(&f) = composition::figures_of(store.tree(), entity).first() {
         return f;
     }
-    let doc = store.document();
+    let doc = store.tree();
     let cartoon = doc.roots()[1];
     let id = doc.next_ids(1)[0];
     let rel = doc.next_relation_id();
@@ -338,7 +338,7 @@ fn copying_a_figure_copies_its_entity_with_fresh_ports() {
     assert_eq!(pasted.notes.len(), 2, "{:?}", pasted.notes);
     lab.store.apply(tx("duplicate", pasted.ops)).unwrap();
     let copy = pasted.roots[0];
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     let entity = composition::figured_by(doc, copy).unwrap();
     assert_ne!(entity, lab.fiber);
     // A second fiber in the model, right after the first, with its own ports.
@@ -365,9 +365,9 @@ fn copying_a_whole_chain_keeps_its_connections() {
     let figures: Vec<NodeId> = [lab.laser, lab.fiber, lab.meter].iter().map(|&e| figure_of_entity(&mut lab.store, e)).collect();
     let pasted = copy::duplicate(&lab.store, &figures).unwrap();
     assert!(pasted.notes.is_empty(), "{:?}", pasted.notes);
-    let connections = lab.store.document().nodes_of_type(ty("connection")).count();
+    let connections = lab.store.tree().nodes_of_type(ty("connection")).count();
     lab.store.apply(tx("duplicate", pasted.ops)).unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     assert_eq!(doc.nodes_of_type(ty("connection")).count(), connections * 2);
     // The copied meter reads the copied laser: raise it, only its meter moves.
     let def = |e: NodeId| doc.get::<iron_document::facet::Instance>(e).unwrap().def.constant().cloned();
@@ -389,7 +389,7 @@ fn pasting_after_a_cut_relinks_the_figure_to_its_entity() {
     let pasted = copy::paste(&lab.store, &frag, &place, "here").unwrap();
     lab.store.apply(tx("paste", pasted.ops)).unwrap();
     // The same fiber, still connected: no second entity.
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     assert_eq!(composition::figured_by(doc, pasted.roots[0]), Some(lab.fiber));
     assert_eq!(doc.nodes_of_type(ty("entity")).count(), 3);
 }
@@ -401,16 +401,16 @@ fn pasting_after_a_cut_relinks_the_figure_to_its_entity() {
 #[test]
 fn a_detached_meter_keeps_its_wiring_and_stops_following_its_definition() {
     let mut lab = lab();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     let meter_in = lab.port(lab.meter, "in");
     assert!(meter_in.is_expanded());
     let reading = watts(&lab.signal(lab.meter, "in"));
     let u = doc.relations_to(lab.meter).find(|r| r.rel == RelKind::Figures).unwrap().from;
     let bar = doc.children(u)[0];
     let (_, template_bar) = bar.expanded_parts().unwrap();
-    let ops = definition::detach_ops(lab.store.document(), lab.meter).unwrap();
+    let ops = definition::detach_ops(lab.store.tree(), lab.meter).unwrap();
     lab.store.apply(tx("detach meter", ops)).unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     // Authored now: a port and a picture with fresh ids.
     let port = lab.port(lab.meter, "in");
     assert!(!port.is_expanded() && port != meter_in);
@@ -428,7 +428,7 @@ fn a_detached_meter_keeps_its_wiring_and_stops_following_its_definition() {
     // Undo (twice: the edit, then the detach) links it again.
     lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(2).unwrap().unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     assert!(doc.live(meter_in).is_some() && doc.live(port).is_none());
     assert!(doc.relations_to(meter_in).any(|r| r.rel == RelKind::Connects));
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
@@ -444,14 +444,14 @@ fn a_detached_meter_keeps_its_wiring_and_stops_following_its_definition() {
 #[test]
 fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     let mut lab = lab();
-    let cartoon = lab.store.document().roots()[1];
-    let picture_of = |s: &Store, e: NodeId| s.document().relations_to(e).find(|r| r.rel == RelKind::Figures).unwrap().from;
+    let cartoon = lab.store.tree().roots()[1];
+    let picture_of = |s: &Store, e: NodeId| s.tree().relations_to(e).find(|r| r.rel == RelKind::Figures).unwrap().from;
     let (laser_use, fiber_use) = (picture_of(&lab.store, lab.laser), picture_of(&lab.store, lab.fiber));
     // A slider outside drives the laser's power.
-    let slider = lab.store.document().next_id();
+    let slider = lab.store.authored().next_id();
     let mut sl = iron_document::facet::Slider::default();
     sl.value = Slot::Const(Value::Number(0.01));
-    let key = OrderKey::after(&lab.store.document().live(*lab.store.document().children(cartoon).last().unwrap()).unwrap().order);
+    let key = OrderKey::after(&lab.store.tree().live(*lab.store.tree().children(cartoon).last().unwrap()).unwrap().order);
     lab.store.apply(tx("slider", vec![
         Op::Create { id: slider, ty: ty("slider"), parent: Some(cartoon), order: key, facets: vec![Transform2d::default().wrap(), sl.wrap()] },
         Op::Set { id: lab.laser, path: path("args.power"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value * 1 W")).unwrap()) },
@@ -461,7 +461,7 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
 
     let (made, input) = lab.store.make_component(&[laser_use, fiber_use], "source", Actor::Human).unwrap();
     lab.store.apply(input).unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     assert!(doc.live(lab.laser).is_none() && doc.live(lab.fiber).is_none() && doc.live(laser_use).is_none());
     // Derived relations (the inner connection, `exposes`) leave the
     // allocator alone: a fresh relation is still an authored one.
@@ -470,7 +470,7 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15, "{}", watts(&lab.signal(lab.meter, "in")));
     // The source has a power input bound to the slider and a light output.
     let port = |name: &str| lab.port(made.entity, name);
-    assert_eq!(lab.store.document().leaf(made.entity, path("args.power")).unwrap().expr().unwrap().to_string(), format!("{slider}.slider.value * 1 W"));
+    assert_eq!(lab.store.tree().leaf(made.entity, path("args.power")).unwrap().expr().unwrap().to_string(), format!("{slider}.slider.value * 1 W"));
     assert!((watts(&lab.signal(made.entity, "out")) - reading).abs() < 1e-15);
     assert!(port("power").is_expanded());
     // The model view lists the source, not its insides.
@@ -485,9 +485,9 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     let laser_def = made.definition;
     let _ = laser_def;
     let source_picture = made.picture;
-    let inner_pictures: Vec<NodeId> = lab.store.document().children(source_picture).to_vec();
+    let inner_pictures: Vec<NodeId> = lab.store.tree().children(source_picture).to_vec();
     assert_eq!(inner_pictures.len(), 2, "{inner_pictures:?}");
-    let laser_box = lab.store.document().children(inner_pictures[0])[0];
+    let laser_box = lab.store.tree().children(inner_pictures[0])[0];
     assert_eq!(laser_box.path().len(), 3, "{laser_box}");
     let (_, template_box) = laser_box.expanded_parts().unwrap();
     lab.store.apply(tx("taller laser", vec![Op::Set { id: template_box, path: path("size.h"), slot: Slot::Const(Value::Number(77.0)) }])).unwrap();
@@ -496,7 +496,7 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     // its target the path down to the part, and the override outlives an
     // edit to the laser definition (§5.3, "Nested targets").
     lab.store.apply(tx("wider laser here", vec![Op::Set { id: laser_box, path: path("size.w"), slot: Slot::Const(Value::Number(140.0)) }])).unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     let o = doc.children(source_picture).iter().copied().find(|&c| doc.live(c).unwrap().ty.name() == "override").expect("override on the source's picture");
     let target = doc.get::<iron_document::facet::Override>(o).unwrap().target.constant().unwrap().as_ref().unwrap();
     assert_eq!(target.path(), laser_box.path()[1..].to_vec());
@@ -516,7 +516,7 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(1).unwrap().unwrap();
     lab.store.undo(1).unwrap().unwrap();
-    let doc = lab.store.document();
+    let doc = lab.store.tree();
     assert!(doc.live(lab.laser).is_some() && doc.live(made.entity).is_none());
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
 }

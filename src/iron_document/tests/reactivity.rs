@@ -26,7 +26,7 @@ fn bind(e: &str) -> Slot {
 /// A 2D composition named `sheet` holding `markup`, and a model root.
 fn sheet(markup: &str) -> (Store, NodeId, BTreeMap<String, NodeId>) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -40,14 +40,14 @@ fn sheet(markup: &str) -> (Store, NodeId, BTreeMap<String, NodeId>) {
             ],
         ))
         .unwrap();
-    let built = markup::ops(markup, Some(ids[0]), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(markup, Some(ids[0]), OrderKey::first(), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("draw", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     (store, ids[0], built.named)
 }
 
 /// A repeat's items, in order.
 fn items(store: &Store, g: NodeId) -> Vec<NodeId> {
-    let doc = store.document();
+    let doc = store.tree();
     let items: Vec<NodeId> = doc.children(g).iter().copied().filter(|c| c.is_item_scope() && doc.is_live(*c)).collect();
     items
 }
@@ -106,7 +106,7 @@ fn nesting_past_sixteen_is_reported_and_still_drawn() {
     markup.push_str(r#"<rect name="leaf" x="1" w="10" h="10"/>"#);
     markup.push_str(&"</group>".repeat(depth));
     let (store, comp, _) = sheet(&markup);
-    let doc = store.document();
+    let doc = store.tree();
     let top = doc.children(comp)[0];
     let leaves: Vec<NodeId> = doc.descendants(top).into_iter().filter(|&d| d.nesting() == depth && doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("leaf")).collect();
     assert_eq!(leaves.len(), 1, "the deepest copy is drawn");
@@ -123,20 +123,20 @@ fn a_repeat_of_a_component_gives_each_item_its_own_instance() {
     // Copy std:meter's definition in by placing one.
     let (ops, _) = place_ops(&store, r#"<place def="std:meter" in="sheet" x="400" y="0"/>"#).unwrap();
     store.apply(tx("place", ops)).unwrap();
-    let def = standard::find(store.document(), "meter").unwrap();
-    let comp = store.document().roots()[0];
+    let def = standard::find(store.tree(), "meter").unwrap();
+    let comp = store.tree().roots()[0];
     let markup = format!(
         r#"<group id="$g" name="meters" repeat.each="5 10 15">
              <entity id="$e" name="m" instance.def="{def}" instance.mode="linked" args.in="{{= $g.repeat.item * 1 mW}}" args.range="20 mW"/>
              <use id="$u" name="m" notation="free" x="{{= $g.repeat.index * 130}}" y="200"/>
            </group>"#
     );
-    let built = markup::ops(&markup, Some(comp), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(&markup, Some(comp), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     let (g, e, u) = (built.named["g"], built.named["e"], built.named["u"]);
     let mut ops = built.ops;
-    ops.push(Op::Link { rel: Relation { id: store.document().next_relation_id(), from: u, to: e, rel: RelKind::Figures, data: BTreeMap::new() } });
+    ops.push(Op::Link { rel: Relation { id: store.authored().next_relation_id(), from: u, to: e, rel: RelKind::Figures, data: BTreeMap::new() } });
     store.apply(tx("meters", ops)).unwrap_or_else(|e| panic!("{e:?}"));
-    let doc = store.document();
+    let doc = store.tree();
     let items = items(&store, g);
     assert_eq!(items.len(), 3);
     let readouts: Vec<String> = items
@@ -158,21 +158,21 @@ fn items_follow_a_drag_and_a_publish_without_a_transaction() {
     let (mut store, _, n) = sheet(r#"<slider id="$s" x="0" y="0" min="0" max="10" step="1" value="2"/><group id="$g" repeat.count="{= $s.slider.value}"><rect x="{= $g.repeat.index * 20}" w="10" h="10"/></group><let id="$data" value="1 2"/><group id="$h" repeat.each="{= $data}"><rect x="{= $h.repeat.item}" w="5" h="5"/></group>"#);
     let (s, g, data, h) = (n["s"], n["g"], n["data"], n["h"]);
     assert_eq!(items(&store, g).len(), 2);
-    let version = store.document().version();
+    let version = store.authored().version();
     let _ = store.take_derived_ops();
     // A drag previews the slider's value.
     store.preview(s, path("slider.value"), Value::Number(5.0));
     assert_eq!(items(&store, g).len(), 5);
-    assert_eq!(x_of(&store, store.document().children(items(&store, g)[4])[0]), 80.0);
+    assert_eq!(x_of(&store, store.tree().children(items(&store, g)[4])[0]), 80.0);
     assert!(!store.take_derived_ops().is_empty(), "the host is told what to materialise");
-    assert_eq!(store.document().version(), version, "no transaction");
+    assert_eq!(store.authored().version(), version, "no transaction");
     store.unpreview(s, path("slider.value"));
     assert_eq!(items(&store, g).len(), 2);
     // A producer publishes a longer series onto the data.
     let live = store.register_producer("live");
     store.publish(live, BTreeMap::from([(Leaf { node: data, path: path("let.value") }, Value::series(vec![1.0, 2.0, 3.0, 4.0], Dim::NONE))]));
     assert_eq!(items(&store, h).len(), 4);
-    assert_eq!(store.document().version(), version);
+    assert_eq!(store.authored().version(), version);
     assert!(store.reactive().errors.is_empty(), "{:?}", store.reactive().errors);
 }
 
@@ -182,7 +182,7 @@ fn items_follow_a_drag_and_a_publish_without_a_transaction() {
 fn changing_one_element_re_evaluates_one_item() {
     let (mut store, _, n) = sheet(r#"<let id="$data" value="10 20 30 40"/><group id="$g" repeat.each="{= $data}"><rect x="{= $g.repeat.item * 2}" w="5" h="5"/></group>"#);
     let (data, g) = (n["data"], n["g"]);
-    let xs = |s: &Store| items(s, g).iter().map(|&i| x_of(s, s.document().children(i)[0])).collect::<Vec<_>>();
+    let xs = |s: &Store| items(s, g).iter().map(|&i| x_of(s, s.tree().children(i)[0])).collect::<Vec<_>>();
     assert_eq!(xs(&store), vec![20.0, 40.0, 60.0, 80.0]);
     let before = store.reactive().evaluations;
     store.apply(tx("one", vec![Op::Set { id: data, path: path("let.value"), slot: Slot::Const(Value::series(vec![10.0, 20.0, 99.0, 40.0], Dim::NONE)) }])).unwrap();
@@ -198,7 +198,7 @@ fn text_of(store: &Store, id: NodeId) -> String {
 }
 
 fn named(store: &Store, under: NodeId, name: &str) -> Vec<NodeId> {
-    let doc = store.document();
+    let doc = store.tree();
     // Drawn copies only: a derived repeat's or conditional's own template is not one.
     doc.descendants(under).into_iter().filter(|&d| d.is_expanded() && !expand::in_repeat_template(doc, d) && doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).collect()
 }
@@ -274,7 +274,7 @@ fn ticks_keyed_by_value_keep_the_labels_that_stay() {
     assert_eq!(ids(&store), vec![format!("{g}/~10"), format!("{g}/~20"), format!("{g}/~30"), format!("{g}/~40")]);
     assert_eq!(items(&store, g)[1], twenty);
     assert_eq!(store.resolved(twenty, path("item.index")), Some(Value::Number(1.0)));
-    assert!(!store.document().is_live(NodeId::item_scope(g, "0").unwrap()));
+    assert!(!store.tree().is_live(NodeId::item_scope(g, "0").unwrap()));
 }
 
 /// `when`: the children exist only while the condition holds.
@@ -314,7 +314,7 @@ fn an_emitting_action_queues_its_event_for_the_host() {
 #[test]
 fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
     let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
-    let library = store.document().next_id();
+    let library = store.authored().next_id();
     store.apply(tx("library", vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![] }])).unwrap();
     let def_markup = r##"<definition name="accordion">
         <port_spec id="$title" name="title" kind="value" dir="in" signal="Section"/>
@@ -333,13 +333,13 @@ fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
           </group>
         </template>
       </definition>"##;
-    let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     let def = built.roots[0];
     store.apply(tx("define", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let place = format!(r#"<place def="{def}" in="sheet" x="0" y="0" name="A" title="One"/><place def="{def}" in="sheet" x="0" y="100" name="B" title="Two"/>"#);
     let (ops, _) = place_ops(&store, &place).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("place", ops)).unwrap_or_else(|e| panic!("{e:?}"));
-    let uses: Vec<NodeId> = store.document().children(comp).iter().copied().filter(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "use")).collect();
+    let uses: Vec<NodeId> = store.tree().children(comp).iter().copied().filter(|&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "use")).collect();
     assert_eq!(uses.len(), 2);
     let (a, b) = (uses[0], uses[1]);
     let content = |s: &Store, u: NodeId| named(s, u, "content").iter().map(|&c| text_of(s, c)).collect::<Vec<_>>();
@@ -368,12 +368,12 @@ fn an_accordion_component_toggles_per_instance_and_undoes_one_click() {
     // nothing saved.
     let colour = |s: &Store| s.resolved(bar, path("fill.color")).unwrap();
     let cold = colour(&store);
-    let (version, steps, saved) = (store.document().version(), store.history().past().len(), store.save());
+    let (version, steps, saved) = (store.authored().version(), store.history().past().len(), store.save());
     assert_eq!(store.hover_listeners(bar).len(), 1);
     assert!(store.fire(bar, "enter", Actor::Human, 0).unwrap().is_none());
     assert_ne!(colour(&store), cold);
     assert_eq!(store.resolved(named(&store, b, "bar")[0], path("fill.color")).unwrap(), cold, "only this instance");
-    assert_eq!((store.document().version(), store.history().past().len(), store.save()), (version, steps, saved));
+    assert_eq!((store.authored().version(), store.history().past().len(), store.save()), (version, steps, saved));
     store.fire(bar, "leave", Actor::Human, 0).unwrap();
     assert_eq!(colour(&store), cold);
 }
@@ -395,7 +395,7 @@ fn an_actions_writes_are_parallel_and_one_step() {
 }
 
 fn named_any(store: &Store, under: NodeId, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.descendants(under).into_iter().find(|&d| doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
 }
 
@@ -467,7 +467,7 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
         <group id="$night" name="night"><let id="$ink" name="ink" provide="yes" value="#ffffffff"/><rect id="$r" name="r" w="4" h="4" fill.color="@ink"/></group>
         <rect id="$day" name="day" w="4" h="4" fill.color="@ink"/>"##,
     );
-    let library = store.document().next_id();
+    let library = store.authored().next_id();
     store.apply(tx("library", vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![] }])).unwrap();
     let def_markup = r##"<definition name="spaced">
         <template notation="free">
@@ -475,7 +475,7 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
           <rect name="box" x="{= @gap}" y="0" w="10" h="10" fill.color="#000000ff"/>
         </template>
       </definition>"##;
-    let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(def_markup, Some(library), OrderKey::first(), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     let def = built.roots[0];
     store.apply(tx("define", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let (plain, wide) = (named_ids["plain"], named_ids["wide"]);
@@ -486,14 +486,14 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
     assert_eq!(box_x(&store, plain), 8.0, "the component's own default");
     assert_eq!(box_x(&store, wide), 40.0, "the provider above it");
     // The inspector's list: what each picture reads, and from where.
-    let reads = |s: &Store, under: NodeId| s.context_reads(s.document().children(under).iter().copied().find(|&c| s.document().live(c).is_some_and(|n| n.ty.name() == "use")).unwrap());
+    let reads = |s: &Store, under: NodeId| s.context_reads(s.tree().children(under).iter().copied().find(|&c| s.tree().live(c).is_some_and(|n| n.ty.name() == "use")).unwrap());
     assert_eq!(reads(&store, plain), vec![("gap".to_owned(), None, Some(Value::Number(8.0)))], "its own default");
-    let provider = store.document().children(wide).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "let"));
+    let provider = store.tree().children(wide).iter().copied().find(|&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "let"));
     assert_eq!(reads(&store, wide), vec![("gap".to_owned(), provider, Some(Value::Number(40.0)))]);
     // A definition declares what it reads: an undeclared name, a read
     // outside the template, and taking the declaration away are refused.
-    let template = store.document().children(def).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "template")).unwrap();
-    let part = |name: &str| store.document().children(template).iter().copied().find(|&c| store.document().get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
+    let template = store.tree().children(def).iter().copied().find(|&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "template")).unwrap();
+    let part = |name: &str| store.tree().children(template).iter().copied().find(|&c| store.tree().get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
     let (the_box, the_default) = (part("box"), part("gap"));
     let refused = |s: &mut Store, ops: Vec<Op>| s.apply(tx("no", ops)).unwrap_err()[0].message.clone();
     let why = refused(&mut store, vec![Op::Set { id: the_box, path: path("transform2d.y"), slot: bind("@margin") }]);
@@ -504,11 +504,11 @@ fn a_component_reads_context_from_wherever_it_is_placed() {
     assert!(why.contains("does not declare"), "{why}");
     let why = refused(&mut store, vec![Op::Delete { id: the_default }]);
     assert!(why.contains("does not declare"), "{why}");
-    let outside = markup::ops(r#"<let name="model_level" value="{= @gap}"/>"#, Some(def), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let outside = markup::ops(r#"<let name="model_level" value="{= @gap}"/>"#, Some(def), OrderKey::after(&OrderKey::after(&OrderKey::first())), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     let why = refused(&mut store, outside.ops);
     assert!(why.contains("outside a template"), "{why}");
     // The provider's value is live, and ceasing to provide falls back.
-    let gap = store.document().children(wide).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "let")).unwrap();
+    let gap = store.tree().children(wide).iter().copied().find(|&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "let")).unwrap();
     store.apply(tx("gap", vec![Op::Set { id: gap, path: path("let.value"), slot: Slot::Const(Value::Number(60.0)) }])).unwrap();
     assert_eq!(box_x(&store, wide), 60.0);
     store.apply(tx("stop", vec![Op::Set { id: gap, path: path("let.provide"), slot: Slot::Const(Value::Enum("no".into())) }])).unwrap();
@@ -581,15 +581,15 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
     let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
     let laser = store.place_standard("laser", comp, [0.0, 0.0], Actor::Human).unwrap();
     let fiber = store.place_standard("fiber", comp, [200.0, 0.0], Actor::Human).unwrap();
-    let entity = |s: &Store, u: NodeId| expand::use_entity(s.document(), u).unwrap();
+    let entity = |s: &Store, u: NodeId| expand::use_entity(s.tree(), u).unwrap();
     let port = |s: &Store, u: NodeId, name: &str| {
         let e = entity(s, u);
-        s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
+        s.tree().children(e).iter().copied().find(|&p| s.tree().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
     };
     let (le, fe) = (entity(&store, laser), entity(&store, fiber));
     let (from, to) = (port(&store, laser, "out"), port(&store, fiber, "in"));
     let read = |l: Leaf| store.resolved(l.node, l.path);
-    let mut ops = author::connect(store.document(), &read, from, to).unwrap();
+    let mut ops = author::connect(store.tree(), &read, from, to).unwrap();
     ops.push(Op::Set { id: fe, path: path("args.delay_s"), slot: Slot::Const(Value::Number(1.0)) });
     ops.push(Op::Set { id: fe, path: path("args.loss_db_per_km"), slot: Slot::Const(Value::Number(0.0)) });
     let watts = |t: &str| Slot::Const(Expr::parse(t).unwrap().eval(&|_| None).unwrap());
@@ -637,13 +637,13 @@ fn steady_stepped_producers_are_at_rest() {
     let laser = store.place_standard("laser", comp, [0.0, 0.0], Actor::Human).unwrap();
     let fiber = store.place_standard("fiber", comp, [200.0, 0.0], Actor::Human).unwrap();
     store.place_standard("plot", comp, [0.0, 200.0], Actor::Human).unwrap();
-    let entity = |s: &Store, u: NodeId| expand::use_entity(s.document(), u).unwrap();
+    let entity = |s: &Store, u: NodeId| expand::use_entity(s.tree(), u).unwrap();
     let port = |s: &Store, u: NodeId, name: &str| {
         let e = entity(s, u);
-        s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
+        s.tree().children(e).iter().copied().find(|&p| s.tree().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
     };
     let read = |l: Leaf| store.resolved(l.node, l.path);
-    let ops = author::connect(store.document(), &read, port(&store, laser, "out"), port(&store, fiber, "in")).unwrap();
+    let ops = author::connect(store.tree(), &read, port(&store, laser, "out"), port(&store, fiber, "in")).unwrap();
     store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     store.advance_steps(0.0, &Default::default());
     store.advance_presence(0.0);
@@ -832,9 +832,9 @@ fn a_plot_s_new_tick_writes_nothing_outside_it() {
 fn the_plot_pans_by_drag_and_zooms_by_wheel() {
     let (mut store, comp, _) = sheet(r#"<group name="spare"/>"#);
     let plot = store.place_standard("plot", comp, [0.0, 0.0], Actor::Human).unwrap();
-    let e = expand::use_entity(store.document(), plot).unwrap();
+    let e = expand::use_entity(store.tree(), plot).unwrap();
     let out = |s: &Store, name: &str| {
-        let p = s.document().children(e).iter().copied().find(|&p| s.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
+        let p = s.tree().children(e).iter().copied().find(|&p| s.tree().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
         s.resolved(p, path("port.signal")).unwrap().as_f64().unwrap()
     };
     assert_eq!((out(&store, "x_lo"), out(&store, "x_hi")), (0.0, 10.0));

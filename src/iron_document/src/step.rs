@@ -16,9 +16,9 @@
 //!   back to `initial`. While its formula leaves it where it is, the step
 //!   length is not republished, so nothing changes and no frame is drawn.
 
+use crate::Tree;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::document::Document;
 use crate::expr::Leaf;
 use crate::facet::{FacetKind, LeafPath};
 use crate::id::NodeId;
@@ -42,7 +42,7 @@ fn leaf(node: NodeId, facet: FacetKind, field: &'static str) -> Leaf {
 }
 
 /// Whether `n` sits in one of the `paused` compositions.
-fn held(doc: &Document, n: NodeId, paused: &BTreeSet<NodeId>) -> bool {
+fn held(doc: Tree<'_>, n: NodeId, paused: &BTreeSet<NodeId>) -> bool {
     !paused.is_empty() && crate::composition::composition_of(doc, n).is_some_and(|c| paused.contains(&c))
 }
 
@@ -103,7 +103,7 @@ impl Steps {
     }
 
     /// The `dt` leaf of every live accumulator.
-    pub fn dt_leaves(doc: &Document) -> Vec<Leaf> {
+    pub fn dt_leaves(doc: Tree<'_>) -> Vec<Leaf> {
         doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).map(|n| leaf(n, FacetKind::Accumulate, "dt")).collect()
     }
 
@@ -111,7 +111,7 @@ impl Steps {
     /// length now published (any length above 0 answers the same for a
     /// formula at rest). The store publishes the real length only then, so
     /// an accumulator at rest changes nothing from frame to frame.
-    pub fn restless(&self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, paused: &BTreeSet<NodeId>) -> bool {
+    pub fn restless(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, paused: &BTreeSet<NodeId>) -> bool {
         doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && !held(doc, n, paused)).any(|n| {
             let f = |field| leaf(n, FacetKind::Accumulate, field);
             let Some(v) = self.values.get(&n) else { return true };
@@ -126,7 +126,7 @@ impl Steps {
     /// beside the step lengths, and the nodes still changing.
     /// An accumulator in a `paused` composition holds its value: no view
     /// shows it, so it does not advance behind the picture.
-    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, paused: &BTreeSet<NodeId>) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, paused: &BTreeSet<NodeId>) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
         let mut out = BTreeMap::new();
         let mut active = Vec::new();
 

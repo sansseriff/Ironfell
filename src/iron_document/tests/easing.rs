@@ -122,7 +122,7 @@ fn trim_mode_treats_pieces_together_or_in_turn() {
 #[test]
 fn a_key_eases_with_easy_ease() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(5);
+    let ids = store.authored().next_ids(5);
     let (dot, timeline, clip, k0, k1) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
     let key = |t: f64, v: f64, easing: &str| {
         let mut k = Key::default();
@@ -140,7 +140,7 @@ fn a_key_eases_with_easy_ease() {
         Op::Create { id: clip, ty: TypeId::lookup("clip").unwrap(), parent: Some(timeline), order: first.clone(), facets: vec![Timing::default().wrap(), c.wrap()] },
         Op::Create { id: k0, ty: TypeId::lookup("key").unwrap(), parent: Some(clip), order: first.clone(), facets: vec![key(0.0, 0.0, "easy_ease")] },
         Op::Create { id: k1, ty: TypeId::lookup("key").unwrap(), parent: Some(clip), order: OrderKey::after(&first), facets: vec![key(1.0, 100.0, "linear")] },
-        Op::Link { rel: Relation { id: store.document().next_relation_id(), from: clip, to: dot, rel: RelKind::Animates, data: Default::default() } },
+        Op::Link { rel: Relation { id: store.authored().next_relation_id(), from: clip, to: dot, rel: RelKind::Animates, data: Default::default() } },
     ];
     store.apply(TransactionInput { label: "clip".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
     store.set_time(0.25);

@@ -81,7 +81,7 @@ pub fn advance(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sources: R
     }
     // What the clips animate renders every frame while the clock plays.
     let comps: BTreeSet<NodeId> = if running {
-        let doc = store.0.document();
+        let doc = store.0.tree();
         doc.relations()
             .filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to))
             .filter_map(|r| iron_document::composition::composition_of(doc, r.to))

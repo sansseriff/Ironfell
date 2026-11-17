@@ -6,6 +6,7 @@
 //! hover's). Everything else is drawn, picked and edited from the store and
 //! the scene without an entity.
 
+use iron_document::Tree;
 use super::{CompositionLayers, InComposition, NodeMap, Provenance};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -100,7 +101,7 @@ const LIVE_BUDGET: usize = 2_000;
 /// The Live set from the selection and hover: each picked node's ancestors
 /// up to its composition and its subtree, the latter within [`LIVE_BUDGET`].
 pub(super) fn decide_modes(store: Res<super::DocumentStore>, sel: Res<crate::SelectionState>, mut modes: ResMut<Modes>) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let mut live = BTreeSet::new();
     for &id in sel.selected.iter().chain(sel.hovered.iter()) {
         if doc.live(id).is_none() {
@@ -136,7 +137,7 @@ pub(super) fn sync_live(
         return;
     }
     let Some(assets) = assets else { return };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let gone: Vec<NodeId> = map.ids().filter(|&id| !modes.wants_entity(&store.0, id)).collect();
     for id in gone {
         if let Some(e) = map.remove(id)
@@ -214,7 +215,7 @@ pub fn stroke_style(store: &Store, id: NodeId) -> kurbo::Stroke {
     // SVG's `pathLength` (plans/specs/plot.md §2): dashes measured against
     // a nominal length, scaled to the path's own.
     let nominal = r.num("stroke.path_length", 0.0) as f64;
-    let scale = if nominal > 0.0 && store.document().live(id).is_some_and(|n| n.ty.name() == "path") {
+    let scale = if nominal > 0.0 && store.tree().live(id).is_some_and(|n| n.ty.name() == "path") {
         use kurbo::ParamCurveArclen as _;
         let length: f64 = path_outline(store, id).segments().map(|s| s.arclen(1e-3)).sum();
         if length > 0.0 { length / nominal } else { 1.0 }
@@ -359,7 +360,7 @@ pub(super) fn reconcile(
     drawables: &mut Drawables,
     modes: &Modes,
 ) {
-    let doc = store.document();
+    let doc = store.tree();
     let _ = FacetKind::ALL; // keep the import meaningful for readers
     // A contour or a point has no entity of its own: its path is redrawn
     // instead. Tombstoned nodes still name their parent, so a deleted point
@@ -437,7 +438,7 @@ pub(super) fn reconcile(
 /// content: references draw it in place (instance-cache.md phase D), and
 /// it shows nowhere else, since no composition holds it. A repeat's
 /// template is not drawn either; its copies are (plans/specs/repeat.md).
-fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
+fn drawable(doc: Tree<'_>, id: NodeId) -> bool {
     if iron_document::expand::in_repeat_template(doc, id) {
         return false;
     }
@@ -460,7 +461,7 @@ fn drawable(doc: &iron_document::Document, id: NodeId) -> bool {
 /// Spawn the entity for a live node, or `None` for node types that have no
 /// runtime form (clip, timeline, entity, the library types).
 fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &mut Commands, assets: &MeshAssets, drawables: &mut Drawables) -> Option<Entity> {
-    let node = store.document().live(id)?;
+    let node = store.tree().live(id)?;
     let mut ec = match node.ty.name() {
         // An embed is placed like a group; what it shows is drawn through it
         // (`nest`), never parented to it.
@@ -496,11 +497,11 @@ fn spawn(store: &Store, id: NodeId, layers: &mut CompositionLayers, commands: &m
 /// a bound slot contributes what its binding evaluates to, a previewed slot
 /// what the gesture says. Authored constants are read the same way.
 fn write_values(store: &Store, id: NodeId, layers: &mut CompositionLayers, mut ec: Option<&mut EntityCommands>, assets: &MeshAssets, drawables: &mut Drawables) {
-    let Some(node) = store.document().live(id) else { return };
+    let Some(node) = store.tree().live(id) else { return };
     let r = Reader { store, id };
     // Which panel draws it: 2D panels filter on this; 3D content goes on its
     // composition's render layer, which only that composition's cameras see.
-    let composition = iron_document::composition::composition_of(store.document(), id);
+    let composition = iron_document::composition::composition_of(store.tree(), id);
     if let Some(ec) = ec.as_deref_mut() {
         ec.insert(InComposition(composition));
     }
@@ -710,5 +711,5 @@ fn uv_debug_texture() -> Image {
 /// Whether a node sits in a 3D composition.
 fn in_3d(store: &Store, id: NodeId) -> bool {
     use iron_document::composition::{self, Dims};
-    composition::composition_of(store.document(), id).and_then(|c| composition::dims(store.document(), c)) == Some(Dims::Three)
+    composition::composition_of(store.tree(), id).and_then(|c| composition::dims(store.tree(), c)) == Some(Dims::Three)
 }

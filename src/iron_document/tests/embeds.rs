@@ -42,7 +42,7 @@ struct Three {
 /// main (2d), scene (2d) { rect }, assembly (3d) { camera }.
 fn three() -> Three {
     let mut store = Store::new();
-    let ids = store.document().next_ids(5);
+    let ids = store.authored().next_ids(5);
     let (main, scene, rect, assembly, camera) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
     let k = OrderKey::first();
     let k1 = OrderKey::after(&k);
@@ -63,8 +63,8 @@ fn three() -> Three {
 }
 
 fn add_embed(store: &mut Store, parent: NodeId, of: NodeId, extra: Vec<Facet>) -> Result<NodeId, Vec<ApplyError>> {
-    let id = store.document().next_id();
-    let order = store.document().children(parent).last().map(|&c| OrderKey::after(&store.document().live(c).unwrap().order)).unwrap_or_else(OrderKey::first);
+    let id = store.authored().next_id();
+    let order = store.tree().children(parent).last().map(|&c| OrderKey::after(&store.tree().live(c).unwrap().order)).unwrap_or_else(OrderKey::first);
     let mut comps = vec![embed_of(of), Transform2d::default().wrap()];
     comps.extend(extra);
     store.apply(tx("embed", vec![Op::Create { id, ty: ty("embed"), parent: Some(parent), order, facets: comps }]))?;
@@ -78,7 +78,7 @@ fn a_composition_embeds_others_by_reference() {
     let mut cam = EmbedCamera::default();
     cam.camera = Slot::Const(Value::Ref(t.camera));
     let e2 = add_embed(&mut t.store, t.main, t.assembly, vec![cam.wrap()]).unwrap();
-    let doc = t.store.document();
+    let doc = t.store.tree();
     assert_eq!(composition::embedded(doc, e1), Some(t.scene));
     assert_eq!(composition::embedded(doc, e2), Some(t.assembly));
     assert_eq!(composition::embed_camera(doc, e2), Some(t.camera));
@@ -113,8 +113,8 @@ fn loops_are_refused_however_they_would_form() {
     assert_eq!(err[0].kind, ErrorKind::Cycle);
     // By a move: an embed of main, built in a composition nothing shows,
     // then moved into scene (which main shows).
-    let spare = t.store.document().next_id();
-    t.store.apply(tx("spare", vec![Op::Create { id: spare, ty: ty("composition"), parent: None, order: OrderKey::after(&t.store.document().live(t.assembly).unwrap().order), facets: comp("spare", "2d") }])).unwrap();
+    let spare = t.store.authored().next_id();
+    t.store.apply(tx("spare", vec![Op::Create { id: spare, ty: ty("composition"), parent: None, order: OrderKey::after(&t.store.tree().live(t.assembly).unwrap().order), facets: comp("spare", "2d") }])).unwrap();
     let em = add_embed(&mut t.store, spare, t.main, vec![]).unwrap();
     let err = t.store.apply(tx("move", vec![Op::Reparent { id: em, parent: Some(t.scene), order: OrderKey::first() }])).unwrap_err();
     assert_eq!(err[0].kind, ErrorKind::Cycle);

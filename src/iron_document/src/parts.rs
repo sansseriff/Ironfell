@@ -10,6 +10,7 @@
 //! library is embedded and read-only, like the built-in contexts; a document
 //! gets a copy of a part on first placement (`import.source = std:<key>`).
 
+use crate::Tree;
 use crate::expr::Expr;
 use crate::facet::{Anchor, Equation, Facet, Fill, Font, Import, LeafStruct, Name, PathShape, Port, Radius, Stroke, Template, Text, Transform2d};
 use crate::geometry::{Geometry, PackedContour};
@@ -719,12 +720,12 @@ pub fn definition_ops(part: &Part, library: NodeId, order: OrderKey, first: u64)
 }
 
 /// The definition of part `key` already copied into `doc`, if any.
-pub fn find_in(doc: &crate::document::Document, key: &str) -> Option<NodeId> {
+pub fn find_in(doc: Tree<'_>, key: &str) -> Option<NodeId> {
     crate::standard::find(doc, key)
 }
 
 /// The next free designator for `part` in `doc`: `R3` after `R1` and `R2`.
-pub fn next_designator(doc: &crate::document::Document, part: &Part) -> String {
+pub fn next_designator(doc: Tree<'_>, part: &Part) -> String {
     let n = doc
         .nodes_of_type(ty("entity"))
         .filter(|&e| doc.is_live(e))
@@ -756,7 +757,7 @@ impl crate::StoreCore {
 
 /// The ops placing `part` (see [`crate::Store::place_part`]), named
 /// `name` or by its next designator.
-pub fn place_ops(doc: &crate::document::Document, part: &Part, composition: NodeId, at_: [f64; 2], rot: f64, name: Option<&str>) -> Result<(Vec<Op>, Placed), String> {
+pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [f64; 2], rot: f64, name: Option<&str>) -> Result<(Vec<Op>, Placed), String> {
     use crate::standard::{after_last, root_of};
     let mut ops = Vec::new();
     let mut scratch = doc.clone();
@@ -768,36 +769,36 @@ pub fn place_ops(doc: &crate::document::Document, part: &Part, composition: Node
         ops.extend(new);
         Ok(())
     };
-    let def = match find_in(&scratch, &part.key) {
+    let def = match find_in(Tree::over(&scratch), &part.key) {
         Some(d) => d,
         None => {
-            let library = match root_of(&scratch, "library") {
+            let library = match root_of(Tree::over(&scratch), "library") {
                 Some(l) => l,
                 None => {
                     let l = scratch.next_id();
-                    let order = after_last(&scratch, None);
+                    let order = after_last(Tree::over(&scratch), None);
                     push(&mut scratch, &mut ops, vec![Op::Create { id: l, ty: ty("library"), parent: None, order, facets: vec![] }])?;
                     l
                 }
             };
-            let (def_ops, def) = definition_ops(part, library, after_last(&scratch, Some(library)), scratch.next_id().raw())?;
+            let (def_ops, def) = definition_ops(part, library, after_last(Tree::over(&scratch), Some(library)), scratch.next_id().raw())?;
             push(&mut scratch, &mut ops, def_ops)?;
             def
         }
     };
-    let model = match root_of(&scratch, "model") {
+    let model = match root_of(Tree::over(&scratch), "model") {
         Some(m) => m,
         None => {
             let m = scratch.next_id();
-            let order = after_last(&scratch, None);
+            let order = after_last(Tree::over(&scratch), None);
             push(&mut scratch, &mut ops, vec![Op::Create { id: m, ty: ty("model"), parent: None, order, facets: vec![] }])?;
             m
         }
     };
-    let designator = name.map_or_else(|| next_designator(&scratch, part), str::to_owned);
+    let designator = name.map_or_else(|| next_designator(Tree::over(&scratch), part), str::to_owned);
     let last = |p: NodeId| scratch.children(p).iter().filter(|c| !c.is_expanded()).filter_map(|&c| scratch.live(c)).map(|n| n.order.clone()).max();
     let place = crate::definition::Placement { entity_parent: Some(model), entity_after: last(model), figure_parent: Some(composition), figure_after: last(composition) };
-    let (entity, mut inst) = crate::definition::instantiate(&scratch, def, NOTATION, &designator, &place)?;
+    let (entity, mut inst) = crate::definition::instantiate(Tree::over(&scratch), def, NOTATION, &designator, &place)?;
     let mut figure = None;
     for op in inst.iter_mut() {
         let Op::Create { id, ty: t, facets, .. } = op else { continue };
@@ -827,7 +828,7 @@ pub fn place_ops(doc: &crate::document::Document, part: &Part, composition: Node
     // A turned part's labels stay upright: overrides on its picture.
     let quarter = (rot / std::f64::consts::FRAC_PI_2).round().rem_euclid(4.0) as u8;
     if quarter != 0
-        && let Some(template) = crate::definition::template_of(&scratch, def, NOTATION)
+        && let Some(template) = crate::definition::template_of(Tree::over(&scratch), def, NOTATION)
     {
         let labels: Vec<NodeId> = scratch.children(template).iter().copied().filter(|&c| scratch.live(c).is_some_and(|n| n.ty.name() == "text")).collect();
         let marks = part.symbol.iter().filter_map(|m| match m {
@@ -865,7 +866,7 @@ pub fn place_ops(doc: &crate::document::Document, part: &Part, composition: Node
 /// Ops joining two pins with a connection under `parent` (the model): the
 /// connection node and its two `connects` relations. Returns the ops and
 /// the connection.
-pub fn connect_ops(doc: &crate::document::Document, a: NodeId, b: NodeId, parent: NodeId) -> (Vec<Op>, NodeId) {
+pub fn connect_ops(doc: Tree<'_>, a: NodeId, b: NodeId, parent: NodeId) -> (Vec<Op>, NodeId) {
     use crate::document::{RelKind, Relation};
     use std::collections::BTreeMap;
     let id = doc.next_id();
@@ -883,13 +884,13 @@ pub fn connect_ops(doc: &crate::document::Document, a: NodeId, b: NodeId, parent
 }
 
 /// An instance's pin by name: the entity's port.
-pub fn pin(doc: &crate::document::Document, entity: NodeId, name: &str) -> Option<NodeId> {
+pub fn pin(doc: Tree<'_>, entity: NodeId, name: &str) -> Option<NodeId> {
     doc.children(entity).iter().copied().find(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "port") && doc.get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name))
 }
 
 /// Where a pin sits on a figure: the anchor in `figure`'s expanded picture
 /// that names it (expansion points a copied anchor at the entity's port).
-pub fn pin_anchor(doc: &crate::document::Document, figure: NodeId, pin: NodeId) -> Option<NodeId> {
+pub fn pin_anchor(doc: Tree<'_>, figure: NodeId, pin: NodeId) -> Option<NodeId> {
     let mut stack = doc.children(figure).to_vec();
     while let Some(n) = stack.pop() {
         if doc.get::<Anchor>(n).and_then(|a| a.port.constant()).and_then(|v| v.as_ref()) == Some(pin) {
@@ -915,7 +916,7 @@ pub struct End {
 /// the coordinate its leg shares with that end, so a part moved across
 /// the leg keeps it straight (rubber-banding). Returns the ops and the
 /// path.
-pub fn wire_ops(doc: &crate::document::Document, sheet: NodeId, a: End, b: End, points: &[[f64; 2]]) -> Result<(Vec<Op>, NodeId), String> {
+pub fn wire_ops(doc: Tree<'_>, sheet: NodeId, a: End, b: End, points: &[[f64; 2]]) -> Result<(Vec<Op>, NodeId), String> {
     use crate::document::{RelKind, Relation};
     use crate::facet::{Contour, Handles};
     if points.len() < 2 {
@@ -976,7 +977,7 @@ pub fn elbow(from: [f64; 2], to: [f64; 2], vertical_first: bool) -> Option<[f64;
 
 /// Every pin drawn on `sheet`'s top level: its end and where it is.
 pub fn pins_on(store: &crate::StoreCore, sheet: NodeId) -> Vec<(End, [f64; 2])> {
-    let doc = store.document();
+    let doc = store.tree();
     let mut out = Vec::new();
     for &f in doc.children(sheet) {
         if doc.live(f).is_none_or(|n| n.ty.name() != "use") {
@@ -1004,7 +1005,7 @@ pub fn pins_on(store: &crate::StoreCore, sheet: NodeId) -> Vec<(End, [f64; 2])> 
 /// ports with their figures (a part's wires); a connection takes its
 /// figures. A node that projects content (timeline.md) takes that. A figure
 /// of nothing is only itself.
-pub fn delete_subject_ops(doc: &crate::document::Document, figure: NodeId) -> Vec<Op> {
+pub fn delete_subject_ops(doc: Tree<'_>, figure: NodeId) -> Vec<Op> {
     use crate::document::RelKind;
     // A session node that stands for content (a timeline bar `projects` its
     // clip) deletes that; the session view regenerates without it.
@@ -1051,7 +1052,7 @@ pub enum Terminal {
 /// The wire under `at` on `sheet` (a path figuring a connection), within
 /// `reach` sheet px, and the nearest point on it.
 pub fn wire_at(store: &crate::StoreCore, sheet: NodeId, at: [f64; 2], reach: f64) -> Option<(NodeId, [f64; 2])> {
-    let doc = store.document();
+    let doc = store.tree();
     let p = Point::new(at[0], at[1]);
     let mut best: Option<(f64, NodeId, Point)> = None;
     for &path in doc.children(sheet) {
@@ -1073,7 +1074,7 @@ pub fn wire_at(store: &crate::StoreCore, sheet: NodeId, at: [f64; 2], reach: f64
 /// A wire's points, sheet px, if `path` is a wire (a path figuring a
 /// connection, its points in one contour).
 fn wire_points(store: &crate::StoreCore, path: NodeId) -> Option<Vec<[f64; 2]>> {
-    let doc = store.document();
+    let doc = store.tree();
     doc.live(path).filter(|n| n.ty.name() == "path")?;
     let figured = doc.relations_from(path).find(|r| r.rel == crate::document::RelKind::Figures)?.to;
     doc.live(figured).filter(|n| n.ty.name() == "connection")?;
@@ -1083,7 +1084,7 @@ fn wire_points(store: &crate::StoreCore, path: NodeId) -> Option<Vec<[f64; 2]>> 
 }
 
 /// The end a wire's first or last point is bound to.
-fn wire_end(doc: &crate::document::Document, path: NodeId, last: bool) -> Option<End> {
+fn wire_end(doc: Tree<'_>, path: NodeId, last: bool) -> Option<End> {
     let contour = *doc.children(path).first()?;
     let kids = doc.children(contour);
     let point = if last { *kids.last()? } else { *kids.first()? };
@@ -1103,7 +1104,7 @@ fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 
         Ok(())
     };
     let points = wire_points(scratch, wire).ok_or("not a wire")?;
-    let (a, b) = (wire_end(scratch.document(), wire, false).ok_or("a wire's start is not on a pin")?, wire_end(scratch.document(), wire, true).ok_or("a wire's end is not on a pin")?);
+    let (a, b) = (wire_end(scratch.tree(), wire, false).ok_or("a wire's start is not on a pin")?, wire_end(scratch.tree(), wire, true).ok_or("a wire's end is not on a pin")?);
     // The segment `at` lies on.
     let p = Point::new(at[0], at[1]);
     let seg = points.windows(2).position(|w| {
@@ -1111,11 +1112,11 @@ fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 
         (s.distance(p) + p.distance(e) - s.distance(e)).abs() < 1e-6
     }).ok_or("the point is not on the wire")?;
     let junction = find("junction").ok_or("no junction part")?;
-    let (place, placed) = place_ops(scratch.document(), junction, sheet, at, 0.0, None)?;
+    let (place, placed) = place_ops(scratch.authored(), junction, sheet, at, 0.0, None)?;
     apply(scratch, place, ops)?;
-    let j = pin(scratch.document(), placed.entity, "j").ok_or("the junction has no pin")?;
-    let j = End { pin: j, anchor: pin_anchor(scratch.document(), placed.figure, j).ok_or("the junction's pin is not drawn")? };
-    apply(scratch, delete_subject_ops(scratch.document(), wire), ops)?;
+    let j = pin(scratch.tree(), placed.entity, "j").ok_or("the junction has no pin")?;
+    let j = End { pin: j, anchor: pin_anchor(scratch.tree(), placed.figure, j).ok_or("the junction's pin is not drawn")? };
+    apply(scratch, delete_subject_ops(scratch.tree(), wire), ops)?;
     let mut first: Vec<[f64; 2]> = points[..=seg].to_vec();
     first.push(at);
     let mut second = vec![at];
@@ -1127,7 +1128,7 @@ fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 
             }
             v
         });
-        let (wire_ops, _) = wire_ops(scratch.document(), sheet, from, to, &pts)?;
+        let (wire_ops, _) = wire_ops(scratch.tree(), sheet, from, to, &pts)?;
         apply(scratch, wire_ops, ops)?;
     }
     Ok(j)
@@ -1137,7 +1138,7 @@ fn split(scratch: &mut crate::StoreCore, sheet: NodeId, wire: NodeId, at: [f64; 
 /// two ends first and last): a wire ending on a wire splits it at a new
 /// junction. One transaction's worth.
 pub fn wire_between(store: &crate::StoreCore, sheet: NodeId, from: Terminal, to: Terminal, points: &[[f64; 2]]) -> Result<Vec<Op>, String> {
-    let mut scratch = crate::StoreCore::with_document(store.document().clone());
+    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
     let mut ops = Vec::new();
     let end = |t: Terminal, scratch: &mut crate::StoreCore, ops: &mut Vec<Op>| match t {
         Terminal::Pin(e) => Ok(e),
@@ -1148,13 +1149,13 @@ pub fn wire_between(store: &crate::StoreCore, sheet: NodeId, from: Terminal, to:
     if a.pin == b.pin {
         return Err("a wire joins two different pins".into());
     }
-    let (wire, _) = wire_ops(scratch.document(), sheet, a, b, points)?;
+    let (wire, _) = wire_ops(scratch.tree(), sheet, a, b, points)?;
     ops.extend(wire);
     Ok(ops)
 }
 
 /// The sheet a model names: a composition's id or name.
-pub(crate) fn sheet_named(doc: &crate::document::Document, s: &str) -> Result<NodeId, String> {
+pub(crate) fn sheet_named(doc: Tree<'_>, s: &str) -> Result<NodeId, String> {
     if let Some(id) = s.starts_with('#').then(|| s.parse::<NodeId>().ok()).flatten() {
         return doc.live(id).filter(|n| n.ty.name() == "composition").map(|_| id).ok_or_else(|| format!("{s} is not a composition"));
     }
@@ -1164,7 +1165,7 @@ pub(crate) fn sheet_named(doc: &crate::document::Document, s: &str) -> Result<No
 }
 
 /// A placed part by its designator.
-fn entity_named(doc: &crate::document::Document, name: &str) -> Option<NodeId> {
+fn entity_named(doc: Tree<'_>, name: &str) -> Option<NodeId> {
     doc.nodes_of_type(ty("entity")).find(|&e| doc.is_live(e) && doc.get::<Name>(e).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name))
 }
 
@@ -1193,8 +1194,8 @@ pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, S
     if circuit.name != "circuit" {
         return Err(format!("expected <circuit>, got <{}>", circuit.name));
     }
-    let sheet = sheet_named(store.document(), circuit.need("sheet")?)?;
-    let mut scratch = crate::StoreCore::with_document(store.document().clone());
+    let sheet = sheet_named(store.tree(), circuit.need("sheet")?)?;
+    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
     let mut ops: Vec<Op> = Vec::new();
     let apply = |scratch: &mut crate::StoreCore, new: Vec<Op>, ops: &mut Vec<Op>| -> Result<(), String> {
         scratch.apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: new.clone(), exact: false }).map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
@@ -1218,11 +1219,11 @@ pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, S
                 }
                 let name = el.attr("name");
                 if let Some(n) = name
-                    && entity_named(scratch.document(), n).is_some()
+                    && entity_named(scratch.tree(), n).is_some()
                 {
                     return Err(at(format!("{n} is placed already")));
                 }
-                let (place, p) = place_ops(scratch.document(), part, sheet, [x, y], deg.to_radians(), name)?;
+                let (place, p) = place_ops(scratch.authored(), part, sheet, [x, y], deg.to_radians(), name)?;
                 apply(&mut scratch, place, &mut ops).map_err(at)?;
                 let mut sets = Vec::new();
                 for (k, v) in &el.attrs {
@@ -1242,15 +1243,15 @@ pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, S
                 if !sets.is_empty() {
                     apply(&mut scratch, sets, &mut ops).map_err(at)?;
                 }
-                placed.push(scratch.document().get::<Name>(p.entity).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("?").to_owned());
+                placed.push(scratch.tree().get::<Name>(p.entity).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("?").to_owned());
             }
             "wire" => {
                 let pins = pins_on(&scratch, sheet);
                 let end = |k: &str| -> Result<(End, [f64; 2]), String> {
                     let s = el.need(k).map_err(at)?;
                     let (d, p) = s.split_once('.').ok_or_else(|| at(format!("{k}=\"{s}\": write designator.pin, as R1.a")))?;
-                    let e = entity_named(scratch.document(), d).ok_or_else(|| at(format!("no part {d}")))?;
-                    let pin = pin(scratch.document(), e, p).ok_or_else(|| at(format!("{d} has no pin {p}")))?;
+                    let e = entity_named(scratch.tree(), d).ok_or_else(|| at(format!("no part {d}")))?;
+                    let pin = pin(scratch.tree(), e, p).ok_or_else(|| at(format!("{d} has no pin {p}")))?;
                     pins.iter().find(|(x, _)| x.pin == pin).copied().ok_or_else(|| at(format!("{d} is not drawn on this sheet")))
                 };
                 let ((a, pa), (b, pb)) = (end("from")?, end("to")?);
@@ -1289,7 +1290,7 @@ pub fn circuit_ops(store: &crate::StoreCore, markup: &str) -> Result<(Vec<Op>, S
 /// a comment. Each net's solved voltage follows, as comments.
 pub fn netlist(store: &crate::StoreCore, sheet: NodeId) -> String {
     use std::collections::BTreeMap;
-    let doc = store.document();
+    let doc = store.tree();
     let name_of = |n: NodeId| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned).unwrap_or_default();
     // The parts on the sheet, in drawing order, with their part.
     let mut items: Vec<(NodeId, &Part)> = Vec::new();

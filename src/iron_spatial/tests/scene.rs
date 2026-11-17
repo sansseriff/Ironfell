@@ -64,7 +64,7 @@ struct Fixture {
 
 fn fixture(cells: usize, per: usize) -> Fixture {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3 + cells + cells * per);
+    let ids = store.authored().next_ids(3 + cells + cells * per);
     let (composition, field, loose) = (ids[0], ids[1], ids[2]);
     let mut ops = vec![
         Op::Create { id: composition, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![comp2d(), named("scene")] },
@@ -97,7 +97,7 @@ fn fixture(cells: usize, per: usize) -> Fixture {
 /// Every drawable leaf under `roots` in painter order, with its world
 /// affine and local bounds.
 fn leaves(store: &Store, roots: &[NodeId]) -> Vec<(NodeId, Affine, iron_document::geom::LocalBounds)> {
-    let doc = store.document();
+    let doc = store.tree();
     let mut out = Vec::new();
     let mut stack: Vec<NodeId> = roots.iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
@@ -195,7 +195,7 @@ fn check_conservative(scene: &Scene, store: &Store, roots: &[NodeId]) {
 }
 
 fn roots_of(store: &Store, composition: NodeId, loose: NodeId) -> Vec<NodeId> {
-    let mut r = store.document().children(composition).to_vec();
+    let mut r = store.tree().children(composition).to_vec();
     r.push(loose);
     r
 }
@@ -303,7 +303,7 @@ fn structure_rebuilds_and_deletion_drops_entries() {
 #[test]
 fn an_embeds_region_follows_its_sources_content() {
     let mut f = fixture(1, 2);
-    let ids = f.store.document().next_ids(2);
+    let ids = f.store.authored().next_ids(2);
     let (other, embed) = (ids[0], ids[1]);
     let mut e = Embed::default();
     e.source = Slot::Const(Value::Ref(f.composition));

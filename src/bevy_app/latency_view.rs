@@ -26,7 +26,7 @@ pub(super) fn draw(
     dpr: Res<crate::Dpr>,
     mut followers: Query<(Entity, &LatencyFollower, &mut DisplayList, &mut VectorView)>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let latency = doc.roots().iter().copied().find(|&r| {
         r.is_session()
             && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str())

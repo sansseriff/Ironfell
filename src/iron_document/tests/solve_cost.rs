@@ -38,7 +38,7 @@ const LINK: f64 = 100.0;
 /// tests/constraints.rs's pendulum, moved right by `dx`, applied to `store`.
 /// Returns its ball.
 fn pendulum(store: &mut Store, order: &mut OrderKey, dx: f64) -> NodeId {
-    let ids = store.document().next_ids(15);
+    let ids = store.authored().next_ids(15);
     let (group, platform) = (ids[0], ids[1]);
     let joints = [ids[2], ids[3], ids[4]];
     let ball = ids[5];
@@ -46,7 +46,7 @@ fn pendulum(store: &mut Store, order: &mut OrderKey, dx: f64) -> NodeId {
     let bar = ids[9];
     let (fix, hinge) = (ids[10], ids[11]);
     let links = [ids[12], ids[13], ids[14]];
-    let rels = store.document().next_relation_ids(9);
+    let rels = store.authored().next_relation_ids(9);
     let mut key = OrderKey::first();
     let mut next = || {
         let k = key.clone();
@@ -140,7 +140,7 @@ fn solver_cost_with_clusters_at_rest() {
         let balls: Vec<NodeId> = (0..count).map(|k| pendulum(&mut store, &mut order, 900.0 * k as f64)).collect();
         assert_eq!(store.clusters().list.len(), count);
         // An unrelated rect, for the constant edit.
-        let rect = store.document().next_id();
+        let rect = store.authored().next_id();
         order = OrderKey::after(&order);
         let mut s = Size::default();
         s.w = num(10.0);

@@ -17,7 +17,7 @@ fn table(store: &mut Store) -> NodeId {
 fn table_in(store: &mut Store, parent: Option<NodeId>) -> NodeId {
     let rows = vec![vec!["a".to_owned(), "b".to_owned()], vec!["c".to_owned(), "d".to_owned()]];
     let spec = Spec { rows, preset: Preset::Light, header: 1, label_col: false, emphasis: None, align: vec![] };
-    let (ops, t) = table::create_ops(store.document(), parent, OrderKey::first(), [0.0, 0.0], &spec).unwrap();
+    let (ops, t) = table::create_ops(store.tree(), parent, OrderKey::first(), [0.0, 0.0], &spec).unwrap();
     store.apply(tx(ops)).unwrap();
     t
 }
@@ -47,7 +47,7 @@ fn bad_markup_says_what_is_wrong() {
 fn a_tables_rows_are_passed_through_to_its_cells() {
     let mut store = Store::new();
     let t = table(&mut store);
-    let doc = store.document();
+    let doc = store.tree();
     let row = doc.children(t)[1];
     let cell = doc.children(row)[0];
     let chain = [t, row, cell];
@@ -74,7 +74,7 @@ fn a_row_outside_a_table_is_not_passed_through() {
     // chain does not reach it by its table is an ordinary node.
     let mut store = Store::new();
     let t = table(&mut store);
-    let doc = store.document();
+    let doc = store.tree();
     let row = doc.children(t)[0];
     let r = Resolver::new(doc, Library::builtin());
     assert_eq!(r.get(&[row], 0, Field::SELECT), "none");
@@ -89,25 +89,25 @@ fn a_document_context_overrides_a_builtin_one_and_says_so() {
     let mut store = Store::new();
     let t = table(&mut store);
     let (row, cell) = {
-        let doc = store.document();
+        let doc = store.tree();
         let row = doc.children(t)[1];
         (row, doc.children(row)[0])
     };
     let chain = [t, row, cell];
-    let enter = |store: &Store| Resolver::new(store.document(), store.contexts()).get(&chain, 2, Field::ENTER);
+    let enter = |store: &Store| Resolver::new(store.tree(), store.contexts()).get(&chain, 2, Field::ENTER);
     let enter = |store: &Store| -> &'static str { if enter(store) == "edit" { "edit" } else { "select" } };
     assert_eq!(enter(&store), "select");
-    let (ops, node) = contexts::put_ops(store.document(), CELLS_EDIT).unwrap();
+    let (ops, node) = contexts::put_ops(store.tree(), CELLS_EDIT).unwrap();
     store.apply(tx(ops)).unwrap();
     assert_eq!(enter(&store), "edit");
     // The computed view names the document's rule.
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let computed = r.computed(&chain, 2);
     assert!(computed.contains(&("affords.enter".into(), "edit".into(), format!("std:table rule 1 from {node}"))), "{computed:?}");
     // The built-in rules still hold beside it.
     assert_eq!(r.get(&chain, 1, Field::SELECT), "through");
     // Writing the same context again replaces its markup: one op.
-    let (ops, again) = contexts::put_ops(store.document(), "<context name=\"std:table\"></context>").unwrap();
+    let (ops, again) = contexts::put_ops(store.tree(), "<context name=\"std:table\"></context>").unwrap();
     assert_eq!((ops.len(), again), (1, node));
     store.apply(tx(ops)).unwrap();
     assert_eq!(enter(&store), "select");
@@ -121,7 +121,7 @@ fn a_document_context_overrides_a_builtin_one_and_says_so() {
 #[test]
 fn bad_context_markup_is_refused() {
     let mut store = Store::new();
-    let (ops, node) = contexts::put_ops(store.document(), CELLS_EDIT).unwrap();
+    let (ops, node) = contexts::put_ops(store.tree(), CELLS_EDIT).unwrap();
     store.apply(tx(ops)).unwrap();
     let set = Op::Set { id: node, path: "context_def.markup".parse().unwrap(), slot: Slot::Const(Value::Str("<context name=\"k\"><rule match=\"all\" affords.wobble=\"move\"/></context>".into())) };
     let err = store.apply(tx(vec![set])).unwrap_err().remove(0);
@@ -132,7 +132,7 @@ fn bad_context_markup_is_refused() {
 #[test]
 fn a_document_context_reads_as_its_markup() {
     let mut store = Store::new();
-    let (ops, node) = contexts::put_ops(store.document(), CELLS_EDIT).unwrap();
+    let (ops, node) = contexts::put_ops(store.tree(), CELLS_EDIT).unwrap();
     store.apply(tx(ops)).unwrap();
     let q = view::ViewQuery { omit_defaults: false, relation: Default::default(), scope: None, fidelity: view::Fidelity::Summary, depth: None, expand: vec![] };
     let v = store.view(&q).unwrap();
@@ -142,7 +142,7 @@ fn a_document_context_reads_as_its_markup() {
 
 
 fn composition(store: &mut Store, name: &str, notation: &str) -> NodeId {
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let mut c = facet::Composition::default();
     c.notation = Slot::Const(Value::Str(notation.into()));
     let named = facet::Name { text: Slot::Const(Value::Str(name.into())) };
@@ -154,7 +154,7 @@ fn composition(store: &mut Store, name: &str, notation: &str) -> NodeId {
 fn a_views_palette_and_keys_follow_its_focus() {
     let mut store = Store::new();
     let world = composition(&mut store, "slide", "free");
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let free = Focus { world: Some(world), ..Default::default() };
     let v = r.view_values(&free);
     assert_eq!(v.get(Field::PALETTE), "select rect|ellipse|table|empty pen text");
@@ -173,12 +173,12 @@ fn a_notation_named_by_a_document_context_changes_the_palette_and_keeps_the_rest
     let mut store = Store::new();
     let deck = composition(&mut store, "deck", "deck");
     let free = composition(&mut store, "free", "free");
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="deck" extends="std:free-2d">
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="deck" extends="std:free-2d">
   <rule match="view" palette.tools="select text table" keys.tools="v:select t:text b:table" inspector.sections="position fill"/>
 </context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
     let t = table_in(&mut store, Some(deck));
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     assert_eq!(r.view_values(&Focus { world: Some(deck), ..Default::default() }).get(Field::PALETTE), "select text table");
     assert_eq!(r.view_values(&Focus { world: Some(free), ..Default::default() }).get(Field::PALETTE), "select rect|ellipse|table|empty pen text");
     // The inspector's sections follow the view too.
@@ -196,15 +196,15 @@ fn a_container_in_focus_adds_its_view_rules() {
     let world = composition(&mut store, "slide", "free");
     let t = table(&mut store);
     let (row, cell) = {
-        let doc = store.document();
+        let doc = store.tree();
         let row = doc.children(t)[1];
         (row, doc.children(row)[0])
     };
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:table">
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="std:table">
   <rule match="view" palette.tools="select text"/>
 </context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     // With a cell selected, the open scope is the table (through its row).
     let inside = Focus { world: Some(world), scope: vec![t, row], states: vec![] };
     let v = r.view_values(&inside);
@@ -231,22 +231,22 @@ fn grips_and_drags_come_from_the_context() {
     let mut store = Store::new();
     let t = table(&mut store);
     let (row, cell) = {
-        let doc = store.document();
+        let doc = store.tree();
         let row = doc.children(t)[1];
         (row, doc.children(row)[0])
     };
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let v = |chain: &[NodeId]| r.values(chain, chain.len() - 1);
     // A table and its cells offer their boxes; a row, passed through, nothing.
     assert!(v(&[t]).has(Field::GRIPS, "box") && !v(&[t]).has(Field::GRIPS, "shape"));
     assert_eq!(v(&[t, row]).get(Field::GRIPS), "");
     assert_eq!(v(&[t, row, cell]).get(Field::DRAG), "point");
     // A document can take a table's box grips away.
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:free-2d">
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="std:free-2d">
   <rule match="type:table" affords.grips=""/>
 </context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     assert_eq!(r.values(&[t], 0).get(Field::GRIPS), "");
     assert_eq!(contexts::parse(r#"<context name="k"><rule match="all" affords.grips="box handles"/></context>"#).unwrap_err(), "affords.grips=\"box handles\": unknown word handles (box, shape, ends)");
 }
@@ -255,7 +255,7 @@ fn grips_and_drags_come_from_the_context() {
 fn a_tables_cells_navigate_as_a_grid() {
     let mut store = Store::new();
     let t = table(&mut store);
-    let doc = store.document();
+    let doc = store.tree();
     let rows: Vec<NodeId> = doc.children(t).to_vec();
     let cell = |r: usize, c: usize| doc.children(rows[r])[c];
     let r = Resolver::new(doc, store.contexts());
@@ -276,7 +276,7 @@ fn a_tables_cells_navigate_as_a_grid() {
 #[test]
 fn a_stacks_items_navigate_as_a_list_and_alt_moves_one() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (g, items) = (ids[0], &ids[1..]);
     let mut layout = facet::Layout::default();
     layout.mode = Slot::Const(Value::Enum("stack_y".into()));
@@ -287,7 +287,7 @@ fn a_stacks_items_navigate_as_a_list_and_alt_moves_one() {
         key = OrderKey::after(&key);
     }
     store.apply(tx(ops)).unwrap();
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let none = |_: NodeId| None;
     use interaction::KeyAction::*;
     let k = |i: usize, key: &str, alt: bool| interaction::key(&r, &[g, items[i]], key, false, alt, &none);
@@ -297,7 +297,7 @@ fn a_stacks_items_navigate_as_a_list_and_alt_moves_one() {
     assert_eq!(k(1, "enter", false), None);
     // Alt+Down moves the first item past the second.
     let Some(Reorder { id, order }) = k(0, "arrowdown", true) else { panic!("a reorder") };
-    let doc = store.document();
+    let doc = store.tree();
     let order_of = |n: NodeId| doc.live(n).unwrap().order.clone();
     assert!(id == items[0] && order > order_of(items[1]) && order < order_of(items[2]));
     // Computed: the group is a column.
@@ -307,7 +307,7 @@ fn a_stacks_items_navigate_as_a_list_and_alt_moves_one() {
 #[test]
 fn a_previewed_order_lays_the_stack_out_and_floats_the_dragged_item() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (g, items) = (ids[0], &ids[1..]);
     let mut layout = facet::Layout::default();
     layout.mode = Slot::Const(Value::Enum("stack_y".into()));
@@ -323,15 +323,15 @@ fn a_previewed_order_lays_the_stack_out_and_floats_the_dragged_item() {
     let y = |s: &Store, n: NodeId| s.resolved(n, "transform2d.y".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     assert_eq!(items.iter().map(|&n| y(&store, n)).collect::<Vec<_>>(), vec![0.0, 10.0, 20.0]);
     // The children of a stack drag in sequence.
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     assert_eq!(r.get(&[g, items[0]], 1, Field::DRAG), "sequence");
     // The first dragged below the second: the second moves up into its
     // place, the first floats at the pointer.
-    let version = store.document().version();
+    let version = store.authored().version();
     store.set_layout_preview(Some(layout::Preview { container: g, order: vec![items[1], items[0], items[2]], floating: Some((items[0], [3.0, 14.0])) }));
     assert_eq!((y(&store, items[1]), y(&store, items[0]), y(&store, items[2])), (0.0, 14.0, 20.0));
     // A preview is not an edit.
-    assert_eq!(store.document().version(), version);
+    assert_eq!(store.authored().version(), version);
     store.set_layout_preview(None);
     assert_eq!(items.iter().map(|&n| y(&store, n)).collect::<Vec<_>>(), vec![0.0, 10.0, 20.0]);
 }
@@ -341,7 +341,7 @@ fn a_stacks_items_glide_when_layout_moves_them_and_only_with_a_clock() {
     let build = |motion: bool| {
         let mut store = Store::new();
         store.set_motion(motion);
-        let ids = store.document().next_ids(4);
+        let ids = store.authored().next_ids(4);
         let (g, items) = (ids[0], ids[1..].to_vec());
         let mut layout = facet::Layout::default();
         layout.mode = Slot::Const(Value::Enum("stack_y".into()));
@@ -359,7 +359,7 @@ fn a_stacks_items_glide_when_layout_moves_them_and_only_with_a_clock() {
     let y = |s: &Store, n: NodeId| s.resolved(n, "transform2d.y".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     // The last moved first: the first two move down by its height.
     let reorder = |s: &mut Store, items: &[NodeId]| {
-        let first = s.document().live(items[0]).unwrap().order.clone();
+        let first = s.tree().live(items[0]).unwrap().order.clone();
         s.apply(tx(vec![Op::Reorder { id: items[2], order: OrderKey::before(&first) }])).unwrap();
     };
     let (mut store, items) = build(true);
@@ -382,7 +382,7 @@ fn a_stacks_items_glide_when_layout_moves_them_and_only_with_a_clock() {
 }
 
 fn named_nodes(store: &Store, name: &str) -> Vec<NodeId> {
-    let doc = store.document();
+    let doc = store.tree();
     doc.nodes().filter(|n| n.is_live()).map(|n| n.id).filter(|&id| doc.get::<facet::Name>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some(name)).collect()
 }
 
@@ -399,11 +399,11 @@ fn a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_it
     f.style = Slot::Const(Value::Str("drag: ring; drives: transform2d.rot".into()));
     store.apply(tx(vec![Op::AddFacet { id: def_pivot, facet: f.wrap() }])).unwrap();
     // Every instance's pivot now turns, by the definition's rule.
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let instance_pivots: Vec<NodeId> = named_nodes(&store, "pivot").into_iter().filter(|p| p.is_expanded()).collect();
     assert_eq!(instance_pivots.len(), 2);
     for &p in &instance_pivots {
-        let chain = contexts::chain_of(store.document(), p);
+        let chain = contexts::chain_of(store.tree(), p);
         let v = r.values(&chain, chain.len() - 1);
         assert_eq!((v.get(Field::DRAG), v.get(Field::DRIVES)), ("ring", "transform2d.rot"));
         assert_eq!(r.describe_source(&v, Field::DRAG), format!("inline on {p}"));
@@ -428,26 +428,26 @@ fn a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_it
 #[test]
 fn interaction_state_drives_looks_only_and_rules_can_match_it() {
     let mut store = Store::new();
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let mut fill = facet::Fill::default();
     fill.opacity = Slot::Bound(Expr::parse(&format!("{id}.interaction.hovered ? 1 : 0.4")).unwrap());
     store.apply(tx(vec![Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap(), fill.wrap(), facet::Interaction::default().wrap()] }])).unwrap();
     let opacity = |s: &Store| s.resolved(id, "fill.opacity".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     assert_eq!(opacity(&store), 0.4);
     // The host publishes the state: the look follows, the document does not change.
-    let version = store.document().version();
+    let version = store.authored().version();
     let producer = store.register_producer("interaction");
     store.publish(producer, std::collections::BTreeMap::from([(Leaf { node: id, path: "interaction.hovered".parse().unwrap() }, Value::Bool(true))]));
-    assert_eq!((opacity(&store), store.document().version()), (1.0, version));
+    assert_eq!((opacity(&store), store.authored().version()), (1.0, version));
     // State may not drive what the document holds.
     let set = Op::Set { id, path: "transform2d.x".parse().unwrap(), slot: Slot::Bound(Expr::parse(&format!("{id}.interaction.hovered ? 10 : 0")).unwrap()) };
     let err = store.apply(tx(vec![set])).unwrap_err().remove(0);
     assert_eq!(err.kind, ErrorKind::OutOfScope);
     // Rules match a node's state through the store's resolver.
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:free-2d"><rule match="type:rect state:selected" affords.grips="box"/><rule match="type:rect" affords.grips=""/></context>"#).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="std:free-2d"><rule match="type:rect state:selected" affords.grips="box"/><rule match="type:rect" affords.grips=""/></context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
     // Later rules win: the unconditional one, after, clears it; order the other way.
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="std:free-2d"><rule match="type:rect" affords.grips=""/><rule match="type:rect state:selected" affords.grips="box shape"/></context>"#).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="std:free-2d"><rule match="type:rect" affords.grips=""/><rule match="type:rect state:selected" affords.grips="box shape"/></context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
     assert_eq!(store.resolver().get(&[id], 0, Field::GRIPS), "");
     store.set_interaction(std::collections::BTreeMap::from([(id, vec!["selected"])]));
@@ -458,7 +458,7 @@ fn interaction_state_drives_looks_only_and_rules_can_match_it() {
 fn a_views_tolerances_are_context_data() {
     let mut store = Store::new();
     let world = composition(&mut store, "touch", "touch");
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="touch" extends="std:free-2d"><rule match="view" tolerance.hit="2.5" tolerance.slop="8"/></context>"#).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="touch" extends="std:free-2d"><rule match="view" tolerance.hit="2.5" tolerance.slop="8"/></context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
     let r = store.resolver();
     let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
@@ -470,9 +470,9 @@ fn a_views_tolerances_are_context_data() {
 fn a_views_chrome_is_context_data_and_a_part_can_ask_for_its_handle() {
     let mut store = Store::new();
     let world = composition(&mut store, "pitch", "pitch");
-    let (ops, _) = contexts::put_ops(store.document(), r##"<context name="pitch" extends="std:free-2d"><rule match="view" chrome.accent="#e8711aff" chrome.grip_shape="round" chrome.hover="off"/></context>"##).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), r##"<context name="pitch" extends="std:free-2d"><rule match="view" chrome.accent="#e8711aff" chrome.grip_shape="round" chrome.hover="off"/></context>"##).unwrap();
     store.apply(tx(ops)).unwrap();
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let mut a = facet::Affords::default();
     a.style = Slot::Const(Value::Str("drag: ring; chrome.handle: dot; chrome.lit: none".into()));
     store.apply(tx(vec![Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: Some(world), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap(), a.wrap()] }])).unwrap();
@@ -486,7 +486,7 @@ fn a_views_chrome_is_context_data_and_a_part_can_ask_for_its_handle() {
 #[test]
 fn typing_into_a_readout_edits_what_it_reads() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let (s, cell, power) = (ids[0], ids[1], ids[2]);
     let mut slider = facet::Slider::default();
     slider.value = Slot::Const(Value::Number(0.5));
@@ -516,7 +516,7 @@ fn typing_into_a_readout_edits_what_it_reads() {
 #[test]
 fn a_context_facet_names_a_containers_context() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let (g, a, b) = (ids[0], ids[1], ids[2]);
     let mut named = facet::ContextOf::default();
     named.name = Slot::Const(Value::Str("palette".into()));
@@ -525,7 +525,7 @@ fn a_context_facet_names_a_containers_context() {
         Op::Create { id: a, ty: TypeId::lookup("rect").unwrap(), parent: Some(g), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] },
         Op::Create { id: b, ty: TypeId::lookup("rect").unwrap(), parent: None, order: OrderKey::after(&OrderKey::first()), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] },
     ])).unwrap();
-    let (ops, _) = contexts::put_ops(store.document(), r#"<context name="palette"><rule match="children" affords.drag="none" affords.activate="toggle" affords.drives="appearance.opacity"/></context>"#).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), r#"<context name="palette"><rule match="children" affords.drag="none" affords.activate="toggle" affords.drives="appearance.opacity"/></context>"#).unwrap();
     store.apply(tx(ops)).unwrap();
     let r = store.resolver();
     // The group's children take the named context's rules; a rect elsewhere does not.
@@ -556,14 +556,14 @@ fn every_field_constant_names_its_field() {
 #[test]
 fn the_workspace_strip_is_context_data() {
     let mut store = Store::new();
-    let strip = |s: &Store| Resolver::new(s.document(), s.contexts()).workspace_values().get(Field::STRIP).to_owned();
+    let strip = |s: &Store| Resolver::new(s.tree(), s.contexts()).workspace_values().get(Field::STRIP).to_owned();
     assert_eq!(strip(&store), "layers model narratives library");
     let ctx = r#"<context name="std:workspace"><rule match="view" workspace.strip="model layers composition:library"/></context>"#;
-    let (ops, _) = contexts::put_ops(store.document(), ctx).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), ctx).unwrap();
     store.apply(tx(ops)).unwrap();
     assert_eq!(strip(&store), "model layers composition:library");
     let bad = r#"<context name="std:workspace"><rule match="view" workspace.strip="layers nonsense"/></context>"#;
-    let refused = contexts::put_ops(store.document(), bad).map(|(ops, _)| store.apply(tx(ops)).is_err()).unwrap_or(true);
+    let refused = contexts::put_ops(store.tree(), bad).map(|(ops, _)| store.apply(tx(ops)).is_err()).unwrap_or(true);
     assert!(refused, "an unknown view is refused");
 }
 
@@ -572,7 +572,7 @@ fn commands_are_context_data() {
     use iron_document::commands;
     let mut store = Store::new();
     let world = composition(&mut store, "slide", "free");
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
     // A free 2D view's right-click menu, and the keys it adds to the
     // workspace's.
@@ -589,9 +589,9 @@ fn commands_are_context_data() {
     }
     // A document rearranges them as it would a palette.
     let ctx = r#"<context name="std:free-2d"><rule match="view" menu.canvas="make-component | copy" keys.commands="mod+g:create-control"/></context>"#;
-    let (ops, _) = contexts::put_ops(store.document(), ctx).unwrap();
+    let (ops, _) = contexts::put_ops(store.tree(), ctx).unwrap();
     store.apply(tx(ops)).unwrap();
-    let r = Resolver::new(store.document(), store.contexts());
+    let r = Resolver::new(store.tree(), store.contexts());
     let v = r.view_values(&Focus { world: Some(world), ..Default::default() });
     assert_eq!(v.get(Field::MENU), "make-component | copy");
     assert_eq!(commands::keymap(v.get(Field::COMMAND_KEYS)), vec![("mod+g".to_owned(), "create-control")]);
@@ -613,19 +613,19 @@ fn bring_to_front_and_send_to_back_restack_among_siblings() {
     let mut key = OrderKey::first();
     let mut ops = Vec::new();
     for _ in 0..4 {
-        let id = store.document().next_ids(ids.len() + 1)[ids.len()];
+        let id = store.authored().next_ids(ids.len() + 1)[ids.len()];
         ops.push(Op::Create { id, ty: TypeId::lookup("rect").unwrap(), parent: Some(world), order: key.clone(), facets: vec![facet::Transform2d::default().wrap(), facet::Size::default().wrap()] });
         ids.push(id);
         key = OrderKey::after(&key);
     }
     store.apply(tx(ops)).unwrap();
-    let order = |s: &Store| s.document().children(world).to_vec();
+    let order = |s: &Store| s.tree().children(world).to_vec();
     // The first two to the front, keeping their own order.
-    store.apply(tx(restack_ops(store.document(), &[ids[1], ids[0]], true).unwrap())).unwrap();
+    store.apply(tx(restack_ops(store.tree(), &[ids[1], ids[0]], true).unwrap())).unwrap();
     assert_eq!(order(&store), vec![ids[2], ids[3], ids[0], ids[1]]);
-    assert_eq!(restack_ops(store.document(), &[ids[1]], true).unwrap_err(), "Already in front");
+    assert_eq!(restack_ops(store.tree(), &[ids[1]], true).unwrap_err(), "Already in front");
     // The last to the back.
-    store.apply(tx(restack_ops(store.document(), &[ids[1]], false).unwrap())).unwrap();
+    store.apply(tx(restack_ops(store.tree(), &[ids[1]], false).unwrap())).unwrap();
     assert_eq!(order(&store), vec![ids[1], ids[2], ids[3], ids[0]]);
-    assert_eq!(restack_ops(store.document(), &[ids[1]], false).unwrap_err(), "Already at the back");
+    assert_eq!(restack_ops(store.tree(), &[ids[1]], false).unwrap_err(), "Already at the back");
 }

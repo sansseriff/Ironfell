@@ -39,7 +39,7 @@ struct Nest {
 
 fn nest() -> Nest {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let (outer, middle, gas, lone, e1, e2) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5]);
     let k = OrderKey::first();
     let k1 = OrderKey::after(&k);
@@ -70,7 +70,7 @@ fn set_run(store: &mut Store, c: NodeId, mode: &str) {
 #[test]
 fn default_is_auto_and_nothing_is_live_without_a_source() {
     let n = nest();
-    let doc = n.store.document();
+    let doc = n.store.tree();
     assert_eq!(composition::run_mode(doc, n.outer), RunMode::Auto);
     let r = composition::reach(doc, &[n.outer], &BTreeSet::new());
     assert!(!r.live);
@@ -81,7 +81,7 @@ fn default_is_auto_and_nothing_is_live_without_a_source() {
 fn a_source_bubbles_out_through_nested_embeds() {
     let n = nest();
     let sources = BTreeSet::from([n.gas]);
-    let doc = n.store.document();
+    let doc = n.store.tree();
     let r = composition::reach(doc, &[n.outer], &sources);
     assert!(r.live, "outer shows middle shows gas");
     assert_eq!(r.running, sources);
@@ -95,7 +95,7 @@ fn on_demand_stops_bubbling_and_pauses_what_it_hides() {
     let mut n = nest();
     set_run(&mut n.store, n.middle, "on_demand");
     let sources = BTreeSet::from([n.gas]);
-    let doc = n.store.document();
+    let doc = n.store.tree();
     let r = composition::reach(doc, &[n.outer], &sources);
     assert!(!r.live, "middle is on demand, so the gas does not reach outer");
     assert!(r.running.is_empty(), "seen only through middle, the gas pauses");
@@ -108,7 +108,7 @@ fn on_demand_at_the_root_freezes_the_view() {
     let mut n = nest();
     set_run(&mut n.store, n.outer, "on_demand");
     let sources = BTreeSet::from([n.gas]);
-    let r = composition::reach(n.store.document(), &[n.outer], &sources);
+    let r = composition::reach(n.store.tree(), &[n.outer], &sources);
     assert!(!r.live);
     assert!(r.running.is_empty());
 }
@@ -118,18 +118,18 @@ fn always_runs_without_a_source_but_not_behind_on_demand() {
     let mut n = nest();
     set_run(&mut n.store, n.middle, "always");
     let none = BTreeSet::new();
-    let r = composition::reach(n.store.document(), &[n.outer], &none);
+    let r = composition::reach(n.store.tree(), &[n.outer], &none);
     assert!(r.live, "middle is always, and outer shows it");
     assert!(r.running.is_empty(), "always runs the view, not a producer");
     set_run(&mut n.store, n.outer, "on_demand");
-    assert!(!composition::reach(n.store.document(), &[n.outer], &none).live);
+    assert!(!composition::reach(n.store.tree(), &[n.outer], &none).live);
 }
 
 #[test]
 fn a_view_with_several_roots_is_live_when_any_is() {
     let n = nest();
     let sources = BTreeSet::from([n.gas]);
-    assert!(composition::reach(n.store.document(), &[n.lone, n.gas], &sources).live);
+    assert!(composition::reach(n.store.tree(), &[n.lone, n.gas], &sources).live);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn the_run_mode_is_undoable_and_saved() {
     set_run(&mut n.store, n.middle, "on_demand");
     let saved = n.store.save();
     let loaded = Store::load(&saved).expect("loads");
-    assert_eq!(composition::run_mode(loaded.document(), n.middle), RunMode::OnDemand);
+    assert_eq!(composition::run_mode(loaded.tree(), n.middle), RunMode::OnDemand);
     n.store.undo(1).expect("something to undo").expect("undo applies");
-    assert_eq!(composition::run_mode(n.store.document(), n.middle), RunMode::Auto);
+    assert_eq!(composition::run_mode(n.store.tree(), n.middle), RunMode::Auto);
 }

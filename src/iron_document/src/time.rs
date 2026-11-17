@@ -14,8 +14,9 @@
 //! key's value. Targets must be constants: a bound leaf has no slot for a
 //! sampled value, and the conflict is reported rather than resolved.
 
+use crate::Tree;
 use crate::facet::{Clip, Key, LeafPath, Timing};
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::registry::TypeId;
@@ -176,7 +177,7 @@ pub struct KeyAt {
 }
 
 /// A clip's keys with constant values, in time order.
-pub fn keys(doc: &Document, clip: NodeId) -> Vec<KeyAt> {
+pub fn keys(doc: Tree<'_>, clip: NodeId) -> Vec<KeyAt> {
     let mut out: Vec<KeyAt> = doc
         .children(clip)
         .iter()
@@ -195,7 +196,7 @@ pub fn keys(doc: &Document, clip: NodeId) -> Vec<KeyAt> {
 }
 
 /// A clip's start on the clock.
-pub fn start(doc: &Document, clip: NodeId) -> f64 {
+pub fn start(doc: Tree<'_>, clip: NodeId) -> f64 {
     doc.get::<Timing>(clip).and_then(|t| t.start.constant()).and_then(|v| v.as_f64()).unwrap_or(0.0)
 }
 
@@ -220,7 +221,7 @@ pub fn length(keys: &[KeyAt]) -> f64 {
     keys.iter().map(|k| k.t).fold(0.0, f64::max)
 }
 
-pub fn sample(doc: &Document, t: f64) -> Sample {
+pub fn sample(doc: Tree<'_>, t: f64) -> Sample {
     let mut out = Sample::default();
     let Some(clip_ty) = TypeId::lookup("clip") else { return out };
     for clip_id in doc.nodes_of_type(clip_ty) {

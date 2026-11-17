@@ -61,7 +61,7 @@ pub struct CaptureView {
 
 pub fn start(world: &mut World, source: &str) -> Result<u64, String> {
     let store = world.resource::<DocumentStore>();
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let id = if source.starts_with('#') { source.parse::<NodeId>().map_err(|e| e.to_string())? } else {
         doc.nodes_of_type(iron_document::TypeId::lookup("composition").unwrap())
             .find(|&id| doc.is_live(id) && doc.get::<iron_document::facet::Name>(id)
@@ -118,7 +118,7 @@ pub(crate) fn advance(
         capture.frames += 1;
         // The same scope can be reloaded with the origin unchanged: a deleted
         // composition would otherwise render as a blank white success.
-        let gone = !store.0.document().is_live(capture.source);
+        let gone = !store.0.tree().is_live(capture.source);
         if capture.frames > 600 || gone || capture.origin != origin.0 || !captures.results.contains_key(&capture.ticket) {
             let error = if gone { "the composition no longer exists" } else { "picture capture expired or document changed" };
             captures.finish(capture.ticket, serde_json::json!({"ok": false, "error": error}), now);

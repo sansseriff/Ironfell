@@ -13,8 +13,9 @@
 //! is drawn in, which entity a node pictures, and every picture of an
 //! entity. Nothing is stored that these functions can compute.
 
+use crate::Tree;
 use crate::facet::{Composition, LeafStruct};
-use crate::document::{Document, RelKind, Relation};
+use crate::document::{RelKind, Relation};
 use crate::id::{NodeId, RelationId};
 use crate::op::Op;
 use crate::registry::TypeId;
@@ -31,7 +32,7 @@ pub enum Dims {
 /// The composition `id` is drawn in: itself or its nearest composition
 /// ancestor. `None` for nodes outside every composition (the model tree,
 /// the library, the timeline, and loose roots).
-pub fn composition_of(doc: &Document, id: NodeId) -> Option<NodeId> {
+pub fn composition_of(doc: Tree<'_>, id: NodeId) -> Option<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
     let mut cur = Some(id);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
@@ -44,12 +45,12 @@ pub fn composition_of(doc: &Document, id: NodeId) -> Option<NodeId> {
 }
 
 /// Every live composition, in root order.
-pub fn compositions(doc: &Document) -> Vec<NodeId> {
+pub fn compositions(doc: Tree<'_>) -> Vec<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
     doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| n.ty == composition)).collect()
 }
 
-pub fn dims(doc: &Document, composition: NodeId) -> Option<Dims> {
+pub fn dims(doc: Tree<'_>, composition: NodeId) -> Option<Dims> {
     let c = doc.get::<Composition>(composition)?;
     Some(match c.dims.constant().and_then(|v| v.as_str()) {
         Some("3d") => Dims::Three,
@@ -85,7 +86,7 @@ impl RunMode {
     }
 }
 
-pub fn run_mode(doc: &Document, composition: NodeId) -> RunMode {
+pub fn run_mode(doc: Tree<'_>, composition: NodeId) -> RunMode {
     doc.get::<Composition>(composition).and_then(|c| c.run.constant()).and_then(|v| v.as_str()).map_or(RunMode::Auto, RunMode::parse)
 }
 
@@ -103,7 +104,7 @@ pub struct Reach {
 /// open; an open one that is a source, or `always`, makes the view live.
 /// Embeds cannot loop (`validate_embed`), and each composition is walked
 /// once, so this terminates in time linear in the embed graph.
-pub fn reach(doc: &Document, roots: &[NodeId], sources: &std::collections::BTreeSet<NodeId>) -> Reach {
+pub fn reach(doc: Tree<'_>, roots: &[NodeId], sources: &std::collections::BTreeSet<NodeId>) -> Reach {
     let mut out = Reach::default();
     let mut seen = std::collections::BTreeSet::new();
     let mut stack: Vec<NodeId> = roots.to_vec();
@@ -125,13 +126,13 @@ pub fn reach(doc: &Document, roots: &[NodeId], sources: &std::collections::BTree
     out
 }
 
-pub fn notation(doc: &Document, composition: NodeId) -> Option<String> {
+pub fn notation(doc: Tree<'_>, composition: NodeId) -> Option<String> {
     doc.get::<Composition>(composition)?.notation.constant()?.as_str().map(str::to_owned)
 }
 
 /// The entity `node` pictures directly: the target of its `figures`
 /// relation, if that entity is live.
-pub fn figured_by(doc: &Document, node: NodeId) -> Option<NodeId> {
+pub fn figured_by(doc: Tree<'_>, node: NodeId) -> Option<NodeId> {
     doc.relations_from(node).find(|r| r.rel == RelKind::Figures && doc.is_live(r.to)).map(|r| r.to)
 }
 
@@ -139,7 +140,7 @@ pub fn figured_by(doc: &Document, node: NodeId) -> Option<NodeId> {
 /// or its nearest ancestor with a `figures` relation, stopping at the
 /// composition root. This is what hover and selection lift through, so
 /// grabbing a part of a grouped figure selects the whole thing.
-pub fn figure_of(doc: &Document, node: NodeId) -> Option<(NodeId, NodeId)> {
+pub fn figure_of(doc: Tree<'_>, node: NodeId) -> Option<(NodeId, NodeId)> {
     let mut cur = Some(node);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
         if let Some(entity) = figured_by(doc, n.id) {
@@ -151,12 +152,12 @@ pub fn figure_of(doc: &Document, node: NodeId) -> Option<(NodeId, NodeId)> {
 }
 
 /// Every live figure of `entity`, in relation order.
-pub fn figures_of(doc: &Document, entity: NodeId) -> Vec<NodeId> {
+pub fn figures_of(doc: Tree<'_>, entity: NodeId) -> Vec<NodeId> {
     doc.relations_to(entity).filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from)).map(|r| r.from).collect()
 }
 
 /// The `model` root, if the document has one.
-pub fn model_root(doc: &Document) -> Option<NodeId> {
+pub fn model_root(doc: Tree<'_>) -> Option<NodeId> {
     let model = TypeId::lookup("model").expect("registered");
     doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty == model))
 }
@@ -215,12 +216,12 @@ impl std::fmt::Display for LinkError {
     }
 }
 
-fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     let n = doc.get::<crate::facet::Name>(id)?.text.constant()?.as_str()?.to_owned();
     (!n.is_empty()).then_some(n)
 }
 
-pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
+pub fn summarize(doc: Tree<'_>, entity: NodeId) -> EntitySummary {
     use crate::facet::{Instance, Args};
     let def = doc.get::<Instance>(entity).and_then(|i| i.def.constant()).and_then(|v| match v {
         crate::value::Value::Ref(d) => Some(name_of(doc, *d).unwrap_or_else(|| d.to_string())),
@@ -257,7 +258,7 @@ pub fn summarize(doc: &Document, entity: NodeId) -> EntitySummary {
 /// - one pictures an entity: the other joins it;
 /// - both picture different entities: with `keep` naming one of them, the
 ///   other's figures move to it and it is deleted; without, the question.
-pub fn link_ops(doc: &Document, a: NodeId, b: NodeId, keep: Option<NodeId>) -> Result<Vec<Op>, LinkError> {
+pub fn link_ops(doc: Tree<'_>, a: NodeId, b: NodeId, keep: Option<NodeId>) -> Result<Vec<Op>, LinkError> {
     if a == b {
         return Err(LinkError::Invalid(format!("{a} cannot be linked to itself")));
     }
@@ -302,7 +303,7 @@ pub fn link_ops(doc: &Document, a: NodeId, b: NodeId, keep: Option<NodeId>) -> R
 
 /// A `thing` entity for two pictures, creating whatever structure is
 /// missing. Ids are minted in creation order (ascending, as apply requires).
-fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
+fn new_entity_ops(doc: Tree<'_>, a: NodeId, b: NodeId) -> Vec<Op> {
     use crate::facet::{Instance, Name, Args};
     use crate::value::{Slot, Value};
     let ty = |s: &str| TypeId::lookup(s).expect("registered");
@@ -364,7 +365,7 @@ fn new_entity_ops(doc: &Document, a: NodeId, b: NodeId) -> Vec<Op> {
 // Embeds (ECM §7.4): one composition shown inside another.
 
 /// The composition an embed shows, if it names a live one.
-pub fn embedded(doc: &Document, embed: NodeId) -> Option<NodeId> {
+pub fn embedded(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
     match doc.get::<crate::facet::Embed>(embed)?.source.constant()? {
         crate::value::Value::Ref(c) if composition_of(doc, *c) == Some(*c) => Some(*c),
         _ => None,
@@ -372,7 +373,7 @@ pub fn embedded(doc: &Document, embed: NodeId) -> Option<NodeId> {
 }
 
 /// The camera an embed looks through, if it names one.
-pub fn embed_camera(doc: &Document, embed: NodeId) -> Option<NodeId> {
+pub fn embed_camera(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
     match doc.get::<crate::facet::EmbedCamera>(embed)?.camera.constant()? {
         crate::value::Value::Ref(c) if doc.is_live(*c) => Some(*c),
         _ => None,
@@ -388,7 +389,7 @@ pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
 /// follows the camera's aspect. `None` unless the embed shows a live 3D
 /// composition.
 pub fn embed_3d_extent(store: &crate::StoreCore, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
-    let doc = store.document();
+    let doc = store.tree();
     let source = embedded(doc, embed)?;
     if dims(doc, source) != Some(Dims::Three) {
         return None;
@@ -406,7 +407,7 @@ pub fn embed_3d_extent(store: &crate::StoreCore, embed: NodeId) -> Option<(NodeI
 
 /// Every live embed inside `composition`, in preorder. From the type index,
 /// not a walk of the content: views ask every frame.
-pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
+pub fn embeds_in(doc: Tree<'_>, composition: NodeId) -> Vec<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
     let mut out: Vec<NodeId> = doc.nodes_of_type(embed).filter(|&e| composition_of(doc, e) == Some(composition) && e != composition).collect();
     out.sort_by_cached_key(|&e| doc.order_path(e).into_iter().cloned().collect::<Vec<_>>());
@@ -417,7 +418,7 @@ pub fn embeds_in(doc: &Document, composition: NodeId) -> Vec<NodeId> {
 /// close a loop: the composition it shows must not, through its own embeds,
 /// show the one the embed is in. A named camera must be a camera of the
 /// embedded composition.
-pub fn validate_embed(doc: &Document, embed: NodeId) -> Result<(), String> {
+pub fn validate_embed(doc: Tree<'_>, embed: NodeId) -> Result<(), String> {
     let home = composition_of(doc, embed).ok_or_else(|| format!("embed {embed} is not inside a composition"))?;
     let of = match doc.get::<crate::facet::Embed>(embed).and_then(|e| e.source.constant()) {
         Some(crate::value::Value::Ref(c)) => *c,

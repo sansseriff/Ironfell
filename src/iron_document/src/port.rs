@@ -13,8 +13,9 @@
 //! solver equations; the format carries them now, the solving comes next
 //! (ECM §6.1, step 3).
 
+use crate::Tree;
 use crate::facet::{FacetKind, LeafPath, Port};
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expr::{Expr, Leaf};
 use crate::id::NodeId;
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,7 +53,7 @@ pub fn kind(name: &str) -> Option<&'static PortKind> {
     KINDS.iter().find(|k| k.name == name)
 }
 
-fn text(doc: &Document, port: NodeId, field: &str) -> Option<String> {
+fn text(doc: Tree<'_>, port: NodeId, field: &str) -> Option<String> {
     let p = doc.get::<Port>(port)?;
     let slot = match field {
         "kind" => &p.kind,
@@ -66,7 +67,7 @@ fn signal(port: NodeId) -> Leaf {
 }
 
 /// A connection's two ends, `a` then `b`, if it has exactly those.
-pub fn ends(doc: &Document, connection: NodeId) -> Option<(NodeId, NodeId)> {
+pub fn ends(doc: Tree<'_>, connection: NodeId) -> Option<(NodeId, NodeId)> {
     let mut a = None;
     let mut b = None;
     for r in doc.relations_from(connection).filter(|r| r.rel == RelKind::Connects) {
@@ -80,7 +81,7 @@ pub fn ends(doc: &Document, connection: NodeId) -> Option<(NodeId, NodeId)> {
 }
 
 /// For a one-way connection, which end feeds which: `(out, in)`.
-fn direction(doc: &Document, a: NodeId, b: NodeId) -> Option<(NodeId, NodeId)> {
+fn direction(doc: Tree<'_>, a: NodeId, b: NodeId) -> Option<(NodeId, NodeId)> {
     match (text(doc, a, "dir").as_deref(), text(doc, b, "dir").as_deref()) {
         (Some("out"), Some("in")) => Some((a, b)),
         (Some("in"), Some("out")) => Some((b, a)),
@@ -90,7 +91,7 @@ fn direction(doc: &Document, a: NodeId, b: NodeId) -> Option<(NodeId, NodeId)> {
 
 /// Every in-port's signal as its partner's: one derived binding per live,
 /// valid one-way connection.
-pub fn derived_signals(doc: &Document) -> Vec<(Leaf, Expr)> {
+pub fn derived_signals(doc: Tree<'_>) -> Vec<(Leaf, Expr)> {
     let Some(ty) = crate::registry::TypeId::lookup("connection") else { return Vec::new() };
     doc.nodes_of_type(ty)
         .filter(|&c| doc.is_live(c))
@@ -111,7 +112,7 @@ pub fn derived_signals(doc: &Document) -> Vec<(Leaf, Expr)> {
 
 /// Check a connection: two live ports of one kind; for a one-way kind, an
 /// out joined to an in that nothing else feeds; and no signal loop.
-pub fn validate_connection(doc: &Document, connection: NodeId) -> Result<(), String> {
+pub fn validate_connection(doc: Tree<'_>, connection: NodeId) -> Result<(), String> {
     let (a, b) = ends(doc, connection).ok_or_else(|| format!("{connection} needs exactly two connects relations, ends a and b"))?;
     for p in [a, b] {
         let ok = doc.live(p).is_some_and(|n| n.ty.name() == "port");
@@ -148,7 +149,7 @@ pub fn validate_connection(doc: &Document, connection: NodeId) -> Result<(), Str
 }
 
 /// A leaf on a dependency loop through bindings and derived signals, if any.
-fn signal_loop(doc: &Document) -> Option<Leaf> {
+fn signal_loop(doc: Tree<'_>) -> Option<Leaf> {
     let mut deps: BTreeMap<Leaf, BTreeSet<Leaf>> = BTreeMap::new();
     for (leaf, expr) in doc.bound_slots() {
         deps.insert(leaf, expr.deps());
@@ -209,7 +210,7 @@ fn dim_of(unit: Option<&str>) -> crate::units::Dim {
         .map_or(crate::units::Dim::NONE, |(_, d)| d)
 }
 
-pub fn network(doc: &Document) -> Network {
+pub fn network(doc: Tree<'_>) -> Network {
     let port_ty = crate::registry::TypeId::lookup("port").expect("registered");
     let pair_ports: Vec<(NodeId, &'static PortKind)> = doc
         .nodes_of_type(port_ty)

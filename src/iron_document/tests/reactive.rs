@@ -36,7 +36,7 @@ struct Scene {
 
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let (slider, bar) = (ids[0], ids[1]);
     let mut sl = Slider::default();
     sl.value = num(0.25);
@@ -76,7 +76,7 @@ fn bindings_resolve_on_apply_and_on_change() {
     assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
     assert_eq!(resolved_num(&store, bar, "transform2d.y"), 565.0);
     // The authored slot is still the binding, not the value.
-    assert!(store.document().leaf(bar, path("size.h")).unwrap().expr().is_some());
+    assert!(store.tree().leaf(bar, path("size.h")).unwrap().expr().is_some());
     // Changes for the two bound leaves were reported once.
     let changes = store.drain_changes();
     assert_eq!(changes.len(), 2, "{changes:?}");
@@ -136,7 +136,7 @@ fn diamond_is_glitch_free_and_cutoff_stops_propagation() {
     // Cutoff: d = w > 100 ? 1 : 0 (fill.opacity); e depends on d via a
     // second node. Changing w without crossing the threshold evaluates d
     // only; e is never run.
-    let other = store.document().next_id();
+    let other = store.authored().next_id();
     let mut f = Fill::default();
     f.opacity = bind(&format!("{bar}.fill.opacity * 0.5"));
     let mut t = Transform2d::default();
@@ -193,7 +193,7 @@ fn invalid_bindings_are_rejected() {
         .unwrap_err();
     assert_eq!(e[0].kind, ErrorKind::UnknownPath);
     // A create carrying a bad binding is rejected too.
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let mut s = Size::default();
     s.w = bind("#zz.size.w");
     let e = store
@@ -209,14 +209,14 @@ fn invalid_bindings_are_rejected() {
         ))
         .unwrap_err();
     assert_eq!(e[0].kind, ErrorKind::UnknownNode);
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
 }
 
 #[test]
 fn gestures_preview_then_commit_once() {
     let Scene { mut store, slider, bar } = scene();
     store.drain_changes();
-    let v0 = store.document().version();
+    let v0 = store.authored().version();
 
     // Preview: dependents follow, nothing is written, changes are reported.
     for v in [0.3, 0.4, 0.5] {
@@ -225,8 +225,8 @@ fn gestures_preview_then_commit_once() {
     assert!(store.gesture_in_progress());
     assert_eq!(resolved_num(&store, slider, "slider.value"), 0.5);
     assert_eq!(resolved_num(&store, bar, "size.h"), 150.0);
-    assert_eq!(store.document().leaf(slider, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.25)));
-    assert_eq!(store.document().version(), v0);
+    assert_eq!(store.tree().leaf(slider, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.25)));
+    assert_eq!(store.authored().version(), v0);
     let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
     assert_eq!(changed.len(), 3, "{changed:?}");
 
@@ -237,7 +237,7 @@ fn gestures_preview_then_commit_once() {
     assert_eq!(last.label, "set slider");
     assert_eq!(last.ops.len(), 1);
     assert!(!store.gesture_in_progress());
-    assert_eq!(store.document().leaf(slider, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.5)));
+    assert_eq!(store.tree().leaf(slider, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.5)));
     assert_eq!(resolved_num(&store, bar, "size.h"), 150.0);
 
     // Undo restores the constant and the dependents.
@@ -246,11 +246,11 @@ fn gestures_preview_then_commit_once() {
 
     // Cancel reverts previews without a transaction.
     store.drain_changes();
-    let v1 = store.document().version();
+    let v1 = store.authored().version();
     store.preview(slider, path("slider.value"), Value::Number(0.9));
     assert_eq!(resolved_num(&store, bar, "size.h"), 270.0);
     store.cancel_gesture();
-    assert_eq!(store.document().version(), v1);
+    assert_eq!(store.authored().version(), v1);
     assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
     let changed = store.drain_changes();
     assert!(changed.iter().any(|c| c.leaf.node == bar && c.value == Value::Number(75.0)));
@@ -258,7 +258,7 @@ fn gestures_preview_then_commit_once() {
     // A preview on a bound leaf never becomes a write.
     store.preview(bar, path("size.h"), Value::Number(1.0));
     assert!(store.commit_gesture("no-op", Actor::Human, 9).is_none());
-    assert!(store.document().leaf(bar, path("size.h")).unwrap().expr().is_some());
+    assert!(store.tree().leaf(bar, path("size.h")).unwrap().expr().is_some());
 }
 
 #[test]

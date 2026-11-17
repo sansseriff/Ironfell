@@ -20,7 +20,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 /// A 2D composition `sheet`, and the store.
 fn sheet() -> (Store, NodeId) {
     let mut store = Store::new();
-    let comp = store.document().next_id();
+    let comp = store.authored().next_id();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -30,7 +30,7 @@ fn sheet() -> (Store, NodeId) {
 }
 
 fn draw(store: &Store, comp: NodeId, markup: &str) -> (Vec<Op>, BTreeMap<String, NodeId>) {
-    let built = markup::ops(markup, Some(comp), OrderKey::after(&OrderKey::first()), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(markup, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     (built.ops, built.named)
 }
 
@@ -41,8 +41,8 @@ fn draw(store: &Store, comp: NodeId, markup: &str) -> (Vec<Op>, BTreeMap<String,
 #[test]
 fn a_failed_session_op_list_leaves_a_tombstone() {
     let (mut store, comp) = sheet();
-    let before = store.document().nodes().count();
-    let id = store.document().next_session_ids(1)[0];
+    let before = store.tree().nodes().count();
+    let id = store.authored().next_session_ids(1)[0];
     let err = store
         .apply_session(vec![
             Op::Create { id, ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![] },
@@ -50,9 +50,9 @@ fn a_failed_session_op_list_leaves_a_tombstone() {
         ])
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::BadId);
-    assert!(!store.document().is_live(id));
-    assert_eq!(store.document().nodes().count(), before + 1, "the rolled-back create is kept as a tombstone");
-    assert_ne!(store.document().next_session_ids(1)[0], id, "the session counter moved");
+    assert!(!store.tree().is_live(id));
+    assert_eq!(store.tree().nodes().count(), before + 1, "the rolled-back create is kept as a tombstone");
+    assert_ne!(store.authored().next_session_ids(1)[0], id, "the session counter moved");
 }
 
 /// A transaction that expands and is then refused (here by a binding cycle
@@ -83,7 +83,7 @@ fn a_refused_transaction_keeps_its_expansion_problems() {
     ops.push(Op::Delete { id: n["top"] });
     let errs = store.apply(tx("delete and cycle", ops)).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::Cycle, "{errs:?}");
-    assert!(store.document().is_live(n["top"]), "the nest is still there");
+    assert!(store.tree().is_live(n["top"]), "the nest is still there");
     assert_ne!(store.expansion_problems(), &before[..], "but the refused transaction's expansion replaced its problems");
 }
 
@@ -96,7 +96,7 @@ fn a_transaction_refused_by_the_solver_leaves_a_change_pending() {
     let (mut store, comp) = sheet();
     let markup = r#"<ellipse id="$p" x="0" y="0" rx="5" ry="5"/><ellipse id="$q" x="40" y="0" rx="5" ry="5"/><constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="50"/>"#;
     let (mut ops, n) = draw(&store, comp, markup);
-    let rels = store.document().next_relation_ids(3);
+    let rels = store.authored().next_relation_ids(3);
     let link = |id: RelationId, from: NodeId, to: NodeId, role: &str| {
         let mut data = BTreeMap::new();
         data.insert("role".to_owned(), Value::Str(role.into()));

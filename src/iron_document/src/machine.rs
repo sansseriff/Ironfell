@@ -18,7 +18,7 @@
 //! channel's rest value, so a resting instance is static to the renderer.
 //! Nothing here is saved or undone: it is presentation state.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::expr::Leaf;
 use crate::facet::{Args, Channel, LeafPath, Name};
 use crate::id::NodeId;
@@ -26,11 +26,11 @@ use crate::time::{curve, Curve};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
-fn ty_of(doc: &Document, n: NodeId) -> Option<&'static str> {
+fn ty_of(doc: Tree<'_>, n: NodeId) -> Option<&'static str> {
     doc.live(n).map(|x| x.ty.name())
 }
 
-fn name_of(doc: &Document, n: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, n: NodeId) -> Option<String> {
     doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
 }
 
@@ -40,7 +40,7 @@ fn number(slot: &crate::value::Slot) -> Option<f64> {
 
 /// A node's children of a type: authored ones under an authored node, the
 /// instance's copies under a copy.
-fn children(doc: &Document, n: NodeId, ty: &str) -> Vec<NodeId> {
+fn children(doc: Tree<'_>, n: NodeId, ty: &str) -> Vec<NodeId> {
     doc.children(n).iter().copied().filter(|&c| c.is_expanded() == n.is_expanded() && ty_of(doc, c) == Some(ty)).collect()
 }
 
@@ -62,19 +62,19 @@ fn read_num(read: Read, node: NodeId, path: &str) -> Option<f64> {
 
 /// A channel's rest value: a number, a colour, or words (machines.md
 /// "Values other than numbers").
-fn rest_of(doc: &Document, c: NodeId) -> Value {
+fn rest_of(doc: Tree<'_>, c: NodeId) -> Value {
     doc.get::<Channel>(c).and_then(|x| x.value.constant().cloned()).unwrap_or(Value::Number(0.0))
 }
 
 /// A definition's channels: (node, name, rest value).
-pub fn channels(doc: &Document, def: NodeId) -> Vec<(NodeId, String, Value)> {
+pub fn channels(doc: Tree<'_>, def: NodeId) -> Vec<(NodeId, String, Value)> {
     children(doc, def, "channel").into_iter().filter_map(|c| Some((c, name_of(doc, c)?, rest_of(doc, c)))).collect()
 }
 
 /// Which parts read each channel (machines.md §6: the editor's rows are
 /// the parts, not the channels): per channel, each template part and leaf
 /// bound to its `channel.value`.
-pub fn readers(doc: &Document, def: NodeId) -> BTreeMap<NodeId, Vec<(NodeId, LeafPath)>> {
+pub fn readers(doc: Tree<'_>, def: NodeId) -> BTreeMap<NodeId, Vec<(NodeId, LeafPath)>> {
     let chans = children(doc, def, "channel");
     let mut out: BTreeMap<NodeId, Vec<(NodeId, LeafPath)>> = BTreeMap::new();
     let Some(template) = children(doc, def, "template").first().copied() else { return out };
@@ -122,13 +122,13 @@ fn recordable(path: LeafPath, v: &Value) -> bool {
 }
 
 /// A definition's machines: (node, the port name they follow).
-pub fn machines(doc: &Document, def: NodeId) -> Vec<(NodeId, String)> {
+pub fn machines(doc: Tree<'_>, def: NodeId) -> Vec<(NodeId, String)> {
     children(doc, def, "machine").into_iter().filter_map(|m| Some((m, name_of(doc, m)?))).collect()
 }
 
 /// The machine an instance runs: its copy of `m` (machines.md §9 Q12), or
 /// `m` itself (a main, or before expansion).
-pub fn copy_of(doc: &Document, entity: Option<NodeId>, m: NodeId) -> NodeId {
+pub fn copy_of(doc: Tree<'_>, entity: Option<NodeId>, m: NodeId) -> NodeId {
     entity.and_then(|e| NodeId::expanded(e, m)).filter(|&c| doc.is_live(c)).unwrap_or(m)
 }
 
@@ -141,7 +141,7 @@ pub fn copy_source(n: NodeId) -> NodeId {
 /// The pose machine `machine` (a definition's or an instance's copy) gives
 /// `state`: a value per channel of `def`, the channel's rest value where
 /// the state says nothing.
-pub fn pose(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, Value>> {
+pub fn pose(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, state: &str) -> Option<BTreeMap<NodeId, Value>> {
     let s = children(doc, machine, "state").into_iter().find(|&s| name_of(doc, s).as_deref() == Some(state))?;
     let has = doc.get::<Args>(s).map(|a| a.slots.keys().map(|k| k.to_string()).collect::<Vec<_>>()).unwrap_or_default();
     Some(
@@ -182,7 +182,7 @@ pub struct Plan {
 
 /// The transition `machine` runs from `from` to `to`: an exact match first,
 /// then `*` on either side. `None` snaps.
-pub fn plan(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<Plan> {
+pub fn plan(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<Plan> {
     let ts: Vec<(NodeId, String, String)> = children(doc, machine, "transition")
         .into_iter()
         .map(|t| (t, read_text(read, t, "transition.from").unwrap_or_else(|| "*".into()), read_text(read, t, "transition.to").unwrap_or_else(|| "*".into())))
@@ -279,7 +279,7 @@ pub struct Running {
 impl Player {
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
-    pub fn advance(&mut self, doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
+    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
         let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
         let mut running = Vec::new();
@@ -406,7 +406,7 @@ impl Player {
 /// own disappear), and eases plainly where there is none. A pure function
 /// of `at`: a parent keyed on the clock scrubs its children with it.
 #[allow(clippy::type_complexity)]
-fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, down: bool) -> Option<(BTreeMap<NodeId, Value>, String, Option<(NodeId, f64, String, String)>)> {
+fn driven(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, at: f64, down: bool) -> Option<(BTreeMap<NodeId, Value>, String, Option<(NodeId, f64, String, String)>)> {
     let states = state_names(doc, machine);
     let last = states.len().checked_sub(1)?;
     let at = at.min(last as f64);
@@ -439,7 +439,7 @@ fn driven(doc: &Document, read: Read, def: NodeId, machine: NodeId, at: f64, dow
 /// the key's `span`, one occurrence retimed), from the previous state's
 /// pose, so any time gives the same picture. `None` when no clip drives
 /// the state, or the playhead is before its first key.
-fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, Value>, Option<(NodeId, f64, String, String)>)> {
+fn clocked(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(BTreeMap<NodeId, Value>, Option<(NodeId, f64, String, String)>)> {
     let (clip, offset) = crate::timeline_view::clip_of(doc, state)?;
     let keys = crate::time::keys(doc, clip);
     let u = clock - crate::time::start(doc, clip) - offset;
@@ -465,7 +465,7 @@ fn clocked(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf
 
 // ── Authoring by hand (machines.md §9 Q8) ──────────────────────────────
 
-fn order_after_last(doc: &Document, parent: NodeId) -> crate::order::OrderKey {
+fn order_after_last(doc: Tree<'_>, parent: NodeId) -> crate::order::OrderKey {
     doc.children(parent).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max().map_or_else(crate::order::OrderKey::first, |o| crate::order::OrderKey::after(&o))
 }
 
@@ -481,7 +481,7 @@ fn ty(n: &str) -> crate::registry::TypeId {
 }
 
 /// Ids after the document's and any the ops create.
-fn fresh(doc: &Document, ops: &[crate::op::Op]) -> NodeId {
+fn fresh(doc: Tree<'_>, ops: &[crate::op::Op]) -> NodeId {
     let mut next = doc.next_id();
     for op in ops {
         if let crate::op::Op::Create { id, .. } = op
@@ -496,12 +496,12 @@ fn fresh(doc: &Document, ops: &[crate::op::Op]) -> NodeId {
 }
 
 /// A machine's states' names, in order.
-pub fn state_names(doc: &Document, machine: NodeId) -> Vec<String> {
+pub fn state_names(doc: Tree<'_>, machine: NodeId) -> Vec<String> {
     children(doc, machine, "state").into_iter().filter_map(|s| name_of(doc, s)).collect()
 }
 
 /// The `in` port a machine follows, on its definition.
-fn state_port(doc: &Document, def: NodeId, machine: NodeId) -> Option<NodeId> {
+fn state_port(doc: Tree<'_>, def: NodeId, machine: NodeId) -> Option<NodeId> {
     let port = name_of(doc, machine)?;
     children(doc, def, "port_spec").into_iter().find(|&p| name_of(doc, p).as_deref() == Some(port.as_str()))
 }
@@ -515,7 +515,7 @@ fn choice_of(names: &[String]) -> String {
 /// input `state` whose type is the choice of its states, with "default"
 /// and "state_2" and one transition between any two (300 ms, Easy Ease);
 /// each later one adds a state. Answers the ops and the new state's name.
-pub fn add_state_ops(doc: &Document, def: NodeId) -> Result<(Vec<crate::op::Op>, String), String> {
+pub fn add_state_ops(doc: Tree<'_>, def: NodeId) -> Result<(Vec<crate::op::Op>, String), String> {
     add_named_state_ops(doc, def, None, None)
 }
 
@@ -530,7 +530,7 @@ fn state_name(name: &str) -> Result<String, String> {
 
 /// "Add state", named: `name` for the new state, and for the first,
 /// `first` for the state the component's look becomes.
-pub fn add_named_state_ops(doc: &Document, def: NodeId, first: Option<&str>, name: Option<&str>) -> Result<(Vec<crate::op::Op>, String), String> {
+pub fn add_named_state_ops(doc: Tree<'_>, def: NodeId, first: Option<&str>, name: Option<&str>) -> Result<(Vec<crate::op::Op>, String), String> {
     use crate::facet::{Args, LeafStruct, Port, Transition};
     use crate::op::Op;
     use crate::value::Slot;
@@ -601,7 +601,7 @@ pub fn add_named_state_ops(doc: &Document, def: NodeId, first: Option<&str>, nam
 
 /// Rename a state, and what names it: the port's choice, its default,
 /// transitions' `from`/`to`.
-pub fn rename_state_ops(doc: &Document, state: NodeId, name: &str) -> Result<Vec<crate::op::Op>, String> {
+pub fn rename_state_ops(doc: Tree<'_>, state: NodeId, name: &str) -> Result<Vec<crate::op::Op>, String> {
     use crate::op::Op;
     use crate::value::Slot;
     let name = state_name(name)?;
@@ -637,7 +637,7 @@ pub fn rename_state_ops(doc: &Document, state: NodeId, name: &str) -> Result<Vec
 /// Delete a state, and what names it: transitions from or to it go, the
 /// port's choice loses it, and a default that was it becomes the first
 /// state left. A machine keeps at least one state.
-pub fn delete_state_ops(doc: &Document, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
+pub fn delete_state_ops(doc: Tree<'_>, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
     use crate::op::Op;
     use crate::value::Slot;
     let name = name_of(doc, state).ok_or("not a state")?;
@@ -663,7 +663,7 @@ pub fn delete_state_ops(doc: &Document, state: NodeId) -> Result<Vec<crate::op::
 
 /// Make a state the machine's default: the state port's value where
 /// nothing sets it (new instances start in it).
-pub fn set_default_state_ops(doc: &Document, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
+pub fn set_default_state_ops(doc: Tree<'_>, state: NodeId) -> Result<Vec<crate::op::Op>, String> {
     let name = name_of(doc, state).ok_or("not a state")?;
     let machine = doc.live(state).and_then(|n| n.parent).ok_or("a state belongs to a machine")?;
     let def = doc.live(machine).and_then(|n| n.parent).ok_or("a machine belongs to a definition")?;
@@ -692,7 +692,7 @@ impl Pinned {
 
 /// What a pin shows on its main: the state's pose, or a scrubbed
 /// transition's moment.
-fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<NodeId, Value>> {
+fn pinned_pose(doc: Tree<'_>, read: Read, pin: &Pinned) -> Option<BTreeMap<NodeId, Value>> {
     let Some((from, to, p)) = &pin.scrub else { return pose(doc, read, pin.def, pin.machine, &pin.state) };
     let (a, b) = (pose(doc, read, pin.def, pin.machine, from)?, pose(doc, read, pin.def, pin.machine, to)?);
     let plan = plan(doc, read, pin.def, pin.machine, from, to);
@@ -706,14 +706,14 @@ fn pinned_pose(doc: &Document, read: Read, pin: &Pinned) -> Option<BTreeMap<Node
 
 /// The transition a keyed state is in at clock time `clock`, and its
 /// progress (for the timeline's state lanes); `None` at rest.
-pub fn progress_at(doc: &Document, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(NodeId, f64, String, String)> {
+pub fn progress_at(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, state: Leaf, clock: f64) -> Option<(NodeId, f64, String, String)> {
     clocked(doc, read, def, machine, state, clock)?.1
 }
 
 /// Is the machine a chain or a loop (each state has at most one explicit
 /// way in and one way out)? Then the panel draws it as a strip; otherwise
 /// as a graph (machines.md §6).
-pub fn is_strip(doc: &Document, read: Read, machine: NodeId) -> bool {
+pub fn is_strip(doc: Tree<'_>, read: Read, machine: NodeId) -> bool {
     let mut ins: BTreeMap<String, usize> = BTreeMap::new();
     let mut outs: BTreeMap<String, usize> = BTreeMap::new();
     for t in children(doc, machine, "transition") {
@@ -730,7 +730,7 @@ pub fn is_strip(doc: &Document, read: Read, machine: NodeId) -> bool {
 /// transitions when they make a chain or a loop (from the chain's start, or
 /// the first state for a loop), the rest after in the machine's order; and
 /// whether the last runs back to the first (a loop).
-pub fn strip_order(doc: &Document, read: Read, machine: NodeId) -> (Vec<String>, bool) {
+pub fn strip_order(doc: Tree<'_>, read: Read, machine: NodeId) -> (Vec<String>, bool) {
     let names = state_names(doc, machine);
     let mut next: BTreeMap<String, String> = BTreeMap::new();
     for t in children(doc, machine, "transition") {
@@ -771,7 +771,7 @@ pub fn strip_order(doc: &Document, read: Read, machine: NodeId) -> (Vec<String>,
 /// `from → to` transition after the machine's others, with the length and
 /// easing of the one the pair used, and copies of its tweens. Answers the
 /// ops and the new transition.
-pub fn add_transition_ops(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+pub fn add_transition_ops(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
     use crate::facet::{LeafStruct, Transition, Tween};
     use crate::op::Op;
     use crate::value::Slot;
@@ -819,7 +819,7 @@ pub fn add_transition_ops(doc: &Document, read: Read, def: NodeId, machine: Node
 
 /// Give a channel its own slice of a transition: a tween over all of it,
 /// with the transition's easing, which the panel's bar then narrows.
-pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+pub fn add_tween_ops(doc: Tree<'_>, transition: NodeId, channel: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
     use crate::facet::{LeafStruct, Tween};
     use crate::op::Op;
     use crate::value::Slot;
@@ -841,7 +841,7 @@ pub fn add_tween_ops(doc: &Document, transition: NodeId, channel: &str) -> Resul
 /// channel's value in the state; any other gets a new channel, resting at
 /// the leaf's value now (what every other state keeps), the leaf bound to
 /// it. Other ops pass through.
-pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Result<Vec<crate::op::Op>, String> {
+pub fn record(doc: Tree<'_>, pin: &Pinned, ops: Vec<crate::op::Op>) -> Result<Vec<crate::op::Op>, String> {
     use crate::expr::Expr;
     use crate::facet::{Args, Channel, FacetKind, LeafStruct};
     use crate::op::Op;
@@ -941,7 +941,7 @@ pub fn record(doc: &Document, pin: &Pinned, ops: Vec<crate::op::Op>) -> Result<V
 /// drawing for every state: a part made, deleted or moved in the tree, or
 /// a value no state can hold (a path's points, a font). Names are not
 /// looks, and a previewed transition refuses such edits.
-pub fn shared_edit(doc: &Document, pin: &Pinned, ops: &[crate::op::Op]) -> bool {
+pub fn shared_edit(doc: Tree<'_>, pin: &Pinned, ops: &[crate::op::Op]) -> bool {
     use crate::facet::FacetKind;
     use crate::op::Op;
     use crate::value::Slot;
@@ -984,7 +984,7 @@ pub struct PairEdit {
 }
 
 /// The transition a pair has of its own, if it has one.
-pub fn own_transition(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<NodeId> {
+pub fn own_transition(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str) -> Option<NodeId> {
     let p = plan(doc, read, def, machine, from, to)?;
     (read_text(read, p.transition, "transition.from").as_deref() == Some(from) && read_text(read, p.transition, "transition.to").as_deref() == Some(to)).then_some(p.transition)
 }
@@ -993,7 +993,7 @@ pub fn own_transition(doc: &Document, read: Read, def: NodeId, machine: NodeId, 
 /// own first, a copy of the default with the edit applied, in the same
 /// transaction (copy on write: editing one transition never changes
 /// another). Answers the ops and the pair's transition.
-pub fn edit_pair_ops(doc: &Document, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str, edit: &PairEdit) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+pub fn edit_pair_ops(doc: Tree<'_>, read: Read, def: NodeId, machine: NodeId, from: &str, to: &str, edit: &PairEdit) -> Result<(Vec<crate::op::Op>, NodeId), String> {
     use crate::facet::{LeafStruct, Transition, Tween};
     use crate::op::Op;
     use crate::value::Slot;
@@ -1151,7 +1151,7 @@ pub fn mirror_ease(e: &str) -> String {
 /// The pair edit that copies transition `source`'s timing onto a pair, as
 /// it is or `mirrored` (played backwards: what ended last starts first,
 /// easings turned about), for a reverse leg.
-pub fn copied_timing(doc: &Document, read: Read, source: NodeId, mirrored: bool) -> Result<PairEdit, String> {
+pub fn copied_timing(doc: Tree<'_>, read: Read, source: NodeId, mirrored: bool) -> Result<PairEdit, String> {
     use crate::facet::Tween;
     if ty_of(doc, source) != Some("transition") {
         return Err(format!("{source} is not a transition"));
@@ -1171,7 +1171,7 @@ pub fn copied_timing(doc: &Document, read: Read, source: NodeId, mirrored: bool)
 }
 
 /// Set a state's values to another's (the state menu's "Copy look from").
-pub fn copy_pose_ops(doc: &Document, state: NodeId, from: NodeId) -> Result<Vec<crate::op::Op>, String> {
+pub fn copy_pose_ops(doc: Tree<'_>, state: NodeId, from: NodeId) -> Result<Vec<crate::op::Op>, String> {
     use crate::facet::LeafStruct;
     for s in [state, from] {
         if ty_of(doc, s) != Some("state") {
@@ -1184,7 +1184,7 @@ pub fn copy_pose_ops(doc: &Document, state: NodeId, from: NodeId) -> Result<Vec<
 
 /// A state stops setting a channel, so it shows the channel's rest value
 /// (the drawing's own).
-pub fn reset_value_ops(doc: &Document, state: NodeId, channel: &str) -> Result<Vec<crate::op::Op>, String> {
+pub fn reset_value_ops(doc: Tree<'_>, state: NodeId, channel: &str) -> Result<Vec<crate::op::Op>, String> {
     use crate::facet::LeafStruct;
     if ty_of(doc, state) != Some("state") {
         return Err(format!("{state} is not a state"));

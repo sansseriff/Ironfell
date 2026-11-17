@@ -58,7 +58,7 @@ struct Card {
 /// the template; one instance placed.
 fn card() -> Card {
     let mut store = Store::new();
-    let ids = store.document().next_ids(7);
+    let ids = store.authored().next_ids(7);
     let [bench, model, library, def, template, title, button] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -95,7 +95,7 @@ fn at(store: &Store, u: NodeId, part: NodeId, leaf: &str) -> f64 {
 fn resizable_gives_the_picture_its_parts_bounds_and_nothing_moves() {
     let Card { mut store, def, template, button, u, .. } = card();
     let before = at(&store, u, button, "transform2d.x") + store.resolved(u, path("transform2d.x")).unwrap().as_f64().unwrap();
-    let ops = author::resizable(store.document(), def, true, &|id| store.extent(id)).unwrap();
+    let ops = author::resizable(store.tree(), def, true, &|id| store.extent(id)).unwrap();
     store.apply(tx("make resizable", ops)).unwrap();
     // The box is the parts' bounds (10..210 × 20..110), moved to start at 0, 0.
     assert_eq!(store.resolved(template, path("size.w")), Some(Value::Number(200.0)));
@@ -105,13 +105,13 @@ fn resizable_gives_the_picture_its_parts_bounds_and_nothing_moves() {
     assert!((after - before).abs() < 1e-9, "the button stays where it was on screen");
     // Undo in one step; off again removes the sizes.
     store.undo(0).unwrap().unwrap();
-    assert!(store.document().facet(template, FacetKind::Size).is_none());
+    assert!(store.tree().facet(template, FacetKind::Size).is_none());
 }
 
 #[test]
 fn parts_follow_a_resized_instance_by_their_constraints() {
     let Card { mut store, def, button, title, u, .. } = card();
-    let ops = author::resizable(store.document(), def, true, &|id| store.extent(id)).unwrap();
+    let ops = author::resizable(store.tree(), def, true, &|id| store.extent(id)).unwrap();
     store.apply(tx("make resizable", ops)).unwrap();
     // At the template's size nothing is published: the parts are as drawn.
     assert_eq!(at(&store, u, button, "transform2d.x"), 160.0);

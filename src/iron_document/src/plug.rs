@@ -7,8 +7,9 @@
 //! imply: one `mate` constraint per such connection, held by the solver
 //! (`solve.rs`) and never stored. The connection is the one authored fact.
 
+use crate::Tree;
 use crate::constraint::{self, ConstraintInfo, Operand};
-use crate::document::{Document, RelKind, Relation};
+use crate::document::{RelKind, Relation};
 use crate::expr::Leaf;
 use crate::facet::{Anchor, Connection, FacetKind, LeafPath, LeafStruct, Name, Port};
 use crate::geom;
@@ -58,7 +59,7 @@ fn anchor_leaf(id: NodeId, field: &str) -> Leaf {
     Leaf { node: id, path: LeafPath::new(FacetKind::Anchor, field).expect("declared") }
 }
 
-fn port_text(doc: &Document, port: NodeId, field: &str) -> String {
+fn port_text(doc: Tree<'_>, port: NodeId, field: &str) -> String {
     doc.get::<Port>(port)
         .and_then(|p| match field {
             "kind" => p.kind.constant(),
@@ -73,14 +74,14 @@ fn port_text(doc: &Document, port: NodeId, field: &str) -> String {
 
 /// The end of a connection that holds a joint of two loose ends: the port
 /// its relation marks `held` (component-authoring.md §5).
-pub fn held_end(doc: &Document, connection: NodeId) -> Option<NodeId> {
+pub fn held_end(doc: Tree<'_>, connection: NodeId) -> Option<NodeId> {
     doc.relations_from(connection)
         .find(|r| r.rel == RelKind::Connects && r.data.get("held").and_then(|v| v.as_bool()) == Some(true))
         .map(|r| r.to)
 }
 
 /// The outermost port exposing `port`.
-fn outer_port(doc: &Document, mut port: NodeId) -> NodeId {
+fn outer_port(doc: Tree<'_>, mut port: NodeId) -> NodeId {
     for _ in 0..16 {
         match doc.relations_to(port).find(|r| r.rel == RelKind::Exposes && doc.is_live(r.from)) {
             Some(r) => port = r.from,
@@ -91,7 +92,7 @@ fn outer_port(doc: &Document, mut port: NodeId) -> NodeId {
 }
 
 /// The connection on `port` and the port at its other end.
-pub fn connection_of(doc: &Document, port: NodeId) -> Option<(NodeId, NodeId)> {
+pub fn connection_of(doc: Tree<'_>, port: NodeId) -> Option<(NodeId, NodeId)> {
     let c = doc.relations_to(port).find(|r| r.rel == RelKind::Connects && doc.is_live(r.from))?.from;
     let (a, b) = crate::port::ends(doc, c)?;
     Some((c, if a == port { b } else { a }))
@@ -99,7 +100,7 @@ pub fn connection_of(doc: &Document, port: NodeId) -> Option<(NodeId, NodeId)> {
 
 /// A node's outermost authored ancestor below its composition (itself
 /// when it is one).
-fn body_of(doc: &Document, id: NodeId) -> NodeId {
+fn body_of(doc: Tree<'_>, id: NodeId) -> NodeId {
     let mut at = id.expanded_root().unwrap_or(id);
     while let Some(p) = doc.live(at).and_then(|n| n.parent) {
         if doc.live(p).is_some_and(|n| n.ty.name() == "composition") {
@@ -111,7 +112,7 @@ fn body_of(doc: &Document, id: NodeId) -> NodeId {
 }
 
 /// Every port anchor in the document, with resolved positions.
-pub fn port_anchors(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> Vec<PortAnchor> {
+pub fn port_anchors(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>) -> Vec<PortAnchor> {
     let num = |l: Leaf| read(l).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let mut out = Vec::new();
     for a in doc.nodes_with(FacetKind::Anchor) {
@@ -155,7 +156,7 @@ pub fn port_anchors(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>) -> Vec
 /// Whether the port `grabbed` is dragged from may be plugged into
 /// `target`'s, and why not. `grabbed`'s own connection is taken as gone
 /// (a plug drag unplugs first).
-pub fn compatible(doc: &Document, grabbed: &PortAnchor, target: &PortAnchor) -> Result<(), String> {
+pub fn compatible(doc: Tree<'_>, grabbed: &PortAnchor, target: &PortAnchor) -> Result<(), String> {
     if target.sealed {
         return Err(format!("{} is inside a component that does not expose it", target.port));
     }
@@ -209,7 +210,7 @@ pub fn compatible(doc: &Document, grabbed: &PortAnchor, target: &PortAnchor) -> 
 /// The ops connecting `a` to `b` (outer ports): a `connection` beside the
 /// entity of `a`, with its two ends; `held`, when both are loose ends, is
 /// the one that keeps its place. `id` and `rels` are fresh.
-pub fn plug_ops(doc: &Document, a: NodeId, b: NodeId, held: Option<NodeId>, id: NodeId, rels: [crate::id::RelationId; 2]) -> Result<Vec<Op>, String> {
+pub fn plug_ops(doc: Tree<'_>, a: NodeId, b: NodeId, held: Option<NodeId>, id: NodeId, rels: [crate::id::RelationId; 2]) -> Result<Vec<Op>, String> {
     let entity = a.expanded_root().unwrap_or(a);
     let parent = doc.live(entity).and_then(|n| n.parent).ok_or_else(|| format!("{a} belongs to no placed entity"))?;
     let order = doc.children(parent).iter().rev().find(|c| !c.is_expanded()).and_then(|&c| doc.live(c)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
@@ -231,7 +232,7 @@ pub fn plug_ops(doc: &Document, a: NodeId, b: NodeId, held: Option<NodeId>, id: 
 /// The mates connections imply (§4.3): for every connection between two
 /// rigid anchors on different bodies in one composition, a `mate` between
 /// the bodies at the anchors, named by the connection.
-pub fn implied_mates(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
+pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
     let spec = constraint::spec("mate").expect("declared kind");
     let anchors = port_anchors(doc, read);
     // Whether an anchor's context lets a connection hold it (`plug.mate`):

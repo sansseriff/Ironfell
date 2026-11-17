@@ -37,7 +37,7 @@ fn transaction(label: impl Into<String>, ops: Vec<Op>) -> TransactionInput {
 /// not planned (it is handled elsewhere), else the plan or why there is none.
 pub fn plan(id: &str, s: &Situation) -> Option<Result<Plan, String>> {
     let needs = |ok: Result<Plan, String>| if s.selected.is_empty() { Err("Select something first".to_owned()) } else { ok };
-    let doc = s.store.document();
+    let doc = s.store.tree();
     let extent = |n: NodeId| s.store.extent(n);
     Some(match id {
         // Add auto layout (layout-and-tables.md §2.4): a group gets a layout;

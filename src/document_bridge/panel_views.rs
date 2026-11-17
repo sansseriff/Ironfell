@@ -12,12 +12,13 @@
 //! and 3D nodes outside every composition. Each composition gets its own
 //! layer the first time anything asks, and keeps it.
 
+use iron_document::Tree;
 use super::DocumentStore;
 use crate::panels::{COMPOSITION_PANEL, PanelRect, Panels, VIEWER_PANEL};
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
 use iron_document::facet::Name as DocName;
-use iron_document::{Document, NodeId};
+use iron_document::NodeId;
 use std::collections::BTreeMap;
 
 /// The composition a materialised node is drawn in (`None`: outside every
@@ -164,7 +165,7 @@ pub const INSPECT: &str = "inspect:";
 /// Which composition a spec names: a node id, a composition's name, or
 /// (empty) the first composition with matching dimensions — 2D unless the
 /// document has only 3D ones.
-fn resolve(doc: &Document, spec: &str) -> Option<NodeId> {
+fn resolve(doc: Tree<'_>, spec: &str) -> Option<NodeId> {
     let all = composition::compositions(doc);
     if spec.is_empty() {
         return all.iter().copied().find(|&c| composition::dims(doc, c) == Some(Dims::Two)).or_else(|| all.first().copied());
@@ -189,7 +190,7 @@ pub(crate) fn resolve_panel_views(
     mut layers: ResMut<CompositionLayers>,
     mut views: ResMut<PanelViews>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let mut next: Vec<PanelView> = panels
         .iter()
         .filter(|(_, p)| p.kind == COMPOSITION_PANEL)

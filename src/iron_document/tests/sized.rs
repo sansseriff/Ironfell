@@ -44,7 +44,7 @@ struct Bench {
 /// 200 × 100: a frame filling the box and a label 20 px above its bottom.
 fn bench() -> Bench {
     let mut store = Store::new();
-    let ids = store.document().next_ids(7);
+    let ids = store.authored().next_ids(7);
     let (bench, model, library, def, template, frame, label) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -94,7 +94,7 @@ fn a_sized_picture_reflows_its_parts_and_only_its_own() {
     assert_eq!(num(&store, frame, "size.w"), 200.0);
     let a = place(&mut store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0"/>"#));
     let b = place(&mut store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="200" w="320" h="140"/>"#));
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
     // Each picture starts at the template's box, or the box it was given.
     assert_eq!((num(&store, a, "size.w"), num(&store, a, "size.h")), (200.0, 100.0));
     assert_eq!((num(&store, b, "size.w"), num(&store, b, "size.h")), (320.0, 140.0));
@@ -112,7 +112,7 @@ fn a_sized_picture_reflows_its_parts_and_only_its_own() {
     // The parts that read the box are keyed on it: pictures of different
     // sizes never share a drawing.
     let key = |u: NodeId| {
-        let an = analysis::classify(store.document(), store.reactive(), u).unwrap();
+        let an = analysis::classify(store.tree(), store.reactive(), u).unwrap();
         an.parts.iter().find(|p| p.node == frame).unwrap().key.clone()
     };
     assert!(key(a).contains_key("size"), "{:?}", key(a));
@@ -125,13 +125,13 @@ fn a_sized_picture_reflows_its_parts_and_only_its_own() {
 #[test]
 fn an_unsized_template_refuses_a_box() {
     let Bench { mut store, bench, def, .. } = bench();
-    let template = store.document().children(def)[0];
+    let template = store.tree().children(def)[0];
     store.apply(tx("unsize", vec![Op::RemoveFacet { id: template, kind: FacetKind::Size }])).unwrap();
     let err = place_ops(&store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0" w="10"/>"#)).unwrap_err();
     assert!(err.contains("has no size"), "{err}");
     // Without w, it places, unsized.
     let u = place(&mut store, &format!(r#"<place def="{def}" in="{bench}" x="0" y="0"/>"#));
-    assert!(store.document().facet(u, FacetKind::Size).is_none());
+    assert!(store.tree().facet(u, FacetKind::Size).is_none());
 }
 
 /// Component verbs as an edit (edit.rs): its ops and its summary lines.

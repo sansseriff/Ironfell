@@ -19,8 +19,9 @@
 //! every signal outside is what it was (ECM §9's black-boxing law). One
 //! transaction; undo restores the selection.
 
+use crate::Tree;
 use crate::composition;
-use crate::document::{Document, RelKind, Relation};
+use crate::document::{RelKind, Relation};
 use crate::expr::{Expr, Leaf};
 use crate::facet::{Args, Facet, FacetKind, Instance, LeafPath, LeafStruct, Name, Port, Template, Transform2d, Use};
 use crate::id::{NodeId, RelationId};
@@ -53,7 +54,7 @@ pub struct Made {
 
 /// The ops that make a component named `name` from `selection`: `use`
 /// nodes of linked instances, all in one composition.
-pub fn make(doc: &Document, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: &[NodeId], name: &str) -> Result<Made, String> {
+pub fn make(doc: Tree<'_>, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: &[NodeId], name: &str) -> Result<Made, String> {
     // The selection: pictures, and the instances they picture.
     let mut uses: Vec<NodeId> = Vec::new();
     for &n in selection {
@@ -373,7 +374,7 @@ fn remap_op(op: Op, map: &BTreeMap<NodeId, NodeId>) -> Op {
 /// it takes their place, at `top_left` (the selection's top-left in their
 /// parent's space; the moved nodes shift by it so nothing moves on screen).
 /// `entity` in the result is the main itself: a main figures no entity.
-pub fn make_main(doc: &Document, selection: &[NodeId], top_left: [f64; 2], name: &str) -> Result<Made, String> {
+pub fn make_main(doc: Tree<'_>, selection: &[NodeId], top_left: [f64; 2], name: &str) -> Result<Made, String> {
     let mut roots: Vec<NodeId> = Vec::new();
     for &n in selection {
         let node = doc.live(n).ok_or_else(|| format!("{n} is not a live node"))?;

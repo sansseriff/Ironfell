@@ -6,7 +6,7 @@ use iron_document::*;
 
 fn main() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
     let mut name = Name::default();

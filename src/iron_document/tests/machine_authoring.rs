@@ -26,7 +26,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 #[test]
 fn a_state_made_by_hand_animates_its_instances() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let [bench, model, library, def, template, dot] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -47,10 +47,10 @@ fn a_state_made_by_hand_animates_its_instances() {
         ))
         .unwrap();
     // Add state: a machine following a new `state` input, two states.
-    let (ops, second) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, second) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add state", ops)).unwrap();
     assert_eq!(second, "state_2");
-    let doc = store.document();
+    let doc = store.tree();
     let (m, port) = machine::machines(doc, def)[0].clone();
     assert_eq!(port, "state");
     let spec = doc.children(def).iter().copied().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("state") && doc.get::<Port>(c).is_some()).unwrap();
@@ -60,19 +60,19 @@ fn a_state_made_by_hand_animates_its_instances() {
     store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
     store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
     store.advance_machines(0.5);
-    let chans = machine::channels(store.document(), def);
+    let chans = machine::channels(store.tree(), def);
     assert_eq!(chans.len(), 1);
     assert_eq!(chans[0].2, Value::Number(1.0), "the channel rests at the dot's value before the edit");
-    assert!(store.document().leaf(dot, path("appearance.opacity")).unwrap().expr().is_some(), "the dot reads the channel");
+    assert!(store.tree().leaf(dot, path("appearance.opacity")).unwrap().expr().is_some(), "the dot reads the channel");
     assert_eq!(store.resolved(dot, path("appearance.opacity")), Some(Value::Number(0.2)), "the pinned state shows on the definition");
     // Unpinned, the definition is at rest.
     store.pin_state(None);
     assert_eq!(store.resolved(dot, path("appearance.opacity")), Some(Value::Number(1.0)));
     // Rename the state; the port's choice follows.
-    let s2 = store.document().children(m).iter().copied().find(|&s| store.document().get::<Name>(s).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("state_2")).unwrap();
-    let ops = machine::rename_state_ops(store.document(), s2, "dim").unwrap();
+    let s2 = store.tree().children(m).iter().copied().find(|&s| store.tree().get::<Name>(s).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("state_2")).unwrap();
+    let ops = machine::rename_state_ops(store.tree(), s2, "dim").unwrap();
     store.apply(tx("rename", ops)).unwrap();
-    assert_eq!(store.document().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default|dim)".into())));
+    assert_eq!(store.tree().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default|dim)".into())));
     // An instance animates between them: 300 ms, Easy Ease.
     let (ops, summary) = place_ops(&store, &format!(r#"<place def="{def}" in="bench" x="0" y="0"/>"#)).unwrap();
     store.apply(tx("place", ops)).unwrap();
@@ -99,8 +99,8 @@ fn a_state_made_by_hand_animates_its_instances() {
     for _ in 0..4 {
         store.undo(0).unwrap().unwrap();
     }
-    assert!(machine::channels(store.document(), def).is_empty());
-    assert_eq!(store.document().leaf(dot, path("appearance.opacity")).unwrap().constant(), Some(&Value::Number(1.0)));
+    assert!(machine::channels(store.tree(), def).is_empty());
+    assert_eq!(store.tree().leaf(dot, path("appearance.opacity")).unwrap().constant(), Some(&Value::Number(1.0)));
 }
 
 /// The machine panel's verbs (machines.md §6): a scrubbed transition shows
@@ -109,7 +109,7 @@ fn a_state_made_by_hand_animates_its_instances() {
 #[test]
 fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let [bench, model, library, def, template, dot] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -129,9 +129,9 @@ fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
             ],
         ))
         .unwrap();
-    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, _) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add state", ops)).unwrap();
-    let m = machine::machines(store.document(), def)[0].0;
+    let m = machine::machines(store.tree(), def)[0].0;
     store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
     store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
     let opacity = |s: &Store| s.resolved(dot, path("appearance.opacity")).unwrap().as_f64().unwrap();
@@ -145,24 +145,24 @@ fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
     // One "any change" transition: a strip, and default → state_2 uses it.
     {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        assert!(machine::is_strip(store.document(), &read, m));
+        assert!(machine::is_strip(store.tree(), &read, m));
     }
     // Own timing for default → state_2: its own transition, 300 ms like the shared one.
     let (ops, own) = {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").unwrap()
+        machine::add_transition_ops(store.tree(), &read, def, m, "default", "state_2").unwrap()
     };
     store.apply(tx("own", ops)).unwrap();
     {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        let plan = machine::plan(store.document(), &read, def, m, "default", "state_2").unwrap();
+        let plan = machine::plan(store.tree(), &read, def, m, "default", "state_2").unwrap();
         assert_eq!(plan.transition, own);
         assert_eq!(plan.ms, 300.0);
-        assert!(machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").is_err(), "twice is refused");
+        assert!(machine::add_transition_ops(store.tree(), &read, def, m, "default", "state_2").is_err(), "twice is refused");
     }
     // The channel's own slice, the second half: at a quarter it has not moved.
-    let chan = machine::channels(store.document(), def)[0].1.clone();
-    let (ops, tween) = machine::add_tween_ops(store.document(), own, &chan).unwrap();
+    let chan = machine::channels(store.tree(), def)[0].1.clone();
+    let (ops, tween) = machine::add_tween_ops(store.tree(), own, &chan).unwrap();
     store.apply(tx("tween", ops)).unwrap();
     store.apply(tx("narrow", vec![Op::Set { id: tween, path: path("tween.start"), slot: Slot::Const(Value::Number(0.5)) }])).unwrap();
     scrub(&mut store, 0.25);
@@ -187,7 +187,7 @@ fn the_machine_panel_scrubs_retimes_and_lanes_show_state() {
 #[test]
 fn scrubbing_records_nothing_and_events_report_their_states() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let [bench, model, library, def, template, dot] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut c = Composition::default();
@@ -207,30 +207,30 @@ fn scrubbing_records_nothing_and_events_report_their_states() {
             ],
         ))
         .unwrap();
-    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, _) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add state", ops)).unwrap();
-    let m = machine::machines(store.document(), def)[0].0;
+    let m = machine::machines(store.tree(), def)[0].0;
     store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
     store.apply(tx("dim", vec![Op::Set { id: dot, path: path("appearance.opacity"), slot: Slot::Const(Value::Number(0.2)) }])).unwrap();
-    assert_eq!(machine::channels(store.document(), def).len(), 1);
+    assert_eq!(machine::channels(store.tree(), def).len(), 1);
     // Previewing a transition: an edit to a part belongs to neither state,
     // so it is refused, and nothing changes.
     store.pin_state(Some(machine::Pinned { def, machine: m, state: "default".into(), scrub: Some(("default".into(), "state_2".into(), 0.5)) }));
     let refused = store.apply(tx("move", vec![Op::Set { id: dot, path: path("transform2d.x"), slot: Slot::Const(Value::Number(40.0)) }])).unwrap_err();
     assert!(refused[0].message.contains("pick default or state_2"), "{refused:?}");
-    assert_eq!(machine::channels(store.document(), def).len(), 1, "nothing recorded while previewing");
-    assert_ne!(store.document().leaf(dot, path("transform2d.x")).and_then(|s| s.constant()), Some(&Value::Number(40.0)));
+    assert_eq!(machine::channels(store.tree(), def).len(), 1, "nothing recorded while previewing");
+    assert_ne!(store.tree().leaf(dot, path("transform2d.x")).and_then(|s| s.constant()), Some(&Value::Number(40.0)));
     // A third state, and explicit transitions a: state_3 → default → state_2: the strip follows them.
-    let (ops, third) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, third) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("third", ops)).unwrap();
     for (f, g) in [(third.as_str(), "default"), ("default", "state_2")] {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        let (ops, _) = machine::add_transition_ops(store.document(), &read, def, m, f, g).unwrap();
+        let (ops, _) = machine::add_transition_ops(store.tree(), &read, def, m, f, g).unwrap();
         store.apply(tx("own", ops)).unwrap();
     }
     {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        assert_eq!(machine::strip_order(store.document(), &read, m), (vec![third.clone(), "default".into(), "state_2".into()], false));
+        assert_eq!(machine::strip_order(store.tree(), &read, m), (vec![third.clone(), "default".into(), "state_2".into()], false));
     }
     // A pin on a state that is gone lets go.
     store.pin_state(Some(machine::Pinned::state(def, m, "nope")));
@@ -255,7 +255,7 @@ fn scrubbing_records_nothing_and_events_report_their_states() {
 #[test]
 fn a_state_is_made_default_and_deleted() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let [library, def, template, dot] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut t = Template::default();
@@ -271,27 +271,27 @@ fn a_state_is_made_default_and_deleted() {
             ],
         ))
         .unwrap();
-    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, _) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add", ops)).unwrap();
-    let m = machine::machines(store.document(), def)[0].0;
-    let state = |s: &Store, n: &str| s.document().children(m).iter().copied().find(|&c| s.document().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(n)).unwrap();
-    let spec = store.document().children(def).iter().copied().find(|&c| store.document().get::<Port>(c).is_some()).unwrap();
-    let ops = machine::set_default_state_ops(store.document(), state(&store, "state_2")).unwrap();
+    let m = machine::machines(store.tree(), def)[0].0;
+    let state = |s: &Store, n: &str| s.tree().children(m).iter().copied().find(|&c| s.tree().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(n)).unwrap();
+    let spec = store.tree().children(def).iter().copied().find(|&c| store.tree().get::<Port>(c).is_some()).unwrap();
+    let ops = machine::set_default_state_ops(store.tree(), state(&store, "state_2")).unwrap();
     store.apply(tx("default", ops)).unwrap();
-    assert_eq!(store.document().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("state_2".into())));
+    assert_eq!(store.tree().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("state_2".into())));
     // Own timing for default → state_2, then delete state_2: the transition goes too.
     {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        let (ops, _) = machine::add_transition_ops(store.document(), &read, def, m, "default", "state_2").unwrap();
+        let (ops, _) = machine::add_transition_ops(store.tree(), &read, def, m, "default", "state_2").unwrap();
         store.apply(tx("own", ops)).unwrap();
     }
-    let ops = machine::delete_state_ops(store.document(), state(&store, "state_2")).unwrap();
+    let ops = machine::delete_state_ops(store.tree(), state(&store, "state_2")).unwrap();
     store.apply(tx("delete", ops)).unwrap();
-    assert_eq!(machine::state_names(store.document(), m), vec!["default".to_owned()]);
-    assert_eq!(store.document().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default)".into())));
-    assert_eq!(store.document().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("default".into())));
-    assert_eq!(store.document().children(m).iter().filter(|&&c| store.document().live(c).is_some_and(|n| n.ty.name() == "transition")).count(), 1, "the pair's own transition went with it");
-    assert!(machine::delete_state_ops(store.document(), state(&store, "default")).is_err(), "the last state stays");
+    assert_eq!(machine::state_names(store.tree(), m), vec!["default".to_owned()]);
+    assert_eq!(store.tree().get::<Port>(spec).unwrap().datatype.constant(), Some(&Value::Str("choice(default)".into())));
+    assert_eq!(store.tree().get::<Port>(spec).unwrap().signal.constant(), Some(&Value::Enum("default".into())));
+    assert_eq!(store.tree().children(m).iter().filter(|&&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "transition")).count(), 1, "the pair's own transition went with it");
+    assert!(machine::delete_state_ops(store.tree(), state(&store, "default")).is_err(), "the last state stays");
 }
 
 /// A part already bound to a channel: a drag inverts the binding and writes
@@ -300,7 +300,7 @@ fn a_state_is_made_default_and_deleted() {
 #[test]
 fn an_edit_to_a_part_bound_to_a_channel_records_into_the_pinned_state() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let [library, def, template, dot] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut t = Template::default();
@@ -316,25 +316,25 @@ fn an_edit_to_a_part_bound_to_a_channel_records_into_the_pinned_state() {
             ],
         ))
         .unwrap();
-    let (ops, _) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, _) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add", ops)).unwrap();
-    let m = machine::machines(store.document(), def)[0].0;
+    let m = machine::machines(store.tree(), def)[0].0;
     // state_2 moves the dot: a channel, the dot bound to it.
     store.pin_state(Some(machine::Pinned::state(def, m, "state_2")));
     store.apply(tx("move", vec![Op::Set { id: dot, path: path("transform2d.x"), slot: Slot::Const(Value::Number(-80.0)) }])).unwrap();
-    let (ch, name, rest) = machine::channels(store.document(), def)[0].clone();
+    let (ch, name, rest) = machine::channels(store.tree(), def)[0].clone();
     assert_eq!(rest, Value::Number(0.0));
     // A third state, pinned; the drag writes the channel's value (inverted).
-    let (ops, third) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, third) = machine::add_state_ops(store.tree(), def).unwrap();
     store.apply(tx("add", ops)).unwrap();
     store.pin_state(Some(machine::Pinned::state(def, m, third.clone())));
     store.apply(tx("move", vec![Op::Set { id: ch, path: path("channel.value"), slot: Slot::Const(Value::Number(100.0)) }])).unwrap();
     store.advance_machines(0.5);
-    let view = machine::channels(store.document(), def);
+    let view = machine::channels(store.tree(), def);
     assert_eq!(view[0].2, Value::Number(0.0), "the rest value, which default shows, is unchanged");
     assert_eq!(store.resolved(dot, path("transform2d.x")), Some(Value::Number(100.0)), "the pinned state shows");
-    let s3 = store.document().children(m).iter().copied().find(|&c| store.document().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(third.as_str())).unwrap();
-    assert_eq!(store.document().leaf(s3, LeafPath::new(facet::FacetKind::Args, &name).unwrap()).and_then(|s| s.constant()).and_then(Value::as_f64), Some(100.0));
+    let s3 = store.tree().children(m).iter().copied().find(|&c| store.tree().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(third.as_str())).unwrap();
+    assert_eq!(store.tree().leaf(s3, LeafPath::new(facet::FacetKind::Args, &name).unwrap()).and_then(|s| s.constant()).and_then(Value::as_f64), Some(100.0));
     store.pin_state(None);
     store.advance_machines(0.6);
     assert_eq!(store.resolved(dot, path("transform2d.x")), Some(Value::Number(0.0)), "at rest: default's place");
@@ -350,7 +350,7 @@ fn an_edit_to_a_part_bound_to_a_channel_records_into_the_pinned_state() {
 fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
     use facet::{Fill, Font, Text};
     let mut store = Store::new();
-    let ids = store.document().next_ids(5);
+    let ids = store.authored().next_ids(5);
     let [library, def, template, dot, label] = ids[..] else { unreachable!() };
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut t = Template::default();
@@ -370,12 +370,12 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
         ))
         .unwrap();
     // Named on the way in.
-    let (ops, second) = machine::add_named_state_ops(store.document(), def, Some("calm"), Some("alert")).unwrap();
+    let (ops, second) = machine::add_named_state_ops(store.tree(), def, Some("calm"), Some("alert")).unwrap();
     store.apply(tx("add", ops)).unwrap();
     assert_eq!(second, "alert");
-    let m = machine::machines(store.document(), def)[0].0;
-    assert_eq!(machine::state_names(store.document(), m), vec!["calm".to_owned(), "alert".to_owned()]);
-    assert!(machine::add_named_state_ops(store.document(), def, None, Some("alert")).is_err(), "names are unique");
+    let m = machine::machines(store.tree(), def)[0].0;
+    assert_eq!(machine::state_names(store.tree(), m), vec!["calm".to_owned(), "alert".to_owned()]);
+    assert!(machine::add_named_state_ops(store.tree(), def, None, Some("alert")).is_err(), "names are unique");
     // alert: red, louder words, half opacity.
     let red = Value::Color([1.0, 0.0, 0.0, 1.0]);
     store.pin_state(Some(machine::Pinned::state(def, m, "alert")));
@@ -389,14 +389,14 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
             ],
         ))
         .unwrap();
-    let chans = machine::channels(store.document(), def);
+    let chans = machine::channels(store.tree(), def);
     assert_eq!(chans.len(), 3, "a channel each: colour, words, opacity");
     let by = |n: &str| chans.iter().find(|(_, c, _)| c.contains(n)).unwrap().clone();
     let (colour, words_ch) = (by("color"), by("content"));
     assert_eq!(colour.2, Value::Color([0.5, 0.5, 0.5, 1.0]), "the colour rests at the drawing's");
     assert_eq!(words_ch.2, Value::Str("calm".into()));
     // The parts that read each channel, for the editor's rows.
-    let readers = machine::readers(store.document(), def);
+    let readers = machine::readers(store.tree(), def);
     assert_eq!(readers[&colour.0], vec![(dot, path("fill.color"))]);
     assert_eq!(readers[&words_ch.0], vec![(label, path("text.content"))]);
     store.advance_machines(0.1);
@@ -415,7 +415,7 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
     assert_eq!(store.resolved(dot, path("fill.color")), Some(blue.clone()));
     assert_eq!(store.resolved(label, path("text.content")), Some(Value::Str("ALARM".into())));
     assert_eq!(store.resolved(dot, path("appearance.opacity")), Some(Value::Number(0.4)));
-    assert_eq!(machine::channels(store.document(), def).iter().find(|c| c.1.contains("color")).unwrap().2, Value::Color([0.5, 0.5, 0.5, 1.0]), "the drawing's colour is unchanged");
+    assert_eq!(machine::channels(store.tree(), def).iter().find(|c| c.1.contains("color")).unwrap().2, Value::Color([0.5, 0.5, 0.5, 1.0]), "the drawing's colour is unchanged");
     store.set_through_handle(label, path("text.content"), Value::Str("ALERT".into()), "words", Actor::Human, 0).unwrap();
     store.set_through_handle(dot, path("fill.color"), red.clone(), "red", Actor::Human, 0).unwrap();
     store.set_through_handle(dot, path("appearance.opacity"), Value::Number(0.5), "dim", Actor::Human, 0).unwrap();
@@ -423,22 +423,22 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
     // the pair its own transition in one step, and the default stays.
     let default_t = {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        machine::plan(store.document(), &read, def, m, "calm", "alert").unwrap().transition
+        machine::plan(store.tree(), &read, def, m, "calm", "alert").unwrap().transition
     };
     let edit = machine::PairEdit { ms: Some(1000.0), name: Some("raise".into()), slices: vec![machine::Slice { channel: words_ch.1.clone(), start: Some(0.8), end: Some(1.0), ease: Some("linear".into()) }], ..Default::default() };
     let (ops, own) = {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        machine::edit_pair_ops(store.document(), &read, def, m, "calm", "alert", &edit).unwrap()
+        machine::edit_pair_ops(store.tree(), &read, def, m, "calm", "alert", &edit).unwrap()
     };
     store.apply(tx("time words", ops)).unwrap();
     assert_ne!(own, default_t);
     assert_eq!(store.resolved(default_t, path("transition.ms")), Some(Value::Number(300.0)), "the default is untouched");
     assert_eq!(store.resolved(own, path("transition.ms")), Some(Value::Number(1000.0)));
-    assert_eq!(store.document().get::<Name>(own).and_then(|n| n.text.constant()).and_then(|v| v.as_str()), Some("raise"));
+    assert_eq!(store.tree().get::<Name>(own).and_then(|n| n.text.constant()).and_then(|v| v.as_str()), Some("raise"));
     // A second edit changes the same transition.
     let (ops, again) = {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        machine::edit_pair_ops(store.document(), &read, def, m, "calm", "alert", &machine::PairEdit { ease: Some("linear".into()), ..Default::default() }).unwrap()
+        machine::edit_pair_ops(store.tree(), &read, def, m, "calm", "alert", &machine::PairEdit { ease: Some("linear".into()), ..Default::default() }).unwrap()
     };
     store.apply(tx("linear", ops)).unwrap();
     assert_eq!(again, own);
@@ -454,22 +454,22 @@ fn states_hold_colours_and_words_and_pairs_take_their_own_timing_on_edit() {
     // The reverse leg takes the timing mirrored: the words first.
     let (ops, back) = {
         let read = |l: Leaf| store.resolved(l.node, l.path);
-        let e = machine::copied_timing(store.document(), &read, own, true).unwrap();
-        machine::edit_pair_ops(store.document(), &read, def, m, "alert", "calm", &e).unwrap()
+        let e = machine::copied_timing(store.tree(), &read, own, true).unwrap();
+        machine::edit_pair_ops(store.tree(), &read, def, m, "alert", "calm", &e).unwrap()
     };
     store.apply(tx("mirror", ops)).unwrap();
-    let w = store.document().children(back).iter().copied().find(|&c| store.document().live(c).is_some_and(|n| n.ty.name() == "tween")).unwrap();
+    let w = store.tree().children(back).iter().copied().find(|&c| store.tree().live(c).is_some_and(|n| n.ty.name() == "tween")).unwrap();
     assert_eq!((store.resolved(w, path("tween.start")), store.resolved(w, path("tween.end"))), (Some(Value::Number(0.0)), Some(Value::Number(0.19999999999999996))));
     assert_eq!(machine::mirror_ease("ease_in"), "ease_out");
     assert_eq!(machine::mirror_ease("cubic-bezier(0.1, 0.2, 0.3, 1)"), "cubic-bezier(0.7, 0, 0.9, 0.8)");
     // alert stops setting the opacity: it shows the drawing's again.
-    let alert = store.document().children(m).iter().copied().find(|&c| store.document().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("alert")).unwrap();
+    let alert = store.tree().children(m).iter().copied().find(|&c| store.tree().get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("alert")).unwrap();
     let opacity = by("opacity").1;
-    store.apply(tx("reset", machine::reset_value_ops(store.document(), alert, &opacity).unwrap())).unwrap();
+    store.apply(tx("reset", machine::reset_value_ops(store.tree(), alert, &opacity).unwrap())).unwrap();
     store.pin_state(Some(machine::Pinned::state(def, m, "alert")));
     store.advance_machines(0.4);
     assert_eq!(store.resolved(dot, path("appearance.opacity")), Some(Value::Number(1.0)));
-    assert!(machine::reset_value_ops(store.document(), alert, &opacity).is_err());
+    assert!(machine::reset_value_ops(store.tree(), alert, &opacity).is_err());
 }
 
 /// Component verbs as an edit (edit.rs): its ops and its summary lines.

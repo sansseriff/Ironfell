@@ -21,7 +21,7 @@ fn q(text: &str) -> Value {
 /// an `Any` field, so it is where a quantity can live before `params` arrive.
 fn scene() -> (Store, NodeId, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (timeline, clip, a, b) = (ids[0], ids[1], ids[2], ids[3]);
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("timing.start".into()));
@@ -53,7 +53,7 @@ fn quantities_round_trip_through_the_file_with_their_unit() {
     assert!(text.contains(r#""value":{"q":[1.0,"W"]}"#), "{text}");
     let loaded = Store::load(&text).unwrap();
     assert_eq!(loaded.save(), text);
-    assert_eq!(loaded.document().leaf(a, "key.value".parse().unwrap()).unwrap().constant(), Some(&q("9.58 mW")));
+    assert_eq!(loaded.tree().leaf(a, "key.value".parse().unwrap()).unwrap().constant(), Some(&q("9.58 mW")));
     // Views show the engineering form.
     let v = loaded.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(a), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(r#"value="9.58 mW""#), "{v}");
@@ -86,9 +86,9 @@ fn bindings_evaluate_quantities_and_report_dimension_errors() {
 #[test]
 fn clips_interpolate_quantities() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(7);
+    let ids = store.authored().next_ids(7);
     let (timeline, driver, d0, d1, holder, h0, target) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let key = |t: f64, v: Value| {
         let mut k = Key::default();
         k.t = Slot::Const(Value::Number(t));
@@ -128,7 +128,7 @@ fn numbers_needing_every_digit_survive_save_and_load() {
     // correctly rounded reads it back as …056 (serde_json without
     // `float_roundtrip`), and the second save differs from the first.
     let mut store = Store::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut lens = iron_document::facet::Camera::default();
     lens.aspect = Slot::Const(Value::Number(620.0 / 340.0));
     store.apply(tx("camera", vec![Op::Create { id, ty: ty("camera"), parent: None, order: OrderKey::first(), facets: vec![iron_document::facet::Transform3d::default().wrap(), lens.wrap()] }])).unwrap();

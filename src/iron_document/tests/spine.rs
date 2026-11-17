@@ -40,7 +40,7 @@ fn content(store: &Store) -> String {
 /// facets, plus relations. Tombstones are excluded, which is what makes
 /// this the right comparison for undoing a create.
 fn live_content(store: &Store) -> String {
-    let doc = store.document();
+    let doc = store.tree();
     let mut out = String::new();
     let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
@@ -59,7 +59,7 @@ fn live_content(store: &Store) -> String {
 }
 
 fn check(store: &Store) {
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
 }
 
 struct Scene {
@@ -74,7 +74,7 @@ struct Scene {
 /// group { rect, circle, inner_group { mesh } }
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(5);
+    let ids = store.authored().next_ids(5);
     let (group, rect, circle, inner, mesh) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
@@ -148,7 +148,7 @@ fn relation(store: &Store, from: NodeId, to: NodeId) -> Relation {
     let mut data = BTreeMap::new();
     data.insert("prop".to_owned(), Value::Str("opacity".into()));
     Relation {
-        id: store.document().next_relation_id(),
+        id: store.authored().next_relation_id(),
         from,
         to,
         rel: RelKind::Animates,
@@ -169,7 +169,7 @@ fn every_op_kind_inverts_exactly() {
     } = s;
     let mut store = s.store;
     // A clip and a relation so link/unlink have something to work on.
-    let clip = store.document().next_id();
+    let clip = store.authored().next_id();
     let mut timing = Timing::default();
     timing.start = num(0.0);
     store
@@ -190,7 +190,7 @@ fn every_op_kind_inverts_exactly() {
         .unwrap();
     check(&store);
 
-    let fresh = store.document().next_id();
+    let fresh = store.authored().next_id();
     let cases: Vec<(&str, Vec<Op>)> = vec![
         (
             "create",
@@ -271,7 +271,7 @@ fn every_op_kind_inverts_exactly() {
     for (label, ops) in cases {
         let before = content(&store);
         let before_live = live_content(&store);
-        let v0 = store.document().version();
+        let v0 = store.authored().version();
         store
             .apply(tx(label, ops))
             .unwrap_or_else(|e| panic!("{label}: {e:?}"));
@@ -294,11 +294,11 @@ fn every_op_kind_inverts_exactly() {
         if label == "create" {
             // The inverse of a create is a delete, and ids are never reused:
             // the undone node stays as a tombstone.
-            assert!(store.document().node(fresh).is_some_and(|n| !n.is_live()));
+            assert!(store.tree().node(fresh).is_some_and(|n| !n.is_live()));
         } else {
             assert_eq!(content(&store), before, "{label}: undo did not restore");
         }
-        assert_eq!(store.document().version(), Version(v0.0 + 2));
+        assert_eq!(store.authored().version(), Version(v0.0 + 2));
         // And redo re-applies cleanly.
         store
             .redo(0)
@@ -336,7 +336,7 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
         .apply(tx("delete", vec![Op::Delete { id: mesh }]))
         .unwrap();
     store.undo(0).unwrap().unwrap();
-    let extra = store.document().next_id();
+    let extra = store.authored().next_id();
     store
         .apply(tx(
             "add",
@@ -381,7 +381,7 @@ fn replay_of_log_equals_snapshot_and_load_roundtrips() {
     // The loaded store keeps working: the counter is right, so a new create
     // does not collide.
     let mut loaded = loaded;
-    let id = loaded.document().next_id();
+    let id = loaded.authored().next_id();
     loaded
         .apply(tx(
             "after load",
@@ -511,7 +511,7 @@ fn structural_rules() {
     assert_eq!(e[0].kind, ErrorKind::BadId);
 
     // Required facets are enforced on create and on remove.
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let e = store
         .apply(tx(
             "bare rect",
@@ -554,17 +554,17 @@ fn structural_rules() {
     store
         .apply(tx("delete group", vec![Op::Delete { id: group }]))
         .unwrap();
-    let v = store.document().version();
+    let v = store.authored().version();
     for n in [group, inner, rect] {
-        assert_eq!(store.document().node(n).unwrap().tombstoned, Some(v), "{n}");
+        assert_eq!(store.tree().node(n).unwrap().tombstoned, Some(v), "{n}");
     }
-    assert!(store.document().roots().is_empty());
+    assert!(store.tree().roots().is_empty());
     check(&store);
 
     // Undo brings the subtree back, parents before children.
     store.undo(0).unwrap().unwrap();
     check(&store);
-    assert_eq!(store.document().children(group), &[rect, s.circle, inner]);
+    assert_eq!(store.tree().children(group), &[rect, s.circle, inner]);
 }
 
 #[test]
@@ -577,12 +577,12 @@ fn sibling_order_survives_many_inserts_between_the_same_pair() {
         ..
     } = s;
     let mut store = s.store;
-    let mut prev = store.document().live(rect).unwrap().order.clone();
-    let hi = store.document().live(circle).unwrap().order.clone();
+    let mut prev = store.tree().live(rect).unwrap().order.clone();
+    let hi = store.tree().live(circle).unwrap().order.clone();
     let mut inserted = Vec::new();
     for _ in 0..1000 {
         let key = OrderKey::between(Some(&prev), Some(&hi)).unwrap();
-        let id = store.document().next_id();
+        let id = store.authored().next_id();
         store
             .apply(tx(
                 "insert",
@@ -599,7 +599,7 @@ fn sibling_order_survives_many_inserts_between_the_same_pair() {
         prev = key;
     }
     check(&store);
-    let kids = store.document().children(group);
+    let kids = store.tree().children(group);
     assert_eq!(kids[0], rect);
     assert_eq!(&kids[1..1001], &inserted[..]);
     assert_eq!(kids[1001], circle);
@@ -661,7 +661,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     // Summary elides a big child list to two samples, and edits to hidden
     // children do not change the rendered text.
     let mut ops = Vec::new();
-    for id in store.document().next_ids(20) {
+    for id in store.authored().next_ids(20) {
         ops.push(Op::Create {
             id,
             ty: ty("rect"),
@@ -681,7 +681,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     // Two samples: the mesh that was already there, then the first rect.
     assert_eq!(summary.matches("<mesh").count(), 1, "{summary}");
     assert_eq!(summary.matches("<rect").count(), 1, "{summary}");
-    let hidden = *store.document().children(inner).last().unwrap();
+    let hidden = *store.tree().children(inner).last().unwrap();
     store
         .apply(tx(
             "edit hidden",
@@ -696,7 +696,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     // Only the version attribute may differ.
     let strip = |s: &str| {
         s.replacen(
-            &format!("version=\"{}\"", store.document().version().0),
+            &format!("version=\"{}\"", store.authored().version().0),
             "",
             1,
         )
@@ -707,7 +707,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
     );
 
     // Relations render as child elements on their source.
-    let clip = store.document().next_id();
+    let clip = store.authored().next_id();
     store
         .apply(tx(
             "clip",
@@ -730,7 +730,7 @@ fn views_mark_elision_and_summary_is_stable_under_hidden_edits() {
         })
         .unwrap();
     assert!(v.contains("<animates to=\"#2\" prop=\"opacity\"/>"), "{v}");
-    assert_eq!(store.document().relations_to(rect).count(), 1);
+    assert_eq!(store.tree().relations_to(rect).count(), 1);
 
     // Views of tombstoned scopes are errors, not empty documents.
     store
@@ -800,7 +800,7 @@ fn ops_and_transactions_roundtrip_through_json() {
 #[test]
 fn deleting_a_subtree_with_sibling_bindings_undoes() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let (g, b, a) = (ids[0], ids[1], ids[2]);
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
@@ -820,7 +820,7 @@ fn deleting_a_subtree_with_sibling_bindings_undoes() {
         .unwrap();
     let before = live_content(&store);
     store.apply(tx("delete group", vec![Op::Delete { id: g }])).unwrap();
-    assert!(store.document().live(a).is_none());
+    assert!(store.tree().live(a).is_none());
     store.undo(0).expect("something to undo").expect("undo applies");
     assert_eq!(live_content(&store), before);
 }

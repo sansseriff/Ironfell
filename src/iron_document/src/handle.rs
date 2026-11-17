@@ -11,7 +11,7 @@
 //! This is doc 02 §8.2's "edit the underlying source if the binding is a
 //! direct reference", generalised to linear references.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::expr::{BinOp, Expr, Leaf};
 use crate::graph::{ProducerId, Reactive};
 use crate::value::{Value, ValueKind};
@@ -40,7 +40,7 @@ impl Handle {
 /// The handle for `leaf` now: roles are read at the moment of the grab. A
 /// constant a clip drives is direct: the gesture previews it, and its commit
 /// writes keys by the visible mode (timeline.md §12.2, `Store::commit_gesture`).
-pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
+pub fn handle(doc: Tree<'_>, reactive: &Reactive, leaf: Leaf) -> Handle {
     let Some(slot) = doc.leaf(leaf.node, leaf.path) else {
         // A leaf of a facet the node may have but lacks (a rect's
         // `corners`): a gesture drives it directly and its commit adds the
@@ -149,7 +149,7 @@ pub fn handle(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Handle {
 /// Replace every reference to a bound leaf with that leaf's expression, so
 /// the result reads only constants and clip-driven leaves. Bindings form a
 /// DAG (checked at apply time), so this terminates.
-fn inline(doc: &Document, reactive: &Reactive, expr: &Expr) -> Expr {
+fn inline(doc: Tree<'_>, reactive: &Reactive, expr: &Expr) -> Expr {
     let i = |e: &Expr| Box::new(inline(doc, reactive, e));
     match expr {
         Expr::Ref(l) => match reactive.expr_of(*l).or_else(|| doc.leaf(l.node, l.path).and_then(|s| s.expr())) {
@@ -238,7 +238,7 @@ pub fn linear(expr: &Expr, var: Leaf, read: &dyn Fn(Leaf) -> Option<Value>) -> O
 
 /// The leaf a target value for `leaf` would be written to, with the value.
 /// `Direct` answers the leaf itself; `Linear` inverts; `Locked` is an error.
-pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Value) -> Result<(Leaf, Value), String> {
+pub fn resolve_target(doc: Tree<'_>, reactive: &Reactive, leaf: Leaf, value: Value) -> Result<(Leaf, Value), String> {
     match handle(doc, reactive, leaf) {
         Handle::Direct => Ok((leaf, clamp_to_bounds(doc, reactive, leaf, value))),
         Handle::Linear { source, a, b } => {
@@ -271,7 +271,7 @@ pub fn resolve_target(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Va
 /// part's slices. `with` is a path of the subject (`tween.end`), or several
 /// leaves by id (`#a.tween.start #a.tween.end #b.tween.start …`).
 /// Answers the leaves and the range they stay in.
-pub fn rigid(doc: &Document, node: crate::id::NodeId) -> Option<(Vec<Leaf>, (f64, f64))> {
+pub fn rigid(doc: Tree<'_>, node: crate::id::NodeId) -> Option<(Vec<Leaf>, (f64, f64))> {
     let r = doc.relations_from(node).find(|r| r.rel == crate::document::RelKind::Projects && r.data.contains_key("with"))?;
     let text = r.data.get("with")?.as_str()?;
     let leaves: Vec<Leaf> = text
@@ -291,7 +291,7 @@ pub fn rigid(doc: &Document, node: crate::id::NodeId) -> Option<(Vec<Leaf>, (f64
 /// The number typed into words that show one: plain (`12.5`), or with a
 /// unit (`5 mW`), a plain number taking the unit the words are formatted in
 /// (`fmt(x, "mW", 2)`). In SI for a quantity, as a linear handle works.
-fn typed_number(doc: &Document, reactive: &Reactive, leaf: Leaf, text: &str) -> Option<f64> {
+fn typed_number(doc: Tree<'_>, reactive: &Reactive, leaf: Leaf, text: &str) -> Option<f64> {
     let text = text.trim();
     let unit = reactive.expr_of(leaf).or_else(|| doc.leaf(leaf.node, leaf.path).and_then(|s| s.expr())).and_then(|e| match e {
         Expr::Call(f, args) if f == "fmt" => match args.get(1) {
@@ -311,7 +311,7 @@ fn typed_number(doc: &Document, reactive: &Reactive, leaf: Leaf, text: &str) -> 
 /// (constraint-system.md §4.7): a slider's value lies between its `min` and
 /// `max`. A drag or an edit that inverts onto a bounded leaf stops at the
 /// bound, and so does everything that reads it.
-pub fn bounds(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Option<(f64, f64)> {
+pub fn bounds(doc: Tree<'_>, reactive: &Reactive, leaf: Leaf) -> Option<(f64, f64)> {
     // A tween's slice (machines.md): within its transition, its start
     // before its end, so a trim stops at the other edge.
     if leaf.path.facet == crate::facet::FacetKind::Tween {
@@ -330,7 +330,7 @@ pub fn bounds(doc: &Document, reactive: &Reactive, leaf: Leaf) -> Option<(f64, f
     Some(if lo <= hi { (lo, hi) } else { (hi, lo) })
 }
 
-fn clamp_to_bounds(doc: &Document, reactive: &Reactive, leaf: Leaf, value: Value) -> Value {
+fn clamp_to_bounds(doc: Tree<'_>, reactive: &Reactive, leaf: Leaf, value: Value) -> Value {
     match (bounds(doc, reactive, leaf), value) {
         (Some((lo, hi)), Value::Number(n)) => Value::Number(n.clamp(lo, hi)),
         (_, v) => v,

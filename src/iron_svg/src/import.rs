@@ -345,8 +345,8 @@ fn inline_singles(mut drawing: Vec<INode>, mut defs: Vec<INode>) -> (Vec<INode>,
 /// in the document's library.
 fn fragment(nodes: Vec<INode>, definitions: Vec<INode>, count: usize) -> Result<Fragment, String> {
     let mut store = Store::new();
-    let library = (!definitions.is_empty()).then(|| store.document().next_id());
-    let mut ids = store.document().next_ids(count + usize::from(library.is_some())).into_iter();
+    let library = (!definitions.is_empty()).then(|| store.authored().next_id());
+    let mut ids = store.authored().next_ids(count + usize::from(library.is_some())).into_iter();
     if library.is_some() {
         ids.next();
     }

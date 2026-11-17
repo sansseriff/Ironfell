@@ -12,7 +12,7 @@ fn ty(n: &str) -> TypeId {
 
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut n = Name::default();
@@ -31,18 +31,18 @@ fn standard_components_place_once_and_a_slider_drives_a_laser() {
     let (mut store, comp) = desk();
     for e in standard::ENTRIES {
         let u = store.place_standard(e.key, comp, [100.0, 100.0], Actor::Human).unwrap_or_else(|err| panic!("{}: {err}", e.key));
-        assert!(expand::use_entity(store.document(), u).is_some(), "{}", e.key);
+        assert!(expand::use_entity(store.tree(), u).is_some(), "{}", e.key);
         assert_eq!(store.resolved(u, "transform2d.x".parse().unwrap()), Some(Value::Number(100.0)));
     }
     // One history entry per placement; the definition comes in once.
     let entries = store.history().past().len();
     let second = store.place_standard("laser", comp, [400.0, 100.0], Actor::Human).unwrap();
     assert_eq!(store.history().past().len(), entries + 1);
-    let lasers = store.document().nodes_of_type(ty("definition")).filter(|&d| store.document().is_live(d)).filter(|&d| standard::find(store.document(), "laser") == Some(d)).count();
+    let lasers = store.tree().nodes_of_type(ty("definition")).filter(|&d| store.tree().is_live(d)).filter(|&d| standard::find(store.tree(), "laser") == Some(d)).count();
     assert_eq!(lasers, 1);
     // The slider's value (10 × 1 mW) drives the second laser's power by a
     // line; a readout of plain numbers takes it too.
-    let doc = store.document();
+    let doc = store.tree();
     let port = |u: NodeId, name: &str| {
         let e = expand::use_entity(doc, u).unwrap();
         doc.children(e).iter().copied().find(|&p| doc.get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
@@ -50,7 +50,7 @@ fn standard_components_place_once_and_a_slider_drives_a_laser() {
     let slider = doc.children(comp).iter().copied().find(|&u| doc.get::<Name>(u).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("slider")).unwrap();
     let (from, to) = (port(slider, "value"), port(second, "power"));
     let read = |l: Leaf| store.resolved(l.node, l.path);
-    let ops = author::connect(store.document(), &read, from, to).unwrap();
+    let ops = author::connect(store.tree(), &read, from, to).unwrap();
     store.apply(TransactionInput { label: "connect".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
     assert_eq!(store.resolved(to, "port.signal".parse().unwrap()), Some(Value::parse_quantity("10 mW").unwrap()));
 }
@@ -58,14 +58,14 @@ fn standard_components_place_once_and_a_slider_drives_a_laser() {
 #[test]
 fn the_library_composition_bakes_every_preview() {
     let mut store = Store::new();
-    let first = store.document().next_session_ids(1)[0];
+    let first = store.authored().next_session_ids(1)[0];
     let ops = standard::library_ops(first, OrderKey::first());
     assert!(ops.iter().all(|op| match op {
         Op::Create { facets, .. } => facets.iter().all(|f| f.field_names().into_iter().all(|n| f.get(n).is_none_or(|s| s.expr().is_none()))),
         _ => true,
     }));
     store.apply_session(ops).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let lib = composition::compositions(doc).into_iter().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(standard::LIBRARY)).unwrap();
     assert!(lib.is_session());
     assert_eq!(doc.children(lib).len(), standard::ENTRIES.len());
@@ -75,17 +75,17 @@ fn the_library_composition_bakes_every_preview() {
 #[test]
 fn the_library_recolours_its_cards_for_the_theme() {
     let mut store = Store::new();
-    let first = store.document().next_session_ids(1)[0];
+    let first = store.authored().next_session_ids(1)[0];
     store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
-    assert!(standard::library_theme_ops(store.document(), true).is_empty(), "built in the light theme's colours");
-    let dark = standard::library_theme_ops(store.document(), false);
+    assert!(standard::library_theme_ops(store.tree(), true).is_empty(), "built in the light theme's colours");
+    let dark = standard::library_theme_ops(store.tree(), false);
     // Each card's fill and edge, each label's ink, and the previews' dark
     // ink and light surfaces: the Readout's figure, the Laser's body, the
     // dial's face, rim and reading, and eleven of the Plot's baked tokens
     // (its reference lines and marks among them).
     assert_eq!(dark.len(), standard::ENTRIES.len() * 3 + 1 + 1 + 3 + 11);
     store.apply_session(dark).unwrap();
-    assert!(standard::library_theme_ops(store.document(), false).is_empty());
+    assert!(standard::library_theme_ops(store.tree(), false).is_empty());
 }
 
 /// WCAG contrast between two sRGB colours.
@@ -101,10 +101,10 @@ fn contrast(a: [f32; 4], b: [f32; 4]) -> f32 {
 #[test]
 fn the_library_previews_read_in_both_themes() {
     let mut store = Store::new();
-    let first = store.document().next_session_ids(1)[0];
+    let first = store.authored().next_session_ids(1)[0];
     store.apply_session(standard::library_ops(first, OrderKey::first())).unwrap();
     // Every colour leaf in the Library, to see the light theme come back as built.
-    let colours = |doc: &Document| -> Vec<(NodeId, Value)> {
+    let colours = |doc: Tree<'_>| -> Vec<(NodeId, Value)> {
         let mut out = Vec::new();
         for id in doc.live_nodes().map(|n| n.id) {
             for f in doc.facets_of(id) {
@@ -117,10 +117,10 @@ fn the_library_previews_read_in_both_themes() {
         }
         out
     };
-    let built = colours(store.document());
+    let built = colours(store.tree());
     for light in [false, true] {
-        store.apply_session(standard::library_theme_ops(store.document(), light)).unwrap();
-        let doc = store.document();
+        store.apply_session(standard::library_theme_ops(store.tree(), light)).unwrap();
+        let doc = store.tree();
         let lib = composition::compositions(doc).into_iter().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(standard::LIBRARY)).unwrap();
         let named = |id: NodeId| doc.get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
         let colour = |id: NodeId| match doc.get::<Fill>(id).and_then(|f| f.color.constant().cloned()) {

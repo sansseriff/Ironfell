@@ -389,7 +389,7 @@ impl Manip {
 
     /// What the release's transaction is called.
     pub fn label(&self, store: &Store) -> String {
-        let ty = |id: NodeId| store.document().live(id).map_or("node", |n| n.ty.name());
+        let ty = |id: NodeId| store.tree().live(id).map_or("node", |n| n.ty.name());
         match self {
             Manip::Drag(d) => match &d.duplicate {
                 Some(_) => format!("duplicate {}", d.label.trim_start_matches("move ")),
@@ -720,7 +720,7 @@ pub(crate) fn hand_off(
             }
             return None;
         }
-        let ty = store.document().live(id).map_or("node", |n| n.ty.name()).to_owned();
+        let ty = store.tree().live(id).map_or("node", |n| n.ty.name()).to_owned();
         return Some(Manip::Plane { handle, mapping, press: pointer.screen, ty });
     };
     if let Handle::Locked(reason) = store.handle(id, leaf("transform3d.pos")) {

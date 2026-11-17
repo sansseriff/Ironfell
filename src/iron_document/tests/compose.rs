@@ -26,7 +26,7 @@ fn comp(name: &str, dims: &str) -> Vec<facet::Facet> {
 /// and a rect and an ellipse on the bench.
 fn desk() -> (Store, [NodeId; 6]) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let k = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let mut at = Transform2d::default();
     at.x = Slot::Const(Value::Number(100.0));
@@ -78,7 +78,7 @@ fn a_component_from_shapes_is_pictured_in_two_compositions_in_one_transaction() 
     )
     .unwrap();
     assert_eq!(store.history().past().len(), before + 1, "one history entry");
-    let doc = store.document();
+    let doc = store.tree();
     let def = field(&summary, "made", 0, "definition");
     let entity = field(&summary, "placed", 0, "entity");
     assert_eq!(field(&summary, "placed", 1, "entity"), entity, "the second picture is of the same entity");
@@ -95,7 +95,7 @@ fn a_component_from_shapes_is_pictured_in_two_compositions_in_one_transaction() 
     assert_eq!(doc.get::<Name>(entity).and_then(|n| n.text.constant()).and_then(|v| v.as_str()), Some("P1"));
     // Undo takes it all back: the shapes return, nothing placed remains.
     store.undo(1).unwrap().unwrap();
-    assert!(store.document().is_live(rect) && !store.document().is_live(entity));
+    assert!(store.tree().is_live(rect) && !store.tree().is_live(entity));
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn a_standard_component_comes_in_once_and_takes_arguments() {
         &format!(r#"<place def="std:laser" in="{bench}" x="40" y="200" power="5 mW" id="$l"/><place def="std:laser" in="{overview}" args.power="{{= 2 mW * 3}}"/>"#),
     )
     .unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let (a, b) = (field(&summary, "placed", 0, "entity"), field(&summary, "placed", 1, "entity"));
     assert_eq!(field(&summary, "placed", 0, "definition"), field(&summary, "placed", 1, "definition"), "the definition is copied in once");
     assert_eq!(standard::find(doc, "laser"), Some(field(&summary, "placed", 0, "definition")));
@@ -124,9 +124,9 @@ fn refusals_say_what_to_do_instead() {
     assert!(err(&mut store, &format!(r#"<place def="std:lamp" in="{overview}"/>"#)).contains("std:laser"));
     assert!(err(&mut store, r#"<place entity="$nope" in="overview"/>"#).contains("not named by an earlier component verb"));
     // A refused edit applies nothing, even when an earlier verb was fine.
-    let version = store.document().version();
+    let version = store.authored().version();
     assert!(err(&mut store, &format!(r#"<place def="std:laser" in="{overview}"/><place def="std:laser" in="{scene}"/>"#)).starts_with("op 1 (place):"));
-    assert_eq!(store.document().version(), version);
+    assert_eq!(store.authored().version(), version);
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn nodes_and_component_verbs_are_one_transaction() {
     store.apply(TransactionInput { label: "mixed".into(), actor: Actor::Model, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
     assert_eq!(store.history().past().len(), before + 1, "one history entry");
     let def = field(&summary, "made", 0, "definition");
-    assert!(store.document().is_live(def));
+    assert!(store.tree().is_live(def));
 }
 
 /// Component verbs as an edit (edit.rs): its ops and its summary lines.

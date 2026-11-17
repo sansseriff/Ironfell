@@ -122,7 +122,7 @@ pub const NOT_COMPARED: &[(&str, &str)] = &[
 ];
 
 pub fn snapshot(s: &StoreCore) -> Snapshot {
-    let doc = s.document();
+    let doc = s.tree();
     let mut nodes: Vec<(Node, Vec<Facet>)> = doc.nodes().map(|n| (n.clone(), doc.facets_of(n.id).cloned().collect())).collect();
     nodes.sort_by_key(|(n, _)| n.id);
     let relations: Vec<Relation> = doc.relations().cloned().collect();

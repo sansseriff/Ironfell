@@ -10,8 +10,8 @@
 //! agree: what only needs the shape reads [`geometry`], whichever the form;
 //! what edits points needs their nodes, [`contours`] of an expanded path.
 
+use crate::Tree;
 use crate::facet::{Contour as ContourShape, Handles, LeafStruct, PathShape, Transform2d};
-use crate::document::Document;
 use crate::geometry::{Geometry, PackedContour};
 use crate::id::NodeId;
 use crate::op::Op;
@@ -39,13 +39,13 @@ pub enum FillRule {
     EvenOdd,
 }
 
-fn of_type(doc: &Document, id: NodeId, ty: &str) -> bool {
+fn of_type(doc: Tree<'_>, id: NodeId, ty: &str) -> bool {
     doc.live(id).is_some_and(|n| n.ty.name() == ty)
 }
 
 /// `path`'s authored packed geometry, if it is packed (a non-empty
 /// `path.d`): what decides its form.
-pub fn packed(doc: &Document, path: NodeId) -> Option<&Arc<Geometry>> {
+pub fn packed(doc: Tree<'_>, path: NodeId) -> Option<&Arc<Geometry>> {
     doc.get::<PathShape>(path).and_then(|p| p.d.constant()).and_then(Value::as_geometry).filter(|g| !g.is_empty())
 }
 
@@ -53,7 +53,7 @@ pub fn packed(doc: &Document, path: NodeId) -> Option<&Arc<Geometry>> {
 /// data, plans/specs/plot.md §2). A third form beside packed and expanded:
 /// drawn from its resolved value, never point-edited, and it has no
 /// `contour` children.
-pub fn bound(doc: &Document, path: NodeId) -> bool {
+pub fn bound(doc: Tree<'_>, path: NodeId) -> bool {
     doc.get::<PathShape>(path).is_some_and(|p| p.d.expr().is_some())
 }
 
@@ -75,7 +75,7 @@ pub fn geometry(store: &StoreCore, path: NodeId) -> Arc<Geometry> {
 /// `contour` per packed contour with a `point` per anchor. Empty when the
 /// path is not packed.
 pub fn expand_points(store: &StoreCore, path: NodeId) -> Vec<Op> {
-    let doc = store.document();
+    let doc = store.tree();
     let Some(g) = packed(doc, path) else { return Vec::new() };
     let runs: Vec<(Vec<Anchor>, bool)> = g.contours().iter().map(|c| (c.anchors.clone(), c.closed)).collect();
     let mut ids = doc.next_ids(ids_needed(&runs)).into_iter();
@@ -87,7 +87,7 @@ pub fn expand_points(store: &StoreCore, path: NodeId) -> Vec<Op> {
 /// `path`'s contours in order, each with its points: an expanded path's,
 /// none for a packed one (see [`expand_points`]).
 pub fn contours(store: &StoreCore, path: NodeId) -> Vec<Contour> {
-    let doc = store.document();
+    let doc = store.tree();
     let num = |n: NodeId, leaf: &str| store.resolved(n, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).unwrap_or(0.0);
     doc.children(path)
         .iter()

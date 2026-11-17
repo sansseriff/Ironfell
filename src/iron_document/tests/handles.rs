@@ -47,7 +47,7 @@ struct Scene {
 
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (slider, bar, v, rect) = (ids[0], ids[1], ids[2], ids[3]);
     let mut sl = Slider::default();
     sl.value = num(0.4);
@@ -94,7 +94,7 @@ fn x_equals_two_v_plus_ten_sets_v() {
     store.preview_target(rect, path("transform2d.x"), Value::Number(110.0)).unwrap();
     assert_eq!(resolved(&store, v, "slider.value"), 50.0);
     assert_eq!(resolved(&store, rect, "transform2d.x"), 110.0);
-    assert_eq!(store.document().leaf(v, path("slider.value")).unwrap().constant(), Some(&Value::Number(5.0)));
+    assert_eq!(store.tree().leaf(v, path("slider.value")).unwrap().constant(), Some(&Value::Number(5.0)));
     let changed: Vec<Leaf> = store.drain_changes().into_iter().map(|c| c.leaf).collect();
     assert!(changed.contains(&leaf(v, "slider.value")) && changed.contains(&leaf(rect, "transform2d.x")), "{changed:?}");
 
@@ -104,7 +104,7 @@ fn x_equals_two_v_plus_ten_sets_v() {
     assert_eq!(last.ops.len(), 1, "{:?}", last.ops);
     assert!(matches!(&last.ops[0], Op::Set { id, path: p, slot } if *id == v && *p == path("slider.value") && slot.constant() == Some(&Value::Number(50.0))));
     assert_eq!(applied.version, Version(2));
-    assert!(store.document().leaf(rect, path("transform2d.x")).unwrap().expr().is_some(), "the binding stays");
+    assert!(store.tree().leaf(rect, path("transform2d.x")).unwrap().expr().is_some(), "the binding stays");
     store.undo(2).unwrap().unwrap();
     assert_eq!(resolved(&store, rect, "transform2d.x"), 20.0);
 }
@@ -206,9 +206,9 @@ fn everything_else_is_locked_with_a_reason() {
 #[test]
 fn an_animated_constant_is_direct_and_what_binds_it_is_locked() {
     let Scene { mut store, rect, v, .. } = scene();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (timeline, clip) = (ids[0], ids[1]);
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let mut timing = Timing::default();
     timing.start = num(0.0);
     let mut c = Clip::default();

@@ -15,6 +15,7 @@
 //! and the standard components (`std/*.xml`), so a component is data the
 //! engine reads, not code: anything one does, an agent's edit can do too.
 
+use crate::Tree;
 use crate::expr::Expr;
 use crate::facet::{Facet, FacetKind};
 use crate::id::NodeId;
@@ -51,7 +52,7 @@ pub(crate) struct Names<'a> {
     /// `p` (from a `<place id="$p">`) to what it placed.
     pub(crate) places: BTreeMap<String, crate::compose::Named>,
     /// The document, once the places exist in it.
-    pub(crate) doc: Option<&'a crate::document::Document>,
+    pub(crate) doc: Option<crate::Tree<'a>>,
 }
 
 impl Names<'_> {
@@ -231,7 +232,7 @@ pub(crate) fn facets(el: &El, ty: TypeId, names: &Names) -> Result<Vec<Facet>, S
 
 /// The port `name` of the instance `node` stands for (an entity, or a
 /// `use` picturing one), as the expanded node holding its signal.
-pub(crate) fn instance_port(doc: &crate::document::Document, node: NodeId, name: &str) -> Option<NodeId> {
+pub(crate) fn instance_port(doc: Tree<'_>, node: NodeId, name: &str) -> Option<NodeId> {
     let entity = match doc.live(node)?.ty.name() {
         "use" => crate::composition::figure_of(doc, node).map(|(_, e)| e)?,
         _ => node,

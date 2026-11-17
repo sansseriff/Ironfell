@@ -5,11 +5,12 @@
 //! joins and caps; a shadow is an `feDropShadow` on a wrapper `<g>` in the
 //! shape's parent space, which is where Iron offsets it.
 
+use iron_document::Tree;
 use crate::{exact, num, Cut, Cuts};
 use iron_document::composition::{self, Dims};
 use iron_document::contour;
 use iron_document::shape;
-use iron_document::{Affine2, FacetKind, Document, NodeId, Store, Value};
+use iron_document::{Affine2, FacetKind, NodeId, Store, Value};
 use kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as _, Vec2};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +35,7 @@ const MAX_DEPTH: u32 = 8;
 
 /// Export `scope` from `store` as SVG text.
 pub fn export(store: &Store, scope: &Scope) -> Result<Export, String> {
-    let doc = store.document();
+    let doc = store.tree();
     let mut w = Writer { store, doc, body: String::new(), defs: Vec::new(), ids: BTreeSet::new(), unnamed: BTreeMap::new(), bounds: None, cuts: Cuts::default(), filters: 0, clips: 0 };
     match scope {
         Scope::Composition(c) => {
@@ -81,7 +82,7 @@ pub fn export(store: &Store, scope: &Scope) -> Result<Export, String> {
 }
 
 /// Every live node in preorder: painter order across the document.
-fn preorder(doc: &Document) -> BTreeMap<NodeId, usize> {
+fn preorder(doc: Tree<'_>) -> BTreeMap<NodeId, usize> {
     let mut out = BTreeMap::new();
     let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
@@ -93,7 +94,7 @@ fn preorder(doc: &Document) -> BTreeMap<NodeId, usize> {
 
 struct Writer<'a> {
     store: &'a Store,
-    doc: &'a Document,
+    doc: Tree<'a>,
     body: String,
     /// Filters and clip paths, each a finished element.
     defs: Vec<String>,

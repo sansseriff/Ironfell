@@ -10,7 +10,7 @@
 //! generic directives (`:e[words]{#id}`, `:val{#id.facet.field}`,
 //! `::view{show=name}`), the exchange form for import, export and the model.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::facet::{Block, Facet, LeafStruct, Name, RichText};
 use crate::id::NodeId;
 use crate::op::Op;
@@ -114,13 +114,13 @@ fn str_of(slot: &Slot) -> String {
 }
 
 /// Every live narrative root, in document order.
-pub fn narratives(doc: &Document) -> Vec<NodeId> {
+pub fn narratives(doc: Tree<'_>) -> Vec<NodeId> {
     let t = ty("narrative");
     doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| n.ty == t)).collect()
 }
 
 /// A narrative by id (`#N`) or by name.
-pub fn find(doc: &Document, source: &str) -> Option<NodeId> {
+pub fn find(doc: Tree<'_>, source: &str) -> Option<NodeId> {
     let all = narratives(doc);
     if let Ok(id) = source.parse::<NodeId>()
         && all.contains(&id)
@@ -130,12 +130,12 @@ pub fn find(doc: &Document, source: &str) -> Option<NodeId> {
     all.into_iter().find(|&n| name(doc, n) == source)
 }
 
-pub fn name(doc: &Document, id: NodeId) -> String {
+pub fn name(doc: Tree<'_>, id: NodeId) -> String {
     doc.get::<Name>(id).map(|n| str_of(&n.text)).unwrap_or_default()
 }
 
 /// A block's content; `None` for a node that is not a live block.
-pub fn content(doc: &Document, id: NodeId) -> Option<BlockContent> {
+pub fn content(doc: Tree<'_>, id: NodeId) -> Option<BlockContent> {
     let node = doc.live(id)?;
     if node.ty != ty("block") {
         return None;
@@ -155,13 +155,13 @@ pub fn content(doc: &Document, id: NodeId) -> Option<BlockContent> {
 }
 
 /// A narrative's blocks in order.
-pub fn blocks(doc: &Document, narrative: NodeId) -> Vec<(NodeId, BlockContent)> {
+pub fn blocks(doc: Tree<'_>, narrative: NodeId) -> Vec<(NodeId, BlockContent)> {
     doc.children(narrative).iter().filter_map(|&b| content(doc, b).map(|c| (b, c))).collect()
 }
 
 /// The ops creating a narrative root named `name` holding `blocks`, with
 /// ids from `first` on (the root first). Ordered after `order`.
-pub fn create_ops(doc: &Document, name: &str, blocks: &[BlockContent]) -> (NodeId, Vec<Op>) {
+pub fn create_ops(doc: Tree<'_>, name: &str, blocks: &[BlockContent]) -> (NodeId, Vec<Op>) {
     let ids = doc.next_ids(blocks.len() + 1);
     let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
     let mut nm = Name::default();
@@ -210,7 +210,7 @@ pub struct Planned {
     pub minted: BTreeMap<String, NodeId>,
 }
 
-pub fn plan(doc: &Document, narrative: NodeId, edits: &[Edit]) -> Result<Planned, String> {
+pub fn plan(doc: Tree<'_>, narrative: NodeId, edits: &[Edit]) -> Result<Planned, String> {
     if !narratives(doc).contains(&narrative) {
         return Err(format!("{narrative} is not a live narrative"));
     }
@@ -346,7 +346,7 @@ pub fn target_node(target: &str) -> Option<NodeId> {
 }
 
 /// Every mention and value in every narrative (the span index, derived).
-pub fn references(doc: &Document) -> Vec<Reference> {
+pub fn references(doc: Tree<'_>) -> Vec<Reference> {
     let mut out = Vec::new();
     for n in narratives(doc) {
         for (b, c) in blocks(doc, n) {
@@ -361,7 +361,7 @@ pub fn references(doc: &Document) -> Vec<Reference> {
 }
 
 /// Which blocks refer to `target`.
-pub fn references_to(doc: &Document, target: NodeId) -> Vec<Reference> {
+pub fn references_to(doc: Tree<'_>, target: NodeId) -> Vec<Reference> {
     references(doc).into_iter().filter(|r| r.target == target).collect()
 }
 
@@ -381,7 +381,7 @@ pub fn value_expr(m: &Mark) -> Option<String> {
 
 /// A narrative as markdown: one block per paragraph. With `ids`, each
 /// block's first line starts `[#B] ` (the model's view).
-pub fn to_markdown(doc: &Document, narrative: NodeId, ids: bool) -> String {
+pub fn to_markdown(doc: Tree<'_>, narrative: NodeId, ids: bool) -> String {
     let mut out = String::new();
     for (id, c) in blocks(doc, narrative) {
         if !out.is_empty() {

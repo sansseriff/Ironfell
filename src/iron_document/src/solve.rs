@@ -9,9 +9,9 @@
 //! Drivers (a transaction's explicit `Set`, or a finger during a drag) are
 //! strong terms; the implicit least-change rows keep the rest still.
 
+use crate::Tree;
 use crate::facet::{FacetKind, LeafPath};
 use crate::constraint::{self, ConstraintInfo};
-use crate::document::Document;
 use crate::expr::Leaf;
 use crate::geom::{self, Affine2};
 use crate::id::NodeId;
@@ -118,7 +118,7 @@ fn num(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId, path: LeafPath, defau
 }
 
 /// Whether a leaf may move: a constant, not bound, not clip-driven.
-fn is_free(doc: &Document, reactive: &crate::graph::Reactive, leaf: Leaf) -> bool {
+fn is_free(doc: Tree<'_>, reactive: &crate::graph::Reactive, leaf: Leaf) -> bool {
     doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
         && !reactive.is_bound(leaf)
         && !reactive.is_driven(leaf)
@@ -127,7 +127,7 @@ fn is_free(doc: &Document, reactive: &crate::graph::Reactive, leaf: Leaf) -> boo
 /// Group the document's constraints into clusters. `Err` when a constraint
 /// is malformed (callers validate first) or when bindings and clusters form
 /// a cycle.
-pub fn clusters(doc: &Document, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Result<Clusters, String> {
+pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Result<Clusters, String> {
     let read = |l: Leaf| reactive.read(doc, l);
     let all: Vec<ConstraintInfo> = constraint::all(doc, &read)?
         .into_iter()
@@ -290,7 +290,7 @@ enum Tag {
 
 /// Builds terms whose closures index the term's own variable list.
 struct Builder<'d> {
-    doc: &'d Document,
+    doc: Tree<'d>,
     read: &'d dyn Fn(Leaf) -> Option<Value>,
     var_index: BTreeMap<Leaf, usize>,
 }
@@ -343,7 +343,7 @@ fn half_diagonal(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId) -> f64 {
 /// The solver's problem for one cluster, with a tag per term. `exclude`
 /// leaves one constraint out, for the culprit search.
 fn build_problem<'a>(
-    doc: &'a Document,
+    doc: Tree<'a>,
     read: &'a dyn Fn(Leaf) -> Option<Value>,
     cluster: &Cluster,
     drivers: &[Driver],
@@ -455,7 +455,7 @@ const OPTIONS: Options = Options { max_iterations: 50, tolerance: 1e-9, weights:
 /// is not one of the cluster's variables are ignored; fingers on nodes
 /// outside it too.
 pub fn solve_cluster(
-    doc: &Document,
+    doc: Tree<'_>,
     read: &dyn Fn(Leaf) -> Option<Value>,
     cluster: &Cluster,
     drivers: &[Driver],

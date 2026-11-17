@@ -41,7 +41,7 @@ pub fn inside_clips(store: &StoreCore, id: NodeId, point: [f64; 2]) -> bool {
             let Some(inv) = store.world_affine(id).inverse() else { return false; };
             if !frame.contains(inv.apply(point)) { return false; }
         }
-        at = store.document().live(id).and_then(|n| n.parent);
+        at = store.tree().live(id).and_then(|n| n.parent);
     }
     true
 }

@@ -16,7 +16,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 #[ignore]
 fn value_keyed_items_grow_the_registries() {
     let mut store = Store::new();
-    let comp = store.document().next_id();
+    let comp = store.authored().next_id();
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -26,7 +26,7 @@ fn value_keyed_items_grow_the_registries() {
     // Eight ticks keyed by their value, as tests/reactivity.rs's
     // `ticks_keyed_by_value_keep_the_labels_that_stay`.
     let markup = r#"<let id="$lo" value="0"/><group id="$g" repeat.each="{= range($lo, $lo + 30, 4)}" repeat.key="{= t => t}"><text name="tick" x="{= $g.repeat.item}" y="0" content="{= fmt($g.repeat.item)}"/></group>"#;
-    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.document().next_id()).unwrap();
+    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.authored().next_id()).unwrap();
     store.apply(tx("draw", built.ops)).unwrap();
     let lo = built.named["lo"];
     let before = id::registry_sizes();

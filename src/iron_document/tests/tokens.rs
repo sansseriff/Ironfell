@@ -25,7 +25,7 @@ fn named(t: &str) -> facet::Facet {
 /// A composition with one rect; answers (store, rect).
 fn bench() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     store
@@ -55,15 +55,15 @@ fn close(a: [f32; 4], hex: &str) -> bool {
 #[test]
 fn a_token_follows_the_theme_and_the_built_in_palette_joins_on_first_use() {
     let (mut store, r) = bench();
-    assert!(palette::tokens(store.document()).is_empty());
+    assert!(palette::tokens(store.tree()).is_empty());
     store.apply(tx("token", vec![Op::Set { id: r, path: path("fill.color"), slot: Slot::Bound(Expr::parse("@series-2").unwrap()) }])).unwrap();
-    assert!(palette::tokens(store.document()).contains_key("series-8"), "the whole built-in theme joined");
+    assert!(palette::tokens(store.tree()).contains_key("series-8"), "the whole built-in theme joined");
     assert!(close(fill(&store, r), "#eb6834"), "{:?}", fill(&store, r));
     store.set_theme(true);
     assert!(close(fill(&store, r), "#d95926"), "dark");
     store.set_theme(false);
     // Editing the token recolours what uses it.
-    let t = palette::tokens(store.document())["series-2"];
+    let t = palette::tokens(store.tree())["series-2"];
     store.apply(tx("recolour", vec![Op::Set { id: t, path: path("token.light"), slot: Slot::Const(Value::Color([0.0, 0.0, 1.0, 1.0])) }])).unwrap();
     assert_eq!(fill(&store, r), [0.0, 0.0, 1.0, 1.0]);
     // Formulas print the token by name; a save round-trips.
@@ -74,7 +74,7 @@ fn a_token_follows_the_theme_and_the_built_in_palette_joins_on_first_use() {
     // Undo takes the theme away with the first use.
     store.undo(0).unwrap().unwrap();
     store.undo(0).unwrap().unwrap();
-    assert!(palette::tokens(store.document()).is_empty());
+    assert!(palette::tokens(store.tree()).is_empty());
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn an_unknown_token_is_a_binding_error() {
     store.apply(tx("token", vec![Op::Set { id: r, path: path("fill.color"), slot: Slot::Bound(Expr::parse("@nope").unwrap()) }])).unwrap();
     let errs: Vec<String> = store.reactive().errors.values().cloned().collect();
     assert!(errs.iter().any(|e| e.contains("@nope")), "{errs:?}");
-    assert!(palette::tokens(store.document()).is_empty(), "no theme for a name it does not have");
+    assert!(palette::tokens(store.tree()).is_empty(), "no theme for a name it does not have");
 }
 
 #[test]

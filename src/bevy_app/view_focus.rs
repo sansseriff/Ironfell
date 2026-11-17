@@ -180,7 +180,7 @@ pub fn view_focus_system(
     mut focus: ResMut<ViewFocus>,
     events: Res<HostEvents>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let stamp = Stamp {
         version: doc.version().0,
         selected: sel.selected.clone(),

@@ -26,7 +26,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 /// A 2D composition and a model root.
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     store
@@ -56,7 +56,7 @@ fn place(store: &mut Store, attrs: &str) -> (NodeId, NodeId) {
 
 /// The plot's part named `name`.
 fn part(store: &Store, u: NodeId, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.descendants(u).into_iter().find(|&n| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no part {name}"))
 }
 
@@ -68,7 +68,7 @@ fn errors(store: &Store, e: NodeId, u: NodeId) -> Vec<String> {
 /// The texts of the copies of the plot's tick label `name` (a repeat's
 /// copies, `#use/labels/~k/label`), in order.
 fn labels(store: &Store, u: NodeId, name: &str) -> Vec<String> {
-    let doc = store.document();
+    let doc = store.tree();
     let mut copies: Vec<(String, NodeId)> = doc
         .descendants(u)
         .into_iter()
@@ -125,7 +125,7 @@ fn a_function_is_sampled_at_the_plot_s_width_and_read_at_the_cursor() {
     // 360 px wide, less the margins, at one sample per 2 px.
     assert_eq!(anchors(&store, part(&store, u, "series 1")), 145);
     let port = |name: &str| {
-        let doc = store.document();
+        let doc = store.tree();
         let p = doc.children(e).iter().copied().find(|&c| doc.get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap();
         store.resolved(p, path("port.signal")).unwrap()
     };
@@ -234,7 +234,7 @@ fn the_plot_follows_the_theme_and_styles_each_series() {
     let (mut store, _) = desk();
     let (e, u) = place(&mut store, r#"ys2="{= range(0, 1, 41)}" style2="scatter""#);
     assert!(errors(&store, e, u).is_empty(), "{:#?}", errors(&store, e, u));
-    assert!(palette::tokens(store.document()).contains_key("series-1"));
+    assert!(palette::tokens(store.tree()).contains_key("series-1"));
     let colour = |s: &Store, part_name: &str, leaf: &str| s.resolved(part(s, u, part_name), path(leaf));
     let light = (colour(&store, "frame", "fill.color"), colour(&store, "series 1", "stroke.color"));
     store.set_theme(true);
@@ -262,7 +262,7 @@ fn marks_label_points_and_reference_lines_in_data_coordinates() {
     let dash = store.resolved(part(&store, u, "series 1"), path("stroke.dash")).unwrap();
     assert_eq!(dash.as_str(), Some("7 5"));
     // The reference line at 20 is in view: the y range reaches it.
-    let y_hi = store.resolved(store.document().children(e).iter().copied().find(|&p| store.document().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("y_hi")).unwrap(), path("port.signal")).unwrap();
+    let y_hi = store.resolved(store.tree().children(e).iter().copied().find(|&p| store.tree().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("y_hi")).unwrap(), path("port.signal")).unwrap();
     assert!(y_hi.as_f64().unwrap() >= 20.0, "{y_hi:?}");
     assert_eq!(labels(&store, u, "mark label"), vec!["peak", "next"]);
 }

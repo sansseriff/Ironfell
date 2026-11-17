@@ -19,6 +19,7 @@
 //! Gestures this tool does not draw a box for keep their own paths in
 //! `interaction`: dragging meshes in 3D, content on planes in 3D, sliders.
 
+use iron_document::Tree;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
@@ -163,7 +164,7 @@ const INSTANCE_VIOLET: [f32; 4] = [0.66, 0.55, 1.0, 1.0];
 
 /// Whether `id` is a component main (`Some(true)`) or an instance's picture
 /// (`Some(false)`), with the name its chip shows.
-fn component_of(doc: &iron_document::Document, id: NodeId) -> Option<(bool, String)> {
+fn component_of(doc: Tree<'_>, id: NodeId) -> Option<(bool, String)> {
     if doc.live(id).map(|n| n.ty.name()) != Some("use") {
         return None;
     }
@@ -177,7 +178,7 @@ fn component_of(doc: &iron_document::Document, id: NodeId) -> Option<(bool, Stri
     Some((false, name(entity).or_else(|| name(id)).or_else(|| name(def)).unwrap_or_else(|| "component".into())))
 }
 
-fn component_tint(doc: &iron_document::Document, id: NodeId) -> Option<peniko::Color> {
+fn component_tint(doc: Tree<'_>, id: NodeId) -> Option<peniko::Color> {
     component_of(doc, id).map(|(main, _)| peniko::Color::new(if main { MAIN_VIOLET } else { INSTANCE_VIOLET }))
 }
 
@@ -318,7 +319,7 @@ struct GeometryStamp {
 
 impl GeometryStamp {
     fn new(store: &Store, revision: u64) -> Self {
-        Self { version: store.document().version(), resolved: revision, time: store.time().to_bits() }
+        Self { version: store.authored().version(), resolved: revision, time: store.time().to_bits() }
     }
 }
 
@@ -358,7 +359,7 @@ impl SelectionGeometryCache {
                 _ => frames.iter().map(|f| f.transform_rect_bbox(Rect::new(0.0, 0.0, 1.0, 1.0)))
                     .reduce(|a, b| a.union(b)).map(unit),
             };
-            let version = geo.store.document().version();
+            let version = geo.store.authored().version();
             let resizable = match self.resizable.get(panel) {
                 Some((v, reaches, known)) if *v == version && reaches.len() == items.len() && reaches.iter().zip(items).all(|(a, b)| a == *b) => *known,
                 _ => {
@@ -1103,8 +1104,8 @@ impl Geo<'_> {
         self.contexts().get(chain, chain.len() - 1, Field::EDIT)
     }
 
-    pub(crate) fn doc(&self) -> &iron_document::Document {
-        self.store.document()
+    pub(crate) fn doc(&self) -> iron_document::Tree<'_> {
+        self.store.tree()
     }
 
     fn num(&self, id: NodeId, path: &str) -> Option<f64> {
@@ -1656,7 +1657,7 @@ fn selectable(cx: &Resolver, chain: &[NodeId]) -> bool {
 
 /// Where `id` shows in a 2D panel, for a selection made elsewhere: in a
 /// panel showing its composition, or through embeds of it.
-fn find_reach(doc: &iron_document::Document, views: &PanelViews, id: NodeId) -> Option<Reach> {
+fn find_reach(doc: Tree<'_>, views: &PanelViews, id: NodeId) -> Option<Reach> {
     let comp = composition::composition_of(doc, id);
     let lineage = nest::lineage(doc, id);
     let views2d = || views.0.iter().filter(|v| v.dims == Dims::Two);
@@ -1664,7 +1665,7 @@ fn find_reach(doc: &iron_document::Document, views: &PanelViews, id: NodeId) -> 
         return Some(Reach { panel: v.panel.clone(), chain: lineage });
     }
     let comp = comp?;
-    fn search(doc: &iron_document::Document, roots: &[NodeId], prefix: &[NodeId], comp: NodeId, depth: u32) -> Option<Vec<NodeId>> {
+    fn search(doc: Tree<'_>, roots: &[NodeId], prefix: &[NodeId], comp: NodeId, depth: u32) -> Option<Vec<NodeId>> {
         for &n in roots {
             let mut chain = prefix.to_vec();
             chain.push(n);
@@ -1696,8 +1697,8 @@ fn find_reach(doc: &iron_document::Document, views: &PanelViews, id: NodeId) -> 
 /// Every chain by which `id` shows in `view`: directly, when the panel
 /// shows its composition, and through each 2D embed of that composition
 /// the panel shows, recursively. `embeds` is every embed in the document.
-fn occurrences(doc: &iron_document::Document, view: &PanelView, embeds: &[NodeId], id: NodeId) -> Vec<Vec<NodeId>> {
-    fn prefixes(doc: &iron_document::Document, view: &PanelView, embeds: &[NodeId], comp: Option<NodeId>, depth: u32) -> Vec<Vec<NodeId>> {
+fn occurrences(doc: Tree<'_>, view: &PanelView, embeds: &[NodeId], id: NodeId) -> Vec<Vec<NodeId>> {
+    fn prefixes(doc: Tree<'_>, view: &PanelView, embeds: &[NodeId], comp: Option<NodeId>, depth: u32) -> Vec<Vec<NodeId>> {
         let mut out = Vec::new();
         if view.shows(comp) {
             out.push(Vec::new());
@@ -1906,7 +1907,7 @@ fn snap_session(geo: &Geo, view: &PanelView, mine: &[&Reach], k: f64) -> Option<
 /// they are all meshes seen through one 3D camera (a 3D panel's, or a 3D
 /// embed's in a 2D view); that camera, and where the gizmo may be hovered.
 fn gizmo_target(
-    doc: &iron_document::Document,
+    doc: Tree<'_>,
     reaches: &[Reach],
     views: &PanelViews,
     panel_cams: &Query<(Entity, &crate::bevy_app::scene3d::PanelCamera)>,
@@ -1939,7 +1940,7 @@ fn gizmo_target(
 }
 
 /// Selected nodes no other selected node contains.
-fn outermost(doc: &iron_document::Document, selected: &[NodeId]) -> Vec<NodeId> {
+fn outermost(doc: Tree<'_>, selected: &[NodeId]) -> Vec<NodeId> {
     selected.iter().copied().filter(|&id| !selected.iter().any(|&o| o != id && doc.is_ancestor(o, id))).collect()
 }
 
@@ -2001,7 +2002,7 @@ fn paste_placement(geo: &Geo, hits: &crate::PointerHits, views: &PanelViews, rea
 /// A gesture's label when the nodes stand for clips (timeline segments
 /// `projects` them, timeline.md §6): "retime slide", "trim clips". `None`
 /// for ordinary nodes.
-fn projected_label(doc: &iron_document::Document, ids: &[NodeId], verb: &str) -> Option<String> {
+fn projected_label(doc: Tree<'_>, ids: &[NodeId], verb: &str) -> Option<String> {
     let subjects: Vec<NodeId> = ids.iter().filter_map(|&id| doc.relations_from(id).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to)).collect();
     let name = |id: NodeId| doc.get::<iron_document::facet::Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
     let is_key = |id: NodeId| doc.live(id).is_some_and(|n| n.ty.name() == "key");
@@ -2018,7 +2019,7 @@ fn projected_label(doc: &iron_document::Document, ids: &[NodeId], verb: &str) ->
     }
 }
 
-fn type_label(doc: &iron_document::Document, nodes: &[NodeId]) -> String {
+fn type_label(doc: Tree<'_>, nodes: &[NodeId]) -> String {
     match nodes {
         [one] => doc.live(*one).map(|n| n.ty.name().to_owned()).unwrap_or_else(|| "node".into()),
         many => format!("{} nodes", many.len()),
@@ -2027,7 +2028,7 @@ fn type_label(doc: &iron_document::Document, nodes: &[NodeId]) -> String {
 
 /// The container a chain's node sits in and its siblings there, with the
 /// chain prefix that reaches them.
-fn siblings(doc: &iron_document::Document, views: &PanelViews, r: &Reach) -> (Vec<NodeId>, Vec<NodeId>) {
+fn siblings(doc: Tree<'_>, views: &PanelViews, r: &Reach) -> (Vec<NodeId>, Vec<NodeId>) {
     let prefix = r.chain[..r.chain.len() - 1].to_vec();
     let roots = match prefix.last() {
         Some(&c) if nest::is_embed(doc, c) => composition::embedded(doc, c).map(|s| doc.children(s).to_vec()).unwrap_or_default(),
@@ -2179,7 +2180,7 @@ pub fn select_tool_system(
     let ToolDoc { mut store, mut gestures, mut pending, mut history, map, spatial, drawables, mut view_cameras, keyboard, geometry_revision, mut geometry_cache } = docp;
     // What the last paste or duplicate made becomes the selection once it
     // exists (its reach is found below, like any selection made elsewhere).
-    if !tool.select_when_live.is_empty() && tool.select_when_live.iter().all(|&id| store.0.document().is_live(id)) {
+    if !tool.select_when_live.is_empty() && tool.select_when_live.iter().all(|&id| store.0.tree().is_live(id)) {
         let ids = std::mem::take(&mut tool.select_when_live);
         tool.reach.retain(|id, _| ids.contains(id));
         sel.selected = ids;
@@ -2189,7 +2190,7 @@ pub fn select_tool_system(
     let k = dpr.0;
     // Keep a reach for every selected node, dropping the rest.
     {
-        let doc = store.0.document();
+        let doc = store.0.tree();
         tool.reach.retain(|id, r| sel.selected.contains(id) && r.chain.iter().all(|&n| doc.live(n).is_some()));
         for &id in &sel.selected {
             if !tool.reach.contains_key(&id)
@@ -2238,7 +2239,7 @@ pub fn select_tool_system(
             } else { iron_document::author::create_control(&store.0, &ids, None).map(|_| ()) };
             match checked {
                 Ok(()) if reaches.first().and_then(|r| views.get(&r.panel)).is_some_and(|v| v.dims == Dims::Two) => {
-                    tool.placement = Some(PivotPlacement { reaches, relocate, version: store.0.document().version() });
+                    tool.placement = Some(PivotPlacement { reaches, relocate, version: store.0.authored().version() });
                     *edit = PathEdit::default();
                     events.push(crate::host_events::EngineEvent::ControlState { placing: if relocate { "pivot" } else { "create" }.into(), visible: !tool.controls_hidden });
                 }
@@ -2287,7 +2288,7 @@ pub fn select_tool_system(
             }
             continue;
         }
-        let doc = store.0.document();
+        let doc = store.0.tree();
         // Inside a container that navigates (`keys.nav`: a stack's list, a
         // table's grid; ARIA's composites, affordances.md §5.7), arrows, Tab
         // and Enter move among its items; elsewhere they keep their
@@ -2547,7 +2548,7 @@ pub fn select_tool_system(
             // A spreadsheet's cells (layout-and-tables.md §5.1): into the
             // selected table from the selected cell, or a new table.
             let rows = iron_document::table::from_tsv(&text);
-            if let Some((t, n)) = sel.selected.iter().find_map(|&n| iron_document::table::table_of(store.0.document(), n).map(|t| (t, n))) {
+            if let Some((t, n)) = sel.selected.iter().find_map(|&n| iron_document::table::table_of(store.0.tree(), n).map(|t| (t, n))) {
                 match iron_document::table::paste_ops(&store.0, t, (n != t).then_some(n), &rows) {
                     Ok(ops) => pending.0.push(TransactionInput { label: "paste into table".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }),
                     Err(e) => warn!("paste into table: {e}"),
@@ -2605,7 +2606,7 @@ pub fn select_tool_system(
                 for note in pasted.notes.iter().chain(&frag.dropped) {
                     info!("{verb}: {note}");
                 }
-                let label = if verb == "paste" { format!("paste {}", type_label(&frag.doc, &frag.roots)) } else { verb.to_owned() };
+                let label = if verb == "paste" { format!("paste {}", type_label(Tree::over(&frag.doc), &frag.roots)) } else { verb.to_owned() };
                 pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false });
                 tool.select_when_live = pasted.roots;
             }
@@ -2685,7 +2686,7 @@ pub fn select_tool_system(
 
     if let Some(p) = &tool.placement {
         let ids: Vec<_> = p.reaches.iter().map(Reach::node).collect();
-        if ids != sel.selected || p.version != store.0.document().version() || *active != ActiveTool::Select || views.get(&p.reaches[0].panel).is_none() {
+        if ids != sel.selected || p.version != store.0.authored().version() || *active != ActiveTool::Select || views.get(&p.reaches[0].panel).is_none() {
             tool.placement = None;
             tool.pivot_preview = None;
             tool.pivot_guides.clear();
@@ -2750,7 +2751,7 @@ pub fn select_tool_system(
     // handles is a gizmo edit.
     {
         let reaches = selected_reaches(&sel, tool);
-        let want = gizmo_target(store.0.document(), &reaches, &views, &panel_cams, &embed_cams, &embed_views);
+        let want = gizmo_target(store.0.tree(), &reaches, &views, &panel_cams, &embed_cams, &embed_views);
         let editing = matches!(tool.gesture, Gesture::Edit(Manip::Gizmo { .. }));
         match want {
             Some((panel, camera, targets, clip)) if *active == ActiveTool::Select => {
@@ -3180,7 +3181,7 @@ pub fn select_tool_system(
                 // Its context says entering opens it: the shell opens what
                 // it stands for (a timeline band, its transition).
                 tool.last_click = None;
-                let doc = store.0.document();
+                let doc = store.0.tree();
                 let name = doc.get::<iron_document::facet::Name>(chain[k]).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("").to_owned();
                 let stands_for = doc.relations_from(chain[k]).find(|r| r.rel == iron_document::RelKind::Projects).map(|r| r.to.to_string());
                 events.push(crate::host_events::EngineEvent::Open { panel: view.panel.clone(), node: chain[k].to_string(), name, stands_for });
@@ -3791,7 +3792,7 @@ pub fn select_tool_system(
                 Some(LinkTarget::Pin(to)) => {
                     let read = |leaf: iron_document::Leaf| store.0.resolved(leaf.node, leaf.path);
                     let (a, b) = if l.from.dir == "out" { (l.from.port, to.port) } else { (to.port, l.from.port) };
-                    match iron_document::author::connect(store.0.document(), &read, a, b) {
+                    match iron_document::author::connect(store.0.tree(), &read, a, b) {
                         Ok(ops) => pending.0.push(TransactionInput { label: format!("connect {} to {}", l.from.name, to.name), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }),
                         Err(e) => warn!("connect: {e}"),
                     }
@@ -3815,7 +3816,7 @@ pub fn select_tool_system(
             Gesture::Sequence(q) => {
                 store.0.set_layout_preview(None);
                 if q.index != q.from {
-                    let doc = store.0.document();
+                    let doc = store.0.tree();
                     let order_of = |n: NodeId| doc.live(n).map(|x| x.order.clone());
                     let before = q.index.checked_sub(1).and_then(|p| order_of(q.others[p]));
                     let after = q.others.get(q.index).and_then(|&n| order_of(n));
@@ -4090,7 +4091,7 @@ pub(crate) fn begin_points_drag(store: &mut Store, spatial: &crate::document_bri
 /// A path point made a corner: its handles set to zero, or nothing when
 /// they are already.
 pub(crate) fn corner_ops(store: &Store, point: NodeId) -> Vec<Op> {
-    if store.document().live(point).is_none() {
+    if store.tree().live(point).is_none() {
         return Vec::new();
     }
     ["handles.ix", "handles.iy", "handles.ox", "handles.oy"]
@@ -4104,7 +4105,7 @@ pub(crate) fn corner_ops(store: &Store, point: NodeId) -> Vec<Op> {
 }
 
 /// Deleting `points` from their contours, keeping two at least in each.
-pub(crate) fn delete_points_ops(doc: &iron_document::Document, points: &[NodeId]) -> Vec<Op> {
+pub(crate) fn delete_points_ops(doc: Tree<'_>, points: &[NodeId]) -> Vec<Op> {
     let mut left: HashMap<NodeId, usize> = HashMap::default();
     let mut ops = Vec::new();
     for &point in points {
@@ -4177,7 +4178,7 @@ fn expand_points(store: &Store, pending: &mut PendingTransactions, id: NodeId) {
 /// binding or a clip, the shell asks first and converts on a yes.
 /// Whether it converted now (rather than asking first, or failing).
 fn edit_as_path(store: &Store, pending: &mut PendingTransactions, id: NodeId, events: &crate::host_events::HostEvents) -> bool {
-    let ty = store.document().live(id).map_or("", |n| n.ty.name());
+    let ty = store.tree().live(id).map_or("", |n| n.ty.name());
     match iron_document::shape::to_path(store, id) {
         Ok(c) if c.cuts.is_empty() => {
             pending.0.push(TransactionInput { label: format!("convert {ty} to path"), actor: Actor::Human, ts: 0, idempotency_key: None, ops: c.ops, exact: false });
@@ -5075,7 +5076,7 @@ pub fn navigate_views(
                 let frames: Vec<Affine> = if key == "zoom-selection" {
                     sel.selected.iter().filter_map(|id| tool.reach.get(id)).filter(|r| r.panel == view.panel).filter_map(|r| geo.frame(&r.chain)).collect()
                 } else {
-                    nest::panel_roots(&store.0.document(), view).iter().filter_map(|&n| geo.frame(&[n])).collect()
+                    nest::panel_roots(store.0.tree(), view).iter().filter_map(|&n| geo.frame(&[n])).collect()
                 };
                 let Some(r) = frames
                     .iter()
@@ -5120,7 +5121,7 @@ pub fn sync_session_selection(
     // gets a timeline lane in the frame it is selected): only a selection
     // that differs from the one last synced was changed elsewhere.
     if seen.is_some_and(|v| v != version) && store.0.selection() != *synced {
-        let doc = store.0.document();
+        let doc = store.0.tree();
         let mut reach = HashMap::default();
         let ids: Vec<NodeId> = store
             .0
@@ -5173,7 +5174,7 @@ mod tests {
 
     fn ids(n: u32) -> Vec<NodeId> {
         let mut store = Store::new();
-        store.document().next_ids(n as usize)
+        store.authored().next_ids(n as usize)
     }
 
     #[test]
@@ -5224,12 +5225,12 @@ mod tests {
     /// A square path at (100, 50) of four point nodes.
     fn square() -> (Store, NodeId, Vec<NodeId>) {
         let mut store = Store::new();
-        let path = store.document().next_ids(1)[0];
+        let path = store.authored().next_ids(1)[0];
         let mut t = Transform2d::default();
         (t.x, t.y) = (Slot::Const(Value::Number(100.0)), Slot::Const(Value::Number(50.0)));
         let corner = |x, y| Anchor { at: Point::new(x, y), inn: kurbo::Vec2::ZERO, out: kurbo::Vec2::ZERO };
         let runs = vec![(vec![corner(0.0, 0.0), corner(10.0, 0.0), corner(10.0, 10.0), corner(0.0, 10.0)], true)];
-        let mut next = store.document().next_ids(1 + contour::ids_needed(&runs)).into_iter().skip(1);
+        let mut next = store.authored().next_ids(1 + contour::ids_needed(&runs)).into_iter().skip(1);
         let mut ops = vec![Op::Create { id: path, ty: TypeId::lookup("path").unwrap(), parent: None, order: OrderKey::first(), facets: vec![t.wrap(), PathShape::default().wrap()] }];
         ops.extend(contour::contours_ops(path, &runs, &mut next));
         store.apply(TransactionInput { label: "draw".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
@@ -5267,7 +5268,7 @@ mod tests {
     #[test]
     fn deleting_points_keeps_two_in_each_contour() {
         let (store, _, points) = square();
-        let ops = delete_points_ops(store.document(), &points);
+        let ops = delete_points_ops(store.tree(), &points);
         assert_eq!(ops.len(), 2);
         assert!(matches!(ops[..], [Op::Delete { id: a }, Op::Delete { id: b }] if a == points[0] && b == points[1]));
     }

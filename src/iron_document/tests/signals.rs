@@ -41,10 +41,10 @@ struct Scene {
 /// rect (x=50) animated by a clip (x 100 -> 300 over 1..3 s).
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(7);
+    let ids = store.authored().next_ids(7);
     let key_ids = [ids[5], ids[6]];
     let (gauge, bar, rect, timeline, clip) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let mut sl = Slider::default();
     sl.value = num(0.25);
     let mut s = Size::default();
@@ -104,7 +104,7 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
     assert_eq!((signal.producer, signal.value), (gas, Value::Number(0.5)));
 
     // The document never saw it.
-    assert_eq!(store.document().leaf(gauge, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.25)));
+    assert_eq!(store.tree().leaf(gauge, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.25)));
     assert_eq!(store.history().log().count(), 1);
 
     // Republishing the same value is silent; a moved value reports once.
@@ -169,7 +169,7 @@ fn a_freeze_commits_the_published_values_as_one_transaction() {
     let applied = store.freeze(gas, "freeze gas".into(), Actor::Human, 1).unwrap().unwrap();
     assert_eq!(applied.version, Version(2));
     assert!(store.signals().is_empty(), "the producer holds nothing after a freeze");
-    assert_eq!(store.document().leaf(gauge, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.6)));
+    assert_eq!(store.tree().leaf(gauge, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.6)));
     assert_eq!(f64_of(&store, bar, "size.w"), 120.0);
     // The release reports the gauge (as a resolved change) and the set
     // reaches readers through the transaction, like any authored change;

@@ -13,8 +13,8 @@
 //! child draws on top, so it is listed first, as Figma lists layers); in 3D
 //! they keep the stored order.
 
+use crate::Tree;
 use crate::composition::{self, Dims};
-use crate::document::Document;
 use crate::facet::{Name, Text};
 use crate::id::NodeId;
 use serde::Serialize;
@@ -65,7 +65,7 @@ pub struct Row {
     pub problem: Option<String>,
 }
 
-fn is_layer(doc: &Document, id: NodeId) -> bool {
+fn is_layer(doc: Tree<'_>, id: NodeId) -> bool {
     !id.is_expanded() && !id.is_session() && doc.live(id).is_some_and(|n| LAYER_TYPES.contains(&n.ty.name()))
 }
 
@@ -76,7 +76,7 @@ fn dims_str(d: Option<Dims>) -> &'static str {
     }
 }
 
-fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     let named = doc.get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     if let Some(n) = named {
         return Some(n.to_owned());
@@ -89,7 +89,7 @@ fn name_of(doc: &Document, id: NodeId) -> Option<String> {
 /// The rows a node's children make, in panel order: the embedded
 /// composition's top level for an embed, the node's own layer children
 /// otherwise. `dims` is the dimension they are drawn in.
-fn child_rows(doc: &Document, id: NodeId) -> (Vec<NodeId>, Option<Dims>) {
+fn child_rows(doc: Tree<'_>, id: NodeId) -> (Vec<NodeId>, Option<Dims>) {
     let (parent, dims) = match composition::embedded(doc, id).filter(|_| doc.live(id).is_some_and(|n| n.ty.name() == "embed")) {
         Some(c) => (c, composition::dims(doc, c)),
         None => (id, composition::composition_of(doc, id).and_then(|c| composition::dims(doc, c))),
@@ -103,7 +103,7 @@ fn child_rows(doc: &Document, id: NodeId) -> (Vec<NodeId>, Option<Dims>) {
 
 /// The chain of `id` in its own composition: its ancestors below the
 /// composition, outermost first, then itself.
-pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
+pub fn lineage(doc: Tree<'_>, id: NodeId) -> Vec<NodeId> {
     let mut out = vec![id];
     let mut cur = doc.live(id).and_then(|n| n.parent);
     while let Some(n) = cur.and_then(|c| doc.live(c)) {
@@ -122,7 +122,7 @@ pub fn key(chain: &[NodeId]) -> String {
     chain.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
 }
 
-fn chips(doc: &Document, entity: NodeId, home: Option<NodeId>) -> Vec<Chip> {
+fn chips(doc: Tree<'_>, entity: NodeId, home: Option<NodeId>) -> Vec<Chip> {
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for f in composition::figures_of(doc, entity) {
@@ -143,7 +143,7 @@ fn chips(doc: &Document, entity: NodeId, home: Option<NodeId>) -> Vec<Chip> {
 
 /// The visible rows of `composition`, descending into each row whose key is
 /// in `open`.
-pub fn rows(doc: &Document, composition: NodeId, open: &BTreeSet<String>) -> Vec<Row> {
+pub fn rows(doc: Tree<'_>, composition: NodeId, open: &BTreeSet<String>) -> Vec<Row> {
     let mut out = Vec::new();
     let (top, dims) = child_rows(doc, composition);
     walk(doc, &top, dims, &mut Vec::new(), 0, 0, open, &mut out);
@@ -151,7 +151,7 @@ pub fn rows(doc: &Document, composition: NodeId, open: &BTreeSet<String>) -> Vec
 }
 
 #[allow(clippy::too_many_arguments)]
-fn walk(doc: &Document, ids: &[NodeId], dims: Option<Dims>, chain: &mut Vec<NodeId>, depth: u32, embeds: u32, open: &BTreeSet<String>, out: &mut Vec<Row>) {
+fn walk(doc: Tree<'_>, ids: &[NodeId], dims: Option<Dims>, chain: &mut Vec<NodeId>, depth: u32, embeds: u32, open: &BTreeSet<String>, out: &mut Vec<Row>) {
     for &id in ids {
         let Some(node) = doc.live(id) else { continue };
         chain.push(id);

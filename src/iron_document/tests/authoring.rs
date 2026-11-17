@@ -51,7 +51,7 @@ struct Desk {
 
 fn desk() -> Desk {
     let mut store = Store::new();
-    let ids = store.document().next_ids(5);
+    let ids = store.authored().next_ids(5);
     let [library, comp, model, body, beam] = ids.try_into().unwrap();
     let mut c = Composition::default();
     c.notation = Slot::Const(Value::Str("cartoon".into()));
@@ -73,7 +73,7 @@ fn shapes_become_a_component_edited_through_its_main_and_copied_as_instances() {
     let (made, input) = store.make_component(&[body, beam], "laser", Actor::Human).unwrap();
     apply(&mut store, "make", input.ops);
     let main = made.picture;
-    let doc = store.document();
+    let doc = store.tree();
     assert_eq!(expand::main_definition(doc, main), Some(made.definition));
     assert_eq!((num(&store, main, "transform2d.x"), num(&store, main, "transform2d.y")), (60.0, 140.0));
     assert_eq!((num(&store, body, "transform2d.x"), num(&store, body, "transform2d.y")), (0.0, 0.0));
@@ -84,13 +84,13 @@ fn shapes_become_a_component_edited_through_its_main_and_copied_as_instances() {
     // Edits inside the main are edits to the definition.
     apply(&mut store, "wider", vec![Op::Set { id: shown_body, path: path("size.w"), slot: Slot::Const(Value::Number(150.0)) }]);
     assert_eq!(num(&store, body, "size.w"), 150.0);
-    assert!(store.document().children(shown_body).is_empty());
+    assert!(store.tree().children(shown_body).is_empty());
 
     // A copy of the main is an instance, which follows the definition.
     let pasted = copy::duplicate(&store, &[main]).unwrap();
     apply(&mut store, "duplicate", pasted.ops);
     let instance = pasted.roots[0];
-    let doc = store.document();
+    let doc = store.tree();
     assert!(expand::main_definition(doc, instance).is_none());
     let entity = expand::use_entity(doc, instance).expect("an instance figures an entity");
     assert_eq!(expand::linked_definition(doc, entity), Some(made.definition));
@@ -101,7 +101,7 @@ fn shapes_become_a_component_edited_through_its_main_and_copied_as_instances() {
     for _ in 0..4 {
         store.undo(0).unwrap().unwrap();
     }
-    let doc = store.document();
+    let doc = store.tree();
     assert!(doc.live(main).is_none() && doc.children(comp).contains(&body));
     assert_eq!(num(&store, body, "transform2d.x"), 60.0);
 }
@@ -115,32 +115,32 @@ fn ports_inputs_wraps_links_and_lines_are_authored_on_the_main() {
     let pasted = copy::duplicate(&store, &[main]).unwrap();
     apply(&mut store, "instance", pasted.ops);
     let instance = pasted.roots[0];
-    let entity = expand::use_entity(store.document(), instance).unwrap();
+    let entity = expand::use_entity(store.tree(), instance).unwrap();
 
     // A port placed on the main, at the beam's end.
-    let (ops, out, out_anchor) = author::add_port(store.document(), main, [180.0, 35.0], "out", false).unwrap();
+    let (ops, out, out_anchor) = author::add_port(store.authored(), main, [180.0, 35.0], "out", false).unwrap();
     apply(&mut store, "add port", ops);
     let shown = NodeId::expanded(main, out_anchor).unwrap();
     assert_eq!(store.world_affine(shown).translation(), [240.0, 175.0]);
     // Edited: an optical output, a male FC/PC connector.
     let patch = PortPatch { name: Some("light out".into()), kind: Some("optical_power".into()), connector: Some("FC/PC".into()), gender: Some("male".into()), ..Default::default() };
-    { let ops = author::edit_port(store.document(), out, &patch).unwrap(); apply(&mut store, "edit port", ops); }
+    { let ops = author::edit_port(store.authored(), out, &patch).unwrap(); apply(&mut store, "edit port", ops); }
     let port = NodeId::expanded(entity, out).unwrap();
     assert_eq!(store.resolved(port, path("port.kind")), Some(Value::Str("optical_power".into())));
     assert_eq!(store.resolved(out_anchor, path("name.text")), Some(Value::Str("light_out".into())));
 
     // A setting: power, 10 mW by default; the instance gets the argument.
-    let (ops, power) = author::add_input(store.document(), def, "power", Value::parse_quantity("10 mW").unwrap()).unwrap();
+    let (ops, power) = author::add_input(store.authored(), def, "power", Value::parse_quantity("10 mW").unwrap()).unwrap();
     apply(&mut store, "add input", ops);
     assert_eq!(store.resolved(entity, path("args.power")), Some(Value::parse_quantity("10 mW").unwrap()));
     // The output says the power.
     let patch = PortPatch { signal: Some(format!("{{= {power}.port.signal}}")), ..Default::default() };
-    { let ops = author::edit_port(store.document(), out, &patch).unwrap(); apply(&mut store, "out = power", ops); }
+    { let ops = author::edit_port(store.authored(), out, &patch).unwrap(); apply(&mut store, "out = power", ops); }
     assert_eq!(store.resolved(port, path("port.signal")), Some(Value::parse_quantity("10 mW").unwrap()));
     // Renamed, the instance keeps its value under the new name.
     apply(&mut store, "set power", vec![Op::Set { id: entity, path: path("args.power"), slot: Slot::Const(Value::parse_quantity("4 mW").unwrap()) }]);
     let patch = PortPatch { name: Some("setpoint".into()), ..Default::default() };
-    { let ops = author::edit_port(store.document(), power, &patch).unwrap(); apply(&mut store, "rename", ops); }
+    { let ops = author::edit_port(store.authored(), power, &patch).unwrap(); apply(&mut store, "rename", ops); }
     assert_eq!(store.resolved(entity, path("args.setpoint")), Some(Value::parse_quantity("4 mW").unwrap()));
     assert_eq!(store.resolved(port, path("port.signal")), Some(Value::parse_quantity("4 mW").unwrap()));
 
@@ -150,7 +150,7 @@ fn ports_inputs_wraps_links_and_lines_are_authored_on_the_main() {
     let before = store.world_affine(shown_beam).translation();
     let (ops, empty) = author::create_control(&store, &[shown_beam], None).unwrap();
     apply(&mut store, "create control", ops);
-    let doc = store.document();
+    let doc = store.tree();
     assert_eq!(doc.live(beam).unwrap().parent, Some(empty));
     assert_eq!(doc.live(empty).map(|n| n.ty.name()), Some("empty"));
     let shown_beam = NodeId::expanded(main, beam).unwrap();
@@ -162,25 +162,25 @@ fn ports_inputs_wraps_links_and_lines_are_authored_on_the_main() {
     let shown_empty = NodeId::expanded(main, empty).unwrap();
     let link = Expr::parse(&format!("scale({power}.port.signal, 0 mW, 20 mW, 0, 1.5)")).unwrap();
     apply(&mut store, "link", vec![Op::Set { id: shown_empty, path: path("transform2d.rot"), slot: Slot::Bound(link) }]);
-    assert!(store.document().leaf(empty, path("transform2d.rot")).unwrap().expr().is_some());
+    assert!(store.tree().leaf(empty, path("transform2d.rot")).unwrap().expr().is_some());
     assert!((num(&store, NodeId::expanded(instance, empty).unwrap(), "transform2d.rot") - 0.3).abs() < 1e-12);
 
     // A second instance's light connected by a line to a meter-like input:
     // make a "sink" with one optical input, and connect.
-    let ids = store.document().next_ids(1);
-    let comp = store.document().roots()[1];
+    let ids = store.authored().next_ids(1);
+    let comp = store.tree().roots()[1];
     apply(&mut store, "sink shape", vec![Op::Create { id: ids[0], ty: ty("rect"), parent: Some(comp), order: key(9), facets: rect(400.0, 140.0, 40.0, 40.0, "sink") }]);
     let (sink, input) = store.make_component(&[ids[0]], "sink", Actor::Human).unwrap();
     apply(&mut store, "make sink", input.ops);
-    let (ops, sink_in) = author::add_input(store.document(), sink.definition, "light", Value::parse_quantity("0 W").unwrap()).unwrap();
+    let (ops, sink_in) = author::add_input(store.authored(), sink.definition, "light", Value::parse_quantity("0 W").unwrap()).unwrap();
     apply(&mut store, "sink input", ops);
-    { let ops = author::edit_port(store.document(), sink_in, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap(); apply(&mut store, "optical", ops); }
+    { let ops = author::edit_port(store.authored(), sink_in, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap(); apply(&mut store, "optical", ops); }
     let pasted = copy::duplicate(&store, &[sink.picture]).unwrap();
     apply(&mut store, "sink instance", pasted.ops);
-    let sink_entity = expand::use_entity(store.document(), pasted.roots[0]).unwrap();
+    let sink_entity = expand::use_entity(store.tree(), pasted.roots[0]).unwrap();
     let to = NodeId::expanded(sink_entity, sink_in).unwrap();
     let read = |l: Leaf| store.resolved(l.node, l.path);
-    let ops = author::connect(store.document(), &read, port, to).unwrap();
+    let ops = author::connect(store.tree(), &read, port, to).unwrap();
     apply(&mut store, "connect", ops);
     assert_eq!(store.resolved(to, path("port.signal")), Some(Value::parse_quantity("4 mW").unwrap()));
 }
@@ -191,7 +191,7 @@ fn fiber_rig() -> (Store, NodeId, NodeId, Vec<NodeId>) {
     use kurbo::{Point, Vec2};
     let Desk { mut store, comp, body, beam } = desk();
     apply(&mut store, "clear", vec![Op::Delete { id: body }, Op::Delete { id: beam }]);
-    let ids = store.document().next_ids(8);
+    let ids = store.authored().next_ids(8);
     let (fiber, shadow, control) = (ids[0], ids[1], ids[2]);
     let mut ops = vec![];
     let mut point_ops = vec![];
@@ -217,13 +217,13 @@ fn fiber_rig() -> (Store, NodeId, NodeId, Vec<NodeId>) {
 #[test]
 fn shared_control_preserves_contours_offsets_and_follows_rotation_scale() {
     let (mut store, main, control, points) = fiber_rig();
-    let parents: Vec<_> = points.iter().map(|p| store.document().live(*p).unwrap().parent).collect();
+    let parents: Vec<_> = points.iter().map(|p| store.tree().live(*p).unwrap().parent).collect();
     let before: Vec<_> = points.iter().map(|p| store.world_affine(*p).translation()).collect();
     let shown = |p| NodeId::expanded(main, p).unwrap();
     let ops = attachment::attach(&store, shown(control), &points.iter().map(|p| shown(*p)).collect::<Vec<_>>()).unwrap();
     apply(&mut store, "attach", ops);
     for (i, &p) in points.iter().enumerate() {
-        assert_eq!(store.document().live(p).unwrap().parent, parents[i]);
+        assert_eq!(store.tree().live(p).unwrap().parent, parents[i]);
         assert_eq!(store.world_affine(p).translation(), before[i]);
     }
     apply(&mut store, "move endpoint", vec![Op::Set { id: shown(control), path: path("transform2d.x"), slot: Slot::Const(Value::Number(100.0)) }]);
@@ -242,7 +242,7 @@ fn shared_control_preserves_contours_offsets_and_follows_rotation_scale() {
     apply(&mut store, "detach", ops);
     for (i, &p) in points.iter().enumerate() { assert_eq!(store.world_affine(p).translation(), before[i]); }
     store.undo(0).unwrap().unwrap();
-    assert!(store.document().get::<facet::Attachment>(points[0]).is_some());
+    assert!(store.tree().get::<facet::Attachment>(points[0]).is_some());
     let saved = store.save();
     let loaded = Store::load(&saved).unwrap();
     assert_eq!(loaded.save(), saved);
@@ -261,15 +261,15 @@ fn attachments_survive_instances_and_port_exposure_and_reject_invalid_edits() {
     assert!(store.apply(tx("remove attachment metadata", vec![Op::RemoveFacet { id: points[0], kind: facet::FacetKind::Attachment }])).is_err());
     assert_eq!(store.save(), before);
     assert!(attachment::attach(&store, control, &points).is_err());
-    let ops = author::expose_control(store.document(), shown(control), "in", true).unwrap();
+    let ops = author::expose_control(store.authored(), shown(control), "in", true).unwrap();
     apply(&mut store, "expose", ops);
-    assert!(store.document().get::<facet::Anchor>(control).is_some());
+    assert!(store.tree().get::<facet::Anchor>(control).is_some());
     let pasted = copy::duplicate(&store, &[main]).unwrap();
     let instance = pasted.roots[0];
     apply(&mut store, "instance", pasted.ops);
     let p = NodeId::expanded(instance, points[1]).unwrap();
     let c = NodeId::expanded(instance, control).unwrap();
-    assert_eq!(store.document().get::<facet::Attachment>(p).unwrap().control.constant().unwrap().as_ref(), Some(c));
+    assert_eq!(store.tree().get::<facet::Attachment>(p).unwrap().control.constant().unwrap().as_ref(), Some(c));
     assert!(attachment::attach(&store, c, &[p]).is_err());
     let before = store.world_affine(p).translation();
     apply(&mut store, "override endpoint", vec![Op::Set { id: c, path: path("transform2d.x"), slot: Slot::Const(Value::Number(90.0)) }]);
@@ -287,21 +287,21 @@ fn both_paths_follow_a_plugged_instance_and_unplug_without_jumping() {
     let shown = NodeId::expanded(main, control).unwrap();
     let ops = attachment::attach(&store, shown, &points).unwrap();
     apply(&mut store, "attach", ops);
-    let ops = author::expose_control(store.document(), shown, "in", true).unwrap();
+    let ops = author::expose_control(store.authored(), shown, "in", true).unwrap();
     apply(&mut store, "expose", ops);
-    let spec = store.document().get::<facet::Anchor>(control).unwrap().port.constant().unwrap().as_ref().unwrap();
-    let ops = author::edit_port(store.document(), spec, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap();
+    let spec = store.tree().get::<facet::Anchor>(control).unwrap().port.constant().unwrap().as_ref().unwrap();
+    let ops = author::edit_port(store.authored(), spec, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap();
     apply(&mut store, "optical", ops);
     let copy = copy::duplicate(&store, &[main]).unwrap();
     let instance = copy.roots[0];
     apply(&mut store, "instance", copy.ops);
-    let comp = store.document().live(main).unwrap().parent.unwrap();
+    let comp = store.tree().live(main).unwrap().parent.unwrap();
     let laser = store.place_standard("laser", comp, [400.0, 300.0], Actor::Human).unwrap();
-    let entity = expand::use_entity(store.document(), instance).unwrap();
+    let entity = expand::use_entity(store.tree(), instance).unwrap();
     let input = NodeId::expanded(entity, spec).unwrap();
     let laser_anchor = store.port_anchors().into_iter().find(|p| p.anchor.path().first() == Some(&laser)).unwrap();
     let read = |l: Leaf| store.resolved(l.node, l.path);
-    let ops = author::connect(store.document(), &read, laser_anchor.port, input).unwrap();
+    let ops = author::connect(store.tree(), &read, laser_anchor.port, input).unwrap();
     apply(&mut store, "connect", ops);
     let p = NodeId::expanded(instance, points[0]).unwrap();
     let q = NodeId::expanded(instance, points[1]).unwrap();
@@ -310,7 +310,7 @@ fn both_paths_follow_a_plugged_instance_and_unplug_without_jumping() {
     assert!((store.world_affine(p).translation()[0] - start[0] - 50.0).abs() < 1e-8);
     assert!((store.world_affine(q).translation()[1] - store.world_affine(p).translation()[1] - 8.0).abs() < 1e-8);
     let before = store.world_affine(p).translation();
-    let connection = plug::connection_of(store.document(), input).unwrap();
+    let connection = plug::connection_of(store.tree(), input).unwrap();
     store.unplug(connection.0, "unplug", Actor::Human).unwrap();
     assert_eq!(store.world_affine(p).translation(), before);
 }
@@ -325,14 +325,14 @@ fn attachment_batch_rejects_foreign_or_driven_points_without_partial_changes() {
     let before = store.save();
     assert!(attachment::attach(&store, control, &points).is_err());
     assert_eq!(store.save(), before);
-    assert!(store.document().get::<facet::Attachment>(points[0]).is_none());
+    assert!(store.tree().get::<facet::Attachment>(points[0]).is_none());
 }
 
 #[test]
 fn attaching_under_transformed_paths_preserves_world_positions() {
     let (mut store, _main, control, points) = fiber_rig();
-    let contour = store.document().live(points[1]).unwrap().parent.unwrap();
-    let path_node = store.document().live(contour).unwrap().parent.unwrap();
+    let contour = store.tree().live(points[1]).unwrap().parent.unwrap();
+    let path_node = store.tree().live(contour).unwrap().parent.unwrap();
     apply(&mut store, "transform shadow", vec![Op::Set { id: path_node, path: path("transform2d.rot"), slot: Slot::Const(Value::Number(0.7)) }, Op::Set { id: path_node, path: path("transform2d.sx"), slot: Slot::Const(Value::Number(2.0)) }]);
     let before = store.world_affine(points[1]).translation();
     let ops = attachment::attach(&store, control, &points).unwrap();
@@ -359,9 +359,9 @@ fn a_pinned_state_opens_its_main_and_counts_edits_it_cannot_hold() {
     let shown = NodeId::expanded(main, body).unwrap();
     let chain = [main, shown];
     assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 0, "at rest a press selects the component");
-    let (ops, state) = machine::add_state_ops(store.document(), def).unwrap();
+    let (ops, state) = machine::add_state_ops(store.tree(), def).unwrap();
     apply(&mut store, "add state", ops);
-    let m = machine::machines(store.document(), def)[0].0;
+    let m = machine::machines(store.tree(), def)[0].0;
     store.pin_state(Some(machine::Pinned::state(def, m, state)));
     assert_eq!(interaction::target(&store.resolver(), &chain, &|_| false, false), 1, "editing its states, a press selects the part");
     assert_eq!(store.shared_edits(), 0);
@@ -386,7 +386,7 @@ fn near_affine(a: Affine2, b: Affine2) {
 #[test]
 fn control_creation_and_relocation_preserve_full_nested_affines_and_undo() {
     let Desk { mut store, comp, body, beam } = desk();
-    let parent = store.document().next_id();
+    let parent = store.authored().next_id();
     let mut t = Transform2d::default();
     t.x = Slot::Const(Value::Number(28.0)); t.y = Slot::Const(Value::Number(-13.0));
     t.rot = Slot::Const(Value::Number(0.7)); t.sx = Slot::Const(Value::Number(-2.0)); t.sy = Slot::Const(Value::Number(0.4));
@@ -414,9 +414,9 @@ fn control_creation_and_relocation_preserve_full_nested_affines_and_undo() {
     store.undo(0).unwrap().unwrap(); assert_eq!(content(&store),pre_pivot);
     store.redo(0).unwrap().unwrap(); assert_eq!(content(&store),after);
     for _ in 0..3 { store.undo(0).unwrap().unwrap(); }
-    assert!(!store.document().is_live(control));
+    assert!(!store.tree().is_live(control));
     for (n,a) in [body,beam].into_iter().zip(before) { near_affine(store.world_affine(n),a); }
-    assert_eq!(store.document().live(body).unwrap().parent, Some(parent));
+    assert_eq!(store.tree().live(body).unwrap().parent, Some(parent));
 }
 
 #[test]
@@ -454,9 +454,9 @@ fn controls_reject_observed_bound_singular_and_animated_coordinates_atomically()
     apply(&mut store,"zero",vec![Op::Set { id: control, path: path("transform2d.sx"), slot: Slot::Const(Value::Number(0.0)) }]);
     assert!(author::relocate_pivot(&store,control,[1.0,2.0]).unwrap_err().contains("zero-scale"));
     store.undo(0).unwrap().unwrap();
-    let clip = store.document().next_id();
+    let clip = store.authored().next_id();
     let mut c = facet::Clip::default(); c.prop = Slot::Const(Value::Str("transform2d.rot".into()));
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     apply(&mut store,"animate",vec![
         Op::Create { id: clip, ty: ty("clip"), parent: None, order: key(9), facets: vec![c.wrap(), facet::Timing::default().wrap()] },
         Op::Link { rel: Relation { id: rel, rel: RelKind::Animates, from: clip, to: control, data: std::collections::BTreeMap::new() } },

@@ -106,13 +106,13 @@ impl GasSim {
 pub struct GasParticle;
 
 fn name_of(store: &Store, id: NodeId) -> Option<String> {
-    store.document().get::<DocName>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
+    store.tree().get::<DocName>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned)
 }
 
 /// The piston demo's nodes: a 3D composition named `cylinder` holding
 /// meshes `chamber` and `piston`, and a `port_spec` named `pressure`.
 fn find(store: &Store) -> Option<Targets> {
-    let doc = store.document();
+    let doc = store.tree();
     let composition = doc.nodes_of_type(TypeId::lookup("composition")?).find(|&c| name_of(store, c).as_deref() == Some("cylinder") && composition::dims(doc, c) == Some(Dims::Three))?;
     let child = |name: &str| doc.children(composition).iter().copied().find(|&k| name_of(store, k).as_deref() == Some(name));
     let gauge = doc.nodes_of_type(TypeId::lookup("port_spec")?).find(|&p| name_of(store, p).as_deref() == Some("pressure"))?;
@@ -157,7 +157,7 @@ pub(super) fn step_and_publish(
     mut commands: Commands,
     mut transforms: Query<&mut Transform, With<GasParticle>>,
 ) {
-    let version = store.0.document().version();
+    let version = store.0.authored().version();
     if sim.found.as_ref().map(|(v, _)| *v) != Some(version) {
         sim.found = Some((version, find(&store.0)));
     }

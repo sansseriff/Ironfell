@@ -28,9 +28,10 @@
 //! must match its `in` ports exactly, and a constant value must have the
 //! default's kind (and, for a quantity, its dimension).
 
+use crate::Tree;
 use crate::facet::{Args, Facet, FacetKind, Template, Instance, LeafPath, LeafStruct, Name, Port, Use};
 use crate::expr::{Expr, Leaf};
-use crate::document::{Document, RelKind, Relation};
+use crate::document::{RelKind, Relation};
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -53,7 +54,7 @@ fn ty(name: &str) -> TypeId {
     TypeId::lookup(name).expect("registered type")
 }
 
-fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     doc.get::<Name>(id)?.text.constant()?.as_str().map(str::to_owned)
 }
 
@@ -64,7 +65,7 @@ fn is_input(port: &Port) -> bool {
 }
 
 /// The inputs a definition declares (its `in` port_specs), in child order.
-pub fn inputs_of(doc: &Document, def: NodeId) -> Result<Vec<InputInfo>, String> {
+pub fn inputs_of(doc: Tree<'_>, def: NodeId) -> Result<Vec<InputInfo>, String> {
     let node = doc.live(def).ok_or_else(|| format!("{def} is not a live node"))?;
     if node.ty != ty("definition") {
         return Err(format!("{def} is a {}, not a definition", node.ty));
@@ -87,7 +88,7 @@ pub fn inputs_of(doc: &Document, def: NodeId) -> Result<Vec<InputInfo>, String> 
 }
 
 /// Check an entity's instance and args against its definition.
-pub fn validate_entity(doc: &Document, id: NodeId) -> Result<(), String> {
+pub fn validate_entity(doc: Tree<'_>, id: NodeId) -> Result<(), String> {
     let def = doc
         .get::<Instance>(id)
         .and_then(|i| i.def.constant())
@@ -151,7 +152,7 @@ fn check_kind(spec: &InputInfo, v: &Value) -> Result<(), String> {
 }
 
 /// The `template` child of `def` for `notation`.
-pub fn template_of(doc: &Document, def: NodeId, notation: &str) -> Option<NodeId> {
+pub fn template_of(doc: Tree<'_>, def: NodeId, notation: &str) -> Option<NodeId> {
     doc.children(def).iter().copied().find(|&c| {
         doc.get::<Template>(c).and_then(|d| d.notation.constant()).and_then(|v| v.as_str()) == Some(notation)
     })
@@ -173,7 +174,7 @@ pub struct Placement {
 /// copied: the entity's ports and the use's picture are expanded from the
 /// definition when the ops apply. Ids and relation ids are taken from
 /// `doc`, so these ops must be applied before anything else allocates.
-pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
+pub fn instantiate(doc: Tree<'_>, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = inputs_of(doc, def)?;
     template_of(doc, def, notation).ok_or_else(|| format!("{def} has no template for notation {notation:?}"))?;
     let ids = doc.next_ids(2);
@@ -203,7 +204,7 @@ pub fn instantiate(doc: &Document, def: NodeId, notation: &str, name: &str, plac
 /// Ops that draw an existing entity in another notation: a `use` of it
 /// under `parent` (after `after`), whose picture is expanded from its
 /// definition's `notation` template (ECM §5: one entity, many figures).
-pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
+pub fn place_figures(doc: Tree<'_>, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
     let def = doc
         .get::<Instance>(entity)
         .and_then(|i| i.def.constant())
@@ -217,7 +218,7 @@ pub fn place_figures(doc: &Document, entity: NodeId, notation: &str, parent: Opt
 /// A `use` node figuring `entity` in `notation`, at the origin.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
-fn use_ops(doc: &Document, def: NodeId, u: NodeId, rel: crate::id::RelationId, entity: NodeId, notation: &str, name: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Vec<Op> {
+fn use_ops(doc: Tree<'_>, def: NodeId, u: NodeId, rel: crate::id::RelationId, entity: NodeId, notation: &str, name: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Vec<Op> {
     // A sized template's picture starts at the template's box, as
     // constants: each picture then holds its own (plans/specs/plot.md §3).
     let size = template_of(doc, def, notation)
@@ -256,7 +257,7 @@ fn use_ops(doc: &Document, def: NodeId, u: NodeId, rel: crate::id::RelationId, e
 /// authored: editing the definition later changes nothing here. Ids and
 /// relation ids are taken from `doc`, so these ops must be applied before
 /// anything else allocates.
-pub fn instantiate_static(doc: &Document, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
+pub fn instantiate_static(doc: Tree<'_>, def: NodeId, notation: &str, name: &str, place: &Placement) -> Result<(NodeId, Vec<Op>), String> {
     let specs = inputs_of(doc, def)?;
     // Ports and behaviour equations are copied onto the entity.
     let port_specs: Vec<NodeId> = doc.children(def).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty == ty("port_spec") || n.ty == ty("equation"))).collect();
@@ -312,7 +313,7 @@ pub fn instantiate_static(doc: &Document, def: NodeId, notation: &str, name: &st
 /// its definition's `notation` template under `parent` (after `after`), its
 /// bindings reading the entity's ports, each root a figure of the entity
 /// (ECM §5: one entity, many figures).
-pub fn place_static_figures(doc: &Document, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
+pub fn place_static_figures(doc: Tree<'_>, entity: NodeId, notation: &str, parent: Option<NodeId>, after: Option<OrderKey>) -> Result<Vec<Op>, String> {
     let def = doc
         .get::<Instance>(entity)
         .and_then(|i| i.def.constant())
@@ -332,7 +333,7 @@ pub fn place_static_figures(doc: &Document, entity: NodeId, notation: &str, pare
 }
 
 /// A template's roots, and every node to copy (roots and descendants).
-fn template_nodes(doc: &Document, template: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
+fn template_nodes(doc: Tree<'_>, template: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
     let roots: Vec<NodeId> = doc.children(template).to_vec();
     let mut copied: Vec<NodeId> = Vec::new();
     for &r in &roots {
@@ -344,7 +345,7 @@ fn template_nodes(doc: &Document, template: NodeId) -> (Vec<NodeId>, Vec<NodeId>
 
 /// A node's facets with every binding rewritten: a reference to a copied
 /// node, or to a port_spec, follows it to the instance's copy.
-fn rewritten(doc: &Document, old: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> Vec<Facet> {
+fn rewritten(doc: Tree<'_>, old: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> Vec<Facet> {
     let rewrite = |leaf: Leaf| -> Leaf {
         match new_id.get(&leaf.node) {
             Some(&n) => Leaf { node: n, path: leaf.path },
@@ -367,7 +368,7 @@ fn rewritten(doc: &Document, old: NodeId, new_id: &BTreeMap<NodeId, NodeId>) -> 
 
 #[allow(clippy::too_many_arguments)]
 fn copy_template(
-    doc: &Document,
+    doc: Tree<'_>,
     entity: NodeId,
     new_id: &BTreeMap<NodeId, NodeId>,
     roots: &[NodeId],
@@ -408,7 +409,7 @@ fn copy_template(
 /// them (a readout of a port's signal) are re-pointed at the copies, so
 /// nothing outside the instance notices. One transaction; undo restores the
 /// link.
-pub fn detach_ops(doc: &Document, entity: NodeId) -> Result<Vec<Op>, String> {
+pub fn detach_ops(doc: Tree<'_>, entity: NodeId) -> Result<Vec<Op>, String> {
     let Some(def) = crate::expand::linked_definition(doc, entity) else {
         return Err(format!("{entity} is not a linked instance"));
     };

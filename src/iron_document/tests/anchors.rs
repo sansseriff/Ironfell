@@ -58,7 +58,7 @@ struct Bench {
 
 fn bench() -> Bench {
     let mut store = Store::new();
-    let ids = store.document().next_ids(12);
+    let ids = store.authored().next_ids(12);
     let [library, comp, model, jack, jack_out, jack_t, jack_body, jack_anchor, lead, lead_in, lead_t, lead_anchor] = ids.try_into().unwrap();
     let template = || {
         let mut t = Template::default();
@@ -89,7 +89,7 @@ fn bench() -> Bench {
         ))
         .unwrap();
     // The lead's tip sits on its anchor.
-    let tip = store.document().next_id();
+    let tip = store.authored().next_id();
     let mut t = Transform2d::default();
     t.x = Slot::Bound(Expr::parse(&format!("{lead_anchor}.transform2d.x")).unwrap());
     t.y = Slot::Bound(Expr::parse(&format!("{lead_anchor}.transform2d.y")).unwrap());
@@ -97,15 +97,15 @@ fn bench() -> Bench {
 
     let place = |s: &Store| Placement {
         entity_parent: Some(model),
-        entity_after: s.document().children(model).last().map(|&c| s.document().live(c).unwrap().order.clone()),
+        entity_after: s.tree().children(model).last().map(|&c| s.tree().live(c).unwrap().order.clone()),
         figure_parent: Some(comp),
-        figure_after: s.document().children(comp).last().map(|&c| s.document().live(c).unwrap().order.clone()),
+        figure_after: s.tree().children(comp).last().map(|&c| s.tree().live(c).unwrap().order.clone()),
     };
-    let (j, ops) = definition::instantiate(store.document(), jack, "c", "jack", &place(&store)).unwrap();
+    let (j, ops) = definition::instantiate(store.tree(), jack, "c", "jack", &place(&store)).unwrap();
     store.apply(tx("jack", ops)).unwrap();
-    let (l, ops) = definition::instantiate(store.document(), lead, "c", "lead", &place(&store)).unwrap();
+    let (l, ops) = definition::instantiate(store.tree(), lead, "c", "lead", &place(&store)).unwrap();
     store.apply(tx("lead", ops)).unwrap();
-    let uses: Vec<NodeId> = store.document().children(comp).to_vec();
+    let uses: Vec<NodeId> = store.tree().children(comp).to_vec();
     let (jack_use, lead_use) = (uses[0], uses[1]);
     // The jack placed at (100, 200); the lead at (300, 0), not yet plugged in.
     store.apply(tx("place", vec![
@@ -118,8 +118,8 @@ fn bench() -> Bench {
     assert_eq!((num(&store, lead_anchor, "anchor.wx"), num(&store, lead_anchor, "anchor.wy")), (300.0, 0.0));
     // Plugged in: a connection from the jack's out to the lead's in.
     let (a, b) = (NodeId::expanded(j, jack_out).unwrap(), NodeId::expanded(l, lead_in).unwrap());
-    let id = store.document().next_id();
-    let rels = store.document().next_relation_ids(2);
+    let id = store.authored().next_id();
+    let rels = store.authored().next_relation_ids(2);
     let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
     store
         .apply(tx("plug", vec![
@@ -201,10 +201,10 @@ fn plugging_two_rigid_ports_mates_their_parts() {
     let c = store.port_anchors().into_iter().find(|a| a.anchor == lead_anchor).unwrap().connection.unwrap();
     store.unplug(c, "unplug", Actor::Human).unwrap();
     // A socket: an in port at (0, 5) facing down (+y), placed at (400, 0).
-    let library = store.document().roots()[0];
-    let comp = store.document().roots()[1];
-    let model = store.document().roots()[2];
-    let ids = store.document().next_ids(5);
+    let library = store.tree().roots()[0];
+    let comp = store.tree().roots()[1];
+    let model = store.tree().roots()[2];
+    let ids = store.authored().next_ids(5);
     let [socket, socket_in, socket_t, socket_body, socket_anchor] = ids.try_into().unwrap();
     let mut facing = at(0.0, 5.0);
     facing.rot = Slot::Const(Value::Number(std::f64::consts::FRAC_PI_2));
@@ -221,13 +221,13 @@ fn plugging_two_rigid_ports_mates_their_parts() {
         .unwrap();
     let place = Placement {
         entity_parent: Some(model),
-        entity_after: store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        entity_after: store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone()),
         figure_parent: Some(comp),
-        figure_after: store.document().children(comp).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        figure_after: store.tree().children(comp).last().map(|&c| store.tree().live(c).unwrap().order.clone()),
     };
-    let (_, ops) = definition::instantiate(store.document(), socket, "c", "socket", &place).unwrap();
+    let (_, ops) = definition::instantiate(store.tree(), socket, "c", "socket", &place).unwrap();
     store.apply(tx("place socket", ops)).unwrap();
-    let socket_use = *store.document().children(comp).last().unwrap();
+    let socket_use = *store.tree().children(comp).last().unwrap();
     store.apply(tx("move socket", vec![Op::Set { id: socket_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(400.0)) }])).unwrap();
     let socket_anchor = NodeId::expanded(socket_use, socket_anchor).unwrap();
     let jack_anchor = store.port_anchors().into_iter().find(|a| a.body == jack_use).unwrap().anchor;
@@ -308,10 +308,10 @@ fn a_loose_end_dropped_once_and_plugged_again_stays_put_when_its_part_leaves() {
 
 /// A `tail`: one out port whose anchor is a loose end, placed at (600, 50).
 fn add_tail(store: &mut Store) -> (NodeId, NodeId, NodeId) {
-    let library = store.document().roots()[0];
-    let comp = store.document().roots()[1];
-    let model = store.document().roots()[2];
-    let ids = store.document().next_ids(4);
+    let library = store.tree().roots()[0];
+    let comp = store.tree().roots()[1];
+    let model = store.tree().roots()[2];
+    let ids = store.authored().next_ids(4);
     let [tail, tail_out, tail_t, tail_anchor] = ids.try_into().unwrap();
     let mut t = Template::default();
     t.notation = Slot::Const(Value::Str("c".into()));
@@ -325,13 +325,13 @@ fn add_tail(store: &mut Store) -> (NodeId, NodeId, NodeId) {
         .unwrap();
     let place = Placement {
         entity_parent: Some(model),
-        entity_after: store.document().children(model).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        entity_after: store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone()),
         figure_parent: Some(comp),
-        figure_after: store.document().children(comp).last().map(|&c| store.document().live(c).unwrap().order.clone()),
+        figure_after: store.tree().children(comp).last().map(|&c| store.tree().live(c).unwrap().order.clone()),
     };
-    let (entity, ops) = definition::instantiate(store.document(), tail, "c", "tail", &place).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), tail, "c", "tail", &place).unwrap();
     store.apply(tx("place tail", ops)).unwrap();
-    let tail_use = *store.document().children(comp).last().unwrap();
+    let tail_use = *store.tree().children(comp).last().unwrap();
     store.apply(tx("move tail", vec![
         Op::Set { id: tail_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(600.0)) },
         Op::Set { id: tail_use, path: path("transform2d.y"), slot: Slot::Const(Value::Number(50.0)) },

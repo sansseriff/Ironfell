@@ -12,7 +12,7 @@
 //! icon, and whether a key must start a clipboard write while the key event
 //! still counts as a user gesture.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::order::OrderKey;
@@ -192,7 +192,7 @@ pub fn registry_json() -> serde_json::Value {
 /// Bring to front or send to back: the selection's outermost nodes, under
 /// each parent, after (or before) every sibling, keeping their own order.
 /// A later sibling draws on top.
-pub fn restack_ops(doc: &Document, selected: &[NodeId], front: bool) -> Result<Vec<Op>, String> {
+pub fn restack_ops(doc: Tree<'_>, selected: &[NodeId], front: bool) -> Result<Vec<Op>, String> {
     let roots: Vec<NodeId> = selected.iter().copied().filter(|&id| !selected.iter().any(|&o| o != id && doc.is_ancestor(o, id))).collect();
     if roots.iter().any(|n| n.is_expanded()) {
         return Err("An instance's parts keep their definition's order".into());

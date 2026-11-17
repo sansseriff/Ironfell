@@ -10,8 +10,9 @@
 //! The kind vocabulary is code, like the node types; [`KINDS`] is the one
 //! table validation, views and the solver read.
 
+use crate::Tree;
 use crate::facet::{Constraint, LeafPath};
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::registry::TypeId;
@@ -94,7 +95,7 @@ fn vec2(v: Option<&Value>) -> Option<[f64; 2]> {
 
 /// Read one constraint. `Err` describes a malformed one; `Ok(None)` is a
 /// constraint that is not a live constraint node.
-pub fn read(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Result<Option<ConstraintInfo>, String> {
+pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Result<Option<ConstraintInfo>, String> {
     let Some(node) = doc.live(id) else { return Ok(None) };
     if node.ty != constraint_type() {
         return Ok(None);
@@ -154,7 +155,7 @@ pub fn read(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>, id: Node
 }
 
 /// Every live constraint, malformed ones as errors.
-pub fn all(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<Vec<ConstraintInfo>, String> {
+pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<Vec<ConstraintInfo>, String> {
     let mut out = Vec::new();
     for id in doc.nodes_of_type(constraint_type()) {
         if let Some(c) = read(doc, read_value, id)? {
@@ -168,7 +169,7 @@ pub fn all(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result
 /// constraints of one kind over the same anchored operands). Inkling unified
 /// duplicates silently; for an author that is an LLM, an explicit error
 /// teaches more.
-pub fn validate_all(doc: &Document, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<(), String> {
+pub fn validate_all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<(), String> {
     let all = all(doc, read_value)?;
     let mut seen: BTreeSet<(&'static str, Vec<(NodeId, [i64; 2])>)> = BTreeSet::new();
     for c in &all {

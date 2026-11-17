@@ -4,9 +4,9 @@ use iron_document::{Actor, OrderKey, Store, composition, standard};
 
 fn build() -> (Store, iron_document::NodeId) {
     let mut store = Store::new();
-    let first = store.document().next_session_ids(1)[0];
+    let first = store.authored().next_session_ids(1)[0];
     store.apply_session(standard::latency_ops(first, OrderKey::first())).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let comp = composition::compositions(doc).into_iter().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(standard::LATENCY)).unwrap();
     let target = doc.children(comp)[0];
     (store, target)
@@ -18,7 +18,7 @@ fn the_square_drags_as_session_state_never_in_history() {
     assert!(target.is_session());
     let x = |s: &Store| s.resolved(target, "transform2d.x".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     let before = x(&store);
-    let version = store.document().version();
+    let version = store.authored().version();
     let h = store.begin_drag(target, [20.0, 20.0]);
     assert!(!h.is_locked(), "the square is draggable: {h:?}");
     store.drag_to(&h, [before + 20.0 + 100.0, 220.0]);
@@ -45,7 +45,7 @@ fn recentring_reports_the_move_for_redraw_and_picking() {
 fn building_it_reaches_the_spatial_scene() {
     let mut store = Store::new();
     let _ = store.take_geometry_changes();
-    let first = store.document().next_session_ids(1)[0];
+    let first = store.authored().next_session_ids(1)[0];
     store.apply_session(standard::latency_ops(first, OrderKey::first())).unwrap();
     assert!(store.take_geometry_changes().structure, "a session composition's creation is a structure change");
 }

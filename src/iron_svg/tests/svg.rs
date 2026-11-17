@@ -39,7 +39,7 @@ struct Build {
 
 impl Build {
     fn new(store: &Store) -> Build {
-        Build { ids: store.document().next_ids(400), used: 0, keys: BTreeMap::new(), ops: Vec::new() }
+        Build { ids: store.authored().next_ids(400), used: 0, keys: BTreeMap::new(), ops: Vec::new() }
     }
 
     fn add(&mut self, t: &str, parent: Option<NodeId>, facets: Vec<Facet>) -> NodeId {
@@ -209,7 +209,7 @@ fn fixture() -> (Store, NodeId) {
     let mut e3 = Embed::default();
     e3.source = Slot::Const(Value::Ref(space));
     b.add("embed", Some(comp), vec![e3.wrap(), at(400.0, 200.0)]);
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let mut data = BTreeMap::new();
     data.insert("role".to_owned(), Value::Str("a".into()));
     data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
@@ -244,7 +244,7 @@ fn the_fixture_composition_matches_its_golden_file() {
             "a bound value is exported at its current value".to_owned(),
             "constraints are not exported".to_owned(),
             "embed badge view is exported as a copy of badge; it imports as shapes, not a live embed".to_owned(),
-            format!("embed {} shows a 3D composition and is left out", store.document().children(comp).last().unwrap()),
+            format!("embed {} shows a 3D composition and is left out", store.tree().children(comp).last().unwrap()),
         ]
     );
     // The binding exports what it evaluates to now: 0.25 · 200.
@@ -286,7 +286,7 @@ fn export_maps_each_row_of_the_table() {
 #[test]
 fn the_selection_exports_where_it_sits() {
     let (store, comp) = fixture();
-    let card = store.document().children(store.document().children(comp)[0])[0];
+    let card = store.tree().children(store.tree().children(comp)[0])[0];
     let out = export(&store, &Scope::Nodes(vec![card])).unwrap();
     valid_svg(&out.svg);
     // Inside the rotated group: wrapped in the group's world transform.
@@ -313,7 +313,7 @@ fn the_round_trip_law() {
     assert_eq!(first.svg, second.svg);
 
     // Rects and ellipses come back as themselves, and the store agrees.
-    let doc = fresh.document();
+    let doc = fresh.tree();
     let types: Vec<&str> = doc.children(target).iter().map(|&c| doc.live(c).unwrap().ty.name()).collect();
     assert_eq!(types, ["group", "rect", "ellipse", "ellipse", "ellipse", "path", "path", "path"]);
     // The frame keeps both contours and its rule, packed (packed-paths.md):
@@ -343,11 +343,11 @@ fn f(store: &Store, id: NodeId, leaf: &str) -> f64 {
 }
 
 fn kids_of(store: &Store, id: NodeId) -> Vec<NodeId> {
-    store.document().children(id).to_vec()
+    store.tree().children(id).to_vec()
 }
 
 fn ty_of(store: &Store, id: NodeId) -> &'static str {
-    store.document().live(id).unwrap().ty.name()
+    store.tree().live(id).unwrap().ty.name()
 }
 
 fn fixture_text(name: &str) -> String {
@@ -474,9 +474,9 @@ fn an_import_undoes_in_one_step() {
     let imported = import(&fixture_text("figma.svg")).unwrap();
     let (mut store, comp) = empty_composition();
     paste(&mut store, &imported.fragment, comp);
-    assert_eq!(store.document().children(comp).len(), 4);
+    assert_eq!(store.tree().children(comp).len(), 4);
     store.undo(0).unwrap().unwrap();
-    assert!(store.document().children(comp).is_empty());
+    assert!(store.tree().children(comp).is_empty());
 }
 
 #[test]
@@ -517,9 +517,9 @@ fn foreign_group_opacity_remains_isolated() {
     assert!(imported.cuts.is_empty(), "{:?}", imported.cuts);
     let (mut store, target) = empty_composition();
     paste(&mut store, &imported.fragment, target);
-    let group = store.document().children(target)[0];
+    let group = store.tree().children(target)[0];
     assert_eq!(store.resolved(group, "appearance.opacity".parse().unwrap()), Some(Value::Number(0.5)));
-    for &id in store.document().children(group) {
+    for &id in store.tree().children(group) {
         assert_eq!(store.resolved(id, "fill.opacity".parse().unwrap()), Some(Value::Number(1.0)));
     }
 }
@@ -588,7 +588,7 @@ fn repeated_pieces_import_as_references() {
     assert_eq!((imported.definitions, imported.references), (3, 7), "{:?}", imported.cuts);
     let (mut store, comp) = empty_composition();
     let roots = paste(&mut store, &imported.fragment, comp);
-    let doc = store.document();
+    let doc = store.tree();
     let refs: Vec<NodeId> = doc.descendants(comp).into_iter().filter(|&n| expand::reference_template(doc, n).is_some()).collect();
     assert_eq!(refs.len(), 5, "three leaves and two flowers, at the top");
     let library = doc.roots().iter().copied().find(|&r| ty_of(&store, r) == "library").expect("a library");
@@ -621,7 +621,7 @@ fn references_draw_where_copies_do() {
         let (mut s2, c2) = empty_composition();
         paste(&mut s2, &back.fragment, c2);
         let mut out: Vec<[i64; 4]> = s2
-            .document()
+            .tree()
             .descendants(c2)
             .into_iter()
             .filter(|&n| matches!(ty_of(&s2, n), "path" | "ellipse" | "rect"))

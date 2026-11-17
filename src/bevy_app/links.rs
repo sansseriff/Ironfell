@@ -8,7 +8,8 @@
 //! property and how the port's range maps onto it, and writes one binding in
 //! the definition.
 
-use iron_document::{Document, NodeId, expand};
+use iron_document::Tree;
+use iron_document::{NodeId, expand};
 use kurbo::{Point, Rect};
 
 use crate::bevy_app::select::{Geo, Reach};
@@ -44,7 +45,7 @@ pub fn pins_of(geo: &Geo, view: &PanelView, reach: &Reach, k: f64) -> Vec<Pin> {
 /// Whether an instance's input shows as a pin (types-and-units.md §6): its
 /// author's `port.show` (`pin` always, `settings` only when connected), and
 /// `auto`: when it is connected, bound, or set away from its default.
-fn shows(doc: &Document, spec: NodeId, entity: NodeId, port: NodeId, name: &str) -> bool {
+fn shows(doc: Tree<'_>, spec: NodeId, entity: NodeId, port: NodeId, name: &str) -> bool {
     let Some(p) = doc.get::<iron_document::facet::Port>(spec) else { return true };
     let connected = iron_document::plug::connection_of(doc, port).is_some();
     match p.show.constant().and_then(|v| v.as_str()) {
@@ -146,7 +147,7 @@ pub fn pin_at(pins: &[Pin], screen: Point, k: f64) -> Option<&Pin> {
 
 /// The component pictures in `view`'s composition, as reaches (top-level
 /// ones: what a line can land on).
-pub fn components_in(doc: &Document, view: &PanelView) -> Vec<Reach> {
+pub fn components_in(doc: Tree<'_>, view: &PanelView) -> Vec<Reach> {
     let Some(comp) = view.composition else { return Vec::new() };
     doc.children(comp)
         .iter()
@@ -196,7 +197,7 @@ pub fn noodle(a: Point, b: Point) -> kurbo::BezPath {
 
 /// Whether a line from pin `a` may land on pin `b` by their declared types
 /// (out feeds in; a loose end always may).
-pub fn fits(doc: &Document, a: &Pin, b: &Pin) -> bool {
+pub fn fits(doc: Tree<'_>, a: &Pin, b: &Pin) -> bool {
     let ty = |p: NodeId| {
         doc.get::<iron_document::facet::Port>(p)
             .and_then(|x| x.datatype.constant())

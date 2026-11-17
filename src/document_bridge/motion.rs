@@ -22,7 +22,7 @@ pub fn advance(mut store: ResMut<DocumentStore>, time: Res<Time>, mut sources: R
     if !moving.is_empty() {
         store.set_changed();
     }
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let comps: BTreeSet<NodeId> = moving.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
     for c in marked.difference(&comps) {
         sources.0.remove(c);
@@ -43,7 +43,7 @@ pub fn advance_machines(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
     // Including the frame a transition ends on: its final pose publishes
     // with nothing left running.
     store.set_changed();
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let figures = |e: NodeId| doc.relations_to(e).filter(|r| r.rel == iron_document::RelKind::Figures).map(|r| r.from).collect::<Vec<_>>();
     let comps: BTreeSet<NodeId> = running.iter().flat_map(|r| figures(r.entity)).filter_map(|u| iron_document::composition::composition_of(doc, u)).collect();
     for c in marked.difference(&comps) {
@@ -61,7 +61,7 @@ pub fn advance_machines(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
 /// simulation in a hidden tab holds still and costs nothing).
 pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, views: Res<super::PanelViews>, embeds: Res<super::EmbedViews>, mut sources: ResMut<LiveSources>, mut marked: Local<BTreeSet<NodeId>>) {
     let paused = {
-        let doc = store.0.document();
+        let doc = store.0.tree();
         let holding: BTreeSet<NodeId> = doc.nodes_with(iron_document::FacetKind::Accumulate).filter(|&n| doc.is_live(n)).filter_map(|n| iron_document::composition::composition_of(doc, n)).collect();
         if holding.is_empty() {
             holding
@@ -76,7 +76,7 @@ pub fn advance_steps(mut store: ResMut<DocumentStore>, time: Res<Time>, views: R
     }
     // Including the frame the last one rests on: its final value publishes.
     store.set_changed();
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let comps: BTreeSet<NodeId> = active.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
     for c in marked.difference(&comps) {
         sources.0.remove(c);
@@ -104,7 +104,7 @@ pub fn advance_queries(mut store: ResMut<DocumentStore>, time: Res<Time>, events
     if waiting != *was {
         store.set_changed();
     }
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let comps: BTreeSet<NodeId> = waiting.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
     for c in marked.difference(&comps) {
         sources.0.remove(c);
@@ -123,7 +123,7 @@ pub fn advance_presence(mut store: ResMut<DocumentStore>, time: Res<Time>, mut s
         return;
     }
     store.set_changed();
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let comps: BTreeSet<NodeId> = active.iter().filter_map(|&n| iron_document::composition::composition_of(doc, n)).collect();
     for c in marked.difference(&comps) {
         sources.0.remove(c);

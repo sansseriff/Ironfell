@@ -4,6 +4,7 @@
 //! an op computes its inverse while the pre-state is in hand, so undo is
 //! ordinary application of ops and needs no special casing downstream.
 
+use crate::Tree;
 use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::document::{Document, Node, Relation};
 use crate::id::{NodeId, RelationId, Version};
@@ -219,7 +220,7 @@ pub(crate) fn apply_op(
         Op::Delete { id } => delete(doc, &cx, *id),
         Op::Reparent { id, parent, order } => reparent(doc, &cx, *id, *parent, order),
         Op::Reorder { id, order } => {
-            let n = live(doc, &cx, *id)?;
+            let n = live(Tree::over(doc), &cx, *id)?;
             let old = n.order.clone();
             doc.set_order(*id, order.clone());
             Ok(vec![Op::Reorder {
@@ -240,7 +241,7 @@ pub(crate) fn apply_op(
     }
 }
 
-fn live<'d>(doc: &'d Document, cx: &Ctx, id: NodeId) -> Result<&'d Node, ApplyError> {
+fn live<'d>(doc: Tree<'d>, cx: &Ctx, id: NodeId) -> Result<&'d Node, ApplyError> {
     match doc.node(id) {
         Some(n) if n.is_live() => Ok(n),
         Some(n) => Err(cx.err(
@@ -255,7 +256,7 @@ fn live<'d>(doc: &'d Document, cx: &Ctx, id: NodeId) -> Result<&'d Node, ApplyEr
 }
 
 fn check_parent(
-    doc: &Document,
+    doc: Tree<'_>,
     cx: &Ctx,
     parent: Option<NodeId>,
     child_ty: TypeId,
@@ -329,7 +330,7 @@ fn create(
     if parent == Some(id) {
         return Err(cx.err(ErrorKind::Cycle, format!("{id} cannot be its own parent")));
     }
-    check_parent(doc, cx, parent, ty)?;
+    check_parent(Tree::over(doc), cx, parent, ty)?;
     check_facets(cx, ty, comps)?;
     if restoring {
         doc.restore_node(id, ty, parent, order.clone(), comps.to_vec());
@@ -365,10 +366,10 @@ fn new_input_args(doc: &mut Document, id: NodeId) -> Vec<Op> {
         return Vec::new();
     }
     let Some(def) = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "definition")) else { return Vec::new() };
-    let Ok(inputs) = crate::definition::inputs_of(doc, def) else { return Vec::new() };
+    let Ok(inputs) = crate::definition::inputs_of(Tree::over(doc), def) else { return Vec::new() };
     let Some(spec) = inputs.into_iter().find(|s| s.spec == id) else { return Vec::new() };
     let mut inverse = Vec::new();
-    for e in crate::author::entities_of(doc, def) {
+    for e in crate::author::entities_of(Tree::over(doc), def) {
         let Some(old) = doc.get::<Args>(e).cloned() else { continue };
         if old.slots.contains_key(spec.name) {
             continue;
@@ -384,7 +385,7 @@ fn new_input_args(doc: &mut Document, id: NodeId) -> Vec<Op> {
 
 /// The checks a `Create` defers to the end of its transaction: its bindings
 /// read live leaves without a cycle, and an entity or embed is valid.
-pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Version) -> Result<(), ApplyError> {
+pub(crate) fn check_created(doc: Tree<'_>, index: usize, op: &Op, stamp: Version) -> Result<(), ApplyError> {
     // A connection is checked once both of its ends exist (ECM §6.1).
     if let Op::Link { rel } = op
         && rel.rel == crate::document::RelKind::Connects
@@ -452,7 +453,7 @@ pub(crate) fn check_created(doc: &Document, index: usize, op: &Op, stamp: Versio
     check_entity(doc, &cx, *id)
 }
 
-fn check_path_form(doc: &Document, cx: &Ctx, path: NodeId) -> Result<(), ApplyError> {
+fn check_path_form(doc: Tree<'_>, cx: &Ctx, path: NodeId) -> Result<(), ApplyError> {
     let packed = doc.get::<crate::facet::PathShape>(path).and_then(|p| p.d.constant()).and_then(Value::as_geometry).is_some_and(|g| !g.is_empty());
     let expanded = doc.children(path).iter().any(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "contour"));
     if expanded && crate::contour::bound(doc, path) {
@@ -466,7 +467,7 @@ fn check_path_form(doc: &Document, cx: &Ctx, path: NodeId) -> Result<(), ApplyEr
 
 /// An entity's instance and params must agree with its definition; checked
 /// whenever either is created, set, or added (ECM §4.3).
-fn check_entity(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
+fn check_entity(doc: Tree<'_>, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
     match doc.live(id).map(|n| n.ty.name()) {
         Some("entity") => crate::definition::validate_entity(doc, id).map_err(|e| cx.err(ErrorKind::BadInstance, e))?,
         Some("embed") => check_embeds(doc, cx, id)?,
@@ -478,7 +479,7 @@ fn check_entity(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> 
 /// Every embed at or under `id` must name a live composition other than its
 /// own, without a cycle (ECM §7.4); checked on create, set, add and
 /// reparent, since a move can close a loop too.
-fn check_embeds(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
+fn check_embeds(doc: Tree<'_>, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
     for n in std::iter::once(id).chain(doc.descendants(id)) {
         if doc.live(n).is_some_and(|x| x.ty.name() == "embed") {
             crate::composition::validate_embed(doc, n).map_err(|e| cx.err(ErrorKind::Cycle, e))?;
@@ -488,7 +489,7 @@ fn check_embeds(doc: &Document, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> 
 }
 
 fn delete(doc: &mut Document, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> {
-    live(doc, cx, id)?;
+    live(Tree::over(doc), cx, id)?;
     let mut order = vec![id];
     order.extend(doc.descendants(id));
     // Inverses are pushed bottom-up so that the reversed list restores parents
@@ -516,7 +517,7 @@ fn reparent(
     parent: Option<NodeId>,
     order: &OrderKey,
 ) -> Result<Vec<Op>, ApplyError> {
-    let n = live(doc, cx, id)?;
+    let n = live(Tree::over(doc), cx, id)?;
     let (old_parent, old_order, ty) = (n.parent, n.order.clone(), n.ty);
     if let Some(p) = parent {
         if p == id {
@@ -526,9 +527,9 @@ fn reparent(
             return Err(cx.err(ErrorKind::Cycle, format!("{p} is a descendant of {id}")));
         }
     }
-    check_parent(doc, cx, parent, ty)?;
+    check_parent(Tree::over(doc), cx, parent, ty)?;
     doc.set_parent(id, parent, order.clone());
-    check_embeds(doc, cx, id)?;
+    check_embeds(Tree::over(doc), cx, id)?;
     Ok(vec![Op::Reparent {
         id,
         parent: old_parent,
@@ -543,7 +544,7 @@ fn reads_expanded(expr: &crate::expr::Expr) -> bool {
 
 /// A binding may only read leaves that exist, and may not reach itself.
 fn check_binding(
-    doc: &Document,
+    doc: Tree<'_>,
     cx: &Ctx,
     target: crate::expr::Leaf,
     expr: &crate::expr::Expr,
@@ -589,7 +590,7 @@ fn check_binding(
 /// Validate every bound slot in `comps` as if it were being set on `id`.
 /// Runs after the facets are in place so a node may bind its own leaves;
 /// on failure the transaction's working copy is discarded anyway.
-fn check_facet_bindings(doc: &Document, cx: &Ctx, id: NodeId, comps: &[Facet]) -> Result<(), ApplyError> {
+fn check_facet_bindings(doc: Tree<'_>, cx: &Ctx, id: NodeId, comps: &[Facet]) -> Result<(), ApplyError> {
     for c in comps {
         for field in c.field_names() {
             if let Some(expr) = c.get(field).and_then(|s| s.expr()) {
@@ -608,14 +609,14 @@ fn set(
     path: LeafPath,
     slot: &Slot,
 ) -> Result<Vec<Op>, ApplyError> {
-    live(doc, cx, id)?;
+    live(Tree::over(doc), cx, id)?;
     // A binding that reads an instance's expanded node is checked once the
     // transaction's instances have expanded (`check_created`): the instance
     // may be placed by an earlier op of the same transaction.
     if let Some(expr) = slot.expr()
         && !reads_expanded(expr)
     {
-        check_binding(doc, cx, crate::expr::Leaf { node: id, path }, expr)?;
+        check_binding(Tree::over(doc), cx, crate::expr::Leaf { node: id, path }, expr)?;
     }
     if path.facet == FacetKind::Args
         && let Some(inverse) = catch_up_args(doc, cx, id, path.field, slot)?
@@ -632,7 +633,7 @@ fn set(
         .set(path.field, slot.clone())
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
     if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera) {
-        check_entity(doc, cx, id)?;
+        check_entity(Tree::over(doc), cx, id)?;
     }
     Ok(vec![Op::Set {
         id,
@@ -655,7 +656,7 @@ fn catch_up_args(doc: &mut Document, cx: &Ctx, id: NodeId, field: &str, slot: &S
         return Ok(None);
     }
     let Some(def) = doc.get::<Instance>(id).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()) else { return Ok(None) };
-    let Ok(specs) = crate::definition::inputs_of(doc, def) else { return Ok(None) };
+    let Ok(specs) = crate::definition::inputs_of(Tree::over(doc), def) else { return Ok(None) };
     if !specs.iter().any(|s| s.name == field) {
         return Ok(None);
     }
@@ -669,7 +670,7 @@ fn catch_up_args(doc: &mut Document, cx: &Ctx, id: NodeId, field: &str, slot: &S
     args.insert(field, slot.clone());
     doc.remove_facet(id, FacetKind::Args);
     doc.insert_facet(id, crate::facet::LeafStruct::wrap(args));
-    check_entity(doc, cx, id)?;
+    check_entity(Tree::over(doc), cx, id)?;
     Ok(Some(vec![Op::Set { id, path: LeafPath::new(FacetKind::Args, field).expect("an argument path"), slot: default }]))
 }
 
@@ -679,7 +680,7 @@ fn add_comp(
     id: NodeId,
     comp: &Facet,
 ) -> Result<Vec<Op>, ApplyError> {
-    let n = live(doc, cx, id)?;
+    let n = live(Tree::over(doc), cx, id)?;
     let kind = comp.kind();
     if !n.ty.spec().allows(kind) {
         return Err(cx.err(
@@ -704,8 +705,8 @@ fn add_comp(
         doc.remove_facet(id, kind);
     }
     doc.insert_facet(id, comp.clone());
-    check_facet_bindings(doc, cx, id, std::slice::from_ref(comp))?;
-    check_entity(doc, cx, id)?;
+    check_facet_bindings(Tree::over(doc), cx, id, std::slice::from_ref(comp))?;
+    check_entity(Tree::over(doc), cx, id)?;
     Ok(vec![match replaced {
         Some(old) => Op::AddFacet { id, facet: old },
         None => Op::RemoveFacet { id, kind },
@@ -718,7 +719,7 @@ fn remove_comp(
     id: NodeId,
     kind: FacetKind,
 ) -> Result<Vec<Op>, ApplyError> {
-    let n = live(doc, cx, id)?;
+    let n = live(Tree::over(doc), cx, id)?;
     if n.ty.spec().requires(kind) {
         return Err(cx.err(
             ErrorKind::FacetRequired,
@@ -735,7 +736,7 @@ fn remove_comp(
 }
 
 fn link(doc: &mut Document, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError> {
-    live(doc, cx, rel.from)?;
+    live(Tree::over(doc), cx, rel.from)?;
     // An instance's expanded node appears when the transaction's expansion
     // runs, so a link to one needs only its instance to exist here (an undo
     // may relink before it restores the instance); the checks after
@@ -743,7 +744,7 @@ fn link(doc: &mut Document, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyEr
     match rel.to.expanded_root() {
         Some(root) if doc.node(root).is_some() => {}
         Some(root) => return Err(cx.err(ErrorKind::UnknownNode, format!("no node {root}"))),
-        None => live(doc, cx, rel.to).map(|_| ())?,
+        None => live(Tree::over(doc), cx, rel.to).map(|_| ())?,
     }
     // Any unused id is accepted, not only ids past the counter: the inverse of
     // an unlink re-links with the original id, and relations are not

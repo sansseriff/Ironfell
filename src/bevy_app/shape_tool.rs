@@ -64,7 +64,7 @@ pub fn shape_tool_system(
     drawables: Res<crate::document_bridge::Drawables>,
     focus: Res<crate::bevy_app::view_focus::ViewFocus>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     if let Some(id) = shapes.select.filter(|&id| doc.live(id).is_some()) {
         sel.selected = vec![id];
         shapes.select = None;

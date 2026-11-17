@@ -46,7 +46,7 @@ impl Doc {
     }
     fn add(&mut self, name: &'static str, ty_name: &str, parent: Option<&str>, facets: Vec<Facet>) -> NodeId {
         let pending = self.ops.iter().filter(|o| matches!(o, Op::Create { .. })).count();
-        let id = self.store.document().next_ids(pending + 1)[pending];
+        let id = self.store.authored().next_ids(pending + 1)[pending];
         let parent = parent.map(|p| self[p]);
         let order = self.last.get(&parent).map(OrderKey::after).unwrap_or_else(OrderKey::first);
         self.last.insert(parent, order.clone());
@@ -75,7 +75,7 @@ fn embed_of(c: NodeId) -> Vec<Facet> {
 
 fn rows(d: &Doc, c: &str, open: &[&str]) -> Vec<Row> {
     let open: BTreeSet<String> = open.iter().map(|s| s.to_string()).collect();
-    layers::rows(d.store.document(), d[c], &open)
+    layers::rows(d.store.tree(), d[c], &open)
 }
 
 fn names(rows: &[Row]) -> Vec<String> {
@@ -120,7 +120,7 @@ fn rows_run_topmost_first_and_open_by_key() {
     assert_eq!(names(&open), ["Hello there", "group", "  b", "  a", "back"]);
     // A child's key is its chain from the composition's top level.
     assert_eq!(open[2].key, format!("{} {}", d["group"], d["b"]));
-    assert_eq!(open[2].key, layers::key(&layers::lineage(d.store.document(), d["b"])));
+    assert_eq!(open[2].key, layers::key(&layers::lineage(d.store.tree(), d["b"])));
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn a_figure_carries_one_chip_per_other_composition() {
     let mut instance = Instance::default();
     instance.def = Slot::Const(Value::Ref(d["thing"]));
     let laser = d.add("laser", "entity", Some("model"), vec![instance.wrap(), Args::default().wrap()]);
-    let rels = d.store.document().next_relation_ids(4);
+    let rels = d.store.authored().next_relation_ids(4);
     for (rel, from) in rels.iter().zip(["box", "symbol", "symbol2", "body"]) {
         let from = d[from];
         d.ops.push(Op::Link { rel: Relation { id: *rel, from, to: laser, rel: RelKind::Figures, data: BTreeMap::new() } });

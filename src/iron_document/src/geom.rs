@@ -16,8 +16,8 @@
 //! change, not ten thousand bounds. Structure (create, delete, reparent,
 //! reorder) is a third, global, revision.
 
+use crate::Tree;
 use crate::facet::{FacetKind, LeafPath};
-use crate::document::Document;
 use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::op::Op;
@@ -95,7 +95,7 @@ impl Affine2 {
 
 /// A node's own transform, read through `read`. A node without a
 /// `transform2d` facet is the identity, as in the bridge.
-pub fn local_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
+pub fn local_affine(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
     if doc.facet(id, FacetKind::Transform2d).is_none() {
         return Affine2::IDENTITY;
     }
@@ -109,7 +109,7 @@ pub fn local_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: No
 /// The node's local space to document 2D space: every live ancestor's local
 /// affine, root first, then the node's own. Equal to Bevy's `GlobalTransform`
 /// for the materialised entity.
-pub fn world_affine(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
+pub fn world_affine(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
     let mut chain = vec![id];
     let mut cur = doc.live(id).and_then(|n| n.parent);
     while let Some(p) = cur {
@@ -188,7 +188,7 @@ impl Affine3 {
 }
 
 /// A node's own 3D transform. A node without `transform3d` is the identity.
-pub fn local_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
+pub fn local_affine3(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
     if doc.facet(id, FacetKind::Transform3d).is_none() {
         return Affine3::IDENTITY;
     }
@@ -201,7 +201,7 @@ pub fn local_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: N
 
 /// The node's local space to its composition's 3D space: every live
 /// ancestor's local 3D affine, root first, then the node's own.
-pub fn world_affine3(doc: &Document, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
+pub fn world_affine3(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
     let mut chain = vec![id];
     let mut cur = doc.live(id).and_then(|n| n.parent);
     while let Some(p) = cur {
@@ -239,7 +239,7 @@ pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
     if read("shadow.color").is_some() {
         pad += num("shadow.dx", 0.0).abs().max(num("shadow.dy", 4.0).abs()) + 3.0 * (num("shadow.blur", 4.0).max(0.0) * 0.5);
     }
-    if store.document().live(id).is_some_and(|n| n.ty.name() == "slider") {
+    if store.tree().live(id).is_some_and(|n| n.ty.name() == "slider") {
         pad = pad.max((num("size.h", 24.0) * 0.5).min(12.0) + 3.0);
     }
     pad
@@ -250,7 +250,7 @@ pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
 /// embed of a 2D composition (its region is the source's content, which a
 /// spatial scene knows), and anything else.
 pub fn local_bounds(store: &StoreCore, id: NodeId) -> Option<LocalBounds> {
-    let doc = store.document();
+    let doc = store.tree();
     let node = doc.live(id)?;
     let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
     let (geometry, hit_pad) = match node.ty.name() {
@@ -290,7 +290,7 @@ pub enum GeometryEffect {
 }
 
 /// The `path` a `contour` or `point` belongs to, if it is inside one.
-fn enclosing_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+fn enclosing_path(doc: Tree<'_>, id: NodeId) -> Option<NodeId> {
     let mut at = doc.live(id)?.parent;
     while let Some(p) = at.and_then(|p| doc.live(p)) {
         if p.ty.name() == "path" {
@@ -303,7 +303,7 @@ fn enclosing_path(doc: &Document, id: NodeId) -> Option<NodeId> {
 
 /// Classify a resolved-value change. A point's position is part of its
 /// path's outline, not a placement of its own.
-pub fn effect_of(doc: &Document, leaf: Leaf) -> GeometryEffect {
+pub fn effect_of(doc: Tree<'_>, leaf: Leaf) -> GeometryEffect {
     let Some(node) = doc.live(leaf.node) else { return GeometryEffect::None };
     let ty = node.ty.name();
     match leaf.path.facet {
@@ -366,7 +366,7 @@ impl Revisions {
 
     /// The placement revisions of `id` and its live ancestors, summed: a
     /// cheap stamp for anything derived from the node's world affine.
-    pub fn chain_stamp(&self, doc: &Document, id: NodeId) -> u64 {
+    pub fn chain_stamp(&self, doc: Tree<'_>, id: NodeId) -> u64 {
         let mut stamp = 0u64;
         let mut at = Some(id);
         while let Some(n) = at {
@@ -396,7 +396,7 @@ impl Revisions {
 
     /// Classify everything pending plus `touched` from the reactive graph,
     /// bump the counters, and hand the change set to the caller.
-    pub(crate) fn take(&mut self, doc: &Document, touched: BTreeSet<Leaf>) -> GeometryChanges {
+    pub(crate) fn take(&mut self, doc: Tree<'_>, touched: BTreeSet<Leaf>) -> GeometryChanges {
         let mut out = GeometryChanges::default();
         if std::mem::take(&mut self.pending_structure) {
             self.structure += 1;
@@ -478,7 +478,7 @@ mod tests {
                 ));
             }
             let mut store = StoreCore::new();
-            let ids = store.document().next_ids(depth);
+            let ids = store.authored().next_ids(depth);
             let mut ops = Vec::new();
             for (i, &(x, y, rot, sx, sy)) in chain.iter().enumerate() {
                 let mut t = Transform2d::default();
@@ -561,7 +561,7 @@ mod tests {
     /// A rect under a group under a root group; returns (root, group, rect).
     fn nested(store: &mut StoreCore) -> [NodeId; 3] {
         use crate::facet::Size;
-        let ids = store.document().next_ids(3);
+        let ids = store.authored().next_ids(3);
         let mut t = Transform2d::default();
         t.x = Slot::Const(Value::Number(10.0));
         let mut size = Size::default();
@@ -596,7 +596,7 @@ mod tests {
         // Rotating the group is one placement change; the rect's local
         // revision and the chain stamp of anything outside the group stay.
         let rect_local = store.revisions().local(rect);
-        let root_stamp = store.revisions().chain_stamp(store.document(), root);
+        let root_stamp = store.revisions().chain_stamp(store.tree(), root);
         store
             .apply(TransactionInput {
                 label: "rotate".into(),
@@ -611,8 +611,8 @@ mod tests {
         assert_eq!((c.structure, c.placement.len(), c.local.len()), (false, 1, 0), "{c:?}");
         assert!(c.placement.contains(&group));
         assert_eq!(store.revisions().local(rect), rect_local);
-        assert_eq!(store.revisions().chain_stamp(store.document(), root), root_stamp);
-        assert_ne!(store.revisions().chain_stamp(store.document(), rect), 0, "the rect's chain includes the moved group");
+        assert_eq!(store.revisions().chain_stamp(store.tree(), root), root_stamp);
+        assert_ne!(store.revisions().chain_stamp(store.tree(), rect), 0, "the rect's chain includes the moved group");
         assert_eq!(store.revisions().structure(), s0);
 
         // A size preview is a local change of the rect, through the graph.
@@ -634,7 +634,7 @@ mod tests {
     fn a_points_move_is_its_paths_local_change() {
         use crate::facet::PathShape;
         let mut store = StoreCore::new();
-        let ids = store.document().next_ids(4);
+        let ids = store.authored().next_ids(4);
         let [path, contour, point, other] = [ids[0], ids[1], ids[2], ids[3]];
         let mut at = Transform2d::default();
         at.x = Slot::Const(Value::Number(5.0));
@@ -667,7 +667,7 @@ mod tests {
     fn local_bounds_follow_shape_type_and_paint() {
         use crate::facet::{Radius, Shadow, Stroke};
         let mut store = StoreCore::new();
-        let ids = store.document().next_ids(2);
+        let ids = store.authored().next_ids(2);
         let mut r = Radius::default();
         r.rx = Slot::Const(Value::Number(10.0));
         r.ry = Slot::Const(Value::Number(4.0));
@@ -696,13 +696,13 @@ mod tests {
         let r = store.local_bounds(ids[1]).unwrap();
         assert_eq!(r.geometry, kurbo::Rect::new(0.0, 0.0, 100.0, 100.0));
         assert_eq!(r.paint_pad, 7.0 + 3.0 * 2.0, "shadow: the larger offset plus three standard deviations");
-        assert!(store.local_bounds(store.document().next_id()).is_none());
+        assert!(store.local_bounds(store.authored().next_id()).is_none());
     }
 
     #[test]
     fn world_affine_reads_previews_and_skips_missing_transforms() {
         let mut store = StoreCore::new();
-        let ids = store.document().next_ids(2);
+        let ids = store.authored().next_ids(2);
         let mut t = Transform2d::default();
         t.x = Slot::Const(Value::Number(100.0));
         store

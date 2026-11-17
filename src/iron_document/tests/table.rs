@@ -34,7 +34,7 @@ fn rows(text: &str) -> Vec<Vec<String>> {
 
 fn make(store: &mut Store, text: &str, preset: Preset) -> NodeId {
     let spec = Spec { rows: rows(text), preset, header: 1, label_col: true, emphasis: Some(2), align: vec![] };
-    let (ops, t) = table::create_ops(store.document(), None, OrderKey::first(), [40.0, 30.0], &spec).unwrap();
+    let (ops, t) = table::create_ops(store.tree(), None, OrderKey::first(), [40.0, 30.0], &spec).unwrap();
     store.apply(tx("add table", ops)).unwrap();
     t
 }
@@ -50,7 +50,7 @@ fn the_reference_table_lays_out_from_its_cells() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, REFERENCE, Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     assert_eq!(cells.len(), 30);
     let grid = store.table_grid(t).unwrap().clone();
     assert_eq!((grid.columns.len(), grid.rows.len()), (6, 5));
@@ -75,7 +75,7 @@ fn the_reference_table_lays_out_from_its_cells() {
     assert!(d.lines.iter().all(|(l, w, _)| l.p0.y == l.p1.y && *w == 1.0 && l.p0.x == 0.0 && (l.p1.x - (lx + lw)).abs() < 1e-6));
     // One transaction: one undo removes it all.
     store.undo(0).unwrap().unwrap();
-    assert!(!store.document().is_live(t));
+    assert!(!store.tree().is_live(t));
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn merged_cells_span_and_lines_go_around_them() {
     let mut store = Store::new();
     // A header spanning columns 2–3, and a label spanning two rows.
     let t = make(&mut store, "x | wide | <\nlabel | 1 | 2\n^ | 3 | 4", Preset::Boxed);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     assert_eq!(cells.len(), 7);
     let grid = store.table_grid(t).unwrap().clone();
     let area = |id: NodeId| *grid.cells.iter().find(|a| a.id == id).unwrap();
@@ -119,7 +119,7 @@ fn merged_cells_span_and_lines_go_around_them() {
     assert_eq!(v.p0.y, grid.rows[1].0);
     // A merge that is not a rectangle is refused.
     let spec = Spec { rows: rows("a | b\n^ | <"), preset: Preset::Light, header: 1, label_col: false, emphasis: None, align: vec![] };
-    assert!(table::create_ops(store.document(), None, OrderKey::first(), [0.0, 0.0], &spec).is_err());
+    assert!(table::create_ops(store.tree(), None, OrderKey::first(), [0.0, 0.0], &spec).is_err());
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn a_bound_cell_relays_the_table() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, "name | value\nlaser | 1", Preset::Light);
-    let cell = table::cells(store.document(), t)[3];
+    let cell = table::cells(store.tree(), t)[3];
     let w = num(&store, t, "size.w");
     let e = Expr::parse("\"a much longer reading than before\"").unwrap();
     store.apply(tx("bind", vec![Op::Set { id: cell, path: path("text.content"), slot: Slot::Bound(e) }])).unwrap();
@@ -141,7 +141,7 @@ fn edit(store: &mut Store, t: NodeId, verb: &str, cells: &[NodeId]) {
 
 fn shape(store: &Store, t: NodeId) -> (usize, usize, usize) {
     let g = store.table_grid(t).unwrap();
-    (g.columns.len(), g.rows.len(), table::cells(store.document(), t).len())
+    (g.columns.len(), g.rows.len(), table::cells(store.tree(), t).len())
 }
 
 #[test]
@@ -157,9 +157,9 @@ fn rows_and_columns_are_added_and_removed_in_one_step_each() {
     edit(&mut store, t, "add_column", &[]);
     assert_eq!(shape(&store, t), (4, 4, 16));
     // The new column's cells sit at the end of each row.
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     let area = |id: NodeId| *store.table_grid(t).unwrap().cells.iter().find(|a| a.id == id).unwrap();
-    assert_eq!(table::cells(store.document(), t).iter().filter(|&&c| area(c).col == 3).count(), 4);
+    assert_eq!(table::cells(store.tree(), t).iter().filter(|&&c| area(c).col == 3).count(), 4);
     assert_eq!((area(cells[1]).row, area(cells[1]).col), (0, 1));
     edit(&mut store, t, "remove_column", &[]);
     edit(&mut store, t, "remove_row", &[]);
@@ -174,7 +174,7 @@ fn merge_keeps_the_words_and_split_restores_the_cells() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, "a | b | c\n1 | 2 | 3\n4 | 5 | 6", Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     // "2", "3", "5", "6": a 2 × 2 block.
     edit(&mut store, t, "merge", &[cells[4], cells[8]]);
     assert_eq!(shape(&store, t), (3, 3, 6));
@@ -188,7 +188,7 @@ fn merge_keeps_the_words_and_split_restores_the_cells() {
     assert_eq!(shape(&store, t), (3, 3, 9));
     // The new cells fill the block in reading order: row 2 then row 3.
     let g = store.table_grid(t).unwrap().clone();
-    let now = table::cells(store.document(), t);
+    let now = table::cells(store.tree(), t);
     let pos: Vec<(usize, usize)> = now.iter().map(|&c| { let a = g.cells.iter().find(|a| a.id == c).unwrap(); (a.row, a.col) }).collect();
     assert_eq!(pos, vec![(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)]);
     store.undo(0).unwrap().unwrap();
@@ -201,7 +201,7 @@ fn a_preset_restyles_the_table_and_keeps_its_emphasis() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, REFERENCE, Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     edit(&mut store, t, "preset:boxed", &[]);
     let grid = store.table_grid(t).unwrap().clone();
     // Boxed: every row and column boundary and the four sides.
@@ -224,14 +224,14 @@ fn deleting_a_cell_disturbs_only_its_row() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, "a | b | c\n1 | 2 | 3\n4 | 5 | 6", Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     store.apply(tx("delete", vec![Op::Delete { id: cells[4] }])).unwrap();
     let g = store.table_grid(t).unwrap().clone();
     let at = |id: NodeId| g.cells.iter().find(|a| a.id == id).map(|a| (a.row, a.col)).unwrap();
     // "3" closes up into the gap; "4", "5", "6" stay in row 3.
     assert_eq!(at(cells[5]), (1, 1));
     assert_eq!([at(cells[6]), at(cells[7]), at(cells[8])], [(2, 0), (2, 1), (2, 2)]);
-    assert_eq!(table::rows(store.document(), t).len(), 3);
+    assert_eq!(table::rows(store.tree(), t).len(), 3);
 }
 
 fn view(store: &Store) -> String {
@@ -243,7 +243,7 @@ fn a_model_reads_a_table_as_its_rows() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, REFERENCE, Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     // One cell restyled by hand, one merged pair, one bound cell.
     store.apply(tx("red", vec![Op::Set { id: cells[9], path: path("fill.color"), slot: Slot::Const(Value::Color([0.8, 0.1, 0.1, 1.0])) }])).unwrap();
     let e = Expr::parse("fmt(0.5, \"dB\", 2)").unwrap();
@@ -268,12 +268,12 @@ fn replacing_the_words_keeps_ids_when_the_shape_holds() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, "a | b | c\n1 | 2 | 3", Preset::Light);
-    let before = table::cells(store.document(), t);
+    let before = table::cells(store.tree(), t);
     // Same shape: one cell changes, one is bound, and nothing else is touched.
     let ops = table::replace_ops(&store, t, &table::parse_rows("a | b | c\n1 | 20 | {= fmt(3, 1)}")).unwrap();
     assert_eq!(ops.len(), 2);
     store.apply(tx("replace", ops)).unwrap();
-    assert_eq!(table::cells(store.document(), t), before);
+    assert_eq!(table::cells(store.tree(), t), before);
     assert_eq!(store.resolved(before[4], path("text.content")), Some(Value::Str("20".into())));
     assert_eq!(store.resolved(before[5], path("text.content")), Some(Value::Str("3.0".into())));
     // A new shape: rows made again, in the same look, with a merge.
@@ -281,11 +281,11 @@ fn replacing_the_words_keeps_ids_when_the_shape_holds() {
     store.apply(tx("replace", ops)).unwrap();
     let g = store.table_grid(t).unwrap();
     assert_eq!((g.columns.len(), g.rows.len(), g.cells.len()), (3, 3, 8));
-    let first = table::cells(store.document(), t)[0];
+    let first = table::cells(store.tree(), t)[0];
     assert_eq!(store.resolved(first, path("font.family")), Some(Value::Str("JetBrains Mono".into())));
     // One undo puts the old rows back.
     store.undo(0).unwrap().unwrap();
-    assert_eq!(table::cells(store.document(), t), before);
+    assert_eq!(table::cells(store.tree(), t), before);
 }
 
 #[test]
@@ -293,14 +293,14 @@ fn spreadsheet_cells_paste_into_a_table_from_the_selected_cell() {
     fonts();
     let mut store = Store::new();
     let t = make(&mut store, "a | b | c\n1 | 2 | 3", Preset::Light);
-    let cells = table::cells(store.document(), t);
+    let cells = table::cells(store.tree(), t);
     // A 2 × 2 block from "2": overwrites 2, 3, and grows a row and a column.
     let rows = table::from_tsv("x\ty\tz\r\n<\t^\tw\r\n");
     let ops = table::paste_ops(&store, t, Some(cells[4]), &rows).unwrap();
     store.apply(tx("paste", ops)).unwrap();
     let g = store.table_grid(t).unwrap();
     assert_eq!((g.columns.len(), g.rows.len()), (4, 3));
-    let words: Vec<String> = table::cells(store.document(), t).iter().map(|&c| store.resolved(c, path("text.content")).map(|v| text::display(&v)).unwrap()).collect();
+    let words: Vec<String> = table::cells(store.tree(), t).iter().map(|&c| store.resolved(c, path("text.content")).map(|v| text::display(&v)).unwrap()).collect();
     // The pasted "<" and "^" are words, not merges.
     assert_eq!(words, ["a", "b", "c", "", "1", "x", "y", "z", "", "<", "^", "w"]);
     // Pasted on the canvas: a table centred where it lands.

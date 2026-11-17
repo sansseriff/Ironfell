@@ -28,7 +28,7 @@ fn inter() {
 }
 
 fn text(store: &mut Store, content: Slot, sizing: &str) -> NodeId {
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut t = Text::default();
     t.content = content;
     t.sizing = Slot::Const(Value::Enum(sizing.into()));
@@ -74,7 +74,7 @@ fn sizing_modes() {
 fn content_binds_through_fmt() {
     inter();
     let mut store = Store::new();
-    let gauge = store.document().next_ids(1)[0];
+    let gauge = store.authored().next_ids(1)[0];
     let mut sl = Slider::default();
     sl.value = Slot::Const(Value::Number(0.123456));
     store.apply(tx("gauge", vec![Op::Create { id: gauge, ty: ty("slider"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), sl.wrap()] }])).unwrap();

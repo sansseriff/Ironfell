@@ -86,7 +86,7 @@ fn hue(h: f64) -> [f32; 4] {
 /// replacing an earlier one, so a second run at another size swaps the scene
 /// in one undoable step and the `stress` view keeps its name to show.
 pub fn stress_scene(store: &Store, shapes: usize) -> (TransactionInput, StressIds) {
-    let doc = store.document();
+    let doc = store.tree();
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
     let shapes = shapes.max(1);
     let cells = shapes.div_ceil(CELL);
@@ -246,7 +246,7 @@ pub fn meters_scene(store: &mut Store, count: usize) -> Result<serde_json::Value
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
     let tx = |label: &str, ops| TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
     let err = |e: Vec<iron_document::op::ApplyError>| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
-    let doc = store.document();
+    let doc = store.tree();
     let mut ops = Vec::new();
     for old in iron_document::composition::compositions(doc) {
         if doc.get::<Name>(old).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("meters") {
@@ -269,7 +269,7 @@ pub fn meters_scene(store: &mut Store, count: usize) -> Result<serde_json::Value
     // A face worth baking: 60 tick marks round the dial, between it and the
     // needle in painter order, added to the definition so every instance
     // draws them.
-    let doc = store.document();
+    let doc = store.tree();
     let def = iron_document::standard::find(doc, "meter").ok_or("no meter definition")?;
     let template = iron_document::definition::template_of(doc, def, "free").ok_or("no meter template")?;
     let kids = doc.children(template).to_vec();
@@ -290,7 +290,7 @@ pub fn meters_scene(store: &mut Store, count: usize) -> Result<serde_json::Value
         ops.push(Op::Create { id, ty: ty("rect"), parent: Some(template), order, facets: vec![named(&format!("tick {i}")), at(55.0 + r * a.cos(), 55.0 + r * a.sin(), a), sz.wrap(), fill([0.25, 0.27, 0.32, 1.0])] });
     }
     store.apply(tx("meter ticks", ops)).map_err(err)?;
-    let doc = store.document();
+    let doc = store.tree();
     let port = |u: NodeId, name: &str| -> Option<NodeId> {
         let e = iron_document::expand::use_entity(doc, u)?;
         doc.children(e).iter().copied().find(|&p| doc.get::<Name>(p).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name))

@@ -11,11 +11,12 @@
 //! costs the same whatever a group holds. A 2D composition on a plane and a
 //! 3D mesh light up under a lit ancestor too ([`Highlights::covers`]).
 
+use iron_document::Tree;
 use super::DocumentStore;
 use crate::SelectionState;
 use bevy::prelude::*;
 use iron_document::composition;
-use iron_document::{Document, NodeId};
+use iron_document::NodeId;
 use std::collections::BTreeSet;
 
 /// Every node highlighted this frame: derived from [`SelectionState`] and
@@ -27,7 +28,7 @@ pub struct Highlights {
 }
 
 /// The nodes that light up for `picked`.
-pub fn lit(doc: &Document, picked: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
+pub fn lit(doc: Tree<'_>, picked: impl IntoIterator<Item = NodeId>) -> BTreeSet<NodeId> {
     let mut out = BTreeSet::new();
     for node in picked {
         match composition::figure_of(doc, node) {
@@ -53,7 +54,7 @@ pub fn lit(doc: &Document, picked: impl IntoIterator<Item = NodeId>) -> BTreeSet
 impl Highlights {
     /// `(selected, hovered)` for `id` drawn whole: lit itself or under a lit
     /// ancestor. O(depth); for the few nodes drawn that way (planes, meshes).
-    pub fn covers(&self, doc: &Document, id: NodeId) -> (bool, bool) {
+    pub fn covers(&self, doc: Tree<'_>, id: NodeId) -> (bool, bool) {
         let (mut selected, mut hovered) = (false, false);
         let mut cur = Some(id);
         while let Some(n) = cur {
@@ -74,12 +75,12 @@ pub fn update_highlights(
     mut highlights: ResMut<Highlights>,
     mut seen: Local<Option<iron_document::Version>>,
 ) {
-    let version = store.0.document().version();
+    let version = store.0.authored().version();
     if !selection.is_changed() && *seen == Some(version) {
         return;
     }
     *seen = Some(version);
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let next = Highlights {
         // Marked nodes are outlined as the selection is (they are what the
         // selected slices move), without its box or handles.

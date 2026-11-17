@@ -14,6 +14,7 @@
 //! is. Layout reads what it does not publish, and beneath what it does
 //! ([`base`]), so its own output never feeds back into it.
 
+use crate::tree::Tree as DocTree;
 use std::collections::BTreeMap;
 
 use iron_layout::{Align, Area, Ask, Container, Dim, Item, Justify, Mode, Node, Track, Tree};
@@ -163,7 +164,7 @@ fn content_bounds(store: &StoreCore, id: NodeId) -> Option<Rect> {
     let mut out: Option<Rect> = None;
     for &c in store.doc.children(id) {
         let Some(r) = content_bounds(store, c) else { continue };
-        let a = crate::geom::local_affine(&store.doc, &read, c);
+        let a = crate::geom::local_affine(DocTree::over(&store.doc), &read, c);
         let pts = [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]].map(|p| a.apply(p));
         let (x0, x1) = pts.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
         let (y0, y1) = pts.iter().map(|p| p[1]).fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
@@ -446,10 +447,10 @@ fn constrained(store: &StoreCore) -> BTreeMap<Leaf, Value> {
     let mut out = BTreeMap::new();
     let use_ty = TypeId::lookup("use").expect("registered");
     for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
-        let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
+        let def = crate::expand::main_definition(DocTree::over(doc), u).or_else(|| crate::expand::use_entity(DocTree::over(doc), u).and_then(|e| crate::expand::linked_definition(DocTree::over(doc), e)));
         let Some(def) = def else { continue };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
-        let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
+        let Some(t) = crate::definition::template_of(DocTree::over(doc), def, &notation) else { continue };
         let constant = |id: NodeId, leaf: &str| doc.leaf(id, path(leaf)).and_then(|s| s.constant()).and_then(|v| v.as_f64());
         let (Some(w0), Some(h0)) = (constant(t, "size.w"), constant(t, "size.h")) else { continue };
         let (w, h) = (num(store, u, "size.w", w0), num(store, u, "size.h", h0));
@@ -524,7 +525,7 @@ fn constrained(store: &StoreCore) -> BTreeMap<Leaf, Value> {
 /// along, the gap the mean of the gaps between them, and they are ordered
 /// as they sit, so the layout keeps the arrangement it was given. One
 /// transaction's ops, and the group.
-pub fn add_ops(doc: &crate::Document, extent: &dyn Fn(NodeId) -> Option<Rect>, selection: &[NodeId]) -> Result<(Vec<crate::Op>, NodeId), String> {
+pub fn add_ops(doc: DocTree<'_>, extent: &dyn Fn(NodeId) -> Option<Rect>, selection: &[NodeId]) -> Result<(Vec<crate::Op>, NodeId), String> {
     use crate::facet::{Layout, LeafStruct, Name, Transform2d};
     use crate::{Op, OrderKey, Slot};
     let live: Vec<NodeId> = selection.iter().copied().filter(|&n| doc.is_live(n)).collect();

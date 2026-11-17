@@ -14,9 +14,10 @@
 //! Hosts read painter-ordered candidates in composition space and keep the
 //! exact tests (shape containment, clips, embed regions) to themselves.
 
+use iron_document::Tree;
 use crate::{Bounds, BoundsIndex, Record};
 use iron_document::composition::{self, Dims};
-use iron_document::{Document, NodeId, Store, TypeId};
+use iron_document::{NodeId, Store, TypeId};
 use kurbo::{Affine, Point, Rect};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,9 +30,9 @@ const MAX_REFERENCE_DEPTH: u32 = 64;
 
 /// Every live definition template, each after the templates its references
 /// show: inner first.
-fn template_order(doc: &Document) -> Vec<NodeId> {
+fn template_order(doc: Tree<'_>) -> Vec<NodeId> {
     let Some(template) = TypeId::lookup("template") else { return Vec::new() };
-    fn visit(doc: &Document, t: NodeId, depth: u32, seen: &mut BTreeSet<NodeId>, out: &mut Vec<NodeId>) {
+    fn visit(doc: Tree<'_>, t: NodeId, depth: u32, seen: &mut BTreeSet<NodeId>, out: &mut Vec<NodeId>) {
         if depth > MAX_REFERENCE_DEPTH || !seen.insert(t) {
             return;
         }
@@ -116,7 +117,7 @@ fn scope_of(node: NodeId) -> Option<NodeId> {
     Some(node)
 }
 
-fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
+fn lineage(doc: Tree<'_>, id: NodeId) -> Vec<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
     let template = TypeId::lookup("template").expect("registered");
     let mut out = vec![id];
@@ -133,7 +134,7 @@ fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
     out
 }
 
-fn is_type(doc: &Document, id: NodeId, ty: &str) -> bool {
+fn is_type(doc: Tree<'_>, id: NodeId, ty: &str) -> bool {
     doc.live(id).is_some_and(|n| n.ty.name() == ty)
 }
 
@@ -373,7 +374,7 @@ impl Scene {
                 continue;
             }
             let Some(g) = scope else { continue };
-            if is_type(store.document(), g, "composition") || is_type(store.document(), g, "template") {
+            if is_type(store.tree(), g, "composition") || is_type(store.tree(), g, "template") {
                 // Content changed: the embeds (and references) showing it
                 // follow.
                 for embed in self.shown_by.get(&g).cloned().unwrap_or_default() {
@@ -390,7 +391,7 @@ impl Scene {
             } else if let Some(u) = union {
                 // A group that just gained its first content without a
                 // structural change: a leaf whose bounds appeared.
-                let doc = store.document();
+                let doc = store.tree();
                 let parent = doc.live(g).and_then(|n| n.parent);
                 let affine = affine_of(store.local_affine(g));
                 let order = self.entries.values().map(|e| e.order).max().unwrap_or(0);
@@ -426,7 +427,7 @@ impl Scene {
 
     /// A 2D embed's region: its frame, or the source's content bounds.
     fn embed_region(&self, store: &Store, embed: NodeId, source: NodeId) -> Option<(Rect, bool)> {
-        let doc = store.document();
+        let doc = store.tree();
         if let Some(f) = doc.get::<iron_document::facet::Frame>(embed) {
             let n = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_f64()).unwrap_or(0.0);
             return Some((Rect::new(n(&f.x0), n(&f.y0), n(&f.x1), n(&f.y1)), true));
@@ -440,7 +441,7 @@ impl Scene {
         let Kind::Embed2d { source, .. } = e.kind else { return };
         // A reference is its template's content placed, geometry and paint
         // alike, as a group's entry is its scope's.
-        if iron_document::expand::reference_template(store.document(), embed).is_some() {
+        if iron_document::expand::reference_template(store.tree(), embed).is_some() {
             match self.scopes.get(&scope_of(source)).and_then(|s| s.union) {
                 Some(u) => self.upsert(embed, scope, u.mapped(affine), affine),
                 None => self.remove(embed),
@@ -458,7 +459,7 @@ impl Scene {
 
     /// Everything from scratch: scopes, entries, chains, painter order.
     fn rebuild(&mut self, store: &Store) {
-        let doc = store.document();
+        let doc = store.tree();
         let old_damage: Vec<Rect> = self.entries.keys().filter_map(|id| self.painted(*id)).collect();
         *self = Scene { generation: self.generation.wrapping_add(1), built: true, ..Default::default() };
         self.damage = old_damage;
@@ -537,7 +538,7 @@ impl Scene {
     /// Index `id` into `scope`; recurse into its children as a scope of
     /// its own. Returns whether anything below `id` (or `id`) was indexed.
     fn build_node(&mut self, store: &Store, id: NodeId, scope: Option<NodeId>, depth: u32, order: &BTreeMap<NodeId, u32>) -> bool {
-        let doc = store.document();
+        let doc = store.tree();
         let Some(node) = doc.live(id) else { return false };
         // A repeat's template is not drawn, so nothing in it can be hit.
         if iron_document::expand::in_repeat_template(doc, id) {
@@ -605,7 +606,7 @@ impl Scene {
         true
     }
 
-    fn insert(&mut self, id: NodeId, scope: Option<NodeId>, kind: Kind, affine: Affine, bounds: Bounds, order: u32, doc: &Document) {
+    fn insert(&mut self, id: NodeId, scope: Option<NodeId>, kind: Kind, affine: Affine, bounds: Bounds, order: u32, doc: Tree<'_>) {
         self.entries.insert(id, Entry { scope, kind, affine, bounds, order });
         self.chains.insert(id, lineage(doc, id));
         if let Kind::Group = kind {

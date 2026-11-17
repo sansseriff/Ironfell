@@ -196,7 +196,7 @@ pub(super) fn sync_planes(
     mut materials: ResMut<Assets<PlaneMaterial>>,
     mut active: Query<&mut crate::bevy_app::ActiveStateMarker>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     for (entity, prov, global, layers, plane) in &mut planes {
         let id = prov.0;
         if !nest::is_embed(doc, id) {

@@ -135,7 +135,7 @@ pub fn plan(store: &StoreCore, xml: &str, svg: Option<SvgImport>) -> Result<Plan
         return Err(parse(format!("text inside <edit> is not read ({:?}); write prose outside the <edit>", root.text.trim().chars().take(40).collect::<String>())));
     }
     let verbs: Vec<String> = root.children.iter().map(describe).collect();
-    let mut p = Planner { store, svg, verbs: &verbs, scratch: StoreCore::with_document(store.document().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
+    let mut p = Planner { store, svg, verbs: &verbs, scratch: StoreCore::with_document(store.authored().clone()), ops: Vec::new(), op_verb: Vec::new(), summary: Vec::new(), nodes: BTreeMap::new(), places: BTreeMap::new(), pending: Vec::new() };
     for (i, el) in root.children.iter().enumerate() {
         if !VERBS.contains(&el.name.as_str()) && TypeId::lookup(&el.name).is_none() {
             return Err(Failure::Errors(vec![p.error(i, "parse", format!("<{}> is not a verb or a node type; verbs: {}", el.name, VERBS.join(", ")))]));
@@ -250,7 +250,7 @@ impl Planner<'_, '_> {
         let kind = if message.contains("no node #") || message.contains("is not a live node") { "unknown_node" } else { kind };
         // A node this edit deleted: the version the store names is the plan's own.
         let message = match message.split_once(" was deleted at version ") {
-            Some((id, v)) if v.trim().parse::<u64>().is_ok_and(|v| v > self.store.document().version().0) => format!("{id} was deleted earlier in this edit"),
+            Some((id, v)) if v.trim().parse::<u64>().is_ok_and(|v| v > self.store.authored().version().0) => format!("{id} was deleted earlier in this edit"),
             _ => message,
         };
         VerbError { op: Some(verb), kind: kind.into(), message: self.named(&message), verb: self.verbs.get(verb).cloned() }
@@ -277,7 +277,7 @@ impl Planner<'_, '_> {
     }
 
     fn names(&self) -> Names<'_> {
-        Names { nodes: self.nodes.clone(), places: self.places.clone(), doc: Some(self.scratch.document()) }
+        Names { nodes: self.nodes.clone(), places: self.places.clone(), doc: Some(self.scratch.tree()) }
     }
 
     /// Apply `ops`, written by verb `verb`, to the scratch document and
@@ -301,7 +301,7 @@ impl Planner<'_, '_> {
             return self.nodes.get(name).map(|(id, _)| *id).or_else(|| self.places.get(name).map(|p| p.picture)).ok_or_else(|| format!("{raw} names no node made in this edit"));
         }
         let id: NodeId = raw.parse().map_err(|_| format!("{raw:?} is not a node id (#…) or a $name"))?;
-        self.scratch.document().live(id).map(|_| id).ok_or_else(|| format!("no node {raw}"))
+        self.scratch.tree().live(id).map(|_| id).ok_or_else(|| format!("no node {raw}"))
     }
 
     /// Order keys for `count` new children of `parent`: after its last
@@ -310,7 +310,7 @@ impl Planner<'_, '_> {
     /// where a node in `planned` or `gone` (moved away by a verb not yet
     /// applied) no longer sits where the document has it.
     fn keys(&self, parent: Option<NodeId>, after: Option<&str>, first: bool, count: usize, planned: &[(NodeId, OrderKey)], gone: &[NodeId]) -> Result<Vec<OrderKey>, String> {
-        let doc = self.scratch.document();
+        let doc = self.scratch.tree();
         let siblings: Vec<NodeId> = match parent {
             Some(p) if doc.live(p).is_some() => doc.children(p).to_vec(),
             Some(_) => Vec::new(),
@@ -342,7 +342,7 @@ impl Planner<'_, '_> {
     /// the first of them sits: between the siblings around it, so none of
     /// them moves and no two share a key.
     fn restack(&self, parent: NodeId, ids: &[NodeId]) -> Result<Vec<Op>, String> {
-        let doc = self.scratch.document();
+        let doc = self.scratch.tree();
         let keys: Vec<OrderKey> = ids.iter().filter_map(|&id| doc.live(id)).map(|n| n.order.clone()).collect();
         let Some(start) = keys.iter().min().cloned() else { return Ok(Vec::new()) };
         let others: Vec<OrderKey> = doc.children(parent).iter().filter(|c| !c.is_expanded() && !ids.contains(c)).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).collect();
@@ -500,7 +500,7 @@ impl Planner<'_, '_> {
         lifted.sort_by_key(|p| p.verb);
 
         // Ids for every node first, so any may name another.
-        let mut next = self.scratch.document().next_id().raw();
+        let mut next = self.scratch.authored().next_id().raw();
         let mut ids = Vec::new();
         for (verb, el) in &trees {
             markup::number(std::slice::from_ref(el), &mut next, &mut self.nodes, &mut ids).map_err(|e| one(self, *verb, e))?;
@@ -530,7 +530,7 @@ impl Planner<'_, '_> {
                     }
                     Some(p)
                 }
-                Some(name) => Some(crate::parts::sheet_named(self.scratch.document(), name).map_err(|e| one(self, verb, format!("in=\"{name}\": {e}")))?),
+                Some(name) => Some(crate::parts::sheet_named(self.scratch.tree(), name).map_err(|e| one(self, verb, format!("in=\"{name}\": {e}")))?),
             };
             // Keys among what exists and what this edit already put there.
             let order = {
@@ -540,7 +540,7 @@ impl Planner<'_, '_> {
                 }).collect();
                 self.keys(parent, el.attr("after"), el.attr("first").is_some_and(|f| f != "false"), 1, &planned, &[]).map_err(|e| one(self, verb, e))?.remove(0)
             };
-            let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.document()) };
+            let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.tree()) };
             let mut ops = Vec::new();
             markup::emit(el, parent, order, &mut ids, &names, &mut ops).map_err(|e| one(self, verb, e))?;
             if let (Some(_), None, None, Some(Op::Create { id, .. })) = (el.attr("in"), el.attr("after"), el.attr("first"), ops.first()) {
@@ -558,7 +558,7 @@ impl Planner<'_, '_> {
             }
             let mut el = p.el.clone();
             // Ids for this edit's nodes; a place's names are compose.rs's.
-            let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.document()) };
+            let names = Names { nodes: self.nodes.clone(), places: BTreeMap::new(), doc: Some(self.scratch.tree()) };
             for (k, v) in el.attrs.iter_mut() {
                 if k != "id" {
                     *v = markup::refs(k, v, &names).map_err(|e| one(self, p.verb, format!("{k}=\"{v}\": {e}")))?;
@@ -623,7 +623,7 @@ impl Planner<'_, '_> {
                     None => continue,
                 },
             };
-            let Some(parent) = self.scratch.document().live(id).and_then(|n| n.parent) else { continue };
+            let Some(parent) = self.scratch.tree().live(id).and_then(|n| n.parent) else { continue };
             match groups.iter_mut().find(|g| g.0 == parent) {
                 Some(g) => {
                     g.1 |= place;
@@ -693,7 +693,7 @@ impl Planner<'_, '_> {
         match el.name.as_str() {
             "set" | "add" => {
                 let id = self.node(el.need("id").map_err(|e| fail(self, "parse", e))?).map_err(|e| fail(self, "parse", e))?;
-                let ty = self.scratch.document().live(id).map(|n| n.ty).ok_or_else(|| fail(self, "unknown_node", format!("no node {} (deleted earlier in this edit)", el.attr("id").unwrap_or(""))))?;
+                let ty = self.scratch.tree().live(id).map(|n| n.ty).ok_or_else(|| fail(self, "unknown_node", format!("no node {} (deleted earlier in this edit)", el.attr("id").unwrap_or(""))))?;
                 let mut pairs: Vec<(String, String)> = Vec::new();
                 let skip: &[&str] = if el.attr("path").is_some() { &["id", "type", "path", "value", "bind"] } else { &["id", "type"] };
                 if let Some(path) = el.attr("path") {
@@ -707,7 +707,7 @@ impl Planner<'_, '_> {
                     return Err(fail(self, "parse", "nothing to set; give leaf attributes such as x=\"10\", or path=\"size.h\" value=\"10\"".into()));
                 }
                 let names = self.names();
-                let doc = self.scratch.document();
+                let doc = self.scratch.tree();
                 // A facet the node has, or that a verb before this one adds.
                 let has = |kind: crate::facet::FacetKind| {
                     doc.facets_of(id).any(|f| f.kind() == kind)
@@ -800,7 +800,7 @@ impl Planner<'_, '_> {
                 }
                 // After the links held back, which have not taken theirs yet.
                 let held = self.pending.iter().filter(|(op, _)| matches!(op, Op::Link { .. })).count() as u64;
-                let id = self.scratch.document().next_relation_id().offset(held);
+                let id = self.scratch.authored().next_relation_id().offset(held);
                 self.hold(i, vec![Op::Link { rel: Relation { id, from, to, rel, data } }]);
                 Ok(())
             }
@@ -830,7 +830,7 @@ impl Planner<'_, '_> {
                 let (ops, summary) = crate::parts::circuit_ops(&self.scratch, &markup).map_err(|e| fail(self, "circuit", e))?;
                 self.push(i, ops).map_err(Failure::Errors)?;
                 self.summary.push(format!("  <circuit>{summary}</circuit>"));
-                if let Ok(id) = crate::parts::sheet_named(self.scratch.document(), &sheet) {
+                if let Ok(id) = crate::parts::sheet_named(self.scratch.tree(), &sheet) {
                     self.summary.push(format!("  <netlist sheet=\"{sheet}\">\n{}\n  </netlist>", crate::parts::netlist(&self.scratch, id)));
                 }
                 Ok(())
@@ -840,7 +840,7 @@ impl Planner<'_, '_> {
                 // A context printed by a view carries its node's id; the name decides.
                 let attrs: String = el.attrs.iter().filter(|(k, _)| k != "id").map(|(k, v)| format!(" {k}=\"{}\"", escape(v).replace('"', "&quot;"))).collect();
                 let markup = format!("<context{attrs}>{}</context>", el.inner);
-                let (ops, node) = crate::contexts::put_ops(self.scratch.document(), &markup).map_err(|e| fail(self, "context", e))?;
+                let (ops, node) = crate::contexts::put_ops(self.scratch.tree(), &markup).map_err(|e| fail(self, "context", e))?;
                 self.push(i, ops).map_err(Failure::Errors)?;
                 self.summary.push(format!("  <context id=\"{node}\"/>"));
                 Ok(())
@@ -866,7 +866,7 @@ impl Planner<'_, '_> {
                 };
                 match self.scratch.link(a, b, keep, Actor::Model) {
                     Ok(tx) => self.push(i, tx.ops).map_err(Failure::Errors),
-                    Err(crate::composition::LinkError::Question(q)) => Err(Failure::Markup(question(self.store.document().version().0, a, b, &q))),
+                    Err(crate::composition::LinkError::Question(q)) => Err(Failure::Markup(question(self.store.authored().version().0, a, b, &q))),
                     Err(e) => Err(fail(self, "link", e.to_string())),
                 }
             }
@@ -914,7 +914,7 @@ impl Planner<'_, '_> {
         };
         let at = [num("x")?.unwrap_or(0.0), num("y")?.unwrap_or(0.0)];
         let order = self.keys(Some(parent), None, false, 1, &[], &[])?.remove(0);
-        let doc = self.scratch.document();
+        let doc = self.scratch.tree();
         let (ops, made) = table::captioned_ops(doc, Some(parent), order, at, &spec, el.attr("caption"))?;
         self.push(i, ops).map_err(flatten)?;
         self.summary.push(format!("  <table id=\"{made}\"/>"));
@@ -934,7 +934,7 @@ impl Planner<'_, '_> {
             }
         };
         let (source, after, block) = (id_of("narrative")?, id_of("after")?, id_of("block")?);
-        let doc = self.scratch.document();
+        let doc = self.scratch.tree();
         let (n, edits, keys) = if el.name == "write" {
             let source = source.ok_or("<write> needs narrative=\"#N\" (and after=\"#B\", or after=\"end\")")?;
             let n = narrative::find(doc, &source).ok_or_else(|| format!("no narrative {source:?}"))?;

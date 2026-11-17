@@ -43,6 +43,7 @@ pub mod stats;
 pub mod stress;
 mod text;
 
+use iron_document::Tree;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
@@ -57,7 +58,7 @@ pub(crate) use panel_views::resolve_panel_views;
 pub use render::{DocumentPanelLayer, LIT_HOVERED, LIT_SELECTED, render_document_layer};
 pub use spatial::SpatialScene;
 
-/// The authored store, as a resource. Reads go through `.0.document()`;
+/// The authored store, as a resource. Reads go through `.0.tree()`;
 /// writes go through [`PendingTransactions`], never through here.
 #[derive(Resource)]
 pub struct DocumentStore(pub Store);
@@ -217,7 +218,7 @@ pub struct GeometryRevision(pub u64, BTreeMap<nest::Home, u64>);
 
 impl GeometryRevision {
     /// Bump for a change to `nodes`, by the compositions they draw in.
-    fn touch(&mut self, doc: &iron_document::Document, nodes: &BTreeSet<NodeId>) {
+    fn touch(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>) {
         self.0 = self.0.wrapping_add(1);
         for &n in nodes {
             let r = self.1.entry(nest::home(doc, n)).or_default();
@@ -237,7 +238,7 @@ impl GeometryRevision {
     /// nodes for the viewer, and changes of unknown home. A change anywhere
     /// else, a Stats tick beside a large drawing, leaves it alone
     /// (render-cache.md §4.3).
-    pub fn of_view(&self, doc: &iron_document::Document, view: &PanelView) -> u64 {
+    pub fn of_view(&self, doc: Tree<'_>, view: &PanelView) -> u64 {
         let get = |h: nest::Home| self.1.get(&h).copied().unwrap_or(0);
         let mut stamp = get(nest::Home::Unknown);
         if view.loose {
@@ -399,8 +400,8 @@ pub(crate) fn sync_document(
     if store.0.dark() == light {
         store.0.set_theme(!light);
     }
-    let session_named = |doc: &iron_document::Document, name: &str| doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
-    let build_latency = latency.0 && !session_named(store.0.document(), iron_document::standard::LATENCY);
+    let session_named = |doc: Tree<'_>, name: &str| doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
+    let build_latency = latency.0 && !session_named(store.0.tree(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && timeline.as_ref().is_none_or(|(_, p)| p.light == light)
         && *library_light == Some(light)
@@ -409,7 +410,7 @@ pub(crate) fn sync_document(
         && gestures.0.is_empty()
         && !store.0.has_changes()
         && !store.0.has_derived_ops()
-        && store.0.document().version() == synced.0
+        && store.0.authored().version() == synced.0
         // The session alone changing counts: the timeline draws what is
         // selected (a transition's picked slices).
         && store.0.session_version() == *session_seen
@@ -419,7 +420,7 @@ pub(crate) fn sync_document(
     }
     // A pass with only previewed values to drain is a drag frame, timed
     // apart from applying transactions.
-    let previews_only = pending.0.is_empty() && history.0.is_empty() && load.0.is_none() && gestures.0.is_empty() && store.0.document().version() == synced.0;
+    let previews_only = pending.0.is_empty() && history.0.is_empty() && load.0.is_none() && gestures.0.is_empty() && store.0.authored().version() == synced.0;
     let _timing = crate::perf::span(if previews_only { crate::perf::Phase::GestureReconcile } else { crate::perf::Phase::Sync });
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
@@ -438,12 +439,12 @@ pub(crate) fn sync_document(
         drawables.0.clear();
         store.0 = loaded;
         *origin = DocumentOrigin::for_scope(store.0.scope());
-        synced.0 = store.0.document().version();
-        affected.extend(store.0.document().live_nodes().map(|n| n.id));
+        synced.0 = store.0.authored().version();
+        affected.extend(store.0.tree().live_nodes().map(|n| n.id));
         debug!(
             target: "iron_debug",
             "loaded document v{} ({} live nodes)",
-            store.0.document().version().0,
+            store.0.authored().version().0,
             affected.len()
         );
     }
@@ -534,8 +535,8 @@ pub(crate) fn sync_document(
     // view has asked for it (`LatencyRequested`).
     let latency_build: Option<(&str, fn(NodeId, iron_document::OrderKey) -> Vec<Op>)> = latency.0.then_some((iron_document::standard::LATENCY, iron_document::standard::latency_ops));
     for (name, build) in [(iron_document::standard::LIBRARY, iron_document::standard::library_ops as fn(NodeId, iron_document::OrderKey) -> Vec<Op>)].into_iter().chain(latency_build) {
-        if !session_named(store.0.document(), name) {
-            let doc = store.0.document();
+        if !session_named(store.0.tree(), name) {
+            let doc = store.0.tree();
             let first = doc.next_session_ids(1)[0];
             let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order));
             let ops = build(first, order);
@@ -558,7 +559,7 @@ pub(crate) fn sync_document(
     // The Library is built in the light theme's colours; its cards and
     // labels follow the shell's theme as the timeline does.
     if *library_light != Some(light) {
-        let ops = iron_document::standard::library_theme_ops(store.0.document(), light);
+        let ops = iron_document::standard::library_theme_ops(store.0.tree(), light);
         let mut ids = BTreeSet::new();
         for op in &ops {
             collect_ids(op, &mut ids);
@@ -579,7 +580,7 @@ pub(crate) fn sync_document(
         Ok(None) => {}
         Err(e) => warn!("timeline composition: {e}"),
     }
-    synced.0 = store.0.document().version();
+    synced.0 = store.0.authored().version();
     *session_seen = store.0.session_version();
     // Resolved values that moved: bindings re-evaluated, or a gesture
     // previewed. Their nodes are rewritten like any other change.
@@ -589,7 +590,7 @@ pub(crate) fn sync_document(
     for (leaf, err) in &store.0.reactive().errors {
         warn!("binding {leaf}: {err}");
     }
-    let version = store.0.document().version();
+    let version = store.0.authored().version();
     if version != version_before {
         events.document_changed(version.0 as u32);
     }
@@ -598,8 +599,8 @@ pub(crate) fn sync_document(
     // tombstoned node is no longer its parent's child. So when something
     // went, every drawable and entity whose node is no longer live goes
     // too (found by the host reference, `host_reference.rs`).
-    if affected.iter().any(|&n| !store.0.document().is_live(n)) {
-        let doc = store.0.document();
+    if affected.iter().any(|&n| !store.0.tree().is_live(n)) {
+        let doc = store.0.tree();
         let dead: Vec<NodeId> = drawables.0.keys().copied().chain(map.ids()).filter(|&n| !doc.is_live(n)).collect();
         affected.extend(dead);
     }
@@ -607,7 +608,7 @@ pub(crate) fn sync_document(
     if affected.is_empty() {
         return;
     }
-    geometry_revision.touch(store.0.document(), &affected);
+    geometry_revision.touch(store.0.tree(), &affected);
     let Some(assets) = assets else {
         warn!("mesh assets missing; cannot reconcile");
         return;
@@ -685,7 +686,7 @@ fn collect_ids(op: &Op, out: &mut BTreeSet<NodeId>) -> bool {
 
 /// Preorder index of every live node: painter order for 2D content.
 fn paint_order(store: &Store) -> HashMap<NodeId, u32> {
-    let doc = store.document();
+    let doc = store.tree();
     let mut out = HashMap::new();
     let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
     let mut i = 0u32;

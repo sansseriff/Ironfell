@@ -17,7 +17,7 @@ pub fn selection_reflect_system(
     if !highlights.is_changed() {
         return;
     }
-    let doc = store.0.document();
+    let doc = store.0.tree();
     for (prov, mut active) in &mut query {
         (active.selected, active.hover) = highlights.covers(doc, prov.0);
     }
@@ -61,7 +61,7 @@ pub fn publish_interaction_state(mut store: ResMut<crate::document_bridge::Docum
     if !store.bypass_change_detection().0.set_interaction(states.clone()) {
         return;
     }
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let nodes: Vec<NodeId> = doc.nodes_with(FacetKind::Interaction).filter(|&n| doc.is_live(n)).collect();
     let producer = store.0.producer("interaction");
     if nodes.is_empty() && producer.is_none() {

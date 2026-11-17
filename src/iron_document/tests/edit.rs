@@ -44,7 +44,7 @@ fn apply(store: &mut Store, xml: &str) -> Plan {
 }
 
 fn named(store: &Store, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.roots().iter().flat_map(|&r| std::iter::once(r).chain(doc.descendants(r))).collect::<Vec<_>>().into_iter().find(|&n| !n.is_expanded() && doc.is_live(n) && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no node {name}"))
 }
 
@@ -63,7 +63,7 @@ fn a_node_is_created_in_a_node_with_its_children_and_any_order_of_names() {
       </group>
       <let in="{c}" id="$w" name="w" value="{{= {s}.slider.value * 2}}"/>
     </edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let g = p.aliases["$g"];
     assert_eq!(doc.live(g).unwrap().parent, Some(c));
     assert_eq!(doc.children(g).len(), 2);
@@ -80,7 +80,7 @@ fn a_node_is_created_in_a_node_with_its_children_and_any_order_of_names() {
 fn after_and_first_place_a_node_among_what_exists() {
     let (mut store, c, s) = desk();
     apply(&mut store, &format!(r#"<edit><rect in="{c}" name="front" first="true" w="5" h="5"/><rect in="{c}" name="next" after="{s}" w="5" h="5"/></edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let kids = doc.children(c);
     assert_eq!(kids[0], named(&store, "front"));
     assert_eq!(kids[2], named(&store, "next"));
@@ -104,7 +104,7 @@ fn values_take_their_leafs_kind_and_bind_is_a_binding() {
 fn set_takes_a_bare_field_against_the_nodes_type_or_path_and_value() {
     let (mut store, c, s) = desk();
     let p = apply(&mut store, &format!(r#"<edit><set id="{s}" value="0.7"/><set id="{s}" path="slider.min" value="0.1"/><rect in="{c}" id="$r" w="5" h="5"/><add id="$r" stroke.width="2"/></edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let slider = doc.get::<Slider>(s).unwrap();
     assert_eq!(slider.value.constant(), Some(&Value::Number(0.7)));
     assert_eq!(slider.min.constant(), Some(&Value::Number(0.1)));
@@ -113,7 +113,7 @@ fn set_takes_a_bare_field_against_the_nodes_type_or_path_and_value() {
     // name is its argument.
     let p = apply(&mut store, &format!(r#"<edit><rect in="{c}" id="$q" w="5" h="5"/><set id="$q" appearance.opacity="0.5" stroke.width="3"/><place def="std:laser" in="{c}" id="$l"/></edit>"#));
     assert_eq!(number(&store, p.aliases["$q"], "appearance.opacity"), 0.5);
-    let laser = composition::figure_of(store.document(), p.aliases["$l"]).map(|(_, e)| e).unwrap();
+    let laser = composition::figure_of(store.tree(), p.aliases["$l"]).map(|(_, e)| e).unwrap();
     apply(&mut store, &format!(r#"<edit><set id="{laser}" power="7 mW"/></edit>"#));
     assert_eq!(store.resolved(laser, "args.power".parse().unwrap()), Some(Value::parse_quantity("7 mW").unwrap()));
 }
@@ -151,7 +151,7 @@ fn links_reparents_and_deletes_name_what_the_edit_made() {
       <group in="{c}" id="$g" name="holder"/>
       <reparent id="{s}" in="$g"/>
     </edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let clip = p.aliases["$clip"];
     let r = doc.relations_from(clip).find(|r| r.rel == document::RelKind::Animates).expect("a link");
     assert_eq!(r.to, s);
@@ -160,7 +160,7 @@ fn links_reparents_and_deletes_name_what_the_edit_made() {
     // A relation's id unlinks it.
     let rid = r.id;
     apply(&mut store, &format!(r#"<edit><unlink id="{rid}"/><delete id="{clip}"/></edit>"#));
-    assert!(!store.document().is_live(clip));
+    assert!(!store.tree().is_live(clip));
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_place_is_read_by_its_name_and_its_ports_by_theirs() {
     assert_eq!(number(&store, named(&store, "before"), "transform2d.x"), 110.0);
     assert_eq!(number(&store, named(&store, "before"), "transform2d.y"), 2.0);
     // Siblings keep the order written: the mark after the plot paints over it.
-    let doc = store.document();
+    let doc = store.tree();
     let chart = named(&store, "chart");
     let kids = doc.children(chart).iter().copied().filter(|k| !k.is_expanded()).collect::<Vec<_>>();
     assert_eq!(kids, vec![named(&store, "before"), p.aliases["$plot"], named(&store, "after")]);
@@ -226,7 +226,7 @@ fn a_circuit_and_a_table_share_an_edit_with_nodes() {
     </edit>"#));
     assert!(p.summary.iter().any(|l| l.contains("<netlist")), "{:?}", p.summary);
     assert!(p.summary.iter().any(|l| l.contains("<table id=")), "{:?}", p.summary);
-    let doc = store.document();
+    let doc = store.tree();
     let wires = doc.nodes_of_type(TypeId::lookup("connection").unwrap()).filter(|&w| doc.is_live(w)).count();
     assert_eq!(wires, 3);
 }
@@ -237,7 +237,7 @@ fn narrative_verbs_write_markdown_into_a_narrative() {
     apply(&mut store, "<edit><narrative name=\"notes\"/></edit>");
     let p = apply(&mut store, "<edit><write narrative=\"notes\">\n# Title\n\nSome *words* &amp; more.\n</write></edit>");
     let n = named(&store, "notes");
-    assert_eq!(store.document().children(n).len(), 2);
+    assert_eq!(store.tree().children(n).len(), 2);
     assert!(p.summary.iter().any(|l| l.starts_with("  <write blocks=")));
 }
 
@@ -245,7 +245,7 @@ fn narrative_verbs_write_markdown_into_a_narrative() {
 fn single_quotes_bare_attributes_and_comments_parse() {
     let (mut store, c, _) = desk();
     apply(&mut store, &format!("<edit><!-- a note --><rect in='{c}' name='q' first w='5' h='5'/></edit>"));
-    assert_eq!(store.document().children(c)[0], named(&store, "q"));
+    assert_eq!(store.tree().children(c)[0], named(&store, "q"));
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn a_connection_and_its_two_links_are_one_edit() {
       <place def="std:laser" in="{c}" id="$l" x="40" y="40" power="12 mW"/>
       <place def="std:fiber" in="{c}" id="$f" x="230" y="75"/>
     </edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let port = |owner: &str, name: &str| {
         let u = placed.aliases[owner];
         let e = composition::figure_of(doc, u).map(|(_, e)| e).unwrap();
@@ -280,7 +280,7 @@ fn a_connection_and_its_two_links_are_one_edit() {
         <link from="$w" to="{inp}" rel="connects" end="b"/>
       </connection>
     </edit>"#));
-    let ends = store.document().relations_from(p.aliases["$w"]).filter(|r| r.rel == document::RelKind::Connects).count();
+    let ends = store.tree().relations_from(p.aliases["$w"]).filter(|r| r.rel == document::RelKind::Connects).count();
     assert_eq!(ends, 2);
     // A store error found while planning names this edit's nodes as it did.
     let es = errors(&store, &format!(r#"<edit><connection in="{model}" id="$v"><link from="$v" to="{out}" rel="connects" end="a"/></connection></edit>"#));
@@ -307,7 +307,7 @@ fn reparents_in_one_edit_see_each_others_moves() {
     let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a" name="a"/><rect id="$b" name="b"/><rect id="$c" name="c"/></group></edit>"#));
     let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
     apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
-    assert_eq!(store.document().children(g), &[cc, a, b]);
+    assert_eq!(store.tree().children(g), &[cc, a, b]);
 }
 
 #[test]
@@ -330,7 +330,7 @@ fn compound_verbs_read_the_edits_names() {
       <write narrative="$n">Hello.</write>
     </edit>"#));
     assert!(!serde_json::to_string(&p.ops).unwrap().contains("$v"));
-    assert_eq!(store.document().children(p.aliases["$n"]).len(), 1);
+    assert_eq!(store.tree().children(p.aliases["$n"]).len(), 1);
 }
 
 #[test]
@@ -362,7 +362,7 @@ fn top_level_places_and_nodes_keep_the_order_written() {
       <place def="std:plot" in="{c}" id="$p" xs="0 1" ys="0 1"/>
       <rect in="{c}" id="$over" w="5" h="5"/>
     </edit>"#));
-    let kids: Vec<NodeId> = store.document().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
+    let kids: Vec<NodeId> = store.tree().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
     assert_eq!(&kids[kids.len() - 2..], &[p.aliases["$p"], p.aliases["$over"]]);
 }
 
@@ -423,9 +423,9 @@ fn rewrite_replaces_a_block() {
     apply(&mut store, "<edit><narrative name=\"notes\"/></edit>");
     apply(&mut store, "<edit><write narrative=\"notes\">First.</write></edit>");
     let n = named(&store, "notes");
-    let block = store.document().children(n)[0];
+    let block = store.tree().children(n)[0];
     let p = apply(&mut store, &format!("<edit><rewrite block=\"{block}\">Changed.\n\nAnd more.</rewrite></edit>"));
-    assert_eq!(store.document().children(n).len(), 2);
+    assert_eq!(store.tree().children(n).len(), 2);
     assert!(p.summary.iter().any(|l| l.starts_with("  <rewrite blocks=")));
 }
 
@@ -446,7 +446,7 @@ fn siblings_put_back_in_order_never_share_a_key() {
       <group in="{c}" id="$g"><rect id="$a"/><place def="std:plot" id="$p" xs="0 1" ys="0 1"/><rect id="$b"/></group>
       <rect in="$g" id="$z"/>
     </edit>"#));
-    let doc = store.document();
+    let doc = store.tree();
     let g = p.aliases["$g"];
     let kids: Vec<NodeId> = doc.children(g).iter().copied().filter(|k| !k.is_expanded()).collect();
     assert_eq!(kids, vec![p.aliases["$a"], p.aliases["$p"], p.aliases["$b"], p.aliases["$z"]]);
@@ -464,7 +464,7 @@ fn top_level_siblings_keep_order_however_in_is_spelled() {
       <place def="std:plot" in="scene" id="$p" xs="0 1" ys="0 1"/>
       <rect in="{c}" id="$over" w="5" h="5"/>
     </edit>"#));
-    let kids: Vec<NodeId> = store.document().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
+    let kids: Vec<NodeId> = store.tree().children(c).iter().copied().filter(|k| !k.is_expanded()).collect();
     assert_eq!(&kids[kids.len() - 2..], &[p.aliases["$p"], p.aliases["$over"]]);
 }
 
@@ -547,7 +547,7 @@ fn a_node_moved_twice_is_where_its_last_move_put_it() {
     let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a"/><rect id="$b"/><rect id="$c"/></group></edit>"#));
     let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
     apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{b}"/><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
-    assert_eq!(store.document().children(g), &[cc, a, b]);
+    assert_eq!(store.tree().children(g), &[cc, a, b]);
 }
 
 #[test]

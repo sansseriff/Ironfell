@@ -134,7 +134,7 @@ fn colours_from_expressions() {
 #[test]
 fn a_path_bound_to_path_data_follows_its_inputs() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(4);
+    let ids = store.authored().next_ids(4);
     let (slider, curve, fixed, contour) = (ids[0], ids[1], ids[2], ids[3]);
     let mut sl = Slider::default();
     sl.value = Slot::Const(Value::Number(1.0));
@@ -151,7 +151,7 @@ fn a_path_bound_to_path_data_follows_its_inputs() {
             ],
         ))
         .unwrap();
-    assert!(contour::bound(store.document(), curve));
+    assert!(contour::bound(store.tree(), curve));
     let height = |store: &Store| contour::geometry(store, curve).bounds().height();
     let h1 = height(&store);
     assert_eq!(contour::geometry(&store, curve).anchor_count(), 11);
@@ -166,7 +166,7 @@ fn a_path_bound_to_path_data_follows_its_inputs() {
     text.insert("d".into(), serde_json::json!("M 0 0 L 30 0 L 30 30 Z"));
     let facet = Facet::from_json(FacetKind::PathShape, &serde_json::Value::Object(text)).unwrap();
     store.apply(tx("fixed", vec![Op::Create { id: fixed, ty: ty("path"), parent: None, order: OrderKey::after(&k1), facets: vec![Transform2d::default().wrap(), facet] }])).unwrap();
-    let g = contour::packed(store.document(), fixed).unwrap();
+    let g = contour::packed(store.tree(), fixed).unwrap();
     assert_eq!((g.anchor_count(), g.contours()[0].closed), (3, true));
     // A bound path cannot also hold contour children.
     let err = store.apply(tx("mixed", vec![Op::Create { id: contour, ty: ty("contour"), parent: Some(curve), order: OrderKey::first(), facets: vec![] }]));

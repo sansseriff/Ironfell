@@ -23,6 +23,7 @@
 //! instances become one instance of a new definition that nests them).
 //! They run inside an `<edit>` (edit.rs), which names each one (`id="$p"`).
 
+use crate::Tree;
 use crate::composition::{self, Dims};
 use crate::definition::{self, Placement};
 use crate::expr::Expr;
@@ -77,7 +78,7 @@ pub(crate) fn compose_els(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El
 
 /// The verbs run on a scratch copy holding `before`.
 fn run_verbs(store: &crate::StoreCore, before: Vec<Op>, els: Vec<El>) -> Result<Composed, ComposeError> {
-    let mut scratch = crate::StoreCore::with_document(store.document().clone());
+    let mut scratch = crate::StoreCore::with_document(store.authored().clone());
     if !before.is_empty() {
         scratch
             .apply(crate::TransactionInput { label: "scratch".into(), actor: crate::Actor::Model, ts: 0, idempotency_key: None, ops: before.clone(), exact: false })
@@ -94,7 +95,7 @@ fn compose_verbs(mut scratch: crate::StoreCore, mut ops: Vec<Op>, els: Vec<El>) 
         let at = |m: String| format!("<{}> {}: {m}", el.name, i + 1);
         // An argument's binding may read an earlier place: `$plot.x_hi`.
         let mut el = el.clone();
-        let names = crate::markup::Names { nodes: BTreeMap::new(), places: aliases.iter().map(|(k, v)| (k.trim_start_matches('$').to_owned(), *v)).collect(), doc: Some(scratch.document()) };
+        let names = crate::markup::Names { nodes: BTreeMap::new(), places: aliases.iter().map(|(k, v)| (k.trim_start_matches('$').to_owned(), *v)).collect(), doc: Some(scratch.tree()) };
         for (k, v) in el.attrs.iter_mut() {
             if !PLACE_ATTRS.contains(&k.as_str()) {
                 *v = crate::markup::bindings(v, &names).map_err(at)?;
@@ -121,7 +122,7 @@ fn compose_verbs(mut scratch: crate::StoreCore, mut ops: Vec<Op>, els: Vec<El>) 
 }
 
 /// A node id as written: `#3F`, or an earlier verb's `$alias` through `pick`.
-fn node(doc: &crate::document::Document, raw: &str, aliases: &BTreeMap<String, Named>, pick: impl Fn(&Named) -> Option<NodeId>, what: &str) -> Result<NodeId, String> {
+fn node(doc: Tree<'_>, raw: &str, aliases: &BTreeMap<String, Named>, pick: impl Fn(&Named) -> Option<NodeId>, what: &str) -> Result<NodeId, String> {
     if raw.starts_with('$') {
         let named = aliases.get(raw).ok_or_else(|| format!("{raw} is not named by an earlier component verb (id=\"{raw}\"); place what you name after it"))?;
         return pick(named).ok_or_else(|| format!("{raw} names no {what}"));
@@ -130,12 +131,12 @@ fn node(doc: &crate::document::Document, raw: &str, aliases: &BTreeMap<String, N
     doc.live(id).map(|_| id).ok_or_else(|| format!("{raw} is not a live node"))
 }
 
-fn name_of(doc: &crate::document::Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     doc.get::<Name>(id)?.text.constant()?.as_str().map(str::to_owned)
 }
 
 /// The notations `def` has templates for.
-fn notations(doc: &crate::document::Document, def: NodeId) -> Vec<String> {
+fn notations(doc: Tree<'_>, def: NodeId) -> Vec<String> {
     doc.children(def)
         .iter()
         .filter_map(|&c| doc.get::<crate::facet::Template>(c)?.notation.constant()?.as_str().map(str::to_owned))
@@ -143,7 +144,7 @@ fn notations(doc: &crate::document::Document, def: NodeId) -> Vec<String> {
 }
 
 /// The last authored child's order key under `parent`.
-fn last(doc: &crate::document::Document, parent: NodeId) -> Option<crate::order::OrderKey> {
+fn last(doc: Tree<'_>, parent: NodeId) -> Option<crate::order::OrderKey> {
     doc.children(parent).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max()
 }
 
@@ -193,7 +194,7 @@ pub(crate) fn hex_color(t: &str) -> Option<Value> {
 }
 
 fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
-    let doc = store.document();
+    let doc = store.tree();
     let parent = {
         let raw = el.need("in")?;
         if raw.starts_with('#') { node(doc, raw, aliases, |_| None, "node")? } else { crate::parts::sheet_named(doc, raw)? }
@@ -209,7 +210,7 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
     let (x, y, rot) = (el.num("x")?, el.num("y")?, el.num("rot")?.to_radians());
 
     let mut ops = Vec::new();
-    let mut scratch = doc.clone();
+    let mut scratch = store.authored().clone();
     let stamp = scratch.version().next();
     let mut push = |scratch: &mut crate::document::Document, new: Vec<Op>| -> Result<(), String> {
         for op in &new {
@@ -219,11 +220,11 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
         Ok(())
     };
     let root = |scratch: &mut crate::document::Document, push: &mut dyn FnMut(&mut crate::document::Document, Vec<Op>) -> Result<(), String>, t: &str| -> Result<NodeId, String> {
-        if let Some(r) = crate::standard::root_of(scratch, t) {
+        if let Some(r) = crate::standard::root_of(Tree::over(scratch), t) {
             return Ok(r);
         }
         let r = scratch.next_id();
-        let order = crate::standard::after_last(scratch, None);
+        let order = crate::standard::after_last(Tree::over(scratch), None);
         push(scratch, vec![Op::Create { id: r, ty: ty(t), parent: None, order, facets: vec![] }])?;
         Ok(r)
     };
@@ -240,11 +241,11 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
     } else {
         let raw = el.need("def").map_err(|_| "<place> needs def (a definition, or std:<key>) or entity".to_owned())?;
         let def = if let Some(key) = raw.strip_prefix("std:") {
-            match crate::standard::find(&scratch, key) {
+            match crate::standard::find(Tree::over(&scratch), key) {
                 Some(d) => d,
                 None => {
                     let library = root(&mut scratch, &mut push, "library")?;
-                    let order = crate::standard::after_last(&scratch, Some(library));
+                    let order = crate::standard::after_last(Tree::over(&scratch), Some(library));
                     let first = scratch.next_id().raw();
                     let (def_ops, d) = crate::standard::definition_ops(key, library, order, first).map_err(|e| {
                         format!("{e}; standard components: {}", crate::standard::ENTRIES.iter().map(|e| format!("std:{}", e.key)).collect::<Vec<_>>().join(", "))
@@ -262,8 +263,8 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
         };
         (None, def)
     };
-    if definition::template_of(&scratch, def, &notation).is_none() {
-        let have = notations(&scratch, def);
+    if definition::template_of(Tree::over(&scratch), def, &notation).is_none() {
+        let have = notations(Tree::over(&scratch), def);
         return Err(format!(
             "{def} has no template for notation {notation:?} (it has {}); write notation=\"…\" to use one of those, or create a template with that notation in the definition first",
             if have.is_empty() { "none".to_owned() } else { have.join(", ") }
@@ -272,19 +273,19 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
 
     let fresh = existing.is_none();
     let (entity, inst) = if let Some(entity) = existing {
-        (entity, definition::place_figures(&scratch, entity, &notation, Some(parent), last(&scratch, parent))?)
+        (entity, definition::place_figures(Tree::over(&scratch), entity, &notation, Some(parent), last(Tree::over(&scratch), parent))?)
     } else {
         let model = root(&mut scratch, &mut push, "model")?;
         let name = match el.attr("name") {
             Some(n) => n.to_owned(),
-            None => name_of(&scratch, def).unwrap_or_else(|| "component".into()),
+            None => name_of(Tree::over(&scratch), def).unwrap_or_else(|| "component".into()),
         };
-        let place = Placement { entity_parent: Some(model), entity_after: last(&scratch, model), figure_parent: Some(parent), figure_after: last(&scratch, parent) };
-        definition::instantiate(&scratch, def, &notation, &name, &place)?
+        let place = Placement { entity_parent: Some(model), entity_after: last(Tree::over(&scratch), model), figure_parent: Some(parent), figure_after: last(Tree::over(&scratch), parent) };
+        definition::instantiate(Tree::over(&scratch), def, &notation, &name, &place)?
     };
     // A sized picture's box: `w`/`h` (unless the definition has inputs of
     // those names, which they then set) or `size.w`/`size.h`.
-    let input_names: Vec<&str> = definition::inputs_of(&scratch, def)?.iter().map(|i| i.name).collect();
+    let input_names: Vec<&str> = definition::inputs_of(Tree::over(&scratch), def)?.iter().map(|i| i.name).collect();
     let size_word = |k: &str| -> Option<&str> {
         if input_names.contains(&k) {
             return None;
@@ -330,7 +331,7 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
     push(&mut scratch, inst)?;
 
     // Arguments: `args.k` or a bare `k`, each an input of the definition.
-    let inputs = definition::inputs_of(&scratch, def)?;
+    let inputs = definition::inputs_of(Tree::over(&scratch), def)?;
     let mut sets = Vec::new();
     for (k, v) in &el.attrs {
         if PLACE_ATTRS.contains(&k.as_str()) || (matches!(k.as_str(), "w" | "h") && !input_names.contains(&k.as_str())) {
@@ -374,7 +375,7 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
 }
 
 fn make(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -> Result<(Vec<Op>, String, Named), String> {
-    let doc = store.document();
+    let doc = store.tree();
     let of = el.need("of")?;
     let selection = of.split_whitespace().map(|raw| node(doc, raw, aliases, |n| Some(n.picture), "picture")).collect::<Result<Vec<_>, _>>()?;
     if selection.is_empty() {

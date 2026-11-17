@@ -26,7 +26,7 @@ fn stat(mut v: Vec<f64>) -> String {
 #[ignore]
 fn plot_pan_and_zoom_cost() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -44,13 +44,13 @@ fn plot_pan_and_zoom_cost() {
     let plots: usize = std::env::var("PLOTS").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
     let placed: Vec<NodeId> = (0..plots).map(|k| store.place_standard("plot", ids[0], [0.0, 300.0 * k as f64], Actor::Human).unwrap()).collect();
     let first = placed[0];
-    let doc = store.document();
+    let doc = store.tree();
     let area = doc
         .descendants(first)
         .into_iter()
         .find(|&d| d.is_expanded() && !expand::in_repeat_template(doc, d) && doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("plot area"))
         .unwrap();
-    println!("{plots} plot(s), {} nodes", store.document().descendants(ids[0]).len());
+    println!("{plots} plot(s), {} nodes", store.tree().descendants(ids[0]).len());
     let mut step = |event: &str, payload: [f64; 5]| {
         let t = Instant::now();
         store.pointer_action(area, event, payload).unwrap().unwrap();

@@ -6,8 +6,8 @@
 //! each as a baked preview: its picture with resolved values, in a session
 //! composition.
 
+use crate::Tree;
 use crate::definition::{self, Placement};
-use crate::document::Document;
 use crate::facet::{Composition, Facet, FacetKind, Fill, Font, Import, LeafPath, LeafStruct, Name, Port, Size, Stroke, Text, Transform2d};
 use crate::id::NodeId;
 use crate::op::Op;
@@ -90,7 +90,7 @@ fn source(key: &str) -> Option<&'static str> {
 }
 
 /// The definition `key` already copied into `doc`, if any.
-pub fn find(doc: &Document, key: &str) -> Option<NodeId> {
+pub fn find(doc: Tree<'_>, key: &str) -> Option<NodeId> {
     let source = format!("std:{key}");
     doc.nodes_of_type(ty("definition")).find(|&d| doc.is_live(d) && doc.get::<Import>(d).and_then(|i| i.source.constant()).and_then(|v| v.as_str()) == Some(source.as_str()))
 }
@@ -114,11 +114,11 @@ pub fn definition_ops(key: &str, library: NodeId, order: OrderKey, first: u64) -
     Ok((built.ops, def))
 }
 
-pub(crate) fn root_of(doc: &Document, ty_: &str) -> Option<NodeId> {
+pub(crate) fn root_of(doc: Tree<'_>, ty_: &str) -> Option<NodeId> {
     doc.roots().iter().copied().find(|&r| !r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == ty_))
 }
 
-pub(crate) fn after_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
+pub(crate) fn after_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {
     let kids: Vec<NodeId> = match parent {
         Some(p) => doc.children(p).to_vec(),
         None => doc.roots().to_vec(),
@@ -143,13 +143,13 @@ pub fn interfaces() -> Vec<(&'static str, Vec<PortInfo>)> {
         .iter()
         .map(|e| {
             let mut store = crate::StoreCore::new();
-            let doc = store.document();
+            let doc = store.tree();
             let (library, first) = (doc.next_id(), doc.next_id().raw() + 1);
             let mut ops = vec![Op::Create { id: library, ty: ty("library"), parent: None, order: OrderKey::first(), facets: vec![] }];
             let (def_ops, def) = definition_ops(e.key, library, OrderKey::first(), first).expect("standard definition");
             ops.extend(def_ops);
             store.apply(crate::TransactionInput { label: "interface".into(), actor: crate::Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).expect("standard definition applies");
-            let doc = store.document();
+            let doc = store.tree();
             let ports = doc
                 .children(def)
                 .iter()
@@ -176,21 +176,21 @@ impl crate::StoreCore {
         let err = |e: Vec<crate::op::ApplyError>| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
         let tx = |label: String, ops| crate::TransactionInput { label, actor, ts: 0, idempotency_key: None, ops, exact: false };
         let mut first = None;
-        let def = match find(&self.doc, key) {
+        let def = match find(Tree::over(&self.doc), key) {
             Some(d) => d,
             None => {
                 let mut ops = Vec::new();
                 let mut next = self.doc.next_id().raw();
-                let library = match root_of(&self.doc, "library") {
+                let library = match root_of(Tree::over(&self.doc), "library") {
                     Some(l) => l,
                     None => {
                         let l = NodeId::from_raw(next);
                         next += 1;
-                        ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after_last(&self.doc, None), facets: vec![] });
+                        ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after_last(Tree::over(&self.doc), None), facets: vec![] });
                         l
                     }
                 };
-                let order = if ops.is_empty() { after_last(&self.doc, Some(library)) } else { OrderKey::first() };
+                let order = if ops.is_empty() { after_last(Tree::over(&self.doc), Some(library)) } else { OrderKey::first() };
                 let (def_ops, def) = definition_ops(key, library, order, next)?;
                 ops.extend(def_ops);
                 first = Some(self.apply(tx(format!("add {name}"), ops)).map_err(err)?.version);
@@ -199,23 +199,23 @@ impl crate::StoreCore {
         };
         let doc = &self.doc;
         let mut ops = Vec::new();
-        let model = match root_of(doc, "model") {
+        let model = match root_of(Tree::over(doc), "model") {
             Some(m) => m,
             None => {
                 let m = doc.next_id();
-                ops.push(Op::Create { id: m, ty: ty("model"), parent: None, order: after_last(doc, None), facets: vec![] });
+                ops.push(Op::Create { id: m, ty: ty("model"), parent: None, order: after_last(Tree::over(doc), None), facets: vec![] });
                 m
             }
         };
         let place = Placement { entity_parent: Some(model), entity_after: doc.children(model).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max(), figure_parent: Some(composition), figure_after: doc.children(composition).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max() };
         let (_, mut inst) = if ops.is_empty() {
-            definition::instantiate(doc, def, NOTATION, &name, &place)?
+            definition::instantiate(Tree::over(doc), def, NOTATION, &name, &place)?
         } else {
             // A model made in this transaction: instantiate's ids come after it.
             let mut scratch = doc.clone();
             let stamp = scratch.version().next();
             crate::op::apply_op(&mut scratch, 0, &ops[0], stamp).map_err(|e| e.message)?;
-            definition::instantiate(&scratch, def, NOTATION, &name, &place)?
+            definition::instantiate(Tree::over(&scratch), def, NOTATION, &name, &place)?
         };
         for op in inst.iter_mut() {
             if let Op::Create { ty: t, facets, .. } = op
@@ -385,7 +385,7 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
 /// Library's session composition is touched, never a document's components. The Library's
 /// colours are constants (its previews are baked), so a theme switch sets
 /// them, as the timeline regenerates in its palette (timeline_view.rs).
-pub fn library_theme_ops(doc: &Document, light: bool) -> Vec<Op> {
+pub fn library_theme_ops(doc: Tree<'_>, light: bool) -> Vec<Op> {
     let (fill, edge, ink) = library_colours(light);
     let Some(&lib) = doc.roots().iter().find(|&&r| r.is_session() && doc.get::<Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(LIBRARY)) else {
         return Vec::new();
@@ -436,7 +436,7 @@ struct Baked {
 
 fn bake(key: &str) -> Baked {
     let mut store = crate::StoreCore::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let setup = vec![
@@ -450,7 +450,7 @@ fn bake(key: &str) -> Baked {
     }
     let Ok(u) = store.place_standard(key, ids[1], [0.0, 0.0], crate::Actor::System) else { return empty };
     let _ = store.refresh_text();
-    let doc = store.document();
+    let doc = store.tree();
     let mut nodes = Vec::new();
     let mut index: Vec<NodeId> = Vec::new();
     let mut stack: Vec<NodeId> = doc.children(u).iter().rev().copied().collect();

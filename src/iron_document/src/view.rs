@@ -7,8 +7,8 @@
 //! nesting is the data. Elision is always marked: a reader must be able to
 //! tell "empty" from "not shown".
 
+use crate::Tree;
 use crate::facet::{Facet, FacetKind};
-use crate::document::Document;
 use crate::id::NodeId;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -94,7 +94,7 @@ pub fn with_problems<T>(problems: std::collections::BTreeMap<NodeId, Vec<String>
 }
 
 pub fn render_tree(
-    doc: &Document,
+    doc: Tree<'_>,
     reactive: &crate::graph::Reactive,
     by: &By,
     q: &ViewQuery,
@@ -136,7 +136,7 @@ pub fn render_tree(
 }
 
 fn node(
-    doc: &Document,
+    doc: Tree<'_>,
     reactive: &crate::graph::Reactive,
     by: &By,
     q: &ViewQuery,
@@ -294,7 +294,7 @@ fn write_open(out: &mut String, indent: &str, tag: &str, attrs: &[(String, Strin
 /// The model view (ECM §11): every live entity with its definition, its
 /// arguments (value, binding, solver marker as in the tree view) and each
 /// figure with the composition it is drawn in. Signals arrive with ports.
-fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery) -> String {
+fn render_model(doc: Tree<'_>, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery) -> String {
     use crate::composition;
     let mut out = String::new();
     writeln!(out, "<model-view version=\"{}\">", doc.version().0).expect("string write");
@@ -396,7 +396,7 @@ fn render_model(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &
 /// A node's id, name and (unless skeleton) leaves: each as its current
 /// value, plus `<attr>.bind` for a binding and `<attr>.by` for a solver
 /// variable.
-fn leaf_attrs(doc: &Document, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery, id: NodeId) -> Vec<(String, String)> {
+fn leaf_attrs(doc: Tree<'_>, reactive: &crate::graph::Reactive, by: &By, q: &ViewQuery, id: NodeId) -> Vec<(String, String)> {
     let fidelity = q.fidelity;
     let mut attrs: Vec<(String, String)> = vec![("id".into(), id.to_string())];
 

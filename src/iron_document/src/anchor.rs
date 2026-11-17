@@ -20,8 +20,9 @@
 //! the laser it is plugged into. A follower whose partner also follows is
 //! left where its template put it, so anchors never loop.
 
+use crate::Tree;
 use crate::composition;
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expr::{BinOp, Expr, Leaf};
 use crate::facet::{Anchor, FacetKind, LeafPath};
 use crate::id::NodeId;
@@ -45,7 +46,7 @@ fn num(n: f64) -> Expr {
 
 /// Live ancestors of `id` with a 2D transform, nearest first, then `id`
 /// itself first when `with_self`.
-fn transformed_chain(doc: &Document, id: NodeId, with_self: bool) -> Vec<NodeId> {
+fn transformed_chain(doc: Tree<'_>, id: NodeId, with_self: bool) -> Vec<NodeId> {
     let mut out = Vec::new();
     let mut cur = if with_self { Some(id) } else { doc.live(id).and_then(|n| n.parent) };
     while let Some(n) = cur {
@@ -59,7 +60,7 @@ fn transformed_chain(doc: &Document, id: NodeId, with_self: bool) -> Vec<NodeId>
 
 /// The point `(px, py)` of `node`'s parent space (or own, `with_self`)
 /// carried out to composition space.
-pub(crate) fn outward(doc: &Document, node: NodeId, with_self: bool, mut px: Expr, mut py: Expr) -> (Expr, Expr) {
+pub(crate) fn outward(doc: Tree<'_>, node: NodeId, with_self: bool, mut px: Expr, mut py: Expr) -> (Expr, Expr) {
     for n in transformed_chain(doc, node, with_self) {
         let (c, s) = (call("cos", t(n, "rot")), call("sin", t(n, "rot")));
         let (ax, ay) = (bin(BinOp::Mul, t(n, "sx"), px), bin(BinOp::Mul, t(n, "sy"), py));
@@ -70,7 +71,7 @@ pub(crate) fn outward(doc: &Document, node: NodeId, with_self: bool, mut px: Exp
 }
 
 /// A composition-space point carried into `node`'s parent space.
-pub(crate) fn inward(doc: &Document, node: NodeId, mut qx: Expr, mut qy: Expr) -> (Expr, Expr) {
+pub(crate) fn inward(doc: Tree<'_>, node: NodeId, mut qx: Expr, mut qy: Expr) -> (Expr, Expr) {
     let mut chain = transformed_chain(doc, node, false);
     chain.reverse();
     for n in chain {
@@ -82,18 +83,18 @@ pub(crate) fn inward(doc: &Document, node: NodeId, mut qx: Expr, mut qy: Expr) -
     (qx, qy)
 }
 
-fn port_of(doc: &Document, anchor: NodeId) -> Option<NodeId> {
+fn port_of(doc: Tree<'_>, anchor: NodeId) -> Option<NodeId> {
     doc.get::<Anchor>(anchor)?.port.constant()?.as_ref().filter(|&p| doc.is_live(p))
 }
 
-fn follows(doc: &Document, anchor: NodeId) -> bool {
+fn follows(doc: Tree<'_>, anchor: NodeId) -> bool {
     doc.get::<Anchor>(anchor).and_then(|a| a.follow.constant()).and_then(|v| v.as_bool()) == Some(true)
 }
 
 /// The port at the other end of `port`'s connection, and the connection. A
 /// port inside a component has none of its own when the component exposes
 /// it: its partner is the exposing port's (component-model.md §5.5).
-fn partner(doc: &Document, port: NodeId) -> Option<(NodeId, NodeId)> {
+fn partner(doc: Tree<'_>, port: NodeId) -> Option<(NodeId, NodeId)> {
     for _ in 0..16 {
         if let Some(connection) = doc.relations_to(port).find(|r| r.rel == RelKind::Connects && doc.is_live(r.from)).map(|r| r.from) {
             let (a, b) = crate::port::ends(doc, connection)?;
@@ -107,7 +108,7 @@ fn partner(doc: &Document, port: NodeId) -> Option<(NodeId, NodeId)> {
 
 /// The ports whose anchors stand for `port`: itself, and, when it is a
 /// component's port, the inner port it exposes (whose picture is drawn).
-fn standing_for(doc: &Document, port: NodeId) -> Vec<NodeId> {
+fn standing_for(doc: Tree<'_>, port: NodeId) -> Vec<NodeId> {
     let mut out = vec![port];
     let mut at = port;
     for _ in 0..16 {
@@ -123,7 +124,7 @@ fn standing_for(doc: &Document, port: NodeId) -> Vec<NodeId> {
 }
 
 /// Every derived anchor binding: positions, and followers' placements.
-pub fn derived(doc: &Document) -> Vec<(Leaf, Expr)> {
+pub fn derived(doc: Tree<'_>) -> Vec<(Leaf, Expr)> {
     let anchors: Vec<NodeId> = doc.nodes_with(FacetKind::Anchor).filter(|&a| doc.is_live(a) && doc.live(a).is_some_and(|n| n.ty.name() == "empty")).collect();
     let mut out = Vec::new();
     for &a in &anchors {

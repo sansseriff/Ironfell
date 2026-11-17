@@ -24,7 +24,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 /// value and by index with an instance in their items.
 fn build() -> String {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -46,13 +46,13 @@ fn build() -> String {
     let markup = r#"<let id="$lo" value="3"/>
         <group id="$t" name="ticks" repeat.each="{= range($lo, $lo + 30, 4)}" repeat.key="{= t => t}"><text name="tick" x="{= $t.repeat.item}" y="0" content="{= fmt($t.repeat.item)}"/></group>
         <group id="$r" name="rows" repeat.count="3"><rect name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#;
-    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.document().next_id()).unwrap_or_else(|e| panic!("{e}"));
+    let built = markup::ops(markup, Some(comp), OrderKey::first(), store.authored().next_id()).unwrap_or_else(|e| panic!("{e}"));
     store.apply(tx("draw", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     // Move the value-keyed repeat, so items come and go.
     store.apply(tx("slide", vec![Op::Set { id: built.named["lo"], path: "let.value".parse().unwrap(), slot: Slot::Const(Value::Number(11.0)) }])).unwrap();
-    let live: Vec<NodeId> = store.document().live_nodes().map(|n| n.id).collect();
+    let live: Vec<NodeId> = store.tree().live_nodes().map(|n| n.id).collect();
     let view = store.view(&ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: live, omit_defaults: false }).unwrap();
-    let derived: Vec<String> = store.document().nodes().map(|n| n.id).filter(|id| id.is_expanded()).map(|id| id.to_string()).collect();
+    let derived: Vec<String> = store.tree().nodes().map(|n| n.id).filter(|id| id.is_expanded()).map(|id| id.to_string()).collect();
     format!("{}\n=====\n{view}\n=====\n{}", store.save(), derived.join("\n"))
 }
 

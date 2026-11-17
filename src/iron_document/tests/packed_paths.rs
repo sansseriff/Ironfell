@@ -42,7 +42,7 @@ fn packed_facets(g: Geometry) -> Vec<Facet> {
 /// A store with one packed path of `sample()`.
 fn with_packed() -> (Store, NodeId) {
     let mut store = Store::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     store.apply(tx("draw", vec![Op::Create { id, ty: ty("path"), parent: None, order: OrderKey::first(), facets: packed_facets(sample()) }])).unwrap();
     (store, id)
 }
@@ -52,9 +52,9 @@ fn a_packed_path_reads_as_its_expanded_twin() {
     let (store, packed) = with_packed();
     // The twin, built the expanded way.
     let mut store2 = Store::new();
-    let twin = store2.document().next_ids(1)[0];
+    let twin = store2.authored().next_ids(1)[0];
     let runs: Vec<(Vec<Anchor>, bool)> = sample().contours().iter().map(|c| (c.anchors.clone(), c.closed)).collect();
-    let mut ids = store2.document().next_ids(1 + contour::ids_needed(&runs)).into_iter().skip(1);
+    let mut ids = store2.authored().next_ids(1 + contour::ids_needed(&runs)).into_iter().skip(1);
     let mut ops = vec![Op::Create { id: twin, ty: ty("path"), parent: None, order: OrderKey::first(), facets: vec![Transform2d::default().wrap(), PathShape::default().wrap()] }];
     ops.extend(contour::contours_ops(twin, &runs, &mut ids));
     store2.apply(tx("draw", ops)).unwrap();
@@ -63,7 +63,7 @@ fn a_packed_path_reads_as_its_expanded_twin() {
     assert_eq!(contour::geometry(&store, packed).outline(), contour::geometry(&store2, twin).outline());
     assert_eq!(store.local_bounds(packed), store2.local_bounds(twin));
     assert!(contour::contours(&store, packed).is_empty(), "no point nodes");
-    assert_eq!(store.document().children(packed).len(), 0);
+    assert_eq!(store.tree().children(packed).len(), 0);
     // The shared value is handed out, not rebuilt.
     assert!(Arc::ptr_eq(&contour::geometry(&store, packed), &contour::geometry(&store, packed)));
 }
@@ -94,19 +94,19 @@ fn path_d_may_be_bound_to_path_data() {
     let (mut store, id) = with_packed();
     let bound = Slot::Bound(Expr::parse("'M 0 0 L 40 0 L 40 20'").unwrap());
     store.apply(tx("bind", vec![Op::Set { id, path: path("path.d"), slot: bound.clone() }])).unwrap();
-    assert!(contour::packed(store.document(), id).is_none());
-    assert!(contour::bound(store.document(), id));
+    assert!(contour::packed(store.tree(), id).is_none());
+    assert!(contour::bound(store.tree(), id));
     assert_eq!(contour::geometry(&store, id).anchor_count(), 3);
     // Expanding a bound path's points makes nothing to edit.
     assert!(contour::expand_points(&store, id).is_empty());
     store.undo(0).unwrap().unwrap();
-    assert!(contour::packed(store.document(), id).is_some());
+    assert!(contour::packed(store.tree(), id).is_some());
 }
 
 #[test]
 fn a_path_is_packed_or_expanded_never_both() {
     let (mut store, id) = with_packed();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let ops = contour::contour_ops(id, OrderKey::first(), &[anchor(0.0, 0.0, 0.0, 0.0, 0.0, 0.0), anchor(5.0, 5.0, 0.0, 0.0, 0.0, 0.0)], false, &mut ids.into_iter());
     let err = store.apply(tx("add contour", ops)).unwrap_err();
     assert_eq!(err[0].kind, ErrorKind::MixedPath, "{err:?}");
@@ -116,7 +116,7 @@ fn a_path_is_packed_or_expanded_never_both() {
 fn expanding_is_one_undoable_transaction() {
     let (mut store, id) = with_packed();
     store.apply(tx("edit points", contour::expand_points(&store, id))).unwrap();
-    assert!(contour::packed(store.document(), id).is_none());
+    assert!(contour::packed(store.tree(), id).is_none());
     let cs = contour::contours(&store, id);
     assert_eq!(cs.iter().map(|c| (c.points.len(), c.closed)).collect::<Vec<_>>(), [(4, true), (2, false)]);
     assert_eq!(*contour::geometry(&store, id), sample(), "the same anchors, as nodes");
@@ -129,7 +129,7 @@ fn expanding_is_one_undoable_transaction() {
     store.undo(1).unwrap().unwrap();
     store.undo(2).unwrap().unwrap();
     assert_eq!(*contour::geometry(&store, id), sample());
-    assert!(contour::packed(store.document(), id).is_some());
+    assert!(contour::packed(store.tree(), id).is_some());
     assert!(contour::contours(&store, id).is_empty(), "the point nodes are tombstones again");
     store.redo(3).unwrap().unwrap();
     assert_eq!(contour::contours(&store, id).len(), 2);

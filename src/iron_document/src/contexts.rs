@@ -15,7 +15,7 @@
 //! their rows. Nothing comes from a grandparent. Later rules win within a
 //! context, field by field.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::id::NodeId;
 use crate::registry::TypeId;
 use std::sync::{Arc, OnceLock};
@@ -438,7 +438,7 @@ impl Library {
 
     /// The context a container carries, if any: the first whose `for`
     /// names its type (and, if it says, a leaf's value).
-    fn for_node(&self, doc: &Document, id: NodeId) -> Option<usize> {
+    fn for_node(&self, doc: Tree<'_>, id: NodeId) -> Option<usize> {
         let ty = doc.live(id)?.ty;
         // A `context` facet names the container's context outright.
         if let Some(name) = doc.get::<crate::facet::ContextOf>(id).and_then(|c| c.name.constant().and_then(|v| v.as_str()).map(str::to_owned)).filter(|n| !n.is_empty()) {
@@ -524,7 +524,7 @@ pub fn print_context(c: &Context) -> String {
 
 /// Resolves nodes' values against a library, for one document.
 pub struct Resolver<'a> {
-    pub doc: &'a Document,
+    pub doc: Tree<'a>,
     pub lib: &'a Library,
     /// Nodes' interaction states (`hovered`, `selected`, …), for rules that
     /// match `state:`; none without a host.
@@ -535,7 +535,7 @@ pub struct Resolver<'a> {
 }
 
 impl<'a> Resolver<'a> {
-    pub fn new(doc: &'a Document, lib: &'a Library) -> Self {
+    pub fn new(doc: Tree<'a>, lib: &'a Library) -> Self {
         Resolver { doc, lib, states: None, editing: None }
     }
 
@@ -733,7 +733,7 @@ pub fn keymap(value: &str) -> Vec<(&str, &str)> {
 /// The chain a node is reached by through its own containers, from its
 /// world's top level down: what a read of one node resolves against when no
 /// view says otherwise.
-pub fn chain_of(doc: &Document, id: NodeId) -> Vec<NodeId> {
+pub fn chain_of(doc: Tree<'_>, id: NodeId) -> Vec<NodeId> {
     let mut chain = Vec::new();
     let mut cur = doc.live(id);
     while let Some(n) = cur {
@@ -767,7 +767,7 @@ pub fn parse_style(style: &str, scope: &str) -> Result<Rule, String> {
 /// a document context with the same id has its markup replaced; otherwise
 /// a `context` node is made in the library, and the library too if there
 /// is none. Returns the ops and the context node.
-pub fn put_ops(doc: &Document, markup: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
+pub fn put_ops(doc: Tree<'_>, markup: &str) -> Result<(Vec<crate::op::Op>, NodeId), String> {
     use crate::facet::{ContextDef, LeafStruct, Name};
     use crate::op::Op;
     use crate::order::OrderKey;

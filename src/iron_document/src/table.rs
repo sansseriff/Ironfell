@@ -11,10 +11,11 @@
 //! as the table's [`Grid`], from which [`decor`] works out the bands and the
 //! lines, broken where a merged cell spans across them.
 
+use crate::Tree;
 use kurbo::{Line, Rect};
 
 use crate::facet::{Font, LayoutItem, LeafStruct, Name, Rules, Table, Text, Transform2d};
-use crate::{Document, NodeId, Op, OrderKey, Slot, StoreCore, TypeId, Value};
+use crate::{NodeId, Op, OrderKey, Slot, StoreCore, TypeId, Value};
 
 /// A cell's area: 0-based column and row, and how many of each it spans.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,27 +61,27 @@ pub fn column_count(store: &StoreCore, table: NodeId) -> usize {
     column_count_with(&|n, l| crate::layout::base(store, n, l), table)
 }
 
-fn of_type(doc: &Document, parent: NodeId, ty: &str) -> Vec<NodeId> {
+fn of_type(doc: Tree<'_>, parent: NodeId, ty: &str) -> Vec<NodeId> {
     doc.children(parent).iter().copied().filter(|&c| doc.live(c).is_some_and(|n| n.ty.name() == ty)).collect()
 }
 
 /// The table's rows, top to bottom.
-pub fn rows(doc: &Document, table: NodeId) -> Vec<NodeId> {
+pub fn rows(doc: Tree<'_>, table: NodeId) -> Vec<NodeId> {
     of_type(doc, table, "row")
 }
 
 /// A row's cells, left to right.
-pub fn row_cells(doc: &Document, row: NodeId) -> Vec<NodeId> {
+pub fn row_cells(doc: Tree<'_>, row: NodeId) -> Vec<NodeId> {
     of_type(doc, row, "text")
 }
 
 /// The table's cells, in reading order.
-pub fn cells(doc: &Document, table: NodeId) -> Vec<NodeId> {
+pub fn cells(doc: Tree<'_>, table: NodeId) -> Vec<NodeId> {
     rows(doc, table).into_iter().flat_map(|r| row_cells(doc, r)).collect()
 }
 
 /// The table a node is a cell or a row of, if any.
-pub fn table_of(doc: &Document, id: NodeId) -> Option<NodeId> {
+pub fn table_of(doc: Tree<'_>, id: NodeId) -> Option<NodeId> {
     let is = |n: NodeId, ty: &str| doc.live(n).is_some_and(|x| x.ty.name() == ty);
     let mut at = id;
     for _ in 0..2 {
@@ -99,11 +100,11 @@ pub fn table_of(doc: &Document, id: NodeId) -> Option<NodeId> {
 /// extra column rather than shifting its neighbours. Returns the areas, in
 /// reading order, and the number of rows.
 pub fn place(store: &StoreCore, table: NodeId) -> (Vec<Area>, usize) {
-    place_with(store.document(), &|n, l| crate::layout::base(store, n, l), table)
+    place_with(store.tree(), &|n, l| crate::layout::base(store, n, l), table)
 }
 
 /// [`place`], reading leaves through `read`.
-pub fn place_with(doc: &Document, read: Read, table: NodeId) -> (Vec<Area>, usize) {
+pub fn place_with(doc: Tree<'_>, read: Read, table: NodeId) -> (Vec<Area>, usize) {
     let cols = column_count_with(read, table);
     let rows = rows(doc, table);
     let mut taken = vec![vec![false; cols]; rows.len()];
@@ -167,7 +168,7 @@ pub fn decor(store: &StoreCore, table: NodeId, grid: &Grid) -> Decor {
         }
     }
     let rule = |kind: &str| (num(store, table, &format!("rules.{kind}_width"), 0.0), color(store, table, &format!("rules.{kind}_color")));
-    let has_rules = store.document().facet(table, crate::FacetKind::Rules).is_some();
+    let has_rules = store.tree().facet(table, crate::FacetKind::Rules).is_some();
     if !has_rules {
         return d;
     }
@@ -495,14 +496,14 @@ fn rows_ops(spec: &Spec, table: NodeId, rows: usize, cells: Vec<((usize, usize),
 /// `doc.next_ids`, and the table's id. Merge markers become spans on the
 /// cell they merge into; the positions they stood for get no node. A cell
 /// written `{= expr}` is bound.
-pub fn create_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {
+pub fn create_ops(doc: Tree<'_>, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {
     create_ops_after(doc, 0, parent, order, at, spec)
 }
 
 /// [`create_ops`], with a caption above the table when `caption` has words:
 /// a stack of the two (layout-and-tables.md §3.3), the caption small, spaced
 /// capitals in the muted ink.
-pub fn captioned_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec, caption: Option<&str>) -> Result<(Vec<Op>, NodeId), String> {
+pub fn captioned_ops(doc: Tree<'_>, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec, caption: Option<&str>) -> Result<(Vec<Op>, NodeId), String> {
     let Some(words) = caption.filter(|c| !c.trim().is_empty()) else {
         return create_ops(doc, parent, order, at, spec);
     };
@@ -535,7 +536,7 @@ pub fn captioned_ops(doc: &Document, parent: Option<NodeId>, order: OrderKey, at
 
 /// [`create_ops`] in a transaction whose earlier ops create `taken` nodes
 /// first: the table's ids follow theirs.
-pub fn create_ops_after(doc: &Document, taken: usize, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {
+pub fn create_ops_after(doc: Tree<'_>, taken: usize, parent: Option<NodeId>, order: OrderKey, at: [f64; 2], spec: &Spec) -> Result<(Vec<Op>, NodeId), String> {
     let (columns, cells) = lay_out(&spec.rows)?;
     let rows = spec.rows.len();
     let ids = doc.next_ids(taken + 1 + rows + cells.len()).split_off(taken);
@@ -557,7 +558,7 @@ pub fn create_ops_after(doc: &Document, taken: usize, parent: Option<NodeId>, or
 /// its id, style and selection. Otherwise its rows are made again in the
 /// look the table has now (`infer`), keeping its own leaves.
 pub fn replace_ops(store: &StoreCore, table: NodeId, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
-    let doc = store.document();
+    let doc = store.tree();
     if doc.live(table).is_none_or(|n| n.ty.name() != "table") {
         return Err(format!("{table} is not a table"));
     }
@@ -587,7 +588,7 @@ pub fn replace_ops(store: &StoreCore, table: NodeId, rows_in: &[Vec<String>]) ->
 
 /// Order keys for new cells inserted before the cells at `at` (indices into
 /// `cells`, in reading order; `cells.len()` appends), in the order given.
-fn keys_at(doc: &Document, cells: &[NodeId], at: &[usize]) -> Result<Vec<OrderKey>, String> {
+fn keys_at(doc: Tree<'_>, cells: &[NodeId], at: &[usize]) -> Result<Vec<OrderKey>, String> {
     let order = |i: usize| cells.get(i).and_then(|&c| doc.live(c)).map(|n| n.order.clone());
     let mut out: Vec<OrderKey> = Vec::new();
     let mut last: Option<(usize, OrderKey)> = None;
@@ -604,7 +605,7 @@ fn keys_at(doc: &Document, cells: &[NodeId], at: &[usize]) -> Result<Vec<OrderKe
 }
 
 /// A new empty cell in `row`, styled as `like`.
-fn blank_cell(doc: &Document, id: NodeId, row: NodeId, like: Option<NodeId>, order: OrderKey) -> Op {
+fn blank_cell(doc: Tree<'_>, id: NodeId, row: NodeId, like: Option<NodeId>, order: OrderKey) -> Op {
     let mut facets = vec![Transform2d::default().wrap(), Text::default().wrap()];
     let font = like.and_then(|l| doc.facet(l, crate::FacetKind::Font).cloned()).unwrap_or_else(|| Font::default().wrap());
     facets.push(font);
@@ -615,7 +616,7 @@ fn blank_cell(doc: &Document, id: NodeId, row: NodeId, like: Option<NodeId>, ord
 }
 
 /// Set a cell's spans, adding its `layout_item` if it has none.
-fn span_ops(doc: &Document, cell: NodeId, span_x: usize, span_y: usize) -> Vec<Op> {
+fn span_ops(doc: Tree<'_>, cell: NodeId, span_x: usize, span_y: usize) -> Vec<Op> {
     let leaf = |f: &str| format!("layout_item.{f}").parse().expect("declared leaf");
     if doc.facet(cell, crate::FacetKind::LayoutItem).is_some() {
         vec![
@@ -648,7 +649,7 @@ fn index_in_row(areas: &[Area], row: usize, col: usize) -> usize {
 /// the others' words, on new lines, as PowerPoint does), `split` (the one
 /// selected merged cell back into single cells).
 pub fn edit_ops(store: &StoreCore, table: NodeId, verb: &str, selected: &[NodeId]) -> Result<(Vec<Op>, String), String> {
-    let doc = store.document();
+    let doc = store.tree();
     if doc.live(table).is_none_or(|n| n.ty.name() != "table") {
         return Err(format!("{table} is not a table"));
     }
@@ -828,7 +829,7 @@ pub fn from_tsv(text: &str) -> Vec<Vec<String>> {
 /// top-left), over what is there, the table growing to fit. A merge the
 /// pasted block lands on is undone where words land on it.
 pub fn paste_ops(store: &StoreCore, table: NodeId, at: Option<NodeId>, rows_in: &[Vec<String>]) -> Result<Vec<Op>, String> {
-    let doc = store.document();
+    let doc = store.tree();
     let read = |n: NodeId, l: &str| crate::layout::base(store, n, l);
     let bound = |cell: NodeId| doc.leaf(cell, "text.content".parse().expect("declared leaf")).and_then(|s| s.expr()).map(|e| e.to_string());
     let (areas, rows) = place(store, table);
@@ -866,7 +867,7 @@ pub fn fragment(rows: Vec<Vec<String>>, centre: [f64; 2]) -> Result<crate::copy:
     use crate::{Actor, Affine2, TransactionInput};
     let mut store = StoreCore::new();
     let spec = Spec { rows, preset: Preset::Light, header: 1, label_col: false, emphasis: None, align: Vec::new() };
-    let (ops, table) = create_ops(store.document(), None, OrderKey::first(), [0.0, 0.0], &spec)?;
+    let (ops, table) = create_ops(store.tree(), None, OrderKey::first(), [0.0, 0.0], &spec)?;
     let tx = |ops| TransactionInput { label: "paste table".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false };
     store.apply(tx(ops)).map_err(|e| format!("the table did not apply: {e:?}"))?;
     // Laid out now: centre it by its size.
@@ -876,7 +877,7 @@ pub fn fragment(rows: Vec<Vec<String>>, centre: [f64; 2]) -> Result<crate::copy:
     let ops = place.iter().map(|(l, v)| Op::Set { id: table, path: l.parse().expect("declared leaf"), slot: Slot::Const(Value::Number(*v)) }).collect();
     store.apply(tx(ops)).map_err(|e| format!("the table did not apply: {e:?}"))?;
     Ok(crate::copy::Fragment {
-        doc: store.document().clone(),
+        doc: store.authored().clone(),
         roots: vec![table],
         extras: Vec::new(),
         homes: std::collections::BTreeMap::from([(table, (None, OrderKey::first()))]),
@@ -893,7 +894,7 @@ pub fn fragment(rows: Vec<Vec<String>>, centre: [f64; 2]) -> Result<crate::copy:
 /// cells' ids in the same shape; what differs from the preset, the table's
 /// leaves as attributes and each cell's as a `<style>` line. `bound` gives a
 /// cell's content binding, if it has one.
-pub fn compact(doc: &Document, read: Read, bound: &dyn Fn(NodeId) -> Option<String>, table: NodeId) -> (Vec<(String, String)>, Vec<String>) {
+pub fn compact(doc: Tree<'_>, read: Read, bound: &dyn Fn(NodeId) -> Option<String>, table: NodeId) -> (Vec<(String, String)>, Vec<String>) {
     let (areas, rows) = place_with(doc, read, table);
     let cols = column_count_with(read, table).max(areas.iter().map(|a| a.col + a.span_x).max().unwrap_or(0));
     let spec = infer(read, table, &areas, rows, cols);

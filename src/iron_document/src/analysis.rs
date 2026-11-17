@@ -23,8 +23,9 @@
 //! This is analysis only. Nothing here changes what is drawn; the render
 //! track consumes it (instance-cache.md phase C).
 
+use crate::Tree;
 use crate::definition;
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expand;
 use crate::expr::Leaf;
 use crate::facet::{Args, FacetKind, LeafPath};
@@ -93,14 +94,14 @@ fn draws(ty: &str) -> bool {
 
 /// A template child that is part of the picture: authored, live, and not
 /// bookkeeping (an override, a constraint).
-fn part_node(doc: &Document, n: NodeId) -> bool {
+fn part_node(doc: Tree<'_>, n: NodeId) -> bool {
     !n.is_expanded() && doc.live(n).is_some_and(|x| !matches!(x.ty.name(), "override" | "constraint" | "clip" | "key" | "timeline" | "narrative" | "block"))
 }
 
 /// Follows the graph from an instance's copies to its inputs, memoised per
 /// leaf.
 struct Resolver<'a> {
-    doc: &'a Document,
+    doc: Tree<'a>,
     reactive: &'a Reactive,
     /// The `use` and, for a linked instance, its entity: reads inside
     /// either are the instance's own.
@@ -297,7 +298,7 @@ pub struct Analysis {
 
 /// The analysis of `use` `u`, a linked instance or a main; `None` for any
 /// other node.
-pub fn classify(doc: &Document, reactive: &Reactive, u: NodeId) -> Option<Analysis> {
+pub fn classify(doc: Tree<'_>, reactive: &Reactive, u: NodeId) -> Option<Analysis> {
     let notation = doc.get::<crate::facet::Use>(u)?.notation.constant()?.as_str()?.to_owned();
     let entity = expand::use_entity(doc, u).filter(|&e| expand::linked_definition(doc, e).is_some());
     let def = match entity {
@@ -427,7 +428,7 @@ pub fn classify(doc: &Document, reactive: &Reactive, u: NodeId) -> Option<Analys
 }
 
 /// Whether `n` is a descendant of `of`.
-fn descends(doc: &Document, n: NodeId, of: NodeId) -> bool {
+fn descends(doc: Tree<'_>, n: NodeId, of: NodeId) -> bool {
     let mut at = doc.node(n).and_then(|x| x.parent);
     while let Some(p) = at {
         if p == of {

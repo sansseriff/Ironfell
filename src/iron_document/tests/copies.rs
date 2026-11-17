@@ -53,7 +53,7 @@ struct Scene {
 
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(8);
+    let ids = store.authored().next_ids(8);
     let [comp, slider, a, b, group, inner, timeline, clip] = ids.try_into().unwrap();
     let mut key = OrderKey::first();
     let mut order = || {
@@ -74,7 +74,7 @@ fn scene() -> Scene {
     timing.start = num(0.0);
     let mut cl = Clip::default();
     cl.prop = Slot::Const(Value::Str("transform2d.x".into()));
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     store
         .apply(tx(
             "scene",
@@ -95,7 +95,7 @@ fn scene() -> Scene {
 }
 
 fn expr_of(store: &Store, id: NodeId, p: &str) -> String {
-    store.document().leaf(id, path(p)).unwrap().expr().unwrap().to_string()
+    store.tree().leaf(id, path(p)).unwrap().expr().unwrap().to_string()
 }
 
 #[test]
@@ -108,16 +108,16 @@ fn a_copy_reads_what_its_original_read_and_follows_its_own_copies() {
     assert_eq!(expr_of(&s.store, a2, "size.w"), format!("{}.slider.value * 100", s.slider));
     assert_eq!(expr_of(&s.store, b2, "size.w"), format!("{a2}.size.w + 1"));
     // Each copy sits right above its original, in place.
-    let kids = s.store.document().children(s.comp).to_vec();
+    let kids = s.store.tree().children(s.comp).to_vec();
     let at = |n: NodeId| kids.iter().position(|&k| k == n).unwrap();
     assert_eq!(at(a2), at(s.a) + 1);
     assert_eq!(at(b2), at(s.b) + 1);
     assert_eq!(get(&s.store, a2, "transform2d.x"), 10.0);
     // The clip animating `b` came along and animates `b`'s copy.
-    let clips: Vec<NodeId> = s.store.document().nodes_of_type(ty("clip")).collect();
+    let clips: Vec<NodeId> = s.store.tree().nodes_of_type(ty("clip")).collect();
     assert_eq!(clips.len(), 2);
     let new_clip = clips.into_iter().find(|&c| c != s.clip).unwrap();
-    let targets: Vec<NodeId> = s.store.document().relations_from(new_clip).map(|r| r.to).collect();
+    let targets: Vec<NodeId> = s.store.tree().relations_from(new_clip).map(|r| r.to).collect();
     assert_eq!(targets, vec![b2]);
     // Moving the slider moves both.
     s.store.apply(tx("slide", vec![Op::Set { id: s.slider, path: path("slider.value"), slot: num(0.2) }])).unwrap();
@@ -147,9 +147,9 @@ fn a_paste_into_another_container_keeps_its_place_on_screen() {
     let pasted = copy::paste(&s.store, &frag, &place, "here").unwrap();
     s.store.apply(tx("paste", pasted.ops)).unwrap();
     let a2 = pasted.roots[0];
-    assert_eq!(s.store.document().live(a2).unwrap().parent, Some(s.group));
+    assert_eq!(s.store.tree().live(a2).unwrap().parent, Some(s.group));
     // On top of the group's children, offset by (7, 0) in document space.
-    assert_eq!(s.store.document().children(s.group).last(), Some(&a2));
+    assert_eq!(s.store.tree().children(s.group).last(), Some(&a2));
     let now = s.store.world_affine(a2).apply([0.0, 0.0]);
     assert!((now[0] - world[0] - 7.0).abs() < 1e-9 && (now[1] - world[1]).abs() < 1e-9, "{now:?} vs {world:?}");
     // Unrotated on screen: the group's quarter turn is undone locally.
@@ -174,7 +174,7 @@ fn a_fragment_survives_the_clipboard() {
     // Roots come back in painter order (`b` sits below the group), and the
     // group came with its child.
     assert_eq!(frag.roots, vec![s.b, s.group]);
-    assert_eq!(s.store.document().children(via_text.roots[1]).len(), 1);
+    assert_eq!(s.store.tree().children(via_text.roots[1]).len(), 1);
     assert!(Fragment::from_text("{\"hello\": 1}").is_err());
 }
 
@@ -185,7 +185,7 @@ fn a_child_of_a_selected_group_is_copied_once_and_undo_removes_everything() {
     let pasted = copy::duplicate(&s.store, &[s.inner, s.group]).unwrap();
     assert_eq!(pasted.roots.len(), 1);
     s.store.apply(tx("duplicate", pasted.ops)).unwrap();
-    assert_eq!(s.store.document().nodes_of_type(ty("rect")).count(), 4);
+    assert_eq!(s.store.tree().nodes_of_type(ty("rect")).count(), 4);
     s.store.undo(0).unwrap().unwrap();
     let after: serde_json::Value = serde_json::from_str(&s.store.save()).unwrap();
     let before: serde_json::Value = serde_json::from_str(&before).unwrap();

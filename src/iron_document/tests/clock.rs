@@ -41,10 +41,10 @@ struct Scene {
 /// timeline view.
 fn scene() -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let key_ids = [ids[3], ids[4]];
     let (rect, timeline, clip, view) = (ids[0], ids[1], ids[2], ids[5]);
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let mut t = Transform2d::default();
     t.x = num(50.0);
     let mut timing = Timing::default();
@@ -80,7 +80,7 @@ fn scene() -> Scene {
 
 /// A node in `view` whose x is `expr`.
 fn add_bar(store: &mut Store, view: NodeId, expr: &str) -> NodeId {
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut t = Transform2d::default();
     t.x = bound(expr);
     store.apply(tx("bar", vec![Op::Create { id, ty: ty("rect"), parent: Some(view), order: OrderKey::first(), facets: vec![t.wrap(), Size::default().wrap()] }])).unwrap();
@@ -98,7 +98,7 @@ fn a_session_op_on_the_clock_resamples() {
     assert_eq!(x_of(&store, rect), 200.0);
     // And set_time writes the clock.
     store.set_time(3.0);
-    assert_eq!(store.document().leaf(clock, path("clock.t")).unwrap().constant(), Some(&Value::Number(3.0)));
+    assert_eq!(store.tree().leaf(clock, path("clock.t")).unwrap().constant(), Some(&Value::Number(3.0)));
     assert_eq!(x_of(&store, rect), 300.0);
 }
 
@@ -129,10 +129,10 @@ fn a_drag_on_a_bar_edits_the_clip_with_the_axis_held() {
     }
     store.preview_target(bar, path("transform2d.x"), Value::Number(410.0)).unwrap();
     assert!(store.commit_gesture("retime", Actor::Human, 0).unwrap().is_ok());
-    assert_eq!(store.document().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(2.5)));
-    assert_eq!(store.document().leaf(view, path("axis.pps")).unwrap().constant(), Some(&Value::Number(100.0)), "the axis held");
+    assert_eq!(store.tree().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(2.5)));
+    assert_eq!(store.tree().leaf(view, path("axis.pps")).unwrap().constant(), Some(&Value::Number(100.0)), "the axis held");
     store.undo(0).unwrap().unwrap();
-    assert_eq!(store.document().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(1.0)), "retiming is undoable");
+    assert_eq!(store.tree().leaf(clip, path("timing.start")).unwrap().constant(), Some(&Value::Number(1.0)), "retiming is undoable");
 }
 
 #[test]

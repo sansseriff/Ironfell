@@ -293,7 +293,7 @@ pub fn dispatch(app: &mut crate::WorkerApp, request: Request) -> (Option<Value>,
             .is_some_and(|result| result.get("ok") == Some(&Value::Bool(true)) && result.get("version").is_some());
         value["ack"] = json!(if queued { "queued" } else if applied { "applied" } else { "completed" });
         if let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() {
-            value["version"] = json!(store.0.document().version().0);
+            value["version"] = json!(store.0.authored().version().0);
             value["sessionVersion"] = json!(store.0.session_version());
         }
         value

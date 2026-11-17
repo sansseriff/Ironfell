@@ -92,7 +92,7 @@ impl World {
     }
 
     fn id(&self, name: &str) -> Option<NodeId> {
-        self.names.get(name).copied().filter(|&n| self.store.document().is_live(n))
+        self.names.get(name).copied().filter(|&n| self.store.tree().is_live(n))
     }
 
     /// Plan and apply one `<edit>`; its `$names` join the world's.
@@ -127,7 +127,7 @@ impl World {
 
     /// Live item scopes of a repeat, with their keys.
     fn items(&self, repeat: NodeId) -> Vec<(String, NodeId)> {
-        let doc = self.store.document();
+        let doc = self.store.tree();
         doc.children(repeat)
             .iter()
             .copied()
@@ -137,7 +137,7 @@ impl World {
     }
 
     fn live_nodes(&self) -> Vec<NodeId> {
-        self.store.document().live_nodes().map(|n| n.id).collect()
+        self.store.tree().live_nodes().map(|n| n.id).collect()
     }
 }
 
@@ -238,7 +238,7 @@ fn build(seed: u64) -> World {
 
 /// The port `name` of the entity a placed `use` figures.
 fn port(w: &World, placed: &str, name: &str) -> Option<NodeId> {
-    let doc = w.store.document();
+    let doc = w.store.tree();
     let u = w.id(placed)?;
     let e = composition::figure_of(doc, u).map(|(_, e)| e)?;
     doc.children(e).iter().copied().find(|&p| doc.is_live(p) && doc.get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name))
@@ -246,7 +246,7 @@ fn port(w: &World, placed: &str, name: &str) -> Option<NodeId> {
 
 fn connect(w: &mut World) {
     let (Some(out), Some(inp)) = (port(w, "$laser", "out"), port(w, "$fiber", "in")) else { return };
-    let model = w.store.document().roots().iter().copied().find(|&r| w.store.document().live(r).is_some_and(|n| n.ty.name() == "model")).unwrap();
+    let model = w.store.tree().roots().iter().copied().find(|&r| w.store.tree().live(r).is_some_and(|n| n.ty.name() == "model")).unwrap();
     let xml = format!(r#"<connection in="{model}" id="$wire"><link from="$wire" to="{out}" rel="connects" end="a"/><link from="$wire" to="{inp}" rel="connects" end="b"/></connection>"#);
     if w.edit(&xml).is_ok() {
         w.reach("connection to an instance port");
@@ -320,7 +320,7 @@ fn step(w: &mut World) {
         5 | 22 | 23 | 24 if doc_has(w, "$rows") => {
             let items = w.items(w.names["$rows"]);
             if let Some((key, item)) = w.rng.pick(&items.iter().map(|(k, i)| (k.as_str(), *i)).collect::<Vec<_>>()).map(|(k, i)| (k.to_owned(), i)) {
-                let copy = w.store.document().children(item).first().copied();
+                let copy = w.store.tree().children(item).first().copied();
                 let x = w.rng.below(50) as f64;
                 if let Some(copy) = copy
                     && w.set(copy, "transform2d.x", num(x)).is_ok()
@@ -358,7 +358,7 @@ fn step(w: &mut World) {
                 (0, Some(d), _) => vec![Op::Delete { id: d }],
                 (1, _, Some(l)) => vec![Op::Set { id: l, path: path("let.value"), slot: Slot::Bound(Expr::parse(&format!("{l}.let.value + 1")).unwrap()) }],
                 _ => {
-                    let a = w.store.document().next_id();
+                    let a = w.store.authored().next_id();
                     vec![Op::Set { id: a, path: path("transform2d.x"), slot: num(1.0) }]
                 }
             };
@@ -396,7 +396,7 @@ fn step(w: &mut World) {
                 }
                 w.gesture = false;
             } else {
-                let movable: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| w.store.document().get::<facet::Transform2d>(n).is_some()).collect();
+                let movable: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| w.store.tree().get::<facet::Transform2d>(n).is_some()).collect();
                 if let Some(n) = w.rng.pick(&movable) {
                     w.store.begin_gesture(&[n]);
                     w.gesture = true;
@@ -408,7 +408,7 @@ fn step(w: &mut World) {
         }
         // A drag on the plot: actions previewed through the overlay.
         11 if doc_has(w, "$plot") => {
-            let doc = w.store.document();
+            let doc = w.store.tree();
             let area = doc.descendants(w.names["$plot"]).into_iter().find(|&d| doc.is_live(d) && !expand::in_repeat_template(doc, d) && doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("plot area"));
             if let Some(area) = area {
                 let dx = w.rng.below(40) as f64 - 20.0;
@@ -425,7 +425,7 @@ fn step(w: &mut World) {
         // A host producer.
         12 => {
             let p = *w.producer.get_or_insert_with(|| w.store.register_producer("random"));
-            let targets: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| !n.is_expanded() && w.store.document().get::<facet::Transform2d>(n).is_some()).collect();
+            let targets: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| !n.is_expanded() && w.store.tree().get::<facet::Transform2d>(n).is_some()).collect();
             if w.rng.chance(25) {
                 w.store.unpublish(p);
             } else if let Some(n) = w.rng.pick(&targets) {
@@ -460,7 +460,7 @@ fn step(w: &mut World) {
         17 if doc_has(w, "$gap") => {
             let (gap, plain, wide) = (w.names["$gap"], w.names["$plain"], w.names["$wide"]);
             let ok = if w.rng.chance(50) {
-                let to = if w.store.document().live(gap).and_then(|n| n.parent) == Some(wide) { plain } else { wide };
+                let to = if w.store.tree().live(gap).and_then(|n| n.parent) == Some(wide) { plain } else { wide };
                 w.store.apply(tx("move", vec![Op::Reparent { id: gap, parent: Some(to), order: OrderKey::first() }])).is_ok()
             } else {
                 let on = w.store.resolved(gap, path("let.provide")) == Some(Value::Enum("yes".into()));
@@ -495,7 +495,7 @@ fn step(w: &mut World) {
         }
         // A constant on an authored node, the most common edit.
         _ => {
-            let targets: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| !n.is_expanded() && !n.is_session() && w.store.document().get::<facet::Transform2d>(n).is_some()).collect();
+            let targets: Vec<NodeId> = w.live_nodes().into_iter().filter(|&n| !n.is_expanded() && !n.is_session() && w.store.tree().get::<facet::Transform2d>(n).is_some()).collect();
             if let Some(n) = w.rng.pick(&targets) {
                 let x = w.rng.below(500) as f64;
                 let _ = w.set(n, "transform2d.x", num(x));
@@ -509,7 +509,7 @@ fn script(seed: u64, steps: usize) -> (BTreeMap<&'static str, u32>, usize) {
     let mut most = 0;
     for _ in 0..steps {
         step(&mut w);
-        most = most.max(w.store.document().live_nodes().count());
+        most = most.max(w.store.tree().live_nodes().count());
     }
     (w.reached, most)
 }

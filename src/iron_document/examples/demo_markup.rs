@@ -23,7 +23,7 @@ fn main() {
     };
     let text = std::fs::read_to_string(file).expect("read the saved document");
     let store = Store::load(&text).expect("load the saved document");
-    let doc = store.document();
+    let doc = store.tree();
     let comp = doc.roots().iter().copied().find(|&r| doc.live(r).is_some_and(|n| n.ty.name() == "composition") && name_of(doc, r).as_deref() == Some(name.as_str())).unwrap_or_else(|| {
         eprintln!("no composition named {name}");
         std::process::exit(1)
@@ -66,11 +66,11 @@ fn main() {
     }
 }
 
-fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     doc.get::<facet::Name>(id)?.text.constant()?.as_str().map(str::to_owned)
 }
 
-fn walk(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
+fn walk(doc: Tree<'_>, id: NodeId, out: &mut Vec<NodeId>) {
     out.push(id);
     for &c in doc.children(id) {
         if !c.is_expanded() && doc.live(c).is_some() {
@@ -80,7 +80,7 @@ fn walk(doc: &Document, id: NodeId, out: &mut Vec<NodeId>) {
 }
 
 struct Writer<'a> {
-    doc: &'a Document,
+    doc: Tree<'a>,
     locals: &'a BTreeMap<NodeId, String>,
     referenced: std::collections::BTreeSet<String>,
     warnings: Vec<String>,

@@ -4,6 +4,7 @@
 //! document_demo`) on a page that shows the demo, or a new scope is made
 //! from it (`template_snapshot("demo")`).
 
+use iron_document::Tree;
 use bevy::prelude::*;
 use iron_document::facet::{Composition, Constraint, Embed, Template, Fill, Mesh, Name as DocName, Radius, Size, Stroke, Transform2d, Transform3d};
 use iron_document::facet::{Clip, Slider, Timing};
@@ -44,8 +45,8 @@ fn themed(c: [f32; 4]) -> Slot {
 
 pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInput {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut ids = store.document().next_ids(61).into_iter();
-    let rel_ids = store.document().next_relation_ids(11);
+    let mut ids = store.authored().next_ids(61).into_iter();
+    let rel_ids = store.authored().next_relation_ids(11);
     let mut next = move || ids.next().expect("reserved");
     let mut key = OrderKey::first();
     let mut order = move || {
@@ -464,13 +465,13 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // Instantiate it into the scene. The ops so far are applied to a scratch
     // copy so the instantiation can read the definition and allocate ids
     // past everything above; all of it stays one transaction.
-    let mut scratch = iron_document::Store::with_document(store.document().clone());
+    let mut scratch = iron_document::Store::with_document(store.authored().clone());
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: ops.clone(), exact: false })
         .expect("demo scene applies");
-    let last_in_scene = scratch.document().children(scene).last().and_then(|&c| scratch.document().live(c)).map(|n| n.order.clone());
+    let last_in_scene = scratch.tree().children(scene).last().and_then(|&c| scratch.tree().live(c)).map(|n| n.order.clone());
     let place = Placement { entity_parent: Some(model), entity_after: None, figure_parent: Some(scene), figure_after: last_in_scene.map(|k| OrderKey::after(&k)) };
-    let (entity, inst) = definition::instantiate_static(scratch.document(), def, "free", "bar", &place).expect("bar instantiates");
+    let (entity, inst) = definition::instantiate_static(scratch.tree(), def, "free", "bar", &place).expect("bar instantiates");
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: inst.clone(), exact: false })
         .expect("instantiation applies");
@@ -481,7 +482,7 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
     // tab, and `main` embeds them where they sat, so the everything-in-one
     // layout still reads as before. Their ids come after everything above,
     // so every earlier id stays put.
-    let late = scratch.document().next_ids(4);
+    let late = scratch.authored().next_ids(4);
     let (pendulum_comp, controls_comp, pendulum_embed, controls_embed) = (late[0], late[1], late[2], late[3]);
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("pendulum".into()));
@@ -552,12 +553,12 @@ pub fn demo_scene(store: &iron_document::Store) -> iron_document::TransactionInp
 /// until `__iron.producer('gas', 'freeze')`.
 fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op> {
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    let mut scratch = iron_document::Store::with_document(base.authored().clone());
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
         .expect("demo scene applies");
     let after = |s: &iron_document::Store, parent: Option<NodeId>| {
-        let doc = s.document();
+        let doc = s.tree();
         let kids = match parent {
             Some(p) => doc.children(p).to_vec(),
             None => doc.roots().to_vec(),
@@ -578,7 +579,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
     let bound = |e: String| Slot::Bound(Expr::parse(&e).expect("demo binding"));
     let v3 = |v: [f64; 3]| Slot::Const(Value::Vec3(v));
     // In creation order: ids must ascend with the ops that mint them.
-    let ids = scratch.document().next_ids(14);
+    let ids = scratch.authored().next_ids(14);
     let (gas_def, pressure, cylinder, chamber, piston, rod, camera) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
     let (comp, view, stroke, p_frame, p_bar, pv_frame, pv_bar) = (ids[7], ids[8], ids[9], ids[10], ids[11], ids[12], ids[13]);
     let mut ops = Vec::new();
@@ -693,7 +694,7 @@ fn piston(base: &iron_document::Store, before: &[Op], library: NodeId) -> Vec<Op
 fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
     use iron_document::facet::{Connection, Contour, Handles, PathShape, Port};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    let mut scratch = iron_document::Store::with_document(base.authored().clone());
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
         .expect("demo scene applies");
@@ -706,7 +707,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         out.extend(ops);
     };
     let last = |s: &iron_document::Store, parent: Option<NodeId>| {
-        let doc = s.document();
+        let doc = s.tree();
         let kids = match parent {
             Some(p) => doc.children(p).to_vec(),
             None => doc.roots().to_vec(),
@@ -766,7 +767,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     let rect_op = |id: NodeId, parent: NodeId, order: OrderKey, comps: Vec<iron_document::Facet>| Op::Create { id, ty: ty("rect"), parent: Some(parent), order, facets: comps };
 
     // The two compositions.
-    let ids = scratch.document().next_ids(2);
+    let ids = scratch.authored().next_ids(2);
     let (cartoon, schematic) = (ids[0], ids[1]);
     let k0 = last(&scratch, None);
     let k1 = OrderKey::after(&k0);
@@ -783,7 +784,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
         s.h = n(14.0);
         rect_op(id, parent, order, vec![at(x, y), s.wrap(), fill(c), named("reading")])
     };
-    let ids = scratch.document().next_ids(29);
+    let ids = scratch.authored().next_ids(29);
     let mut it = ids.into_iter();
     let mut next = move || it.next().expect("reserved");
     let (laser, power, laser_out, laser_cartoon, laser_schematic) = (next(), next(), next(), next(), next());
@@ -862,30 +863,30 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
     // schematic.
     let mut entities = Vec::new();
     for (def, name) in [(laser, "laser"), (fiber, "fiber"), (meter, "meter")] {
-        let doc = scratch.document();
+        let doc = scratch.tree();
         let place = Placement {
             entity_parent: Some(model),
             entity_after: doc.children(model).last().and_then(|&c| doc.live(c)).map(|c| c.order.clone()),
             figure_parent: Some(cartoon),
             figure_after: doc.children(cartoon).last().and_then(|&c| doc.live(c)).map(|c| c.order.clone()),
         };
-        let (e, ops) = definition::instantiate_static(scratch.document(), def, "cartoon", name, &place).expect("optics instantiates");
+        let (e, ops) = definition::instantiate_static(scratch.tree(), def, "cartoon", name, &place).expect("optics instantiates");
         phase(&mut scratch, ops);
-        let after = scratch.document().children(schematic).last().and_then(|&c| scratch.document().live(c)).map(|c| c.order.clone());
-        let ops = definition::place_static_figures(scratch.document(), e, "schematic", Some(schematic), after).expect("schematic figures");
+        let after = scratch.tree().children(schematic).last().and_then(|&c| scratch.tree().live(c)).map(|c| c.order.clone());
+        let ops = definition::place_static_figures(scratch.tree(), e, "schematic", Some(schematic), after).expect("schematic figures");
         phase(&mut scratch, ops);
         entities.push(e);
     }
     let port_of = |s: &iron_document::Store, e: NodeId, name: &str| {
-        let doc = s.document();
+        let doc = s.tree();
         doc.children(e).iter().copied().find(|&p| doc.get::<DocName>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).expect("port")
     };
 
     // The connections, and their wires in the schematic.
     for (i, (from, to)) in [((entities[0], "out"), (entities[1], "in")), ((entities[1], "out"), (entities[2], "in"))].into_iter().enumerate() {
         let (a, b) = (port_of(&scratch, from.0, from.1), port_of(&scratch, to.0, to.1));
-        let id = scratch.document().next_ids(2);
-        let rels = scratch.document().next_relation_ids(3);
+        let id = scratch.authored().next_ids(2);
+        let rels = scratch.authored().next_relation_ids(3);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
         let (x0, x1) = if i == 0 { (150.0, 240.0) } else { (360.0, 450.0) };
         let shape = PathShape::default();
@@ -900,7 +901,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
             Op::Create { id: id[1], ty: ty("path"), parent: Some(schematic), order: wire_key, facets: vec![at(x0, 125.0), shape.wrap(), stroke([0.1, 0.1, 0.12, 1.0], 2.0), named("wire")] },
             Op::Link { rel: Relation { id: rels[2], from: id[1], to: id[0], rel: RelKind::Figures, data: BTreeMap::new() } },
         ]);
-        let pts = scratch.document().next_ids(3);
+        let pts = scratch.authored().next_ids(3);
         phase(&mut scratch, vec![
             Op::Create { id: pts[0], ty: ty("contour"), parent: Some(id[1]), order: key(0), facets: vec![Contour::default().wrap()] },
             Op::Create { id: pts[1], ty: ty("point"), parent: Some(pts[0]), order: key(0), facets: vec![at(0.0, 0.0), Handles::default().wrap()] },
@@ -910,7 +911,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
 
     // The controls, in the cartoon: the laser's power (0–20 mW) and the
     // fiber's length (0–20 km) follow two sliders.
-    let ids = scratch.document().next_ids(2);
+    let ids = scratch.authored().next_ids(2);
     let slider_op = |id: NodeId, y: f64, value: f64, name: &str, order: OrderKey| {
         let mut sl = Slider::default();
         sl.min = n(0.0);
@@ -936,7 +937,7 @@ fn optics(base: &iron_document::Store, before: &[Op], library: NodeId, model: No
 fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: NodeId) -> Vec<Op> {
     use iron_document::facet::{Equation, Port};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    let mut scratch = iron_document::Store::with_document(base.authored().clone());
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
         .expect("demo scene applies");
@@ -948,7 +949,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         out.extend(ops);
     };
     let after = |s: &iron_document::Store, parent: Option<NodeId>| {
-        let doc = s.document();
+        let doc = s.tree();
         let kids = match parent {
             Some(p) => doc.children(p).to_vec(),
             None => doc.roots().to_vec(),
@@ -1001,14 +1002,14 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     };
 
     // The composition.
-    let comp = scratch.document().next_ids(1)[0];
+    let comp = scratch.authored().next_ids(1)[0];
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let root_key = next_key(after(&scratch, None));
     phase(&mut scratch, vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: root_key, facets: vec![named("thermal"), c.wrap()] }]);
 
     // Definitions, in creation order (ids ascend).
-    let ids = scratch.document().next_ids(23);
+    let ids = scratch.authored().next_ids(23);
     let mut it = ids.into_iter();
     let mut next = move || it.next().expect("reserved");
     let (heater, power, h_out, h_eq, h_t, h_body, h_track, h_rise, h_flow) = (next(), next(), next(), next(), next(), next(), next(), next(), next());
@@ -1048,18 +1049,18 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
     let mut entities = Vec::new();
     for (def, name) in [(heater, "heater"), (link, "thermal link"), (ambient, "ambient")] {
         let place = Placement { entity_parent: Some(model), entity_after: after(&scratch, Some(model)), figure_parent: Some(comp), figure_after: after(&scratch, Some(comp)) };
-        let (e, ops) = definition::instantiate_static(scratch.document(), def, "cartoon", name, &place).expect("thermal instantiates");
+        let (e, ops) = definition::instantiate_static(scratch.tree(), def, "cartoon", name, &place).expect("thermal instantiates");
         phase(&mut scratch, ops);
         entities.push(e);
     }
     let port_of = |s: &iron_document::Store, e: NodeId, name: &str| {
-        let doc = s.document();
+        let doc = s.tree();
         doc.children(e).iter().copied().find(|&p| doc.get::<DocName>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).expect("port")
     };
     for (from, to) in [((entities[0], "out"), (entities[1], "a")), ((entities[1], "b"), (entities[2], "p"))] {
         let (a, b) = (port_of(&scratch, from.0, from.1), port_of(&scratch, to.0, to.1));
-        let id = scratch.document().next_ids(1)[0];
-        let rels = scratch.document().next_relation_ids(2);
+        let id = scratch.authored().next_ids(1)[0];
+        let rels = scratch.authored().next_relation_ids(2);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
         let order = next_key(after(&scratch, Some(model)));
         let mut c = iron_document::facet::Connection::default();
@@ -1071,7 +1072,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
         ]);
     }
     // The controls: heater power 0–20 W, link resistance 0.5–5 K/W.
-    let ids = scratch.document().next_ids(2);
+    let ids = scratch.authored().next_ids(2);
     let slider = |id: NodeId, y: f64, min: f64, max: f64, value: f64, name: &str, order: OrderKey| {
         let mut sl = Slider::default();
         sl.min = n(min);
@@ -1104,7 +1105,7 @@ fn thermal(base: &iron_document::Store, before: &[Op], library: NodeId, model: N
 fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<Op> {
     use iron_document::facet::{Connection, Name};
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut scratch = iron_document::Store::with_document(base.document().clone());
+    let mut scratch = iron_document::Store::with_document(base.authored().clone());
     scratch
         .apply(iron_document::TransactionInput { label: "scratch".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops: before.to_vec(), exact: false })
         .expect("demo scene applies");
@@ -1115,9 +1116,9 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
             .expect("components demo applies");
         out.extend(ops);
     };
-    let name_of = |s: &iron_document::Store, id: NodeId| s.document().get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+    let name_of = |s: &iron_document::Store, id: NodeId| s.tree().get::<Name>(id).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
     let last = |s: &iron_document::Store, parent: Option<NodeId>| {
-        let doc = s.document();
+        let doc = s.tree();
         let kids = match parent {
             Some(p) => doc.children(p).to_vec(),
             None => doc.roots().to_vec(),
@@ -1125,14 +1126,14 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
         kids.last().and_then(|&k| doc.live(k)).map(|n| n.order.clone())
     };
     let definition = |s: &iron_document::Store, name: &str| {
-        s.document().nodes_of_type(ty("definition")).find(|&d| s.document().is_live(d) && name_of(s, d).as_deref() == Some(name)).expect("optics definition")
+        s.tree().nodes_of_type(ty("definition")).find(|&d| s.tree().is_live(d) && name_of(s, d).as_deref() == Some(name)).expect("optics definition")
     };
     let _ = definition;
     // The tab's own definitions, whose pictures mark where their ports sit
     // with anchors (empties with an `anchor` facet). A fiber's anchors
     // follow what its ports are plugged into, and its curve runs between
     // them, so moving a laser or a meter carries the fiber along.
-    let library = scratch.document().roots().iter().copied().find(|&r| scratch.document().live(r).is_some_and(|n| n.ty.name() == "library")).expect("library");
+    let library = scratch.tree().roots().iter().copied().find(|&r| scratch.tree().live(r).is_some_and(|n| n.ty.name() == "library")).expect("library");
     let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     let named = |t: &str| {
         let mut n = DocName::default();
@@ -1184,7 +1185,7 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 
     // A laser: its power in, its light out at the beam's end.
     let laser = {
-        let ids = scratch.document().next_ids(7);
+        let ids = scratch.authored().next_ids(7);
         let (def, power, out, template, body, beam, out_at) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6]);
         let mut glow = Fill::default();
         glow.color = Slot::Const(Value::Color([0.95, 0.15, 0.1, 1.0]));
@@ -1204,9 +1205,9 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
     // A fiber: its anchors follow what its ports plug into, and its curve
     // runs between them, leaving and arriving level.
     let fiber = {
-        let ids = scratch.document().next_ids(11);
+        let ids = scratch.authored().next_ids(11);
         let (def, loss, length, input, output, template, in_at, out_at, curve, contour, a) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7], ids[8], ids[9], ids[10]);
-        let b = scratch.document().next_ids(12)[11];
+        let b = scratch.authored().next_ids(12)[11];
         let point = |id: NodeId, end: NodeId, order: OrderKey| {
             let mut t = Transform2d::default();
             t.x = bound(format!("{end}.transform2d.x"));
@@ -1244,7 +1245,7 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
     // with the reading; the angle is linear in the reading, so turning the
     // pivot inverts through the chain to whatever sets the power.
     let meter = {
-        let ids = scratch.document().next_ids(9);
+        let ids = scratch.authored().next_ids(9);
         let (def, input, range, template, dial, in_at, pivot, needle, readout) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7], ids[8]);
         let mut r = Radius::default();
         r.rx = n(55.0);
@@ -1276,10 +1277,10 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
         def
     };
     let spec = |s: &iron_document::Store, def: NodeId, port: &str| {
-        s.document().children(def).iter().copied().find(|&c| name_of(s, c).as_deref() == Some(port)).expect("port_spec")
+        s.tree().children(def).iter().copied().find(|&c| name_of(s, c).as_deref() == Some(port)).expect("port_spec")
     };
 
-    let comp = scratch.document().next_id();
+    let comp = scratch.authored().next_id();
     let mut name = DocName::default();
     name.text = Slot::Const(Value::Str("components".into()));
     let k = last(&scratch, None).map_or_else(OrderKey::first, |k| OrderKey::after(&k));
@@ -1291,7 +1292,7 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 
     // Each instance: an entity and a `use`, moved by `(dx, dy)`.
     let mut place = |scratch: &mut iron_document::Store, def: NodeId, name: &str, dx: f64, dy: f64| -> NodeId {
-        let doc = scratch.document();
+        let doc = scratch.tree();
         let at = Placement { entity_parent: Some(model), entity_after: last(scratch, Some(model)), figure_parent: Some(comp), figure_after: last(scratch, Some(comp)) };
         let (e, mut ops) = definition::instantiate(doc, def, "cartoon", name, &at).expect("components instantiate");
         if let Some(Op::Create { facets, .. }) = ops.iter_mut().find(|op| matches!(op, Op::Create { ty, .. } if ty.name() == "use")) {
@@ -1317,8 +1318,8 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
     for (i, (from, fd, to, td)) in [(source, laser, line, fiber), (line, fiber, gauge, meter)].into_iter().enumerate() {
         let a = NodeId::expanded(from, spec(&scratch, fd, "out")).expect("expanded id");
         let b = NodeId::expanded(to, spec(&scratch, td, "in")).expect("expanded id");
-        let id = scratch.document().next_id();
-        let rels = scratch.document().next_relation_ids(2);
+        let id = scratch.authored().next_id();
+        let rels = scratch.authored().next_relation_ids(2);
         let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
         let mut c = Connection::default();
         c.domain = Slot::Const(Value::Str("optical".into()));
@@ -1333,7 +1334,7 @@ fn components(base: &iron_document::Store, before: &[Op], model: NodeId) -> Vec<
 
     // The source's power (0–20 mW) follows a slider; the loose fibers are
     // set to other lengths.
-    let slider = scratch.document().next_id();
+    let slider = scratch.authored().next_id();
     let mut sl = Slider::default();
     sl.min = n(0.0);
     sl.max = n(20.0);
@@ -1388,7 +1389,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     use iron_document::facet::{Affords, Font, Layout, Text};
     use iron_document::table;
     let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-    let mut scratch = iron_document::Store::with_document(store.document().clone());
+    let mut scratch = iron_document::Store::with_document(store.authored().clone());
     let mut out: Vec<Op> = Vec::new();
     let mut phase = |scratch: &mut iron_document::Store, ops: Vec<Op>| -> Result<(), String> {
         scratch
@@ -1431,7 +1432,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         f.color = token(name);
         f.wrap()
     };
-    let after_roots = |s: &iron_document::Store| s.document().roots().iter().filter_map(|&r| s.document().live(r)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+    let after_roots = |s: &iron_document::Store| s.tree().roots().iter().filter_map(|&r| s.tree().live(r)).map(|n| n.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k));
     let composition = |s: &iron_document::Store, id: NodeId, name: &str, notation: &str| {
         let mut c = Composition::default();
         c.notation = Slot::Const(Value::Str(notation.into()));
@@ -1440,7 +1441,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     let key = |i: u32| (0..i).fold(OrderKey::first(), |k, _| OrderKey::after(&k));
     // The gallery's compositions go before every root the demo scene made,
     // so their tabs come first, each after the one before.
-    let first_root = scratch.document().roots().iter().filter_map(|&r| scratch.document().live(r)).map(|n| n.order.clone()).min();
+    let first_root = scratch.tree().roots().iter().filter_map(|&r| scratch.tree().live(r)).map(|n| n.order.clone()).min();
     let mut gallery_last: Option<OrderKey> = None;
     let mut gallery_key = move || {
         let k = match (&gallery_last, &first_root) {
@@ -1464,7 +1465,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     // as nodes of its own, which would move the ids the scripts know.
     let mut recolour = Vec::new();
     {
-        let doc = scratch.document();
+        let doc = scratch.tree();
         for r in doc.roots().to_vec() {
             for id in doc.descendants(r) {
                 if id.is_expanded() || !doc.is_live(id) {
@@ -1482,18 +1483,18 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     phase(&mut scratch, recolour)?;
 
     // Outline.
-    let (ops, _) = contexts::put_ops(scratch.document(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n  <rule match=\"view\" chrome.hover=\"off\" chrome.grip=\"14\" tolerance.hit=\"2\"/>\n</context>")?;
+    let (ops, _) = contexts::put_ops(scratch.tree(), "<context name=\"outline\" extends=\"std:free-2d\">\n  <rule match=\"type:text\" affords.enter=\"edit\"/>\n  <rule match=\"view\" chrome.hover=\"off\" chrome.grip=\"14\" tolerance.hit=\"2\"/>\n</context>")?;
     phase(&mut scratch, ops)?;
-    let outline = scratch.document().next_id();
+    let outline = scratch.authored().next_id();
     let op = composition(&scratch, outline, "outline", "outline");
     phase(&mut scratch, vec![op])?;
-    let ids = scratch.document().next_ids(1);
+    let ids = scratch.authored().next_ids(1);
     phase(&mut scratch, vec![caption(ids[0], outline, 0, 60.0, 24.0, "A notation whose texts edit on entering: double-click the table, then a cell, and type.\nArrows move between cells; Tab past the last adds a row; Esc goes back to the table.")])?;
     let rows: Vec<Vec<String>> = ["Polyimide (µm) | 75 | 100 | 125", "S (µm) | 85 | 113 | 140", "Gap W (µm) | 153 | 138 | 125"].iter().map(|r| r.split('|').map(|c| c.trim().to_owned()).collect()).collect();
     let spec = table::Spec { rows, preset: table::Preset::Light, header: 1, label_col: true, emphasis: Some(2), align: vec![] };
-    let (ops, _) = table::create_ops(scratch.document(), Some(outline), key(1), [60.0, 60.0], &spec)?;
+    let (ops, _) = table::create_ops(scratch.tree(), Some(outline), key(1), [60.0, 60.0], &spec)?;
     phase(&mut scratch, ops)?;
-    let ids = scratch.document().next_ids(6);
+    let ids = scratch.authored().next_ids(6);
     let mut layout = Layout::default();
     layout.mode = Slot::Const(Value::Enum("stack_y".into()));
     layout.gap = n(8.0);
@@ -1518,12 +1519,12 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     // table of bound readouts and as bars bound to it. Drag a bar's top and
     // its cell follows; type a number in a cell and its bar moves (typed
     // words invert through their `fmt` binding onto the slider).
-    let data = scratch.document().next_id();
+    let data = scratch.authored().next_id();
     let op = composition(&scratch, data, "data", "free");
     phase(&mut scratch, vec![op])?;
     let names = ["north", "east", "south"];
     let values = [0.4, 0.7, 0.55];
-    let ids = scratch.document().next_ids(4);
+    let ids = scratch.authored().next_ids(4);
     let mut ops = vec![caption(ids[0], data, 0, 60.0, 16.0, "One dataset, two pictures: drag a bar's top and its cell follows; double-click the table,\nthen a cell, and type a number: its bar moves. The sliders are the data.")];
     for (i, (name, v)) in names.iter().zip(values).enumerate() {
         let mut s = Slider::default();
@@ -1538,9 +1539,9 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         rows.push(vec![name.to_string(), format!("{{= fmt({s}.slider.value * 100, 0)}}")]);
     }
     let spec = table::Spec { rows, preset: table::Preset::Light, header: 1, label_col: true, emphasis: None, align: vec![] };
-    let (ops, _) = table::create_ops(scratch.document(), Some(data), key(4), [60.0, 220.0], &spec)?;
+    let (ops, _) = table::create_ops(scratch.tree(), Some(data), key(4), [60.0, 220.0], &spec)?;
     phase(&mut scratch, ops)?;
-    let ids = scratch.document().next_ids(6);
+    let ids = scratch.authored().next_ids(6);
     let mut ops = Vec::new();
     for (i, (name, s)) in names.iter().zip(sliders).enumerate() {
         let x = 420.0 + 70.0 * i as f64;
@@ -1559,7 +1560,7 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     // The gallery: science pieces, one composition each, written as edits
     // (plans/specs/markup.md, demo.md); their tabs come first.
     let timeline = {
-        let doc = scratch.document();
+        let doc = scratch.tree();
         doc.nodes_of_type(ty("timeline")).find(|&n| doc.is_live(n)).ok_or("no timeline for the gallery's clips")?
     };
     let page = |scratch: &iron_document::Store, src: &str, key: Option<OrderKey>| -> Result<Vec<Op>, String> {
@@ -1582,22 +1583,22 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     // Circuit (schematic.md): a divider in the schematic notation, its parts
     // from the parts library, wired pin to pin, solved live; a probe reads
     // its middle and a slider sets R2.
-    let circuit = scratch.document().next_id();
+    let circuit = scratch.authored().next_id();
     let op = composition(&scratch, circuit, "circuit", "schematic");
     phase(&mut scratch, vec![op])?;
-    let ids = scratch.document().next_ids(1);
+    let ids = scratch.authored().next_ids(1);
     phase(&mut scratch, vec![caption(ids[0], circuit, 0, 60.0, 16.0, "A schematic notation: W wires pin to pin (click a pin, click corners, click a pin; Space flips the elbow),\nR C L E I G P place parts (Space turns them), all on a 10 px grid. The probe reads the divider's middle\nfrom the network solve; drag the slider to change R2, or a part to see its wires follow.")])?;
     let mut placed = Vec::new();
     for (key, x, y, turns) in [("vsource", 120.0, 220.0, 0.0), ("resistor", 220.0, 160.0, 0.0), ("resistor", 300.0, 220.0, 1.0), ("ground", 120.0, 300.0, 0.0), ("probe", 250.0, 130.0, 0.0)] {
         let part = iron_document::parts::find(key).ok_or("no such part")?;
-        let (ops, p) = iron_document::parts::place_ops(scratch.document(), part, circuit, [x, y], turns * std::f64::consts::FRAC_PI_2, None)?;
+        let (ops, p) = iron_document::parts::place_ops(scratch.authored(), part, circuit, [x, y], turns * std::f64::consts::FRAC_PI_2, None)?;
         phase(&mut scratch, ops)?;
         placed.push(p);
     }
     let [v1, r1, r2, gnd, probe] = placed[..] else { unreachable!() };
     let pins = iron_document::parts::pins_on(&scratch, circuit);
     let end = |p: iron_document::parts::Placed, name: &str| -> Result<(iron_document::parts::End, [f64; 2]), String> {
-        let pin = iron_document::parts::pin(scratch.document(), p.entity, name).ok_or("no pin")?;
+        let pin = iron_document::parts::pin(scratch.tree(), p.entity, name).ok_or("no pin")?;
         pins.iter().find(|(e, _)| e.pin == pin).copied().ok_or_else(|| "pin not drawn".to_owned())
     };
     let wires = [(end(v1, "p")?, end(r1, "a")?, true), (end(r1, "b")?, end(r2, "a")?, false), (end(r2, "b")?, end(v1, "n")?, false), (end(v1, "n")?, end(gnd, "g")?, false), (end(r1, "b")?, end(probe, "t")?, false)];
@@ -1605,10 +1606,10 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
         let mut pts = vec![pa];
         pts.extend(iron_document::parts::elbow(pa, pb, vertical_first));
         pts.push(pb);
-        let (ops, _) = iron_document::parts::wire_ops(scratch.document(), circuit, a, b, &pts)?;
+        let (ops, _) = iron_document::parts::wire_ops(scratch.tree(), circuit, a, b, &pts)?;
         phase(&mut scratch, ops)?;
     }
-    let s = scratch.document().next_ids(2);
+    let s = scratch.authored().next_ids(2);
     let mut level = Slider::default();
     level.value = n(0.5);
     phase(&mut scratch, vec![
@@ -1623,15 +1624,15 @@ pub fn showcase(store: &iron_document::Store) -> Result<iron_document::Transacti
     phase(&mut scratch, ops)?;
     // A narrative about the demo (narrative-panel.md): mentions, live values
     // and view blocks over the scene, the pendulum and the assembly.
-    if let Some(md) = lesson_markdown(scratch.document()) {
+    if let Some(md) = lesson_markdown(scratch.tree()) {
         let blocks = iron_document::narrative::parse_markdown(&md);
-        let (_, ops) = iron_document::narrative::create_ops(scratch.document(), "lesson", &blocks);
+        let (_, ops) = iron_document::narrative::create_ops(scratch.tree(), "lesson", &blocks);
         phase(&mut scratch, ops)?;
     }
     // Titles, captions and labels for the demo scene's compositions, last
     // in each: the scene's own ids, which the scripts know, never move.
     for (name, src) in notes() {
-        let doc = scratch.document();
+        let doc = scratch.tree();
         let Some(comp) = iron_document::composition::compositions(doc).into_iter().find(|&c| doc.get::<DocName>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)) else {
             return Err(format!("notes for {name}: no such composition"));
         };
@@ -1658,7 +1659,7 @@ fn notes() -> Vec<(&'static str, &'static str)> {
 
 /// The demo's lesson, naming its nodes by id; `None` if the demo scene is
 /// not there (a document without it gets no lesson).
-fn lesson_markdown(doc: &iron_document::Document) -> Option<String> {
+fn lesson_markdown(doc: Tree<'_>) -> Option<String> {
     let named = |want: &str, ty: &str| -> Option<NodeId> {
         doc.nodes_of_type(TypeId::lookup(ty)?).find(|&id| doc.live(id).is_some() && doc.get::<DocName>(id).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some(want))
     };
@@ -1702,7 +1703,7 @@ pub fn template_snapshot(kind: &str) -> Result<String, String> {
     match kind {
         "empty" => {
             let ty = |s: &str| TypeId::lookup(s).expect("registered type");
-            let ids = store.document().next_ids(3);
+            let ids = store.authored().next_ids(3);
             let named = |t: &str| {
                 let mut nm = DocName::default();
                 nm.text = Slot::Const(Value::Str(t.into()));
@@ -1750,7 +1751,7 @@ mod tests {
             let t = std::time::Instant::now();
             let store = iron_document::Store::load(&text).unwrap();
             times.push(t.elapsed().as_secs_f64() * 1e3);
-            nodes = store.document().live_nodes().count();
+            nodes = store.tree().live_nodes().count();
         }
         times.sort_by(f64::total_cmp);
         println!("load the demo document: p50 {:.2} ms, min {:.2} ms ({} bytes, {nodes} live nodes)", times[4], times[0], text.len());

@@ -40,7 +40,7 @@ fn input(default: Value) -> Port {
 
 /// The entity's port named `name`.
 fn port_named(store: &Store, entity: NodeId, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.children(entity).iter().copied().find(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
 }
 
@@ -62,7 +62,7 @@ struct Lib {
 /// level's port } } }.
 fn library() -> Lib {
     let mut store = Store::new();
-    let ids = store.document().next_ids(8);
+    let ids = store.authored().next_ids(8);
     let (scene, slider, library, def, level, power, template, bar) = (ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7]);
     let mut sl = Slider::default();
     sl.value = num(0.4);
@@ -103,18 +103,18 @@ fn place(scene: NodeId) -> Placement {
 fn a_definition_instantiates_into_an_entity_and_a_figure() {
     let Lib { mut store, scene, def, level, .. } = library();
     let _ = level;
-    let specs = definition::inputs_of(store.document(), def).unwrap();
+    let specs = definition::inputs_of(store.tree(), def).unwrap();
     assert_eq!(specs.iter().map(|s| s.name).collect::<Vec<_>>(), vec!["level", "power"]);
     assert_eq!(specs[0].kind, ValueKind::Number);
     assert_eq!(specs[1].kind, ValueKind::Quantity);
     // The template itself evaluates with the defaults.
-    let template_rect = store.document().children(definition::template_of(store.document(), def, "free").unwrap())[0];
+    let template_rect = store.tree().children(definition::template_of(store.tree(), def, "free").unwrap())[0];
     assert_eq!(resolved(&store, template_rect, "size.h"), Value::Number(120.0));
 
-    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
-    store.document().check_invariants().unwrap();
-    let e = store.document().live(entity).unwrap();
+    store.authored().check_invariants().unwrap();
+    let e = store.tree().live(entity).unwrap();
     assert_eq!((e.ty.name(), e.parent), ("entity", Some(scene)));
     assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.4));
     assert_eq!(resolved(&store, entity, "args.power"), Value::parse_quantity("1 mW").unwrap());
@@ -123,21 +123,21 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // instance and the definition node they copy.
     let level_port = NodeId::expanded(entity, level).unwrap();
     assert_eq!(port_named(&store, entity, "level"), level_port);
-    let signal = store.document().leaf(level_port, path("port.signal")).unwrap().expr().unwrap().to_string();
+    let signal = store.tree().leaf(level_port, path("port.signal")).unwrap().expr().unwrap().to_string();
     assert_eq!(signal, format!("{entity}.args.level"));
     assert_eq!(resolved(&store, level_port, "port.signal"), Value::Number(0.4));
     // The picture is a `use` under the scene, figuring the entity; its
     // child is the template's rect, expanded, its bindings reading the
     // entity's port.
-    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
+    let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
     let copy = NodeId::expanded(u, template_rect).unwrap();
-    assert_eq!(store.document().children(u), &[copy]);
+    assert_eq!(store.tree().children(u), &[copy]);
     assert_eq!(copy.to_string(), format!("{u}/{}", &template_rect.to_string()[1..]));
-    let h = store.document().leaf(copy, path("size.h")).unwrap().expr().unwrap().to_string();
+    let h = store.tree().leaf(copy, path("size.h")).unwrap().expr().unwrap().to_string();
     assert_eq!(h, format!("{level_port}.port.signal * 300"));
     assert_eq!(resolved(&store, copy, "size.h"), Value::Number(120.0));
     assert_eq!(resolved(&store, copy, "transform2d.y"), Value::Number(520.0));
-    let rels: Vec<_> = store.document().relations_to(entity).collect();
+    let rels: Vec<_> = store.tree().relations_to(entity).collect();
     assert_eq!(rels.len(), 1);
     assert_eq!((rels[0].from, rels[0].rel), (u, RelKind::Figures));
     // The model view shows one element for the entity, with its port; the
@@ -153,19 +153,19 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // the definition, and undo removes it.
     store.apply(tx("narrow", vec![Op::Set { id: copy, path: path("size.w"), slot: num(5.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
-    let o = store.document().children(u).iter().copied().find(|c| !c.is_expanded()).unwrap();
-    assert_eq!(store.document().live(o).unwrap().ty.name(), "override");
+    let o = store.tree().children(u).iter().copied().find(|c| !c.is_expanded()).unwrap();
+    assert_eq!(store.tree().live(o).unwrap().ty.name(), "override");
     store.apply(tx("wider still", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(90.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
     // A second edit to the same leaf updates that override.
     store.apply(tx("narrower", vec![Op::Set { id: copy, path: path("size.w"), slot: num(4.0) }])).unwrap();
-    assert_eq!(store.document().children(u).iter().filter(|c| !c.is_expanded()).count(), 1);
+    assert_eq!(store.tree().children(u).iter().filter(|c| !c.is_expanded()).count(), 1);
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(4.0));
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
-    assert!(store.document().live(o).is_none());
+    assert!(store.tree().live(o).is_none());
     // A bound leaf inverts onto what it reads: the picture's top is
     // `640 - level · 300`, so setting it sets the argument.
     store.apply(tx("raise", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: num(490.0) }])).unwrap();
@@ -174,7 +174,7 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // A binding may not reach inside an instance, in either direction.
     let errs = store.apply(tx("bind inside", vec![Op::Set { id: copy, path: path("size.w"), slot: Slot::Bound(Expr::parse("#2.slider.value").unwrap()) }])).unwrap_err();
     assert!(errs[0].message.contains("cannot reach it"), "{}", errs[0].message);
-    let reader = store.document().next_id();
+    let reader = store.authored().next_id();
     let mut t = Transform2d::default();
     t.x = Slot::Bound(Expr::parse(&format!("{copy}.size.w")).unwrap());
     let errs = store.apply(tx("read inside", vec![Op::Create { id: reader, ty: ty("rect"), parent: Some(scene), order: OrderKey::first(), facets: vec![t.clone().wrap(), Size::default().wrap()] }])).unwrap_err();
@@ -194,7 +194,7 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // Undo removes the whole instance and what it derived; redo restores it.
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
-    assert!(store.document().live(entity).is_none() && store.document().live(copy).is_none() && store.document().live(level_port).is_none());
+    assert!(store.tree().live(entity).is_none() && store.tree().live(copy).is_none() && store.tree().live(level_port).is_none());
     store.redo(2).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "size.h"), Value::Number(120.0));
 }
@@ -202,13 +202,13 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
 #[test]
 fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
     let Lib { mut store, scene, slider, def, .. } = library();
-    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
     store
         .apply(tx("bind level", vec![Op::Set { id: entity, path: path("args.level"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).unwrap()) }]))
         .unwrap();
-    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
-    let copy = store.document().children(u)[0];
+    let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.tree().children(u)[0];
     store.drain_changes();
     store.preview(slider, path("slider.value"), Value::Number(0.9));
     assert_eq!(resolved(&store, entity, "args.level"), Value::Number(0.9));
@@ -239,7 +239,7 @@ fn an_entity_parameter_bound_to_a_slider_drives_the_figure() {
 #[test]
 fn entities_are_validated_against_their_definition() {
     let Lib { mut store, scene, slider, def, power, .. } = library();
-    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
     let bad = |store: &mut Store, label: &str, ops: Vec<Op>| -> String {
         let errs = store.apply(tx(label, ops)).unwrap_err();
@@ -258,7 +258,7 @@ fn entities_are_validated_against_their_definition() {
     let errs = store.apply(tx("unknown", vec![Op::Set { id: entity, path: path("args.gain"), slot: num(1.0) }])).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::TypeMismatch, "{}", errs[0].message);
     assert!(errs[0].message.contains("no argument"), "{}", errs[0].message);
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     let mut inst = iron_document::facet::Instance::default();
     inst.def = Slot::Const(Value::Ref(def));
     let mut params = iron_document::facet::Args::default();
@@ -273,15 +273,15 @@ fn entities_are_validated_against_their_definition() {
     let m = bad(&mut store, "not a def", vec![Op::Set { id: entity, path: path("instance.def"), slot: Slot::Const(Value::Ref(slider)) }]);
     assert!(m.contains("not a definition"), "{m}");
     // No template for a notation; a definition with a bad spec.
-    assert!(definition::instantiate(store.document(), def, "schematic", "bar3", &place(scene)).unwrap_err().contains("no template"));
+    assert!(definition::instantiate(store.tree(), def, "schematic", "bar3", &place(scene)).unwrap_err().contains("no template"));
     // A definition reads only itself.
     let errs = store.apply(tx("reach out", vec![Op::Set { id: power, path: path("port.signal"), slot: Slot::Bound(Expr::parse(&format!("{slider}.slider.value")).unwrap()) }])).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::OutOfScope, "{}", errs[0].message);
-    let level = store.document().children(def)[0];
+    let level = store.tree().children(def)[0];
     store.apply(tx("break spec", vec![Op::Set { id: power, path: path("port.signal"), slot: Slot::Bound(Expr::parse(&format!("{level}.port.signal * 1 W")).unwrap()) }])).unwrap();
-    let e = definition::instantiate(store.document(), def, "free", "bar2", &place(scene)).unwrap_err();
+    let e = definition::instantiate(store.tree(), def, "free", "bar2", &place(scene)).unwrap_err();
     assert!(e.contains("default must be a constant"), "{e}");
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
 }
 
 /// An override whose target leaves the definition is kept, applies nothing,
@@ -290,15 +290,15 @@ fn entities_are_validated_against_their_definition() {
 #[test]
 fn an_override_outlives_its_target_as_a_stale_override() {
     let Lib { mut store, scene, def, .. } = library();
-    let (_, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (_, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
-    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
-    let copy = store.document().children(u)[0];
+    let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.tree().children(u)[0];
     let (_, template_rect) = copy.expanded_parts().unwrap();
     store.apply(tx("recolour", vec![Op::Set { id: copy, path: path("fill.color"), slot: Slot::Const(Value::Color([1.0, 0.0, 0.0, 1.0])) }])).unwrap();
     assert!(store.stale_overrides().is_empty());
     store.apply(tx("drop the bar", vec![Op::Delete { id: template_rect }])).unwrap();
-    assert!(store.document().live(copy).is_none());
+    assert!(store.tree().live(copy).is_none());
     let stale = store.stale_overrides();
     assert_eq!(stale.len(), 1, "{stale:?}");
     assert!(stale[0].1.contains(&format!("no {template_rect}")), "{stale:?}");
@@ -313,19 +313,19 @@ fn an_override_outlives_its_target_as_a_stale_override() {
 #[test]
 fn adding_a_facet_inside_an_instance_is_an_undoable_override() {
     let Lib { mut store, scene, def, .. } = library();
-    let (_, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (_, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
-    let u = store.document().children(scene).iter().copied().find(|&c| store.document().live(c).unwrap().ty.name() == "use").unwrap();
-    let copy = store.document().children(u)[0];
-    assert!(store.document().facet(copy, FacetKind::Stroke).is_none());
+    let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
+    let copy = store.tree().children(u)[0];
+    assert!(store.tree().facet(copy, FacetKind::Stroke).is_none());
     store.begin_gesture(&[copy]);
     store.preview(copy, path("stroke.width"), Value::Number(7.0));
     store.commit_gesture("outline", Actor::Human, 1).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "stroke.width"), Value::Number(7.0));
-    assert!(store.document().children(u).iter().any(|&c| store.document().live(c).unwrap().ty.name() == "override"));
+    assert!(store.tree().children(u).iter().any(|&c| store.tree().live(c).unwrap().ty.name() == "override"));
     store.undo(1).unwrap().unwrap();
-    assert!(store.document().facet(copy, FacetKind::Stroke).is_none());
-    assert!(!store.document().children(u).iter().any(|&c| store.document().live(c).unwrap().ty.name() == "override"));
+    assert!(store.tree().facet(copy, FacetKind::Stroke).is_none());
+    assert!(!store.tree().children(u).iter().any(|&c| store.tree().live(c).unwrap().ty.name() == "override"));
 }
 
 /// An in port created on a definition with a plain `create` (as the model
@@ -334,21 +334,21 @@ fn adding_a_facet_inside_an_instance_is_an_undoable_override() {
 #[test]
 fn creating_an_input_gives_existing_instances_the_argument() {
     let Lib { mut store, scene, def, .. } = library();
-    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
-    let phase = store.document().next_id();
-    let last = store.document().children(def).iter().map(|&c| store.document().live(c).unwrap().order.clone()).max().unwrap();
+    let phase = store.authored().next_id();
+    let last = store.tree().children(def).iter().map(|&c| store.tree().live(c).unwrap().order.clone()).max().unwrap();
     let create = Op::Create { id: phase, ty: ty("port_spec"), parent: Some(def), order: OrderKey::after(&last), facets: vec![input(Value::Number(2.0)).wrap(), named("phase").wrap()] };
     store.apply(tx("new input", vec![create])).unwrap();
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
     assert_eq!(resolved(&store, entity, "args.phase"), Value::Number(2.0));
     assert_eq!(resolved(&store, port_named(&store, entity, "phase"), "port.signal"), Value::Number(2.0));
     store.apply(tx("set phase", vec![Op::Set { id: entity, path: path("args.phase"), slot: num(1.5) }])).unwrap();
     assert_eq!(resolved(&store, entity, "args.phase"), Value::Number(1.5));
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
-    assert!(store.document().get::<iron_document::facet::Args>(entity).unwrap().slots.get("phase").is_none());
-    assert!(store.document().live(phase).is_none());
+    assert!(store.tree().get::<iron_document::facet::Args>(entity).unwrap().slots.get("phase").is_none());
+    assert!(store.tree().live(phase).is_none());
 }
 
 /// A document saved before that (an entity missing an argument its
@@ -357,14 +357,14 @@ fn creating_an_input_gives_existing_instances_the_argument() {
 #[test]
 fn setting_a_missing_declared_argument_catches_the_entity_up() {
     let Lib { mut store, scene, def, .. } = library();
-    let (entity, ops) = definition::instantiate(store.document(), def, "free", "bar", &place(scene)).unwrap();
+    let (entity, ops) = definition::instantiate(store.tree(), def, "free", "bar", &place(scene)).unwrap();
     store.apply(tx("instantiate bar", ops)).unwrap();
     // Drop `power` from the saved entity's args, as an older file has it.
-    let text = iron_document::serial::save(store.document());
+    let text = iron_document::serial::save(store.authored());
     let power = r#","power":{"q":[0.001,"W"]}"#;
     assert!(text.contains(power), "{text}");
     let mut store = Store::load(&text.replace(power, "")).unwrap();
-    assert!(store.document().get::<iron_document::facet::Args>(entity).unwrap().slots.get("power").is_none());
+    assert!(store.tree().get::<iron_document::facet::Args>(entity).unwrap().slots.get("power").is_none());
     store.apply(tx("set power", vec![Op::Set { id: entity, path: path("args.power"), slot: Slot::Const(Value::parse_quantity("3 mW").unwrap()) }])).unwrap();
     assert_eq!(resolved(&store, entity, "args.power"), Value::parse_quantity("3 mW").unwrap());
     // An argument the definition does not declare is still refused.

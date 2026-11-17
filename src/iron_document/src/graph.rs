@@ -21,7 +21,7 @@
 //! evaluated again; a tracked read that reaches its own binding is an
 //! error on that leaf, since the applier cannot refuse it ahead of time.
 
-use crate::document::Document;
+use crate::Tree;
 use crate::expr::{Expr, Leaf};
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -126,7 +126,7 @@ pub struct Reactive {
 impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
-    pub fn read(&self, doc: &Document, leaf: Leaf) -> Option<Value> {
+    pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
         read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
 
@@ -164,7 +164,7 @@ impl Reactive {
     /// longer names are released, leaves another producer holds are refused
     /// and reported. Leaves whose readable value moved are noted and their
     /// dependents re-evaluated, as for a constant that was set.
-    pub fn publish(&mut self, doc: &Document, producer: ProducerId, values: BTreeMap<Leaf, Value>, stamp: u64) {
+    pub fn publish(&mut self, doc: Tree<'_>, producer: ProducerId, values: BTreeMap<Leaf, Value>, stamp: u64) {
         let mut changed: Vec<Leaf> = Vec::new();
         let was: BTreeSet<Leaf> = self.held.remove(&producer).unwrap_or_default();
         let mut now: BTreeSet<Leaf> = BTreeSet::new();
@@ -215,7 +215,7 @@ impl Reactive {
     }
 
     /// Release everything `producer` publishes.
-    pub fn retract(&mut self, doc: &Document, producer: ProducerId) {
+    pub fn retract(&mut self, doc: Tree<'_>, producer: ProducerId) {
         self.publish(doc, producer, BTreeMap::new(), 0);
     }
 
@@ -266,7 +266,7 @@ impl Reactive {
 
     /// Rebuild the structure from the document and evaluate every binding.
     /// Called after transactions that created, deleted, or rebound anything.
-    pub fn rebuild(&mut self, doc: &Document) {
+    pub fn rebuild(&mut self, doc: Tree<'_>) {
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -317,7 +317,7 @@ impl Reactive {
 
     /// The values of `changed` leaves moved (a constant was set, or the
     /// overlay changed). Re-evaluate what depends on them, in height order.
-    pub fn invalidate(&mut self, doc: &Document, changed: impl IntoIterator<Item = Leaf>) {
+    pub fn invalidate(&mut self, doc: Tree<'_>, changed: impl IntoIterator<Item = Leaf>) {
         let mut primed = BTreeSet::new();
         let mut dirty = BTreeSet::new();
         let mut stack: Vec<Leaf> = changed.into_iter().collect();
@@ -339,7 +339,7 @@ impl Reactive {
     }
 
     /// Preview a value without writing the document.
-    pub fn preview(&mut self, doc: &Document, leaf: Leaf, value: Value) {
+    pub fn preview(&mut self, doc: Tree<'_>, leaf: Leaf, value: Value) {
         let before = self.read(doc, leaf);
         self.overlay.insert(leaf, value.clone());
         if before.as_ref() != Some(&value) {
@@ -349,7 +349,7 @@ impl Reactive {
     }
 
     /// Drop one leaf's preview; it falls back to the document.
-    pub fn unpreview(&mut self, doc: &Document, leaf: Leaf) {
+    pub fn unpreview(&mut self, doc: Tree<'_>, leaf: Leaf) {
         if self.overlay.remove(&leaf).is_some() {
             if let Some(v) = self.read(doc, leaf) {
                 self.note(leaf, v);
@@ -359,7 +359,7 @@ impl Reactive {
     }
 
     /// Drop every preview; values fall back to the document.
-    pub fn clear_overlay(&mut self, doc: &Document) {
+    pub fn clear_overlay(&mut self, doc: Tree<'_>) {
         let leaves: Vec<Leaf> = self.overlay.keys().copied().collect();
         self.overlay.clear();
         for &l in &leaves {
@@ -461,7 +461,7 @@ impl Reactive {
     /// which is the equality cutoff. A binding with a tracked read may find
     /// it depends on a leaf evaluated after it; when that leaf changes, the
     /// binding is queued again.
-    fn evaluate(&mut self, doc: &Document, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
+    fn evaluate(&mut self, doc: Tree<'_>, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
         let mut primed = primed.clone();
         let mut queue: BTreeSet<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
         // Static dependencies never queue a node twice; tracked ones may, a
@@ -592,7 +592,7 @@ fn read_with(
     runtime: &BTreeMap<Leaf, Signal>,
     resolved: &BTreeMap<Leaf, Value>,
     nodes: &BTreeMap<Leaf, BoundNode>,
-    doc: &Document,
+    doc: Tree<'_>,
     leaf: Leaf,
 ) -> Option<Value> {
     if let Some(v) = overlay.get(&leaf) {
@@ -626,7 +626,7 @@ fn as_leaf_kind(leaf: Leaf, v: Value) -> Result<Value, crate::expr::EvalError> {
 
 /// How a boundary leaf is named in its type error: an argument by its
 /// name, a port's signal by the port's name.
-fn boundary_name(doc: &Document, leaf: Leaf) -> String {
+fn boundary_name(doc: Tree<'_>, leaf: Leaf) -> String {
     match leaf.path.facet {
         crate::facet::FacetKind::Port => doc.get::<crate::facet::Name>(leaf.node).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).unwrap_or("port").to_owned(),
         _ => leaf.path.field.to_owned(),

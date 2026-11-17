@@ -1,6 +1,7 @@
 //! Shared geometric controls. A point keeps its contour parent; ordinary
 //! bindings carry a control-local offset into that contour's coordinate frame.
-use crate::{Document, Expr, FacetKind, Leaf, LeafPath, LeafStruct, NodeId, Op, Slot, StoreCore, Value};
+use crate::Tree;
+use crate::{Expr, FacetKind, Leaf, LeafPath, LeafStruct, NodeId, Op, Slot, StoreCore, Value};
 use crate::facet::Attachment;
 
 fn path(s: &str) -> LeafPath { s.parse().expect("declared leaf") }
@@ -8,7 +9,7 @@ fn r(id: NodeId, s: &str) -> Expr { Expr::Ref(Leaf { node: id, path: path(s) }) 
 
 /// Authoring targets are plain geometry or one level inside a main, never
 /// an instance override or an unexposed nested component's internals.
-pub fn authored(doc: &Document, id: NodeId) -> Result<NodeId, String> {
+pub fn authored(doc: Tree<'_>, id: NodeId) -> Result<NodeId, String> {
     if !doc.is_live(id) { return Err(format!("{id} no longer exists")); }
     if !id.is_expanded() { return Ok(id); }
     let p = id.path();
@@ -16,7 +17,7 @@ pub fn authored(doc: &Document, id: NodeId) -> Result<NodeId, String> {
     else { Err("Edit the component's main to attach geometry".into()) }
 }
 
-fn scope(doc: &Document, mut id: NodeId) -> Option<NodeId> {
+fn scope(doc: Tree<'_>, mut id: NodeId) -> Option<NodeId> {
     while let Some(n) = doc.live(id) {
         if matches!(n.ty.name(), "template" | "composition") { return Some(id); }
         id = n.parent?;
@@ -24,7 +25,7 @@ fn scope(doc: &Document, mut id: NodeId) -> Option<NodeId> {
     None
 }
 
-fn pair(doc: &Document, point: NodeId, control: NodeId) -> Result<(), String> {
+fn pair(doc: Tree<'_>, point: NodeId, control: NodeId) -> Result<(), String> {
     if doc.live(point).map(|n| n.ty.name()) != Some("point") { return Err(format!("{point} is not a path point")); }
     if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err(format!("Control {control} is missing; detach its points before deleting it")); }
     if scope(doc, point).is_none() || scope(doc, point) != scope(doc, control) {
@@ -33,7 +34,7 @@ fn pair(doc: &Document, point: NodeId, control: NodeId) -> Result<(), String> {
     Ok(())
 }
 
-pub fn bindings(doc: &Document, point: NodeId, control: NodeId) -> [Expr; 2] {
+pub fn bindings(doc: Tree<'_>, point: NodeId, control: NodeId) -> [Expr; 2] {
     let (x, y) = crate::anchor::outward(doc, control, true, r(point, "attachment.dx"), r(point, "attachment.dy"));
     let (x, y) = crate::anchor::inward(doc, point, x, y);
     [x, y]
@@ -42,7 +43,7 @@ pub fn bindings(doc: &Document, point: NodeId, control: NodeId) -> [Expr; 2] {
 /// Attach atomically, keeping placement. Existing drivers must be detached
 /// explicitly; they are never silently overwritten.
 pub fn attach(store: &StoreCore, control: NodeId, points: &[NodeId]) -> Result<Vec<Op>, String> {
-    let doc = store.document();
+    let doc = store.tree();
     let control = authored(doc, control)?;
     let inv = store.world_affine(control).inverse().ok_or("The control has a zero scale")?;
     if points.is_empty() { return Err("Pick at least one path point".into()); }
@@ -78,9 +79,9 @@ pub fn detach(store: &StoreCore, points: &[NodeId]) -> Result<Vec<Op>, String> {
     let mut ops = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for &shown in points {
-        let p = authored(store.document(), shown)?;
+        let p = authored(store.tree(), shown)?;
         if !seen.insert(p) { continue; }
-        if store.document().get::<Attachment>(p).is_none() { return Err(format!("{p} is not attached")); }
+        if store.tree().get::<Attachment>(p).is_none() { return Err(format!("{p} is not attached")); }
         for f in ["transform2d.x", "transform2d.y"] {
             let v = store.resolved(p, path(f)).ok_or("Cannot resolve point position")?;
             ops.push(Op::Set { id: p, path: path(f), slot: Slot::Const(v) });
@@ -93,7 +94,7 @@ pub fn detach(store: &StoreCore, points: &[NodeId]) -> Result<Vec<Op>, String> {
 
 /// Keep metadata and bindings in agreement through every entry point. A
 /// reparent of attached geometry must first detach it, preserving placement.
-pub fn validate(previous: &Document, doc: &Document) -> Result<(), String> {
+pub fn validate(previous: Tree<'_>, doc: Tree<'_>) -> Result<(), String> {
     for point in previous.nodes_with(FacetKind::Attachment).filter(|point| !point.is_expanded() && doc.is_live(*point) && doc.get::<Attachment>(*point).is_none()) {
         if ["transform2d.x", "transform2d.y"].into_iter().any(|field| doc.leaf(point, path(field)).and_then(Slot::constant).is_none()) {
             return Err(format!("{point}: detach before removing attachment metadata"));

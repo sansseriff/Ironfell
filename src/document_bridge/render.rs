@@ -23,6 +23,7 @@
 //! untouched. A plane's view still draws lit nodes outlined, since it has
 //! no overlay of its own.
 
+use iron_document::Tree;
 use super::{SpatialScene, Doc2d, DocumentChanges, DocumentStore, Highlights, PanelViews, Shape2d, nest};
 use super::chunks::{ChunkLayer, Chunks, Place, panel_homes};
 use iron_document::composition::Dims;
@@ -169,7 +170,7 @@ fn cache_key(home: nest::Home, first: NodeId, tinted: bool) -> u64 {
 }
 
 /// The definition template `n` belongs to, if it is inside one.
-fn template_of(doc: &iron_document::Document, n: NodeId) -> Option<NodeId> {
+fn template_of(doc: Tree<'_>, n: NodeId) -> Option<NodeId> {
     let mut at = doc.node(n).and_then(|x| x.parent);
     while let Some(p) = at {
         let node = doc.node(p)?;
@@ -231,7 +232,7 @@ pub fn render_document_layer(
     let planes_only = reason == "selection";
     let _timing = crate::perf::span(crate::perf::Phase::DisplayList);
     let changed = changes.take();
-    let doc = store.0.document();
+    let doc = store.0.tree();
 
     // Damage belongs to the independently prepared canonical compositions.
     // It is diagnostic here; per-view damage mapping/partial rasterization is later.
@@ -506,7 +507,7 @@ pub fn render_document_layer(
 struct Draw<'a> {
     store: &'a iron_document::Store,
     embed_images: &'a super::EmbedImages,
-    doc: &'a iron_document::Document,
+    doc: Tree<'a>,
     drawables: &'a super::Drawables,
     /// Set for plane views only; panels leave feedback to the overlay.
     highlights: Option<&'a Highlights>,

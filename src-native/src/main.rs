@@ -303,7 +303,7 @@ impl Host {
                 .world()
                 .resource::<ironfell::document_bridge::DocumentStore>()
                 .0
-                .document()
+                .authored()
                 .version()
                 .0 as u32;
             self.bridge

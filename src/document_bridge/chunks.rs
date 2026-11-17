@@ -34,10 +34,11 @@
 //! a slider) is drawn live, uncached: it is known to change, so it never
 //! joins a baked group and its changes regroup nothing.
 
+use iron_document::Tree;
 use super::{Drawables, Shape2d, nest::{self, Home}};
 use crate::vector::Recorded;
 use bevy::prelude::*;
-use iron_document::{Document, FacetKind, NodeId, Store};
+use iron_document::{FacetKind, NodeId, Store};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -177,7 +178,7 @@ pub fn panel_homes(view: &super::PanelView) -> Vec<Home> {
 
 /// The roots a home's content hangs from: a composition's children, or the
 /// loose 2D roots.
-pub fn home_roots(doc: &Document, home: Home) -> Vec<NodeId> {
+pub fn home_roots(doc: Tree<'_>, home: Home) -> Vec<NodeId> {
     match home {
         Home::Composition(c) => doc.children(c).to_vec(),
         Home::Loose => nest::loose_roots(doc),
@@ -188,7 +189,7 @@ pub fn home_roots(doc: &Document, home: Home) -> Vec<NodeId> {
 impl Chunks {
     /// Cut `home` into chunks again, dropping its recordings.
     pub fn partition(&mut self, store: &Store, drawables: &Drawables, home: Home) {
-        let doc = store.document();
+        let doc = store.tree();
         let mut cut = Cut { store, doc, drawables, cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
         let roots = home_roots(doc, home);
         cut.pack(&roots);
@@ -221,7 +222,7 @@ impl Chunks {
     /// frame, so it has to be drawn whole. A move, the common change, does
     /// not.
     pub fn must_cut_again(store: &Store, drawables: &Drawables, node: NodeId) -> bool {
-        let doc = store.document();
+        let doc = store.tree();
         let cut = Cut { store, doc, drawables, cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
         cut.whole(node)
     }
@@ -229,7 +230,7 @@ impl Chunks {
 
 struct Cut<'a> {
     store: &'a Store,
-    doc: &'a Document,
+    doc: Tree<'a>,
     drawables: &'a Drawables,
     cost: HashMap<NodeId, (usize, usize)>,
     embeds: HashMap<NodeId, bool>,
@@ -439,7 +440,7 @@ impl Chunk {
 pub fn instance_runs(store: &Store, id: NodeId) -> Option<Vec<InstanceRun>> {
     use iron_document::analysis;
     use std::hash::{Hash, Hasher};
-    let doc = store.document();
+    let doc = store.tree();
     // A reference: its template drawn whole, one static run every
     // reference to it with the same turn and scale shares.
     if let Some(template) = iron_document::expand::reference_template(doc, id) {

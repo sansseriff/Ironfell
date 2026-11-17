@@ -43,7 +43,7 @@ fn big_import() {
     let pasted = iron_document::copy::paste(&store, &imported.fragment, &Default::default(), "import").expect("pastes");
     let input = iron_document::TransactionInput { label: "import SVG".into(), actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false };
     store.apply(input).expect("applies");
-    println!("paste and apply {:?}: {} live nodes; rss {:.0} MB", t.elapsed(), store.document().nodes().filter(|n| n.is_live()).count(), rss_mb());
+    println!("paste and apply {:?}: {} live nodes; rss {:.0} MB", t.elapsed(), store.tree().nodes().filter(|n| n.is_live()).count(), rss_mb());
 }
 
 /// The same file imported with and without references draws the same
@@ -59,7 +59,7 @@ fn references_draw_what_copies_draw() {
     let load = |share: bool| -> (iron_document::Store, iron_document::NodeId) {
         let imported = iron_svg::import_with(&text, share).expect("imports");
         let mut store = iron_document::Store::new();
-        let ids = store.document().next_ids(1);
+        let ids = store.authored().next_ids(1);
         let mut c = iron_document::facet::Composition::default();
         c.dims = iron_document::Slot::Const(iron_document::Value::Enum("2d".into()));
         let mut name = iron_document::facet::Name::default();
@@ -72,12 +72,12 @@ fn references_draw_what_copies_draw() {
     };
     let (fs, fc) = load(false);
     let (ss, sc) = load(true);
-    let label = |s: &iron_document::Store, n: iron_document::NodeId| s.document().get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant().and_then(|v| v.as_str().map(str::to_owned))).unwrap_or_default();
+    let label = |s: &iron_document::Store, n: iron_document::NodeId| s.tree().get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant().and_then(|v| v.as_str().map(str::to_owned))).unwrap_or_default();
     let aff = |s: &iron_document::Store, n: iron_document::NodeId| kurbo::Affine::new(s.local_affine(n).0);
     // A shared node as the flat one it stands for: a reference becomes its
     // piece, placed by the reference.
     let resolve = |n: iron_document::NodeId| -> (iron_document::NodeId, kurbo::Affine) {
-        let doc = ss.document();
+        let doc = ss.tree();
         match iron_document::expand::reference_template(doc, n) {
             Some(t) => {
                 let piece = doc.children(t)[0];
@@ -89,18 +89,18 @@ fn references_draw_what_copies_draw() {
     fn close(a: kurbo::Affine, b: kurbo::Affine) -> bool {
         a.as_coeffs().iter().zip(b.as_coeffs()).all(|(x, y)| (x - y).abs() < 1e-3)
     }
-    let mut stack: Vec<(Vec<iron_document::NodeId>, Vec<iron_document::NodeId>, Vec<String>)> = vec![(fs.document().children(fc).to_vec(), ss.document().children(sc).to_vec(), Vec::new())];
+    let mut stack: Vec<(Vec<iron_document::NodeId>, Vec<iron_document::NodeId>, Vec<String>)> = vec![(fs.tree().children(fc).to_vec(), ss.tree().children(sc).to_vec(), Vec::new())];
     while let Some((fk, sk, path)) = stack.pop() {
         assert_eq!(fk.len(), sk.len(), "child count differs at {path:#?}");
         for (f, s) in fk.into_iter().zip(sk) {
             let (piece, sa) = resolve(s);
             let fa = aff(&fs, f);
-            let (ft, st) = (fs.document().live(f).unwrap().ty.name(), ss.document().live(piece).unwrap().ty.name());
+            let (ft, st) = (fs.tree().live(f).unwrap().ty.name(), ss.tree().live(piece).unwrap().ty.name());
             let mut here = path.clone();
             here.push(format!("{ft} {} / {} {}", label(&fs, f), if piece != s { "ref→" } else { "" }, label(&ss, piece)));
             let lb = |st: &iron_document::Store, n: iron_document::NodeId| st.local_bounds(n).map(|b| [b.geometry.x0, b.geometry.y0, b.geometry.x1, b.geometry.y1].map(|v| (v * 1000.0).round() as i64));
             assert!(ft == st && close(fa, sa) && lb(&fs, f) == lb(&ss, piece), "differs at {here:#?}: flat {:?} {:?}, shared {:?} {:?}", fa.as_coeffs(), lb(&fs, f), sa.as_coeffs(), lb(&ss, piece));
-            stack.push((fs.document().children(f).to_vec(), ss.document().children(piece).to_vec(), here));
+            stack.push((fs.tree().children(f).to_vec(), ss.tree().children(piece).to_vec(), here));
         }
     }
     println!("flat and shared imports draw alike");

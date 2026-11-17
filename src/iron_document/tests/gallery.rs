@@ -34,14 +34,14 @@ fn named(t: &str) -> facet::Facet {
 }
 
 fn find(store: &Store, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.roots().iter().flat_map(|&r| doc.descendants(r)).collect::<Vec<_>>().into_iter().find(|&n| !n.is_expanded() && doc.is_live(n) && doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap_or_else(|| panic!("no node {name}"))
 }
 
 /// A store with a model root and a timeline for the pages' clips.
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     store
         .apply(tx(
             "desk",
@@ -66,7 +66,7 @@ fn every_page_builds_in_one_transaction() {
     let (mut store, timeline) = desk();
     for (name, src) in PAGES {
         page(&mut store, name, src, timeline);
-        let doc = store.document();
+        let doc = store.tree();
         let comps = composition::compositions(doc);
         assert!(comps.iter().any(|&c| doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)), "{name}: no composition");
     }
@@ -86,7 +86,7 @@ fn a_node_reads_a_placed_plots_ports() {
     let opacity = store.resolved(marker, "appearance.opacity".parse().unwrap()).and_then(|v| v.as_f64()).unwrap();
     assert_eq!(opacity, 1.0);
     // Written after the plots, it paints over them: siblings keep markup order.
-    let doc = store.document();
+    let doc = store.tree();
     let kids: Vec<NodeId> = doc.children(doc.live(marker).unwrap().parent.unwrap()).to_vec();
     let at = |id: NodeId| kids.iter().position(|&k| k == id).unwrap();
     let last_use = kids.iter().copied().filter(|&k| doc.live(k).is_some_and(|n| n.ty.name() == "use")).map(at).max().unwrap();
@@ -105,7 +105,7 @@ fn a_plot_cursor_past_the_end_of_its_curve_stays_finite() {
     let (n1, n2, theta1) = (find(&store, "n1"), find(&store, "n2"), find(&store, "theta1"));
     // n₁ = 2 over n₂ = 1: the critical angle is 30°; θ₁ = 60° is past it.
     store.apply(tx("tir", vec![set(n1, 2.0), set(n2, 1.0), set(theta1, 60.0)])).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let mut checked = 0;
     for id in doc.expanded_ids().collect::<Vec<_>>() {
         for leaf in ["transform2d.x", "transform2d.y"] {
@@ -130,7 +130,7 @@ fn a_page_writes_its_relations_and_its_circuit() {
     let (mut store, timeline) = desk();
     page(&mut store, "wave packet", PAGES[3].1, timeline);
     page(&mut store, "RC charging", PAGES[9].1, timeline);
-    let doc = store.document();
+    let doc = store.tree();
     let clip = find(&store, "play t");
     let t = find(&store, "t");
     assert!(doc.relations_from(clip).any(|r| r.rel == document::RelKind::Animates && r.to == t), "the clip animates t ({t}): {:?}", doc.relations_from(clip).collect::<Vec<_>>());

@@ -24,7 +24,7 @@ impl UiChanges {
         self.nodes.extend(nodes);
         self.structure |= structure;
         let composition = iron_document::registry::TypeId::lookup("composition");
-        self.compositions |= structure || nodes.iter().any(|id| store.document().live(*id).is_some_and(|n| Some(n.ty) == composition));
+        self.compositions |= structure || nodes.iter().any(|id| store.tree().live(*id).is_some_and(|n| Some(n.ty) == composition));
     }
 }
 /// Once per frame, after both syncs and all producers. Resolved/session revisions
@@ -33,7 +33,7 @@ pub(super) fn publish(
     store: Res<DocumentStore>, geometry: Res<GeometryRevision>, origin: Res<DocumentOrigin>,
     mut changes: ResMut<UiChanges>, interests: Res<UiInterests>, events: Res<crate::host_events::HostEvents>,
 ) {
-    let version = store.0.document().version().0 as u32;
+    let version = store.0.authored().version().0 as u32;
     let session = store.0.session_version();
     let undo = store.0.history().can_undo();
     let redo = store.0.history().can_redo();
@@ -80,7 +80,7 @@ mod tests {
         app.update();
         let first = app.world().resource::<HostEvents>().drain();
         assert!(matches!(&first[..], [EngineEvent::StateChanged { reset: true, can_undo: false, can_redo: false, .. }]));
-        let version = app.world().resource::<DocumentStore>().0.document().version();
+        let version = app.world().resource::<DocumentStore>().0.authored().version();
         let node: NodeId = "#1".parse().unwrap();
         app.world_mut().resource_mut::<UiInterests>().nodes.insert(node);
         app.world_mut().resource_mut::<UiChanges>().nodes.insert(node);
@@ -88,7 +88,7 @@ mod tests {
         app.update();
         let events = app.world().resource::<HostEvents>().drain();
         assert!(matches!(&events[..], [EngineEvent::StateChanged { resolved_version: 1, reset: false, .. }]));
-        assert_eq!(app.world().resource::<DocumentStore>().0.document().version(), version);
+        assert_eq!(app.world().resource::<DocumentStore>().0.authored().version(), version);
         assert_eq!(app.world().resource::<DocumentStore>().0.history().log().count(), 0);
         app.update();
         assert!(app.world().resource::<HostEvents>().drain().is_empty());

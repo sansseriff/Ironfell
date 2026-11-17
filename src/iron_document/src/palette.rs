@@ -12,9 +12,9 @@
 //! token in use is in the document, where people and the agent can see and
 //! revise it.
 
+use crate::Tree;
 use std::collections::BTreeMap;
 
-use crate::document::Document;
 use crate::expr::{Expr, Leaf};
 use crate::facet::{FacetKind, LeafPath, LeafStruct, Name, Token};
 use crate::id::NodeId;
@@ -55,12 +55,12 @@ fn ty(n: &str) -> TypeId {
     TypeId::lookup(n).expect("registered")
 }
 
-fn name_of(doc: &Document, id: NodeId) -> Option<String> {
+fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     doc.get::<Name>(id)?.text.constant()?.as_str().map(str::to_owned)
 }
 
 /// The document's tokens, by name (the first of a name wins).
-pub fn tokens(doc: &Document) -> BTreeMap<String, NodeId> {
+pub fn tokens(doc: Tree<'_>) -> BTreeMap<String, NodeId> {
     let mut out = BTreeMap::new();
     for t in doc.nodes_of_type(ty("token")) {
         if doc.is_live(t)
@@ -79,7 +79,7 @@ pub fn color_leaf(token: NodeId) -> Leaf {
 }
 
 /// Every token's leaf, by name: what formulas' `@name` resolve to.
-pub fn leaves(doc: &Document) -> BTreeMap<String, Leaf> {
+pub fn leaves(doc: Tree<'_>) -> BTreeMap<String, Leaf> {
     tokens(doc).into_iter().map(|(n, t)| (n, color_leaf(t))).collect()
 }
 
@@ -88,7 +88,7 @@ pub fn leaves(doc: &Document) -> BTreeMap<String, Leaf> {
 /// reader's ancestors, then the document's colour token, then the nearest
 /// `provide="default"` let. A let never reads itself, so a provider may
 /// refine the value it shadows.
-pub fn provided(doc: &Document, reader: NodeId, name: &str, tokens: &BTreeMap<String, Leaf>) -> Option<Leaf> {
+pub fn provided(doc: Tree<'_>, reader: NodeId, name: &str, tokens: &BTreeMap<String, Leaf>) -> Option<Leaf> {
     let value = |n: NodeId| Leaf { node: n, path: LeafPath { facet: FacetKind::Let, field: "value" } };
     let mut fallback = None;
     let mut at = doc.node(reader).and_then(|n| n.parent);
@@ -120,7 +120,7 @@ pub fn provided(doc: &Document, reader: NodeId, name: &str, tokens: &BTreeMap<St
 /// definition): a providing or default `let` of that name among the
 /// children of the reader's ancestors, up to `within`. This is the
 /// declaration a definition's context read needs (reactivity.md §6).
-pub fn declared(doc: &Document, reader: NodeId, name: &str, within: NodeId) -> bool {
+pub fn declared(doc: Tree<'_>, reader: NodeId, name: &str, within: NodeId) -> bool {
     let mut at = doc.node(reader).and_then(|n| n.parent);
     while let Some(p) = at {
         let found = doc.children(p).iter().any(|&c| {
@@ -142,13 +142,13 @@ pub fn declared(doc: &Document, reader: NodeId, name: &str, within: NodeId) -> b
 
 /// Whether `name` is a colour token: a built-in, or one the document has.
 /// Tokens are the theme, read anywhere without a declaration.
-pub fn is_token(doc: &Document, name: &str) -> bool {
+pub fn is_token(doc: Tree<'_>, name: &str) -> bool {
     BUILT_IN.iter().any(|(n, _, _)| *n == name) || tokens(doc).contains_key(name)
 }
 
 /// `token.color` for each token in the theme (`dark` or light): what the
 /// store publishes.
-pub fn publish(doc: &Document, dark: bool) -> BTreeMap<Leaf, Value> {
+pub fn publish(doc: Tree<'_>, dark: bool) -> BTreeMap<Leaf, Value> {
     let mut out = BTreeMap::new();
     for t in doc.nodes_of_type(ty("token")).filter(|&t| doc.is_live(t)) {
         let Some(tok) = doc.get::<Token>(t) else { continue };
@@ -189,7 +189,7 @@ fn used(ops: &[Op]) -> Vec<String> {
 /// the ops that add it (a `palette` named "Theme" if the document has none,
 /// and every missing built-in token, so a document's theme is whole). Ids
 /// start after any `ops` create.
-pub fn ensure_ops(doc: &Document, ops: &[Op]) -> Vec<Op> {
+pub fn ensure_ops(doc: Tree<'_>, ops: &[Op]) -> Vec<Op> {
     let have = tokens(doc);
     let names = used(ops);
     if !names.iter().any(|n| !have.contains_key(n) && BUILT_IN.iter().any(|(b, _, _)| b == n)) {
@@ -239,7 +239,7 @@ fn named(t: &str) -> crate::facet::Facet {
 /// A new token `name` with these colours, in the document's palette (made
 /// if there is none, holding the built-in theme too, so the document's
 /// theme is whole).
-pub fn add_ops(doc: &Document, name: &str, light: [f32; 4], dark: [f32; 4]) -> Vec<Op> {
+pub fn add_ops(doc: Tree<'_>, name: &str, light: [f32; 4], dark: [f32; 4]) -> Vec<Op> {
     // The built-in theme first, as a first use would add it.
     let probe = Op::Set { id: NodeId::from_raw(0), path: LeafPath::new(FacetKind::Fill, "color").expect("declared"), slot: Slot::Bound(Expr::Token("surface".into())) };
     let mut ops = if tokens(doc).is_empty() { ensure_ops(doc, &[probe]) } else { Vec::new() };

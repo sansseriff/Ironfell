@@ -10,7 +10,7 @@ use iron_spatial::Scene;
 fn load(text: &str, share: bool) -> (Store, NodeId) {
     let imported = iron_svg::import_with(text, share).expect("imports");
     let mut store = Store::new();
-    let ids = store.document().next_ids(1);
+    let ids = store.authored().next_ids(1);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -34,7 +34,7 @@ fn compare(text: &str) {
     let (fb, sb) = (fscene.content_bounds(fc).map(round), sscene.content_bounds(sc).map(round));
     println!("content flat {fb:?} shared {sb:?}");
     // Each top-level node's content, geometry and paint.
-    for (&f, &s) in fs.document().children(fc).iter().zip(ss.document().children(sc)) {
+    for (&f, &s) in fs.tree().children(fc).iter().zip(ss.tree().children(sc)) {
         let (a, b) = (fscene.bounds(f), sscene.bounds(s));
         let close = |x: Option<iron_spatial::Bounds>, y: Option<iron_spatial::Bounds>| match (x, y) {
             (Some(x), Some(y)) => round(x.geometry).iter().zip(round(y.geometry)).all(|(p, q)| (p - q).abs() < 0.05),

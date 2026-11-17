@@ -9,11 +9,12 @@
 //! embed, recurse into the embedded one through that affine, clipped to its
 //! region.
 
+use iron_document::Tree;
 use super::{Doc2d, PanelView, Shape2d};
 use bevy::prelude::*;
 use iron_document::facet::Frame;
 use iron_document::composition::{self, Dims};
-use iron_document::{Document, NodeId, TypeId};
+use iron_document::{NodeId, TypeId};
 
 /// Deepest nesting drawn or picked. Loops are refused by the store; this
 /// only bounds the cost of a legitimately deep stack.
@@ -60,7 +61,7 @@ pub fn draw_shape(shape: &Shape2d) -> crate::vector::Shape {
 
 /// The roots one composition panel walks: the composition's children, and
 /// for the viewer, 2D nodes outside every composition.
-pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
+pub fn panel_roots(doc: Tree<'_>, view: &PanelView) -> Vec<NodeId> {
     let mut roots: Vec<NodeId> = view.composition.map(|c| doc.children(c).to_vec()).unwrap_or_default();
     if view.loose {
         roots.extend(loose_roots(doc));
@@ -70,7 +71,7 @@ pub fn panel_roots(doc: &Document, view: &PanelView) -> Vec<NodeId> {
 
 /// 2D nodes outside every composition: what the viewer draws besides its
 /// composition.
-pub fn loose_roots(doc: &Document) -> Vec<NodeId> {
+pub fn loose_roots(doc: Tree<'_>) -> Vec<NodeId> {
     let structural = ["composition", "model", "library", "timeline", "session", "narrative"].map(|t| TypeId::lookup(t).expect("registered"));
     doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect()
 }
@@ -89,7 +90,7 @@ pub enum Home {
 
 /// The composition `id` belongs to, deleted nodes included (a tombstone
 /// keeps its parent, so a deletion still finds the panels that drew it).
-pub fn home(doc: &Document, id: NodeId) -> Home {
+pub fn home(doc: Tree<'_>, id: NodeId) -> Home {
     let composition = TypeId::lookup("composition").expect("registered");
     let mut cur = doc.node(id);
     if cur.is_none() {
@@ -106,7 +107,7 @@ pub fn home(doc: &Document, id: NodeId) -> Home {
 
 /// The compositions a panel showing `root` draws: `root` and whatever its
 /// embeds show, through embeds inside those, to any depth.
-pub fn shown_compositions(doc: &Document, root: Option<NodeId>) -> std::collections::BTreeSet<NodeId> {
+pub fn shown_compositions(doc: Tree<'_>, root: Option<NodeId>) -> std::collections::BTreeSet<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
     let edges: Vec<(NodeId, NodeId)> = doc
         .nodes_of_type(embed)
@@ -127,7 +128,7 @@ pub fn shown_compositions(doc: &Document, root: Option<NodeId>) -> std::collecti
 /// document's type index, not by walking the content: this runs every
 /// frame, and the walk cost ~8 ms a frame on a 42k-node import
 /// (render-cache.md §2).
-pub fn embeds_under(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
+pub fn embeds_under(doc: Tree<'_>, roots: &[NodeId]) -> Vec<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
     let under = |e: NodeId| {
         let mut at = doc.live(e);
@@ -146,7 +147,7 @@ pub fn embeds_under(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// Preorder of `roots` and their descendants: painter order.
-pub fn preorder(doc: &Document, roots: &[NodeId]) -> Vec<NodeId> {
+pub fn preorder(doc: Tree<'_>, roots: &[NodeId]) -> Vec<NodeId> {
     let mut out = Vec::new();
     let mut stack: Vec<NodeId> = roots.iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
@@ -188,7 +189,7 @@ pub fn content_bounds(spatial: &super::SpatialScene, composition: NodeId) -> Opt
 /// What a 2D embed shows, if it embeds a live 2D composition: placement
 /// from the embed's transform, region from its `frame` or the content.
 pub fn embed_2d(store: &iron_document::Store, spatial: &super::SpatialScene, embed: NodeId) -> Option<Embed2d> {
-    let doc = store.document();
+    let doc = store.tree();
     let source = composition::embedded(doc, embed)?;
     if composition::dims(doc, source) != Some(Dims::Two) {
         return None;
@@ -207,7 +208,7 @@ pub fn embed_2d(store: &iron_document::Store, spatial: &super::SpatialScene, emb
 /// `id` and its ancestors inside its composition, outermost first: the part
 /// of a selection chain (`bevy_app::select`) one composition contributes.
 /// Stops below the composition root, or at a loose root.
-pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
+pub fn lineage(doc: Tree<'_>, id: NodeId) -> Vec<NodeId> {
     let composition = TypeId::lookup("composition").expect("registered");
     let template = TypeId::lookup("template").expect("registered");
     let mut out = vec![id];
@@ -227,11 +228,11 @@ pub fn lineage(doc: &Document, id: NodeId) -> Vec<NodeId> {
 
 /// The template a reference shows (`iron_document::expand::reference_template`):
 /// a repeated piece of an imported drawing, drawn from its definition.
-pub fn reference(doc: &Document, id: NodeId) -> Option<NodeId> {
+pub fn reference(doc: Tree<'_>, id: NodeId) -> Option<NodeId> {
     iron_document::expand::reference_template(doc, id)
 }
 
-pub fn is_embed(doc: &Document, id: NodeId) -> bool {
+pub fn is_embed(doc: Tree<'_>, id: NodeId) -> bool {
     doc.live(id).is_some_and(|n| n.ty.name() == "embed")
 }
 
@@ -296,7 +297,7 @@ pub fn collect_embed_views(
     mut layers: ResMut<super::CompositionLayers>,
     mut out: ResMut<EmbedViews>,
 ) {
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let mut found = Vec::new();
     for view in views.0.iter().filter(|v| v.dims == Dims::Two) {
         let roots = panel_roots(doc, view);
@@ -322,7 +323,7 @@ fn collect(
     open: bool,
     found: &mut Vec<EmbedView>,
 ) {
-    let doc = store.document();
+    let doc = store.tree();
     let open_through = |c: NodeId| open && composition::run_mode(doc, c) != composition::RunMode::OnDemand;
     for id in embeds_under(doc, roots) {
         if depth >= MAX_DEPTH {
@@ -357,7 +358,7 @@ fn collect(
 /// appearance in painter order wins. For "Show in" (ECM §7.2).
 #[allow(clippy::too_many_arguments)]
 pub fn locate(store: &iron_document::Store, spatial: &super::SpatialScene, view: &PanelView, node: NodeId) -> Option<kurbo::Rect> {
-    let doc = store.document();
+    let doc = store.tree();
     let target = composition::composition_of(doc, node);
     // A group's entry is already its subtree's union.
     let own = |n: NodeId| -> Option<kurbo::Rect> { spatial.painted(n) };
@@ -374,7 +375,7 @@ pub fn locate(store: &iron_document::Store, spatial: &super::SpatialScene, view:
         node: NodeId,
         depth: u32,
     ) -> Option<kurbo::Rect> {
-        let doc = store.document();
+        let doc = store.tree();
         for id in preorder(doc, roots) {
             if !is_embed(doc, id) || depth >= MAX_DEPTH {
                 continue;

@@ -1,5 +1,6 @@
 //! Shared engine operations. Hosts decode arguments and borrow the engine only
 //! on its owner thread; neither wasm pointers nor transport types enter here.
+use iron_document::Tree;
 use crate::{ActivityControl, WorkerApp};
 use crate::panels::{PanelRect, Panels};
 use bevy::prelude::*;
@@ -222,7 +223,7 @@ pub fn scope_open(app: &mut WorkerApp, id: String, snapshot: String, log: Vec<St
                 break;
             }
         };
-        let current = store.document().version();
+        let current = store.authored().version();
         if tx.version <= current {
             skipped += 1;
             continue;
@@ -240,7 +241,7 @@ pub fn scope_open(app: &mut WorkerApp, id: String, snapshot: String, log: Vec<St
     }
     store.clear_history();
     store.set_scope(Some(id));
-    let version = store.document().version().0;
+    let version = store.authored().version().0;
     install(app, store)?;
     Ok(serde_json::json!({"version": version, "replayed": replayed, "skipped": skipped, "failed": failed}).to_string())
 }
@@ -295,7 +296,7 @@ pub fn scope_log(app: &mut WorkerApp, since: u64) -> Result<String, String> {
         .ok_or_else(|| String::from("document bridge not installed"))?
         .0;
     let scope = store.scope().map(|s| s.to_string());
-    let version = store.document().version().0;
+    let version = store.authored().version().0;
     let (gap, ndjson, count) = match store.log_since(iron_document::Version(since)) {
         None => (true, String::new(), 0),
         Some(txs) => {
@@ -331,7 +332,7 @@ pub fn document_apply(app: &mut WorkerApp, transaction_json: String, expect_vers
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "no_store", "message": "document bridge not installed"}]}).to_string();
     };
-    let current = store.0.document().version().0 as u32;
+    let current = store.0.authored().version().0 as u32;
     if expect_version != 0 && expect_version != current {
         return serde_json::json!({
             "ok": false,
@@ -582,7 +583,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         let num = |k: &str| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
         let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.lone_point()).map(|p| p.to_string());
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let doc = store.0.document();
+        let doc = store.0.tree();
         if verb == "attachment_info" {
             let target = id("target")?;
             let main = target.path()[0];
@@ -640,7 +641,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
             let label = format!("add state {name}");
             store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false }).map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
             // The new state is pinned, so the next edits shape it.
-            let doc = store.0.document();
+            let doc = store.0.tree();
             if let Some(&(machine, _)) = iron_document::machine::machines(doc, def).first() {
                 store.0.pin_state(Some(iron_document::machine::Pinned::state(def, machine, name.clone())));
             }
@@ -727,7 +728,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                     else { iron_document::attachment::detach(&store.0, &points)? };
                 (verb.replace('_', " "), ops, None)
             }
-            "expose_control" => ("expose control as port".into(), author::expose_control(doc, id("control")?, a.get("dir").and_then(|v| v.as_str()).unwrap_or("in"), true)?, None),
+            "expose_control" => ("expose control as port".into(), author::expose_control(store.0.authored(), id("control")?, a.get("dir").and_then(|v| v.as_str()).unwrap_or("in"), true)?, None),
             "expand_path_points" => {
                 let path = iron_document::attachment::authored(doc, id("path")?)?;
                 ("expand path points".into(), iron_document::contour::expand_points(&store.0, path), None)
@@ -736,7 +737,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let main = id("main")?;
                 let dir = a.get("dir").and_then(|v| v.as_str()).unwrap_or("in");
                 let follow = a.get("follow").and_then(|v| v.as_bool()).unwrap_or(false);
-                let (ops, _, anchor) = author::add_port(doc, main, [num("x"), num("y")], dir, follow)?;
+                let (ops, _, anchor) = author::add_port(store.0.authored(), main, [num("x"), num("y")], dir, follow)?;
                 ("add port".into(), ops, iron_document::NodeId::expanded(main, anchor))
             }
             "add_input" => {
@@ -745,12 +746,12 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                     Some(t) => t.trim().parse::<f64>().map(iron_document::Value::Number).or_else(|_| iron_document::Value::parse_quantity(t)).map_err(|_| format!("{t:?} is not a number or quantity"))?,
                     None => iron_document::Value::Number(0.0),
                 };
-                let (ops, spec) = author::add_input(doc, def, a.get("name").and_then(|v| v.as_str()).unwrap_or("input"), default)?;
+                let (ops, spec) = author::add_input(store.0.authored(), def, a.get("name").and_then(|v| v.as_str()).unwrap_or("input"), default)?;
                 ("add input".into(), ops, Some(spec))
             }
             "edit_port" => {
                 let patch: author::PortPatch = serde_json::from_value(a.get("patch").cloned().unwrap_or_default()).map_err(|e| e.to_string())?;
-                ("edit port".into(), author::edit_port(doc, id("spec")?, &patch)?, None)
+                ("edit port".into(), author::edit_port(store.0.authored(), id("spec")?, &patch)?, None)
             }
             "create-control" => {
                 let ids: Vec<iron_document::NodeId> = a.get("ids").and_then(|v| v.as_array()).ok_or("ids missing")?.iter().map(|v| v.as_str().ok_or("Invalid selection id".to_owned())?.parse().map_err(|e| format!("Invalid selection id: {e}"))).collect::<Result<_,_>>()?;
@@ -761,8 +762,8 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 };
                 let (ops, empty) = author::create_control(&store.0, &ids, pivot)?;
                 // Inside a main the empty lands in the definition: select its picture there.
-                let parent = ids.first().and_then(|&n| store.0.document().live(n)).and_then(|n| n.parent);
-                let shown = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(store.0.document(), m).is_some()).and_then(|m| iron_document::NodeId::expanded(m, empty));
+                let parent = ids.first().and_then(|&n| store.0.tree().live(n)).and_then(|n| n.parent);
+                let shown = parent.and_then(|p| p.path().first().copied()).filter(|&m| iron_document::expand::main_definition(store.0.tree(), m).is_some()).and_then(|m| iron_document::NodeId::expanded(m, empty));
                 ("create control".into(), ops, Some(shown.unwrap_or(empty)))
             }
             "place-pivot" => ("place control pivot".into(), author::relocate_pivot(&store.0, id("node")?, [a.get("x").and_then(|v| v.as_f64()).ok_or("Pivot x missing")?, a.get("y").and_then(|v| v.as_f64()).ok_or("Pivot y missing")?])?, None),
@@ -770,7 +771,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                 let def = id("def")?;
                 let on = a.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
                 let extent = |n: iron_document::NodeId| store.0.extent(n);
-                (if on { "make resizable" } else { "make fixed size" }.into(), author::resizable(store.0.document(), def, on, &extent)?, None)
+                (if on { "make resizable" } else { "make fixed size" }.into(), author::resizable(store.0.tree(), def, on, &extent)?, None)
             }
             "add_token" => {
                 // A new colour token (palette.rs) in the document's palette,
@@ -789,7 +790,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
             }
             "connect" => {
                 let read = |l: iron_document::Leaf| store.0.resolved(l.node, l.path);
-                ("connect".into(), author::connect(store.0.document(), &read, id("a")?, id("b")?)?, None)
+                ("connect".into(), author::connect(store.0.tree(), &read, id("a")?, id("b")?)?, None)
             }
             "add_empty" => {
                 let parent = id("parent")?;
@@ -903,7 +904,7 @@ pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
             align: v.get("align").and_then(|a| a.as_str()).map(|a| a.split_whitespace().map(str::to_owned).collect()).unwrap_or_default(),
         };
         let at = [v.get("x").and_then(|x| x.as_f64()).unwrap_or(0.0), v.get("y").and_then(|y| y.as_f64()).unwrap_or(0.0)];
-        let doc = store.0.document();
+        let doc = store.0.tree();
         // Last among its siblings: drawn on top.
         let siblings = match parent {
             Some(p) => doc.children(p).to_vec(),
@@ -951,7 +952,7 @@ pub fn document_edit_plan(app: &mut WorkerApp, xml: String) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "errors": [{"op": null, "kind": "no_store", "message": "document bridge not installed"}]}).to_string();
     };
-    let version = store.0.document().version().0;
+    let version = store.0.authored().version().0;
     let svg = |text: &str| iron_svg::import(text).map(|i| (i.fragment, i.cuts));
     match edit::plan(&store.0, &xml, Some(&svg)) {
         Ok(plan) => serde_json::json!({"ok": true, "version": version, "plan": plan}),
@@ -989,7 +990,7 @@ pub fn document_netlists(app: &mut WorkerApp) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let netlists: Vec<serde_json::Value> = doc
         .nodes_of_type(iron_document::TypeId::lookup("composition").expect("registered"))
         .filter(|&c| doc.is_live(c) && iron_document::composition::notation(doc, c).as_deref() == Some(iron_document::parts::NOTATION))
@@ -1007,7 +1008,7 @@ pub fn document_netlists(app: &mut WorkerApp) -> String {
 pub fn document_netlist(app: &mut WorkerApp, sheet: String) -> String {
     let run = || -> Result<serde_json::Value, String> {
         let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let doc = store.0.document();
+        let doc = store.0.tree();
         let id = match sheet.parse::<iron_document::NodeId>() {
             Ok(id) if sheet.starts_with('#') => id,
             _ => doc
@@ -1026,7 +1027,7 @@ pub fn document_computed(app: &mut WorkerApp, node: String) -> String {
     let run = || -> Result<serde_json::Value, String> {
         let id = node.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
         let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let doc = store.0.document();
+        let doc = store.0.tree();
         if !doc.is_live(id) {
             return Err(format!("{id} is not a live node"));
         }
@@ -1046,7 +1047,7 @@ pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
         let store = app.world().get_resource::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         let focus = app.world().get_resource::<crate::bevy_app::view_focus::ViewFocus>().ok_or("no view focus")?;
         let (_, f, offer) = focus.views.iter().find(|(p, ..)| *p == panel).ok_or_else(|| format!("no view {panel}"))?;
-        let r = iron_document::contexts::Resolver::new(store.0.document(), store.0.contexts());
+        let r = iron_document::contexts::Resolver::new(store.0.tree(), store.0.contexts());
         Ok(serde_json::json!({
             "ok": true,
             "world": f.world.map(|w| w.to_string()),
@@ -1069,7 +1070,7 @@ pub fn document_view_context(app: &mut WorkerApp, panel: String) -> String {
 pub fn document_demo(app: &mut WorkerApp) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        if store.0.document().live_nodes().any(|n| !n.id.is_session()) {
+        if store.0.tree().live_nodes().any(|n| !n.id.is_session()) {
             return Ok(serde_json::json!({"ok": true, "already": true}));
         }
         let tx = crate::document_bridge::demo_scene(&store.0);
@@ -1086,7 +1087,7 @@ pub fn document_demo(app: &mut WorkerApp) -> String {
 pub fn document_showcase(app: &mut WorkerApp) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let doc = store.0.document();
+        let doc = store.0.tree();
         if iron_document::composition::compositions(doc).iter().any(|&c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).as_deref() == Some("circuit")) {
             return Ok(serde_json::json!({"ok": true, "already": true}));
         }
@@ -1111,7 +1112,7 @@ pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let id = entity.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
-        let ops = iron_document::definition::detach_ops(store.0.document(), id)?;
+        let ops = iron_document::definition::detach_ops(store.0.tree(), id)?;
         let applied = store.0
             .apply(iron_document::TransactionInput { label: "detach instance".into(), actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
             .map_err(|es| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
@@ -1148,7 +1149,7 @@ pub fn document_link(app: &mut WorkerApp, a: String, b: String, keep: String, ac
         Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
         Ok(tx) => match store.0.apply(tx) {
             Ok(applied) => {
-                let entity = composition::figure_of(store.0.document(), a).map(|(_, e)| e.to_string());
+                let entity = composition::figure_of(store.0.tree(), a).map(|(_, e)| e.to_string());
                 serde_json::json!({"ok": true, "version": applied.version.0, "entity": entity})
             }
             Err(errors) => serde_json::json!({"ok": false, "error": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ")}),
@@ -1165,7 +1166,7 @@ pub fn document_counterparts(app: &mut WorkerApp, node: String) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"entity": null, "figures": []}).to_string();
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let Some((_, entity)) = node.parse().ok().and_then(|n| composition::figure_of(doc, n)) else {
         return serde_json::json!({"entity": null, "figures": []}).to_string();
     };
@@ -1191,7 +1192,7 @@ pub fn document_to_path(app: &mut WorkerApp, node: String, force: bool) -> Strin
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
-    let ty = store.0.document().live(id).map(|n| n.ty.name()).unwrap_or("");
+    let ty = store.0.tree().live(id).map(|n| n.ty.name()).unwrap_or("");
     let conversion = match iron_document::shape::to_path(&store.0, id) {
         Ok(c) => c,
         Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
@@ -1214,7 +1215,7 @@ pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let scope = if scope == "selection" {
         iron_svg::Scope::Nodes(store.0.selection().into_iter().map(|(id, _)| id).collect())
@@ -1271,7 +1272,7 @@ pub fn document_focus(app: &mut WorkerApp, node: String) -> String {
     let Ok(id) = node.parse::<iron_document::NodeId>() else {
         return serde_json::json!({"ok": false, "error": format!("bad id {node:?}")}).to_string();
     };
-    let Some(c) = app.world().get_resource::<crate::document_bridge::DocumentStore>().and_then(|s| composition::composition_of(s.0.document(), id)) else {
+    let Some(c) = app.world().get_resource::<crate::document_bridge::DocumentStore>().and_then(|s| composition::composition_of(s.0.tree(), id)) else {
         return serde_json::json!({"ok": false, "error": format!("{id} is not in a composition")}).to_string();
     };
     let _ = c;
@@ -1286,7 +1287,7 @@ pub fn document_focus(app: &mut WorkerApp, node: String) -> String {
 
 /// The document's version: `{"version": N}` (0 before a store exists).
 pub fn document_version(app: &mut WorkerApp) -> String {
-    let version = app.world().get_resource::<crate::document_bridge::DocumentStore>().map_or(0, |s| s.0.document().version().0);
+    let version = app.world().get_resource::<crate::document_bridge::DocumentStore>().map_or(0, |s| s.0.authored().version().0);
     serde_json::json!({"version": version}).to_string()
 }
 
@@ -1294,7 +1295,7 @@ pub fn document_selection(app: &mut WorkerApp) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return "[]".into();
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let list: Vec<serde_json::Value> = store
         .0
         .selection()
@@ -1320,7 +1321,7 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
         return "null".into();
     };
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     // A timeline's key diamond or clip bar (session glyphs) inspects the key
     // or clip it projects: a selected key shows its time, value and easing.
     let id = if id.is_session() {
@@ -1397,7 +1398,7 @@ pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
 /// and their values. Null for anything else.
 fn inspect_constraints(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
     use iron_document::{expand, FacetKind};
-    let doc = store.document();
+    let doc = store.tree();
     let part = match id.expanded_parts() {
         Some((owner, local)) if expand::main_definition(doc, owner).is_some() => local,
         Some(_) => return serde_json::Value::Null,
@@ -1419,7 +1420,7 @@ fn inspect_constraints(store: &iron_document::Store, id: iron_document::NodeId) 
 /// A main (component-authoring.md §1): its definition and the definition's
 /// ports, for the inspector's Main section.
 fn inspect_main(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
-    let doc = store.document();
+    let doc = store.tree();
     let Some(def) = iron_document::expand::main_definition(doc, id) else { return serde_json::Value::Null };
     let name = doc.get::<iron_document::facet::Name>(def).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let ports: Vec<serde_json::Value> = iron_document::author::ports_of(doc, def)
@@ -1448,7 +1449,7 @@ fn inspect_main(store: &iron_document::Store, id: iron_document::NodeId) -> serd
 }
 
 fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde_json::Value {
-    let doc = store.document();
+    let doc = store.tree();
     let Some(p) = doc.get::<iron_document::facet::Port>(spec) else { return serde_json::Value::Null };
     let text = |s: &iron_document::Slot| s.constant().and_then(|v| v.as_str()).map(str::to_owned);
     let name = doc.get::<iron_document::facet::Name>(spec).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
@@ -1475,7 +1476,7 @@ fn port_json(store: &iron_document::Store, spec: iron_document::NodeId) -> serde
 /// inspector's Port section: the spec it marks, editable when the anchor is
 /// in a main or a definition's own template.
 fn inspect_port(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
-    let doc = store.document();
+    let doc = store.tree();
     let Some(a) = doc.get::<iron_document::facet::Anchor>(id) else { return serde_json::Value::Null };
     let Some(port) = a.port.constant().and_then(|v| v.as_ref()) else { return serde_json::Value::Null };
     let spec = if doc.live(port).is_some_and(|n| n.ty.name() == "port_spec") { port } else { port.expanded_parts().map(|(_, s)| s).unwrap_or(port) };
@@ -1493,7 +1494,7 @@ fn inspect_port(store: &iron_document::Store, id: iron_document::NodeId) -> serd
 /// is locked and names its connection.
 fn inspect_component(store: &iron_document::Store, id: iron_document::NodeId) -> serde_json::Value {
     use iron_document::{definition, Handle, LeafPath, FacetKind};
-    let doc = store.document();
+    let doc = store.tree();
     let is_entity = doc.live(id).is_some_and(|n| n.ty.name() == "entity");
     let Some(entity) = (if is_entity { Some(id) } else { iron_document::composition::figured_by(doc, id) }) else { return serde_json::Value::Null };
     let name_of = |n: iron_document::NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
@@ -1591,7 +1592,7 @@ fn input_unit(store: &iron_document::Store, entity: iron_document::NodeId, ty: &
     }
 }
 
-fn port_text(doc: &iron_document::Document, spec: iron_document::NodeId, field: &str) -> Option<String> {
+fn port_text(doc: Tree<'_>, spec: iron_document::NodeId, field: &str) -> Option<String> {
     let p = doc.get::<iron_document::facet::Port>(spec)?;
     let slot = match field { "show" => &p.show, _ => &p.group };
     slot.constant().and_then(|v| v.as_str()).filter(|t| !t.is_empty()).map(str::to_owned)
@@ -1601,18 +1602,18 @@ fn port_text(doc: &iron_document::Document, spec: iron_document::NodeId, field: 
 /// (a clip drives it) or `"on"` (a key sits at the playhead).
 fn key_state(store: &iron_document::Store, leaf: iron_document::Leaf) -> &'static str {
     use iron_document::timeline_view as tv;
-    match tv::clip_of(store.document(), leaf) {
+    match tv::clip_of(store.tree(), leaf) {
         None => "none",
         Some((clip, offset)) => {
-            let u = store.time() - iron_document::time::start(store.document(), clip) - offset;
-            if iron_document::time::keys(store.document(), clip).iter().any(|k| (k.t - u).abs() <= tv::AT_KEY) { "on" } else { "animated" }
+            let u = store.time() - iron_document::time::start(store.tree(), clip) - offset;
+            if iron_document::time::keys(store.tree(), clip).iter().any(|k| (k.t - u).abs() <= tv::AT_KEY) { "on" } else { "animated" }
         }
     }
 }
 
 fn inspector_current(store: &iron_document::Store, id: iron_document::NodeId, path: iron_document::LeafPath) -> Option<iron_document::Value> {
     store.resolved(id, path).or_else(|| {
-        let node = store.document().live(id)?;
+        let node = store.tree().live(id)?;
         if !node.ty.spec().allows(path.facet) || !INSPECTOR_OPTIONAL.contains(&path.facet.name()) { return None; }
         path.facet.default_facet().get(path.field).and_then(|s| s.constant()).cloned()
     })
@@ -1707,11 +1708,11 @@ fn inspector_patch_ops(store: &iron_document::Store, id: iron_document::NodeId, 
             }
             // `replace` (pasted data): a constant replaces the formula
             // instead of editing through it.
-            if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.document().leaf(id, path).is_some_and(|s| s.expr().is_some()) {
+            if patch.get("replace").and_then(|v| v.as_bool()) == Some(true) && store.tree().leaf(id, path).is_some_and(|s| s.expr().is_some()) {
                 bindings.push(Op::Set { id, path, slot: Slot::Const(value) });
                 continue;
             }
-            let (target, value) = iron_document::handle::resolve_target(store.document(), store.reactive(), Leaf { node: id, path }, value)?;
+            let (target, value) = iron_document::handle::resolve_target(store.tree(), store.reactive(), Leaf { node: id, path }, value)?;
             if let Some(prior) = writes.insert(target, value.clone()) && prior != value {
                 return Err(format!("linked fields require conflicting values of {target}"));
             }
@@ -1720,7 +1721,7 @@ fn inspector_patch_ops(store: &iron_document::Store, id: iron_document::NodeId, 
     let mut adds = BTreeMap::new();
     let mut ops = Vec::new();
     for (target, value) in writes {
-        if store.document().facet(target.node, target.path.facet).is_none() {
+        if store.tree().facet(target.node, target.path.facet).is_none() {
             let comp = adds.entry((target.node, target.path.facet)).or_insert_with(|| target.path.facet.default_facet());
             comp.set(target.path.field, Slot::Const(value)).map_err(|e| e.to_string())?;
         } else {
@@ -1743,7 +1744,7 @@ fn inspector_patch_ops(store: &iron_document::Store, id: iron_document::NodeId, 
     for op in bindings {
         // A binding on an optional component not yet added adds it.
         if let Op::Set { id, path, slot } = &op
-            && store.document().facet(*id, path.facet).is_none()
+            && store.tree().facet(*id, path.facet).is_none()
         {
             let mut comp = path.facet.default_facet();
             comp.set(path.field, slot.clone()).map_err(|e| e.to_string())?;
@@ -1755,13 +1756,13 @@ fn inspector_patch_ops(store: &iron_document::Store, id: iron_document::NodeId, 
     if let Some(kinds) = patch.get("add").and_then(|v| v.as_array()) {
         for kind in kinds {
             let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
-            if store.document().facet(id, kind).is_none() { added.push(Op::AddFacet { id, facet: kind.default_facet() }); }
+            if store.tree().facet(id, kind).is_none() { added.push(Op::AddFacet { id, facet: kind.default_facet() }); }
         }
     }
     if let Some(remove) = patch.get("remove").and_then(|v| v.as_array()) {
         for kind in remove {
             let kind = kind.as_str().and_then(FacetKind::from_name).filter(|k| INSPECTOR_OPTIONAL.contains(&k.name())).ok_or("not an optional inspector component")?;
-            if store.document().facet(id, kind).is_some() { added.push(Op::RemoveFacet { id, kind }); }
+            if store.tree().facet(id, kind).is_some() { added.push(Op::RemoveFacet { id, kind }); }
         }
     }
     Ok(added)
@@ -1786,7 +1787,7 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
             }
         }
         added.retain(|op| match op {
-            Op::Set { id, path, slot } => store.0.document().leaf(*id, *path) != Some(slot),
+            Op::Set { id, path, slot } => store.0.tree().leaf(*id, *path) != Some(slot),
             _ => true,
         });
         if added.is_empty() { return Ok(serde_json::json!({"ok": true})); }
@@ -1840,7 +1841,7 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
                             color[3] = value.clamp(0.0, 1.0) as f32;
                             Value::Color(color)
                         } else { Value::Number(value) };
-                        let resolved = iron_document::handle::resolve_target(store.0.document(), store.0.reactive(), iron_document::Leaf { node: id, path }, next);
+                        let resolved = iron_document::handle::resolve_target(store.0.tree(), store.0.reactive(), iron_document::Leaf { node: id, path }, next);
                         let (target, next) = match resolved { Ok(v) => v, Err(error) => { store.0.cancel_gesture(); return Err(error); } };
                         if let Some(prior) = writes.insert(target, next.clone()) && prior != next {
                             store.0.cancel_gesture();
@@ -1872,7 +1873,7 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
 /// theme). Each with its light and dark value as hex, and which is shown.
 pub fn document_tokens(app: &mut WorkerApp) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return "{}".into() };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let hex = |v: Option<&iron_document::Value>| match v {
         Some(iron_document::Value::Color(c)) => format!("#{}", c.iter().map(|x| format!("{:02x}", (x.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<String>()),
         _ => "#000000ff".into(),
@@ -1897,7 +1898,7 @@ pub fn document_tokens(app: &mut WorkerApp) -> String {
 pub fn document_colors(app: &mut WorkerApp, node: String) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return "[]".into() };
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "[]".into() };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let Some(root) = iron_document::composition::composition_of(doc, id) else { return "[]".into() };
     let mut seen: Vec<(String, usize)> = Vec::new();
     for n in doc.descendants(root) {
@@ -1926,7 +1927,7 @@ pub fn document_inspect_set(app: &mut WorkerApp, node: String, leaf: String, tex
     // overlay: a drag in progress is left alone unless this conflicts with it.
     let now = crate::host_services::unix_millis();
     let result = match store.0.set_through_handle(id, path, value, format!("set {leaf}"), iron_document::Actor::Human, now) {
-        Ok(None) => serde_json::json!({"ok": true, "version": store.0.document().version().0}),
+        Ok(None) => serde_json::json!({"ok": true, "version": store.0.authored().version().0}),
         Ok(Some(applied)) => serde_json::json!({"ok": true, "version": applied.version.0}),
         Err(error) => serde_json::json!({"ok": false, "error": error}),
     };
@@ -1941,7 +1942,7 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return "[]".into();
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let list: Vec<serde_json::Value> = composition::compositions(doc)
         .into_iter()
         .map(|c| {
@@ -1963,7 +1964,7 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
 pub fn document_layers(app: &mut WorkerApp, source: String, open_json: String) -> String {
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let Some(c) = find_composition(doc, &source) else { return fail(format!("no composition {source:?}")) };
     let open: std::collections::BTreeSet<String> = match serde_json::from_str(&open_json) {
         Ok(o) => o,
@@ -2008,7 +2009,7 @@ pub fn document_select(app: &mut WorkerApp, items_json: String, mode: String) ->
         active.remaining_frames = 10;
     }
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let mut picked = Vec::new();
     for item in items {
         let Some(id) = item.node.parse::<NodeId>().ok().filter(|&id| doc.is_live(id)) else { return fail(format!("no node {}", item.node)) };
@@ -2043,7 +2044,7 @@ pub fn document_select(app: &mut WorkerApp, items_json: String, mode: String) ->
 }
 
 /// A composition named by id or name (as a view's `source` names it).
-fn find_composition(doc: &iron_document::Document, source: &str) -> Option<iron_document::NodeId> {
+fn find_composition(doc: Tree<'_>, source: &str) -> Option<iron_document::NodeId> {
     use iron_document::composition;
     let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     composition::compositions(doc).into_iter().find(|&c| c.to_string() == source || name_of(c).as_deref() == Some(source))
@@ -2059,7 +2060,7 @@ pub fn document_composition_info(app: &mut WorkerApp, source: String) -> String 
     let (Some(store), Some(sources)) = (world.get_resource::<crate::document_bridge::DocumentStore>(), world.get_resource::<crate::document_bridge::liveness::LiveSources>()) else {
         return fail("no store".into());
     };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let Some(c) = find_composition(doc, &source) else { return fail(format!("no composition {source:?}")) };
     let reach = composition::reach(doc, &[c], &sources.0);
     let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned))).unwrap_or_else(|| c.to_string());
@@ -2085,7 +2086,7 @@ pub fn document_set_run_mode(app: &mut WorkerApp, source: String, mode: String) 
         active.remaining_frames = 10;
     }
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
-    let Some(c) = find_composition(store.0.document(), &source) else { return fail(format!("no composition {source:?}")) };
+    let Some(c) = find_composition(store.0.tree(), &source) else { return fail(format!("no composition {source:?}")) };
     let op = Op::Set { id: c, path: "composition.run".parse().expect("declared leaf"), slot: Slot::Const(Value::Enum(mode)) };
     if c.is_session() {
         return match store.0.apply_session(vec![op]) {
@@ -2337,7 +2338,7 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let mut ops = Vec::new();
     for id in ids {
-        if store.0.document().live(id).is_none_or(|n| n.ty.name() != "text") {
+        if store.0.tree().live(id).is_none_or(|n| n.ty.name() != "text") {
             return fail(format!("{id} is not text"));
         }
         let leaf = |p: &str| p.parse::<iron_document::LeafPath>().expect("declared leaf");
@@ -2349,7 +2350,7 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
         if let Some(v) = patch.underline { set("font.underline", Value::Bool(v)); }
         if let Some(v) = patch.strike { set("font.strike", Value::Bool(v)); }
         if let Some(c) = patch.color {
-            if store.0.document().facet(id, FacetKind::Fill).is_some() {
+            if store.0.tree().facet(id, FacetKind::Fill).is_some() {
                 set("fill.color", Value::Color(c));
             } else {
                 let mut fill = Fill::default();
@@ -2430,7 +2431,7 @@ fn narrative_actor(actor: &str) -> iron_document::Actor {
 
 fn narrative_apply(store: &mut iron_document::Store, label: &str, actor: &str, ops: Vec<iron_document::Op>) -> Result<u64, String> {
     if ops.is_empty() {
-        return Ok(store.document().version().0);
+        return Ok(store.authored().version().0);
     }
     let applied = store
         .apply(iron_document::TransactionInput { label: label.into(), actor: narrative_actor(actor), ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
@@ -2439,13 +2440,13 @@ fn narrative_apply(store: &mut iron_document::Store, label: &str, actor: &str, o
 }
 
 fn narrative_source(store: &iron_document::Store, source: &str) -> Result<iron_document::NodeId, String> {
-    iron_document::narrative::find(store.document(), source).ok_or_else(|| format!("no narrative {source:?}"))
+    iron_document::narrative::find(store.tree(), source).ok_or_else(|| format!("no narrative {source:?}"))
 }
 
 /// The narratives in the document: `{"ok", "narratives": [{"id", "name", "blocks"}]}`.
 pub fn narrative_list(app: &mut WorkerApp) -> String {
     narrative_run(app, |store| {
-        let doc = store.document();
+        let doc = store.tree();
         let list: Vec<_> = iron_document::narrative::narratives(doc)
             .into_iter()
             .map(|n| serde_json::json!({"id": n.to_string(), "name": iron_document::narrative::name(doc, n), "blocks": doc.children(n).len()}))
@@ -2461,7 +2462,7 @@ pub fn narrative_list(app: &mut WorkerApp) -> String {
 pub fn narrative_read(app: &mut WorkerApp, source: String) -> String {
     narrative_run(app, |store| {
         let n = narrative_source(store, &source)?;
-        let doc = store.document();
+        let doc = store.tree();
         let label = |t: iron_document::NodeId| -> String {
             match doc.live(t) {
                 None => String::new(),
@@ -2498,7 +2499,7 @@ pub fn narrative_edit(app: &mut WorkerApp, source: String, edits: String, label:
     narrative_run(app, |store| {
         let n = narrative_source(store, &source)?;
         let edits: Vec<iron_document::narrative::Edit> = serde_json::from_str(&edits).map_err(|e| format!("edits: {e}"))?;
-        let planned = iron_document::narrative::plan(store.document(), n, &edits)?;
+        let planned = iron_document::narrative::plan(store.tree(), n, &edits)?;
         let label = if label.is_empty() { "edit narrative".to_owned() } else { label };
         let version = narrative_apply(store, &label, &actor, planned.ops)?;
         let minted: serde_json::Map<String, serde_json::Value> = planned.minted.into_iter().map(|(k, v)| (k, serde_json::json!(v.to_string()))).collect();
@@ -2513,7 +2514,7 @@ pub fn narrative_create(app: &mut WorkerApp, name: String, markdown: String, act
         if blocks.is_empty() {
             blocks.push(iron_document::narrative::BlockContent::default());
         }
-        let (id, ops) = iron_document::narrative::create_ops(store.document(), &name, &blocks);
+        let (id, ops) = iron_document::narrative::create_ops(store.tree(), &name, &blocks);
         let version = narrative_apply(store, &format!("add narrative {name}"), &actor, ops)?;
         Ok(serde_json::json!({"ok": true, "id": id.to_string(), "version": version}))
     })
@@ -2523,7 +2524,7 @@ pub fn narrative_create(app: &mut WorkerApp, name: String, markdown: String, act
 pub fn narrative_markdown(app: &mut WorkerApp, source: String) -> String {
     narrative_run(app, |store| {
         let n = narrative_source(store, &source)?;
-        Ok(serde_json::json!({"ok": true, "name": iron_document::narrative::name(store.document(), n), "markdown": iron_document::narrative::to_markdown(store.document(), n, false)}))
+        Ok(serde_json::json!({"ok": true, "name": iron_document::narrative::name(store.tree(), n), "markdown": iron_document::narrative::to_markdown(store.tree(), n, false)}))
     })
 }
 
@@ -2535,7 +2536,7 @@ pub fn narrative_values(app: &mut WorkerApp, source: String) -> String {
         let n = narrative_source(store, &source)?;
         let mut values = serde_json::Map::new();
         let mut errors = serde_json::Map::new();
-        for (b, c) in narrative::blocks(store.document(), n) {
+        for (b, c) in narrative::blocks(store.tree(), n) {
             let _ = b;
             for m in c.marks.iter().filter(|m| m.kind == "value") {
                 let Some(key) = narrative::value_expr(m) else { continue };
@@ -2565,7 +2566,7 @@ pub fn narrative_values(app: &mut WorkerApp, source: String) -> String {
 /// `select` selects it (ECM §7.2). `{"ok"}`.
 pub fn narrative_probe(app: &mut WorkerApp, node: String, action: String) -> String {
     let id = if node.is_empty() { None } else { node.parse::<iron_document::NodeId>().ok() };
-    let live = id.filter(|&id| app.world().get_resource::<crate::document_bridge::DocumentStore>().is_some_and(|s| s.0.document().is_live(id)));
+    let live = id.filter(|&id| app.world().get_resource::<crate::document_bridge::DocumentStore>().is_some_and(|s| s.0.tree().is_live(id)));
     if let Some(mut sel) = app.world_mut().get_resource_mut::<crate::SelectionState>() {
         match action.as_str() {
             "hover" => {
@@ -2682,7 +2683,7 @@ pub fn timeline_rows(app: &mut WorkerApp, panel: String) -> String {
         let clock = store.clock().ok_or("no clock yet")?;
         let comp = tv::find(store);
         let plan = tv::plan(store, clock, comp);
-        let doc = store.document();
+        let doc = store.tree();
         let now = store.time();
         let pieces = comp.map(|c| tv::pieces(store, c)).unwrap_or_default();
         let rows: Vec<serde_json::Value> = tv::rows(&plan)
@@ -2788,7 +2789,7 @@ pub fn inspect_animate(app: &mut WorkerApp, node: String, leaf: String, action: 
 /// best first. `{"ok", "targets": [{"id", "name", "type", "composition"}]}`.
 pub fn narrative_targets(app: &mut WorkerApp, query: String) -> String {
     narrative_run(app, |store| {
-        let doc = store.document();
+        let doc = store.tree();
         let q = query.to_lowercase();
         let skip = ["block", "narrative", "session", "selection", "port_spec", "template", "override", "constraint", "contour", "point"];
         let mut hits: Vec<(usize, String, iron_document::NodeId)> = Vec::new();
@@ -2838,7 +2839,7 @@ pub fn document_latency(app: &mut WorkerApp, panel: String, fields: String) -> S
     let dpr = app.world().get_resource::<crate::Dpr>().map_or(1.0, |d| d.0);
     let view = app.world().get_resource::<crate::document_bridge::PanelViews>().and_then(|v| v.get(&panel).cloned());
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let Some(comp) = find_composition(doc, iron_document::standard::LATENCY).filter(|c| c.is_session()) else {
         return serde_json::json!({"ok": true, "ready": false}).to_string();
     };
@@ -2861,7 +2862,7 @@ pub fn document_latency(app: &mut WorkerApp, panel: String, fields: String) -> S
             return fail(e.to_string());
         }
     }
-    let doc = store.0.document();
+    let doc = store.0.tree();
     let t = doc.get::<Transform2d>(target);
     let leaf = |s: Option<&Slot>| s.and_then(|s| s.constant()).and_then(|v| v.as_f64()).unwrap_or(0.0);
     let (tx, ty) = (leaf(t.map(|t| &t.x)), leaf(t.map(|t| &t.y)));
@@ -2892,7 +2893,7 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
     // A read polled by the shell: no frames asked for (narrative_run asks).
     let run = |store: &iron_document::Store| -> Result<serde_json::Value, String> {
         use iron_document::{expand, machine, NodeId};
-        let doc = store.document();
+        let doc = store.tree();
         let name_of = |n: NodeId| doc.get::<iron_document::facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
         let read = |l: iron_document::Leaf| store.resolved(l.node, l.path);
         let text = |n: NodeId, p: &str| read(iron_document::Leaf { node: n, path: p.parse().expect("declared") }).and_then(|v| v.as_str().map(str::to_owned));
@@ -2986,7 +2987,7 @@ pub fn machine_view(app: &mut WorkerApp, node: String) -> String {
 /// from, to).
 fn machine_running(store: &iron_document::Store, read: &dyn Fn(iron_document::Leaf) -> Option<iron_document::Value>, def: iron_document::NodeId, m: iron_document::NodeId, entity: iron_document::NodeId, leaf: iron_document::Leaf, now: f64) -> Option<(iron_document::NodeId, f64, String, String)> {
     use iron_document::machine;
-    let doc = store.document();
+    let doc = store.tree();
     if let Some((t, p, f, g)) = machine::progress_at(doc, read, def, machine::copy_of(doc, Some(entity), m), leaf, now) {
         return Some((machine::copy_source(t), p, f, g));
     }
@@ -3003,7 +3004,7 @@ fn machine_running(store: &iron_document::Store, read: &dyn Fn(iron_document::Le
 pub fn state_key(app: &mut WorkerApp, key: String) -> String {
     let run = |store: &iron_document::Store| -> Result<serde_json::Value, String> {
         use iron_document::{machine, NodeId};
-        let doc = store.document();
+        let doc = store.tree();
         let key: NodeId = key.parse().map_err(|_| format!("not a node id: {key}"))?;
         let clip = doc.live(key).and_then(|n| n.parent).ok_or("not a key")?;
         let prop = doc.get::<iron_document::facet::Clip>(clip).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).map(str::to_owned).ok_or("not a clip's key")?;
@@ -3032,7 +3033,7 @@ pub fn state_key(app: &mut WorkerApp, key: String) -> String {
 pub fn workspace_strip(app: &mut WorkerApp) -> String {
     let result = match app.world().get_resource::<crate::document_bridge::DocumentStore>() {
         Some(store) => {
-            let r = iron_document::contexts::Resolver::new(store.0.document(), store.0.contexts());
+            let r = iron_document::contexts::Resolver::new(store.0.tree(), store.0.contexts());
             let strip = r.workspace_values().get(iron_document::contexts::Field::STRIP).to_owned();
             serde_json::json!({"ok": true, "strip": strip.split_whitespace().collect::<Vec<_>>()})
         }

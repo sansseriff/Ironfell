@@ -7,6 +7,7 @@
 //! port, and a connection between two declared ports. An undeclared port is
 //! *loose* and never an obstacle (§3.5, gradual typing): the empty text.
 
+use crate::Tree;
 use crate::units::{self, Dim};
 use crate::value::Value;
 use std::fmt;
@@ -362,7 +363,7 @@ mod tests {
 /// entity's argument (its definition's input `port.datatype`), or a port's
 /// signal (the port's own, copied from its spec). The entity whose
 /// arguments `like(…)` reads comes with it.
-pub fn declared(doc: &crate::document::Document, leaf: crate::expr::Leaf) -> Option<(Type, crate::id::NodeId)> {
+pub fn declared(doc: Tree<'_>, leaf: crate::expr::Leaf) -> Option<(Type, crate::id::NodeId)> {
     use crate::facet::{FacetKind, Name, Port};
     let parse = |p: &Port| p.datatype.constant().and_then(|v| v.as_str()).filter(|t| !t.trim().is_empty()).and_then(|t| Type::parse(t).ok());
     match leaf.path.facet {

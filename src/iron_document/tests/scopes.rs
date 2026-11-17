@@ -30,7 +30,7 @@ fn set_x(id: NodeId, x: f64) -> Op {
 }
 
 fn ellipse(store: &mut Store) -> NodeId {
-    let id = store.document().next_id();
+    let id = store.authored().next_id();
     store
         .apply(tx(
             "add",
@@ -70,10 +70,10 @@ fn scope_ids_round_trip_as_26_crockford_characters() {
 fn the_scope_is_saved_in_the_header_and_is_not_an_op() {
     let mut store = Store::new();
     ellipse(&mut store);
-    let before = store.document().version();
+    let before = store.authored().version();
     let undoable = store.history().past().len();
     store.set_scope(Some(ID.parse().unwrap()));
-    assert_eq!(store.document().version(), before, "naming a scope is not a change");
+    assert_eq!(store.authored().version(), before, "naming a scope is not a change");
     assert_eq!(store.history().past().len(), undoable);
 
     let text = store.save();
@@ -107,7 +107,7 @@ fn snapshot_plus_the_log_after_it_replays_to_the_live_document() {
 
     // The snapshot a scope writes: then everything after it goes to the log.
     let snapshot = store.save();
-    let at = store.document().version();
+    let at = store.authored().version();
 
     let b = ellipse(&mut store);
     store.apply(tx("move b", vec![set_x(b, 7.0)])).unwrap();
@@ -125,7 +125,7 @@ fn snapshot_plus_the_log_after_it_replays_to_the_live_document() {
         .into_iter()
         .map(|t| serde_json::to_string(t).unwrap())
         .collect();
-    assert_eq!(lines.len() as u64, store.document().version().0 - at.0);
+    assert_eq!(lines.len() as u64, store.authored().version().0 - at.0);
 
     let mut opened = Store::load(&snapshot).unwrap();
     for line in &lines {
@@ -134,18 +134,18 @@ fn snapshot_plus_the_log_after_it_replays_to_the_live_document() {
         assert_eq!(applied.version, t.version, "{}", t.label);
     }
     assert_eq!(opened.save(), store.save());
-    opened.document().check_invariants().unwrap();
+    opened.authored().check_invariants().unwrap();
 
     // A reopened scope has nothing to undo.
     opened.clear_history();
     assert!(!opened.history().can_undo());
     assert!(!opened.history().can_redo());
     assert_eq!(opened.history().log().count(), 0);
-    assert_eq!(opened.log_since(opened.document().version()).unwrap().len(), 0);
+    assert_eq!(opened.log_since(opened.authored().version()).unwrap().len(), 0);
 
     // And it carries on from there: a new edit lands at the next version,
     // and the feed resumes from it.
-    let v = opened.document().version();
+    let v = opened.authored().version();
     opened.apply(tx("move b again", vec![set_x(b, 1.0)])).unwrap();
     let next = opened.log_since(v).unwrap();
     assert_eq!(next.len(), 1);
@@ -158,11 +158,11 @@ fn snapshot_plus_the_log_after_it_replays_to_the_live_document() {
 fn the_feed_reports_a_gap_once_the_horizon_drops_transactions() {
     let mut store = Store::new();
     let a = ellipse(&mut store);
-    let at = store.document().version();
+    let at = store.authored().version();
     for i in 0..250 {
         store.apply(tx("move", vec![set_x(a, i as f64)])).unwrap();
     }
     assert!(store.log_since(at).is_none(), "200 kept, 250 written");
-    let recent = Version(store.document().version().0 - 10);
+    let recent = Version(store.authored().version().0 - 10);
     assert_eq!(store.log_since(recent).unwrap().len(), 10);
 }

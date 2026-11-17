@@ -37,10 +37,10 @@ struct Scene {
 /// keys at 0 (100) and 2 (300) on transform2d.x) animating rect.
 fn scene(easing: &str) -> Scene {
     let mut store = Store::new();
-    let ids = store.document().next_ids(6);
+    let ids = store.authored().next_ids(6);
     let (rect, bar, timeline, clip) = (ids[0], ids[1], ids[2], ids[3]);
     let keys = [ids[4], ids[5]];
-    let rel = store.document().next_relation_id();
+    let rel = store.authored().next_relation_id();
     let mut t = Transform2d::default();
     t.x = num(50.0);
     let mut s = Size::default();
@@ -99,7 +99,7 @@ fn playhead_samples_clips_and_bindings_follow() {
     store.set_time(0.5);
     assert_eq!(x_of(&store, rect), 50.0);
     // The document never changed.
-    assert_eq!(store.document().leaf(rect, path("transform2d.x")).unwrap().constant(), Some(&Value::Number(50.0)));
+    assert_eq!(store.tree().leaf(rect, path("transform2d.x")).unwrap().constant(), Some(&Value::Number(50.0)));
     assert!(store.time_errors().is_empty(), "{:?}", store.time_errors());
 }
 
@@ -152,7 +152,7 @@ fn gesture_preview_wins_over_the_clip() {
 fn bad_clips_are_reported_not_applied() {
     let Scene { mut store, rect, bar, clip, keys, .. } = scene("linear");
     // Retarget onto a bound leaf: reported.
-    let rel2 = store.document().next_relation_id();
+    let rel2 = store.authored().next_relation_id();
     let mut c = Clip::default();
     c.prop = Slot::Const(Value::Str("size.h".into()));
     store
@@ -191,5 +191,5 @@ fn views_answer_why_is_this_moving() {
     let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<animates to=\"{rect}\"/>")), "{v}");
     assert!(v.contains("value=\"100\"") && v.contains("value=\"300\""), "the clip's keys: {v}");
-    assert_eq!(store.document().relations_to(rect).count(), 1);
+    assert_eq!(store.tree().relations_to(rect).count(), 1);
 }

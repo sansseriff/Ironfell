@@ -8,7 +8,7 @@ fn tx(ops: Vec<Op>) -> TransactionInput {
 fn num(v: f64) -> Slot { Slot::Const(Value::Number(v)) }
 fn fixture() -> (Store, NodeId, NodeId) {
     let mut s = Store::new();
-    let ids = s.document().next_ids(2);
+    let ids = s.authored().next_ids(2);
     let [g, r] = [ids[0], ids[1]];
     let mut t = Transform2d::default();
     t.x = num(100.0); t.y = num(50.0); t.rot = num(std::f64::consts::FRAC_PI_2);

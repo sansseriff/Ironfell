@@ -24,8 +24,9 @@
 //! sliders and drags through a plane: the tools differ only in how a pointer
 //! becomes leaf values.
 
+use crate::Tree;
 use crate::facet::FacetKind;
-use crate::document::{Document, RelKind};
+use crate::document::RelKind;
 use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::op::Op;
@@ -88,13 +89,13 @@ const GEOMETRY: &[FacetKind] = &[
     FacetKind::Slider,
 ];
 
-fn watched(doc: &Document, g: &ActiveGesture, n: NodeId) -> bool {
+fn watched(doc: Tree<'_>, g: &ActiveGesture, n: NodeId) -> bool {
     g.nodes.contains(&n) || g.nodes.iter().any(|&w| doc.is_ancestor(n, w))
 }
 
 /// Why `ops`, about to apply to `doc`, conflict with the gesture; `None`
 /// when they are compatible.
-pub(crate) fn conflict(doc: &Document, ops: &[Op], g: &ActiveGesture, drivers: &BTreeSet<Leaf>) -> Option<String> {
+pub(crate) fn conflict(doc: Tree<'_>, ops: &[Op], g: &ActiveGesture, drivers: &BTreeSet<Leaf>) -> Option<String> {
     for op in ops {
         let reason = match op {
             Op::Delete { id } if watched(doc, g, *id) => format!("{id} was deleted"),

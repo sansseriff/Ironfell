@@ -4,6 +4,7 @@
 //! definition), or a 3 × 3 table there. One transaction each; the new node
 //! is selected and the select tool is back, as after drawing a shape.
 
+use iron_document::Tree;
 use bevy::prelude::*;
 use iron_document::composition::Dims;
 use iron_document::{Actor, LeafStruct, NodeId, Op, Slot, TransactionInput, TypeId, Value};
@@ -14,7 +15,7 @@ use crate::bevy_app::select::{ActiveTool, Geo, top_hit};
 use crate::document_bridge::{DocumentStore, PanelViews};
 
 /// The outermost main on a hit's chain, if any.
-fn main_on(doc: &iron_document::Document, chain: &[NodeId]) -> Option<NodeId> {
+fn main_on(doc: Tree<'_>, chain: &[NodeId]) -> Option<NodeId> {
     chain.iter().copied().find(|&n| iron_document::expand::main_definition(doc, n).is_some())
 }
 
@@ -47,7 +48,7 @@ pub fn author_tool_system(
     let at = view.affine().inverse() * screen;
     let (ops, made, label) = {
         let geo = Geo { store: &store.0, drawables: &drawables, spatial: &spatial };
-        let doc = store.0.document();
+        let doc = store.0.tree();
         let main = top_hit(&hits).and_then(|(chain, _)| main_on(doc, &chain));
         match *active {
             ActiveTool::Port => {
@@ -56,7 +57,7 @@ pub fn author_tool_system(
                     return;
                 };
                 let local = geo.world(main).inverse() * at;
-                match iron_document::author::add_port(doc, main, [local.x, local.y], "in", false) {
+                match iron_document::author::add_port(store.0.authored(), main, [local.x, local.y], "in", false) {
                     Ok((ops, _, anchor)) => (ops, NodeId::expanded(main, anchor), "add port"),
                     Err(e) => {
                         warn!("port tool: {e}");
@@ -109,7 +110,7 @@ pub fn author_tool_system(
     };
     match store.0.apply(TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }) {
         Ok(_) => {
-            if let Some(m) = made.filter(|&m| store.0.document().is_live(m)) {
+            if let Some(m) = made.filter(|&m| store.0.tree().is_live(m)) {
                 sel.selected = vec![m];
             }
         }

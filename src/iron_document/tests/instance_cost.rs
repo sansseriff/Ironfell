@@ -48,7 +48,7 @@ fn n(v: f64) -> Slot {
 /// given 60 tick marks. Returns the store and the composition.
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     let mut name = Name::default();
@@ -62,7 +62,7 @@ fn desk() -> (Store, NodeId) {
     let comp = ids[0];
     store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
     // 60 ticks in the template, as the app's `meters` bench has.
-    let doc = store.document();
+    let doc = store.tree();
     let def = standard::find(doc, "meter").unwrap();
     let template = definition::template_of(doc, def, "free").unwrap();
     let last = doc.children(template).iter().filter_map(|&k| doc.live(k)).map(|x| x.order.clone()).max();
@@ -91,13 +91,13 @@ fn expanded_instances_cost() {
             store.place_standard("meter", comp, [(i % 30) as f64 * 130.0, (i / 30) as f64 * 140.0], Actor::Human).unwrap();
         }
         let place_ms = started.elapsed().as_secs_f64() * 1000.0 / (count - 1) as f64;
-        let nodes = store.document().live_nodes().count();
-        let expanded = store.document().expanded_ids().count();
+        let nodes = store.tree().live_nodes().count();
+        let expanded = store.tree().expanded_ids().count();
         // A structural edit elsewhere: a rect added to the composition.
         let mut times = Vec::new();
         for _ in 0..5 {
-            let id = store.document().next_id();
-            let order = OrderKey::after(&store.document().children(comp).iter().filter_map(|&k| store.document().live(k)).map(|x| x.order.clone()).max().unwrap());
+            let id = store.authored().next_id();
+            let order = OrderKey::after(&store.tree().children(comp).iter().filter_map(|&k| store.tree().live(k)).map(|x| x.order.clone()).max().unwrap());
             let mut s = Size::default();
             s.w = n(10.0);
             s.h = n(10.0);
@@ -107,12 +107,12 @@ fn expanded_instances_cost() {
         }
         times.sort_by(f64::total_cmp);
         // A constant edit on that rect: no expansion.
-        let rect = *store.document().children(comp).last().unwrap();
+        let rect = *store.tree().children(comp).last().unwrap();
         let t = Instant::now();
         store.apply(tx("move", vec![Op::Set { id: rect, path: "transform2d.x".parse().unwrap(), slot: n(50.0) }])).unwrap();
         let set_ms = t.elapsed().as_secs_f64() * 1000.0;
         let t = Instant::now();
-        let clone = store.document().clone();
+        let clone = store.authored().clone();
         let clone_ms = t.elapsed().as_secs_f64() * 1000.0;
         drop(clone);
         println!("{count} meters: {nodes} live nodes ({expanded} expanded); place {place_ms:.2} ms each; structural edit p50 {:.2} ms; constant edit {set_ms:.2} ms; clone {clone_ms:.2} ms", times[2]);
@@ -138,13 +138,13 @@ fn memory_per_meter() {
     }
     store.clear_history();
     let at_100 = LIVE.load(Ordering::Relaxed);
-    let nodes_100 = store.document().live_nodes().count();
+    let nodes_100 = store.tree().live_nodes().count();
     for i in 100..700 {
         place(&mut store, i);
     }
     store.clear_history();
     let at_700 = LIVE.load(Ordering::Relaxed);
-    let nodes_700 = store.document().live_nodes().count();
+    let nodes_700 = store.tree().live_nodes().count();
     assert_eq!(nodes_700 - nodes_100, 600 * ((nodes_700 - nodes_100) / 600), "every meter expanded in full");
     let per = (at_700 - at_100) as f64 / 600.0;
     println!(

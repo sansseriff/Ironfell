@@ -27,6 +27,7 @@
 //! paste metadata, so a fragment survives the system clipboard. A fragment
 //! from an older schema is refused, as an old file is.
 
+use crate::Tree;
 use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::composition;
 use crate::document::{Document, Node, RelKind, Relation};
@@ -111,12 +112,12 @@ fn ty(name: &str) -> TypeId {
     TypeId::lookup(name).expect("registered type")
 }
 
-fn type_name(doc: &Document, id: NodeId) -> &'static str {
+fn type_name(doc: Tree<'_>, id: NodeId) -> &'static str {
     doc.node(id).map(|n| n.ty.name()).unwrap_or("")
 }
 
 /// Every live node in preorder: painter order.
-fn preorder(doc: &Document) -> BTreeMap<NodeId, usize> {
+fn preorder(doc: Tree<'_>) -> BTreeMap<NodeId, usize> {
     let mut out = BTreeMap::new();
     let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
     while let Some(id) = stack.pop() {
@@ -130,7 +131,7 @@ fn preorder(doc: &Document) -> BTreeMap<NodeId, usize> {
 /// another root, dead nodes and uncopyable types are skipped; `Err` when
 /// nothing is left.
 pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fragment, String> {
-    let doc = store.document();
+    let doc = store.tree();
     let order = preorder(doc);
     let mut roots: Vec<NodeId> = roots
         .iter()
@@ -240,7 +241,7 @@ pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fra
 
 /// A sibling key just after `after` under `parent` in `doc`, before the
 /// next sibling.
-fn key_after(doc: &Document, parent: Option<NodeId>, after: &OrderKey) -> OrderKey {
+fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
         None => doc.roots(),
@@ -250,7 +251,7 @@ fn key_after(doc: &Document, parent: Option<NodeId>, after: &OrderKey) -> OrderK
 }
 
 /// A sibling key after every child of `parent`.
-fn key_last(doc: &Document, parent: Option<NodeId>) -> OrderKey {
+fn key_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
         None => doc.roots(),
@@ -303,13 +304,13 @@ fn place_transform(c: &mut Facet, m: Affine2, notes: &mut Vec<String>, id: NodeI
 /// The ops that put `frag` into `store`'s document. `here` is the caller's
 /// token for this document and session (see [`Fragment::origin`]).
 pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) -> Result<Pasted, String> {
-    let doc = store.document();
+    let doc = store.tree();
     let same = frag.origin == here;
     let mut notes = Vec::new();
 
     // Entities shared rather than copied (a move after a cut).
     let shared: BTreeSet<NodeId> = if place.share_entities && same {
-        frag.extras.iter().copied().filter(|&e| type_name(&frag.doc, e) == "entity" && doc.is_live(e)).flat_map(|e| std::iter::once(e).chain(frag.doc.descendants(e))).collect()
+        frag.extras.iter().copied().filter(|&e| type_name(Tree::over(&frag.doc), e) == "entity" && doc.is_live(e)).flat_map(|e| std::iter::once(e).chain(frag.doc.descendants(e))).collect()
     } else {
         BTreeSet::new()
     };
@@ -325,7 +326,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
     }
     // Definitions an SVG import brought go in the library, made if missing.
     let library = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "library");
-    let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(&frag.doc, e) == "definition");
+    let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(Tree::over(&frag.doc), e) == "definition");
     let mut ids = doc.next_ids(create.len() + usize::from(needs_library));
     let made_library = needs_library.then(|| ids.remove(0));
     let library = library.or(made_library);
@@ -462,7 +463,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
 /// A copy of a main is an instance of its definition (component-authoring.md
 /// §1, as Figma's copy of a main component): the copied `use` loses `main`
 /// and figures a new linked entity in the model.
-fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
+fn mains_to_instances(doc: Tree<'_>, ops: &mut Vec<Op>) {
     use crate::facet::{Args, Instance, LeafStruct, Name};
     let Some(model) = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "model") else { return };
     let mut next = ops
@@ -541,7 +542,7 @@ fn mains_to_instances(doc: &Document, ops: &mut Vec<Op>) {
 pub fn duplicate(store: &StoreCore, roots: &[NodeId]) -> Result<Pasted, String> {
     const HERE: &str = "duplicate";
     let frag = fragment(store, roots, HERE)?;
-    let doc = store.document();
+    let doc = store.tree();
     let mains = roots.iter().filter(|&&r| crate::expand::main_definition(doc, r).is_some());
     let width = mains.filter_map(|&r| store.extent(r)).map(|e| e.width()).fold(0.0, f64::max);
     let offset = if width > 0.0 { [width + 24.0, 0.0] } else { [0.0, 0.0] };

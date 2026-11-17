@@ -34,18 +34,18 @@ fn at(x: f64, y: f64) -> Facet {
 #[test]
 fn a_rect_becomes_a_path_with_the_same_id_and_undo_brings_it_back() {
     let mut store = Store::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut s = Size::default();
     s.w = num(40.0);
     s.h = num(20.0);
     store.apply(tx("draw", vec![Op::Create { id, ty: ty("rect"), parent: None, order: OrderKey::first(), facets: vec![at(10.0, 10.0), s.wrap(), Fill::default().wrap()] }])).unwrap();
-    let facets = |s: &Store| s.document().facets_of(id).cloned().collect::<Vec<_>>();
+    let facets = |s: &Store| s.tree().facets_of(id).cloned().collect::<Vec<_>>();
     let before = facets(&store);
 
     let c = shape::to_path(&store, id).unwrap();
     assert!(c.cuts.is_empty(), "nothing reads or drives it: {:?}", c.cuts);
     store.apply(tx("convert to path", c.ops)).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     assert_eq!(doc.live(id).unwrap().ty.name(), "path");
     assert!(doc.facet(id, FacetKind::Fill).is_some(), "paint carries over");
     assert_eq!(resolved(&store, id, "transform2d.x"), 10.0);
@@ -55,17 +55,17 @@ fn a_rect_becomes_a_path_with_the_same_id_and_undo_brings_it_back() {
     assert_eq!(store.resolved(contour, path("contour.closed")), Some(Value::Bool(true)));
 
     store.undo(0).unwrap().unwrap();
-    assert_eq!(store.document().live(id).unwrap().ty.name(), "rect");
+    assert_eq!(store.tree().live(id).unwrap().ty.name(), "rect");
     assert_eq!(facets(&store), before);
-    assert!(store.document().children(id).iter().all(|&p| store.document().live(p).is_none()), "its points went with the undo");
+    assert!(store.tree().children(id).iter().all(|&p| store.tree().live(p).is_none()), "its points went with the undo");
     store.redo(0).unwrap().unwrap();
-    assert_eq!(store.document().live(id).unwrap().ty.name(), "path");
+    assert_eq!(store.tree().live(id).unwrap().ty.name(), "path");
 }
 
 #[test]
 fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
     let mut store = Store::new();
-    let ids = store.document().next_ids(3);
+    let ids = store.authored().next_ids(3);
     let (slider, ellipse, reader) = (ids[0], ids[1], ids[2]);
     let mut sl = Slider::default();
     sl.value = num(30.0);
@@ -91,8 +91,8 @@ fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
     assert!(c.cuts[1].contains(&format!("{reader}.size.w reads it")), "{}", c.cuts[1]);
     store.apply(tx("convert to path", c.ops)).unwrap();
     // The reader keeps its value as a constant; the outline matches the radii.
-    assert_eq!(store.document().leaf(reader, path("size.w")), Some(&num(30.0)));
-    let doc = store.document();
+    assert_eq!(store.tree().leaf(reader, path("size.w")), Some(&num(30.0)));
+    let doc = store.tree();
     let contour = doc.children(ellipse)[0];
     let first = doc.children(contour)[0];
     assert_eq!((resolved(&store, first, "transform2d.x"), resolved(&store, first, "handles.oy")), (30.0, 10.0 * 0.552_284_749_830_793_4));
@@ -102,14 +102,14 @@ fn converting_an_ellipse_reports_and_bakes_what_reads_or_drives_its_radii() {
 #[test]
 fn only_rects_and_ellipses_convert() {
     let mut store = Store::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     store.apply(tx("group", vec![Op::Create { id, ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![] }])).unwrap();
     assert!(!shape::convertible(&store, id));
     assert!(shape::to_path(&store, id).is_err());
 }
 
 fn rect_at(store: &mut Store, w: f64, h: f64, extra: Vec<Facet>) -> NodeId {
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut s = Size::default();
     s.w = num(w);
     s.h = num(h);
@@ -142,7 +142,7 @@ fn a_rounded_rect_converts_to_its_eight_point_outline() {
     let id = rect_at(&mut store, 40.0, 20.0, vec![c.wrap()]);
     let conv = shape::to_path(&store, id).unwrap();
     store.apply(tx("convert to path", conv.ops)).unwrap();
-    let doc = store.document();
+    let doc = store.tree();
     let contour = doc.children(id)[0];
     assert_eq!(doc.children(contour).len(), 8);
     assert!(doc.facet(id, FacetKind::Corners).is_none(), "corners are a rect's parameter, not a path's");
@@ -167,7 +167,7 @@ fn an_arc_is_a_pie_a_ring_segment_or_a_ring() {
     // the other way, so it stays a ring under the non-zero rule.
     assert_eq!(ellipse_outline(10.0, 10.0, Some([0.0, TAU, 0.5])).len(), 2);
     let mut store = Store::new();
-    let id = store.document().next_ids(1)[0];
+    let id = store.authored().next_ids(1)[0];
     let mut arc = iron_document::facet::Arc::default();
     arc.inner = num(0.5);
     store.apply(tx("ring", vec![Op::Create { id, ty: ty("ellipse"), parent: None, order: OrderKey::first(), facets: vec![at(0.0, 0.0), Radius::default().wrap(), arc.wrap()] }])).unwrap();
@@ -194,7 +194,7 @@ fn a_gesture_on_a_missing_facet_adds_it_in_one_undoable_step() {
     assert_eq!(resolved(&store, id, "corners.br"), 6.0, "previewed before it exists");
     let applied = store.commit_gesture("round corners", Actor::Human, 1).unwrap().unwrap();
     let _ = applied;
-    assert_eq!(store.document().leaf(id, path("corners.tl")), Some(&num(6.0)));
+    assert_eq!(store.tree().leaf(id, path("corners.tl")), Some(&num(6.0)));
     store.undo(2).unwrap().unwrap();
-    assert!(store.document().facet(id, FacetKind::Corners).is_none());
+    assert!(store.tree().facet(id, FacetKind::Corners).is_none());
 }

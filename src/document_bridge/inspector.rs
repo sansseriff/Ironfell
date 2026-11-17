@@ -229,7 +229,7 @@ pub fn info(world: &World, panel: &str) -> serde_json::Value {
 fn instance_info(store: &iron_document::Store) -> Option<serde_json::Value> {
     use iron_document::analysis::{self, Input};
     use iron_document::facet::Name;
-    let doc = store.document();
+    let doc = store.tree();
     let name = |n: iron_document::NodeId| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map_or_else(|| n.to_string(), str::to_owned);
     let (first, _) = store.selection().into_iter().next()?;
     let mut at = Some(first);

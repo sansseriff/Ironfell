@@ -69,7 +69,7 @@ const LINK: f64 = 100.0;
 /// Joints start deliberately off their solution so apply has to solve.
 fn pendulum() -> Pendulum {
     let mut store = Store::new();
-    let ids = store.document().next_ids(14);
+    let ids = store.authored().next_ids(14);
     let (group, platform) = (ids[0], ids[1]);
     let joints = [ids[2], ids[3], ids[4]];
     let ball = ids[5];
@@ -78,7 +78,7 @@ fn pendulum() -> Pendulum {
     let fix = ids[10];
     let hinge = ids[11];
     let links = [ids[12], ids[13]];
-    let rels = store.document().next_relation_ids(9);
+    let rels = store.authored().next_relation_ids(9);
     let mut key = OrderKey::first();
     let mut order = || {
         let k = key.clone();
@@ -149,7 +149,7 @@ fn pendulum() -> Pendulum {
     ops.push(Op::Create { id: hinge, ty: ty("constraint"), parent: Some(group), order: order(), facets: constraint("coincident", 0.0, "hinge") });
     ops.push(link(rels[1], hinge, platform, "a", [80.0, 20.0]));
     ops.push(link(rels[2], hinge, joints[0], "b", [0.0, 0.0]));
-    let third = store.document().next_ids(15)[14];
+    let third = store.authored().next_ids(15)[14];
     let link_ids = [links[0], links[1], third];
     for i in 0..3 {
         let id = link_ids[i];
@@ -158,7 +158,7 @@ fn pendulum() -> Pendulum {
         ops.push(link(rels[4 + 2 * i], id, chain[i + 1], "b", [0.0, 0.0]));
     }
     store.apply(tx("build pendulum", ops)).unwrap();
-    store.document().check_invariants().unwrap();
+    store.authored().check_invariants().unwrap();
     Pendulum { store, group, platform, joints, ball, arms, bar, fix, hinge, links: link_ids, fix_rel: rels[0] }
 }
 
@@ -222,7 +222,7 @@ fn setting_a_value_resolves_with_derived_ops_and_undo_restores_exactly() {
     let redo = p.store.history().past().last().unwrap();
     assert_eq!(redo.ops.len(), 3 + tx.derived_ops.len());
     assert!(redo.derived_ops.is_empty());
-    p.store.document().check_invariants().unwrap();
+    p.store.authored().check_invariants().unwrap();
 }
 
 #[test]
@@ -243,11 +243,11 @@ fn save_load_and_replay_from_empty_agree() {
 #[test]
 fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
     let mut p = pendulum();
-    let version = p.store.document().version();
+    let version = p.store.authored().version();
     let before = content(&p.store);
     // j1 coincident with j2 contradicts their distance of 100.
-    let id = p.store.document().next_id();
-    let rels = p.store.document().next_relation_ids(2);
+    let id = p.store.authored().next_id();
+    let rels = p.store.authored().next_relation_ids(2);
     let mut c = Constraint::default();
     c.kind = Slot::Const(Value::Enum("coincident".into()));
     let link = |rel: RelationId, to: NodeId, role: &str| {
@@ -270,10 +270,10 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
     let m = &errs[0].message;
     assert!(m.contains(&id.to_string()) && m.contains(&p.links[1].to_string()), "both sides of the contradiction are named: {m}");
     assert!(!m.contains(&p.links[0].to_string()), "an innocent constraint is not: {m}");
-    assert_eq!(p.store.document().version(), version, "nothing applied");
+    assert_eq!(p.store.authored().version(), version, "nothing applied");
     assert_eq!(content(&p.store), before);
     assert_eq!(p.store.clusters().list.len(), 1);
-    p.store.document().check_invariants().unwrap();
+    p.store.authored().check_invariants().unwrap();
 
     // Malformed constraints are BadConstraint: a missing operand, an unknown
     // kind, a duplicate.
@@ -311,7 +311,7 @@ fn a_binding_that_reads_and_feeds_a_cluster_is_a_cycle() {
     assert_eq!(errs[0].kind, ErrorKind::Cycle, "{}", errs[0].message);
     assert!(errs[0].message.contains(&p.group.to_string()), "{}", errs[0].message);
     // A value bound to something outside the cluster is a driving dimension.
-    let slider = p.store.document().next_id();
+    let slider = p.store.authored().next_id();
     let mut sl = iron_document::facet::Slider::default();
     sl.value = num(0.5);
     p.store
@@ -349,7 +349,7 @@ fn the_pendulum_view_matches_the_golden_file() {
 #[test]
 fn a_set_out_of_reach_is_adjusted_and_reported_or_rejected_with_exact() {
     let mut p = pendulum();
-    let version = p.store.document().version();
+    let version = p.store.authored().version();
     let applied = p.store.apply(tx("push ball", vec![Op::Set { id: p.ball, path: path("transform2d.x"), slot: num(900.0) }])).unwrap();
     let s = applied.solver.expect("summary");
     assert_eq!(s.unmet.len(), 1, "{s:?}");
@@ -363,7 +363,7 @@ fn a_set_out_of_reach_is_adjusted_and_reported_or_rejected_with_exact() {
     let last = p.store.history().past().last().unwrap();
     assert!(last.derived_ops.iter().any(|op| matches!(op, Op::Set { id, path: pth, .. } if *id == p.ball && pth.field == "x")), "the ball's x is itself adjusted");
     p.store.undo(1).unwrap().unwrap();
-    assert_eq!(p.store.document().version(), Version(version.0 + 2));
+    assert_eq!(p.store.authored().version(), Version(version.0 + 2));
 
     let mut strict = tx("push ball exactly", vec![Op::Set { id: p.ball, path: path("transform2d.x"), slot: num(900.0) }]);
     strict.exact = true;
@@ -377,7 +377,7 @@ fn a_set_out_of_reach_is_adjusted_and_reported_or_rejected_with_exact() {
 fn dragging_the_ball_moves_the_chain_and_commits_one_transaction() {
     let mut p = pendulum();
     let before = content(&p.store);
-    let authored_x = p.store.document().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned();
+    let authored_x = p.store.tree().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned();
     p.store.drain_changes();
     let h = p.store.begin_drag(p.ball, [0.0, 0.0]);
     assert_eq!(h.mode, DragMode::Cluster(p.group));
@@ -387,7 +387,7 @@ fn dragging_the_ball_moves_the_chain_and_commits_one_transaction() {
     assert!(dist(ball, [420.0, 300.0]) < 1e-3, "reachable: {ball:?}");
     assert_chain_holds(&p);
     // Everything moved is previewed, nothing is written, the arms follow.
-    assert_eq!(p.store.document().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned(), authored_x);
+    assert_eq!(p.store.tree().leaf(p.ball, path("transform2d.x")).unwrap().constant().cloned(), authored_x);
     let changed: Vec<NodeId> = p.store.drain_changes().into_iter().map(|c| c.leaf.node).collect();
     assert!(changed.contains(&p.joints[1]) && changed.contains(&p.arms[2]) && changed.contains(&p.bar), "{changed:?}");
     let rot = p.store.resolved(p.arms[2], path("transform2d.rot")).unwrap().as_f64().unwrap();
@@ -424,7 +424,7 @@ fn moving_the_fix_to_the_ball_lets_the_platform_drive() {
     // sideways platform drag at all.
     p.store.apply(tx("lift", vec![Op::Set { id: p.ball, path: path("transform2d.y"), slot: num(300.0) }])).unwrap();
     assert_chain_holds(&p);
-    let rel = p.store.document().next_relation_id();
+    let rel = p.store.authored().next_relation_id();
     let mut data = BTreeMap::new();
     data.insert("role".to_owned(), Value::Str("a".into()));
     p.store
@@ -478,7 +478,7 @@ fn duplicating_the_pendulum_copies_its_mechanism_and_undo_removes_it() {
     let pasted = copy::duplicate(&p.store, &[p.group]).unwrap();
     assert!(pasted.notes.is_empty(), "{:?}", pasted.notes);
     p.store.apply(tx("duplicate group", pasted.ops)).unwrap();
-    let doc = p.store.document();
+    let doc = p.store.tree();
     let copy = pasted.roots[0];
     // Right above the original, as a sibling.
     let roots: Vec<NodeId> = doc.roots().to_vec();
@@ -496,7 +496,7 @@ fn duplicating_the_pendulum_copies_its_mechanism_and_undo_removes_it() {
         }
     }
     // The copy's ball moves; the original's stays.
-    let ball = kids[p.store.document().children(p.group).iter().position(|&k| k == p.ball).unwrap()];
+    let ball = kids[p.store.tree().children(p.group).iter().position(|&k| k == p.ball).unwrap()];
     let still = pos(&p.store, p.ball);
     let h = p.store.begin_drag(ball, [0.0, 0.0]);
     assert!(matches!(h.mode, DragMode::Cluster(_)), "{:?}", h.mode);
@@ -529,7 +529,7 @@ fn a_constraint_reaching_outside_the_copy_stays_behind() {
     assert!(pasted.notes[0].contains("constraint") && pasted.notes[0].contains("outside the copy"), "{:?}", pasted.notes);
     p.store.apply(tx("duplicate ellipse", pasted.ops)).unwrap();
     let ball = pasted.roots[0];
-    assert!(p.store.document().relations_to(ball).next().is_none());
+    assert!(p.store.tree().relations_to(ball).next().is_none());
     // Free: it drags anywhere without a solve.
     let h = p.store.begin_drag(ball, [0.0, 0.0]);
     assert!(matches!(h.mode, DragMode::Axes { .. }), "{:?}", h.mode);
@@ -553,7 +553,7 @@ fn a_live_solve_leaves_nothing_behind_once_a_transaction_applies() {
 
     // Delete every constraint and place the ball: no cluster is left, and
     // the ball reads its new constant, not the live solve's pose.
-    let constraints: Vec<NodeId> = p.store.document().children(p.group).iter().copied().filter(|&c| p.store.document().live(c).is_some_and(|n| n.ty.name() == "constraint")).collect();
+    let constraints: Vec<NodeId> = p.store.tree().children(p.group).iter().copied().filter(|&c| p.store.tree().live(c).is_some_and(|n| n.ty.name() == "constraint")).collect();
     assert!(!constraints.is_empty());
     let mut ops: Vec<Op> = constraints.iter().map(|&id| Op::Delete { id }).collect();
     ops.push(Op::Set { id: ball, path: path("transform2d.x"), slot: num(500.0) });

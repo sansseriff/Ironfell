@@ -28,7 +28,7 @@ fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
 /// A 2D composition and a model root.
 fn desk() -> (Store, NodeId) {
     let mut store = Store::new();
-    let ids = store.document().next_ids(2);
+    let ids = store.authored().next_ids(2);
     let mut c = Composition::default();
     c.dims = Slot::Const(Value::Enum("2d".into()));
     store
@@ -67,12 +67,12 @@ fn set(store: &mut Store, e: NodeId, leaf: &str, slot: Slot) -> Result<Applied, 
 }
 
 fn port_of(store: &Store, e: NodeId, name: &str) -> NodeId {
-    let doc = store.document();
+    let doc = store.tree();
     doc.children(e).iter().copied().find(|&c| doc.get::<Name>(c).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
 }
 
 fn connect(store: &mut Store, from: NodeId, to: NodeId) -> Result<Applied, Vec<ApplyError>> {
-    let doc = store.document();
+    let doc = store.tree();
     let model = doc.nodes_of_type(TypeId::lookup("model").unwrap()).next().unwrap();
     let id = doc.next_ids(1)[0];
     let rels = doc.next_relation_ids(2);

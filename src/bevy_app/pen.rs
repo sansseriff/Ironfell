@@ -17,6 +17,7 @@
 //! its points (but the first of a path being drawn, which closes it), a
 //! click removes that point and the path stays joined across the gap.
 
+use iron_document::Tree;
 use bevy::prelude::*;
 use iron_document::facet::{Contour, Name as DocName, PathShape, Stroke, Transform2d};
 use iron_document::composition::{self, Dims};
@@ -77,7 +78,7 @@ fn point_op(id: NodeId, contour: NodeId, order: OrderKey, at: Point, hi: kurbo::
 /// shape; a line gets a corner.
 fn insert_point(geo: &Geo, path: NodeId, i: usize, j: usize, t: f64, id: NodeId) -> Option<Vec<Op>> {
     use kurbo::ParamCurve as _;
-    let doc = geo.store.document();
+    let doc = geo.store.tree();
     let points = geo.points(path);
     let (.., c) = geo.segments(path).into_iter().find(|s| (s.0, s.1) == (i, j))?;
     let (contour, _, run) = geo.run_of(path, i)?;
@@ -106,7 +107,7 @@ fn transaction(label: &str, ops: Vec<Op>) -> TransactionInput {
 }
 
 /// The order key after a parent's last child (or the first key).
-pub(crate) fn after_last(doc: &iron_document::Document, parent: Option<NodeId>) -> OrderKey {
+pub(crate) fn after_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p).to_vec(),
         None => doc.roots().to_vec(),
@@ -118,7 +119,7 @@ pub(crate) fn after_last(doc: &iron_document::Document, parent: Option<NodeId>) 
 /// embed) under it, else the view's own composition; and the view's
 /// document px → that composition's space.
 pub(crate) fn drop_target(geo: &Geo, hits: &crate::PointerHits, view: &PanelView) -> Option<(NodeId, Affine)> {
-    let doc = geo.store.document();
+    let doc = geo.store.tree();
     let (container, to_comp) = match top_hit(hits) {
         Some((chain, Source::Overlay(_))) if nest::is_embed(doc, chain[0]) && composition::embedded(doc, chain[0]).is_some_and(|s| composition::dims(doc, s) == Some(Dims::Two)) => {
             (composition::embedded(doc, chain[0]), geo.world(chain[0]).inverse())
@@ -145,7 +146,7 @@ pub fn pen_tool_system(
     select: Res<crate::bevy_app::select::SelectTool>,
 ) {
     let pen = &mut *pen;
-    let doc = store.0.document();
+    let doc = store.0.tree();
     // Undo can take the path away (its first point was its creation).
     if pen.path.as_ref().is_some_and(|(id, ..)| doc.live(*id).is_none() && !pending.0.iter().any(|t| t.ops.iter().any(|o| matches!(o, Op::Create { id: c, .. } if c == id)))) {
         pen.path = None;

@@ -16,14 +16,14 @@ use std::fmt;
 
 /// The format's version. Only this one loads: there are no saved files
 /// from earlier versions to keep (decided 2026-11-02), so a format change
-/// bumps it and drops the old reader rather than migrating. Schema 13 added
-/// themed slider colours; 12 made
+/// bumps it and drops the old reader rather than migrating. Schema 14 permits
+/// a context on component templates; 13 added themed slider colours; 12 made
 /// ids `client_counter` and the header's counters one per client; 11 added
 /// `composition.grid_snap`; 10 the composition canvas settings
 /// (background, grid); 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
-pub const SCHEMA: u64 = 13;
+pub const SCHEMA: u64 = 14;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);

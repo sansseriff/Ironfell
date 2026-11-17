@@ -358,7 +358,7 @@ pub(crate) enum Manip {
     /// A lone shape's own handle; `arc` is (start, sweep, inner) at the press.
     ShapeGrip { id: NodeId, grip: ShapeGrip, to_local: Affine, arc: [f64; 3] },
     /// Scrubbing a slider's value along its track.
-    Slider { id: NodeId, mapping: Mapping },
+    Slider { id: NodeId, mapping: Mapping, last: Option<Vec2> },
     /// 2D content dragged on a plane in 3D, through `Store::begin_drag`.
     Plane { handle: DragHandle, mapping: Mapping, press: Vec2, ty: String },
     World(World),
@@ -604,12 +604,21 @@ impl Manip {
                 };
                 preview_writes(cx.store, writes);
             }
-            Manip::Slider { id, mapping } => {
+            Manip::Slider { id, mapping, last } => {
+                if *last == Some(cx.pointer.screen) { return; }
+                let first = last.is_none();
+                *last = Some(cx.pointer.screen);
                 // The pointer along the track, in the slider's own space,
                 // becomes a value; anything bound to it follows this frame.
                 let Some(p) = mapping.point(cx.pointer.screen, cx.views, cx.cameras, cx.planes) else { return };
-                let Some(Shape2d::Slider { w, .. }) = cx.drawables.0.get(id).map(|d| d.shape.clone()) else { return };
+                let Some(Shape2d::Slider { w, h, t: shown }) = cx.drawables.0.get(id).map(|d| d.shape.clone()) else { return };
                 let local = crate::document_bridge::nest::world_2d(cx.store, cx.spatial, *id).inverse() * p;
+                // A thumb grab keeps its value until it moves; a track press
+                // jumps immediately, with presentation easing only on that jump.
+                if first && iron_document::slider::thumb_hit(w as f64, h as f64, shown as f64, local) { return; }
+                let value_leaf = iron_document::Leaf { node: *id, path: leaf("slider.value") };
+                let from = cx.store.presented_number(value_leaf).unwrap_or(0.0);
+                cx.store.cancel_presentation(value_leaf);
                 let t = (local.x / w.max(1.0) as f64).clamp(0.0, 1.0);
                 let num = |s: &Store, f: &str, d: f64| s.resolved(*id, leaf(f)).and_then(|v| v.as_f64()).unwrap_or(d);
                 let (min, max, step) = (num(cx.store, "slider.min", 0.0), num(cx.store, "slider.max", 1.0), num(cx.store, "slider.step", 0.0));
@@ -621,10 +630,11 @@ impl Manip {
                 if num(cx.store, "slider.value", f64::NAN) != value {
                     // Through its handle: a slider inside an instance is
                     // bound to the instance's argument, which takes the value.
-                    if cx.store.preview_target(*id, leaf("slider.value"), Value::Number(value)).is_err() {
-                        cx.store.preview(*id, leaf("slider.value"), Value::Number(value));
+                    if let Err(why) = cx.store.preview_target(*id, leaf("slider.value"), Value::Number(value)) {
+                        info!("{id} cannot follow: {why}");
                     }
                 }
+                if first { cx.store.animate_presentation(value_leaf, from); }
             }
             Manip::Plane { handle, mapping, press, .. } => {
                 if cx.pointer.screen.distance(*press) <= SLOP {
@@ -707,7 +717,7 @@ pub(crate) fn hand_off(
         None => Mapping::Panel { panel, space },
     };
     if slider {
-        return Some(Manip::Slider { id, mapping });
+        return Some(Manip::Slider { id, mapping, last: None });
     }
     let Some(camera) = camera else {
         // 2D content on a plane in 3D, grabbed where the press landed.

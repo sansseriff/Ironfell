@@ -35,7 +35,7 @@ fn the_builtin_library_prints_back_to_itself() {
 #[test]
 fn bad_markup_says_what_is_wrong() {
     let err = |s: &str| contexts::parse(s).unwrap_err();
-    assert_eq!(err(r#"<context name="k"><rule match="all" affords.wobble="move"/></context>"#), "unknown field affords.wobble (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis, affords.delete, affords.cursor)");
+    assert_eq!(err(r#"<context name="k"><rule match="all" affords.wobble="move"/></context>"#), "unknown field affords.wobble (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis, affords.delete, affords.cursor, affords.selection)");
     assert!(err(r#"<context name="k"><rule match="all" sound.x="1"/></context>"#).starts_with("unknown domain in sound.x"));
     assert_eq!(err(r#"<context name="k"><rule match="all" affords.select="maybe"/></context>"#), "affords.select=\"maybe\": expected one of none, target, through, closed, window, inert");
     assert_eq!(err(r#"<context name="k"><rule match="type:widget" affords.select="none"/></context>"#), "unknown node type widget");
@@ -126,7 +126,7 @@ fn bad_context_markup_is_refused() {
     let set = Op::Set { id: node, path: "context_def.markup".parse().unwrap(), slot: Slot::Const(Value::Str("<context name=\"k\"><rule match=\"all\" affords.wobble=\"move\"/></context>".into())) };
     let err = store.apply(tx(vec![set])).unwrap_err().remove(0);
     assert_eq!(err.kind, ErrorKind::BadContext);
-    assert!(err.message.ends_with("unknown field affords.wobble (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis, affords.delete, affords.cursor)"), "{}", err.message);
+    assert!(err.message.ends_with("unknown field affords.wobble (affords.select, affords.enter, affords.edit, affords.grips, affords.drag, affords.drives, affords.activate, affords.step, affords.axis, affords.delete, affords.cursor, affords.selection)"), "{}", err.message);
 }
 
 #[test]
@@ -544,6 +544,7 @@ fn every_field_constant_names_its_field() {
         (Field::HANDLE, "chrome.handle"), (Field::ACCENT, "chrome.accent"), (Field::GRIP, "chrome.grip"), (Field::GRIP_SHAPE, "chrome.grip_shape"), (Field::HOVER, "chrome.hover"),
         (Field::MATE, "plug.mate"), (Field::GRID, "snap.grid"), (Field::DELETE, "affords.delete"), (Field::COMPONENT, "chrome.component"), (Field::CURSOR, "affords.cursor"),
         (Field::STRIP, "workspace.strip"), (Field::COMMAND_KEYS, "keys.commands"), (Field::MENU, "menu.canvas"), (Field::ANIMATE_KEYS, "animate.keys"),
+        (Field::HOVER_LIT, "chrome.hover_lit"), (Field::SELECTION, "affords.selection"), (Field::VALUE_MOTION, "motion.value"),
     ];
     for (f, path) in named {
         assert_eq!(f.path(), path);

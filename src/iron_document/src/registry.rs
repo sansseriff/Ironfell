@@ -321,7 +321,7 @@ static TYPES: &[TypeSpec] = &[
         name: "template",
         // `size`: the picture's default box; parts bind to it, and each
         // sized `use` holds its own (plans/specs/plot.md §3).
-        facets: &[(K::Template, true), (K::Name, false), (K::Size, false)],
+        facets: &[(K::Template, true), (K::Name, false), (K::Size, false), (K::ContextOf, false)],
         default_host: Host::Canvas,
         children: ChildPolicy::Any,
     },

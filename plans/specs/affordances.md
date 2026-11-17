@@ -627,3 +627,24 @@ Then [`chrome.md`](chrome.md); then the state machine spec (§8.4).
    `<style>` element). Or a document's contexts as markup in one leaf?
 7. **Hover cost.** Measure resolution and motion with `bench-render.sh`'s
    `hover-sweep` before phase A lands.
+
+
+## Input authoring policy (2026-11-16)
+
+The slider is the first control using `affords.selection="modifier"`: normal
+presses operate its thumb or track, and Mod-click selects it for authoring.
+`chrome.hover_lit` chooses hover feedback independently of `chrome.lit` (selection):
+`inherit`, `shape`, `frame`, `none`, or `control` (the slider's handle outline).
+`std:input` suppresses its own hover frame and declares modifier selection; an
+optional `context` facet on a component template supplies that policy to its
+instances. An instance's explicit context overrides the template default.
+
+`motion.value="out 120"` declares the slider's track-jump presentation easing.
+The target edits through its normal gesture/binding transaction immediately;
+the drawing eases on the existing host motion clock and keeps its composition
+rendering until the transition ends. No interpolated ops or semantic signals are
+created. Direct scrubbing bypasses easing. `none` disables it. See
+`component-authoring.md` §9 for the slider's behaviour and verification.
+
+A richer authored component Inspector interface was brainstormed but is not built
+by this change; typed inputs, groups and pin visibility remain its current basis.

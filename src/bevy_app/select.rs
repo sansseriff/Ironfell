@@ -404,12 +404,16 @@ impl SelectionGeometryCache {
                     continue;
                 }
                 for chain in occurrences(doc, view, embeds, id) {
-                    let lit = geo.contexts().get(&chain, chain.len() - 1, Field::LIT);
+                    let lit = geo.contexts().lighting(&chain, chain.len() - 1, selected);
                     let frame = lit == "frame";
                     let shape = match () {
                         _ if lit == "none" => None,
                         _ if frame && boxed.contains(&chain) => None,
                         _ if frame => geo.frame(&chain).map(LitShape::Frame),
+                        _ if lit == "control" => geo.drawables.0.get(&id).and_then(|d| match d.shape {
+                            Shape2d::Slider { w, h, t } => Some(LitShape::Outline(geo.space(&chain)? * geo.world(id), iron_document::slider::thumb(w as f64, h as f64, t as f64).to_path(0.1))),
+                            _ => None,
+                        }),
                         _ => geo.drawables.0.get(&id).and_then(|d| {
                             Some(LitShape::Outline(geo.space(&chain)? * geo.world(id), nest::shape_path(&d.shape)))
                         }),
@@ -1655,6 +1659,12 @@ impl Part {
 /// outermost one whose container the selection is not inside, or the hit
 /// node itself (`deep`).
 fn target_index(cx: &Resolver, chain: &[NodeId], selected: &[&Reach], deep: bool) -> usize {
+    if deep {
+        let normal = target_index(cx, chain, selected, false);
+        if cx.values(chain, normal).is(Field::SELECTION, "modifier") {
+            return normal;
+        }
+    }
     interaction::target(cx, chain, &|i| selected.iter().any(|r| r.chain.len() > i + 1 && r.chain[..=i] == chain[..=i]), deep)
 }
 
@@ -3115,7 +3125,7 @@ pub fn select_tool_system(
 
             let top = top_hit(&hits);
             let shift = mods(MOD_SHIFT);
-            let deep = mods(MOD_META);
+            let deep = mods(MOD_META) || mods(MOD_CTRL);
             let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
             let inside_box = view.dims == Dims::Two
                 && geo.selection_frame(&movers(&reaches, &view.panel)).is_some_and(|f| matches!(grip_at(view.affine() * f, screen, false, false, k * tol.hit), Some(Grip::Body)));
@@ -3244,22 +3254,19 @@ pub fn select_tool_system(
             let track = |chain: &[NodeId]| cx.get(chain, chain.len() - 1, Field::DRAG) == "track";
             let is_slider = view.dims != Dims::Two && track(&chain[..=k]) && drawables.0.get(&id).is_some_and(|d| matches!(d.shape, Shape2d::Slider { .. }));
             let is_3d_target = matches!(source, Source::World(_)) && k + 1 == chain.len();
-            // Using a handle does not select it. The track selects/moves
-            // either a plain slider or its enclosing component.
+            // Input controls operate across the entire track. The selection
+            // modifier bypasses operation and reaches their authoring box.
             let deepest = *chain.last().expect("a chain is never empty");
-            if view.dims == Dims::Two
+            if !deep && view.dims == Dims::Two
                 && track(&chain)
-                && let Some(Shape2d::Slider { w, h, t }) = drawables.0.get(&deepest).map(|d| d.shape.clone())
+                && cx.values(&chain, chain.len() - 1).is(Field::SELECTION, "modifier")
+                && let Some(Shape2d::Slider { .. }) = drawables.0.get(&deepest).map(|d| d.shape.clone())
                 && let Source::Overlay(i) = source
             {
-                let p = hits.overlay[i].space * (view.affine().inverse() * screen);
-                let local = geo.world(deepest).inverse() * p;
-                if iron_document::slider::thumb_hit(w as f64, h as f64, t as f64, local) {
-                    if let Some(m) = manipulate::hand_off(&mut store.0, deepest, view.panel.clone(), hits.overlay[i].space, None, None, true, &pointer, &spatial, &cameras, &views, &planes) {
-                        tool.gesture = Gesture::Edit(m);
-                    }
-                    break 'press;
+                if let Some(m) = manipulate::hand_off(&mut store.0, deepest, view.panel.clone(), hits.overlay[i].space, None, None, true, &pointer, &spatial, &cameras, &views, &planes) {
+                    tool.gesture = Gesture::Edit(m);
                 }
+                break 'press;
             }
             let legacy = view.dims == Dims::Three || through.is_some() || is_3d_target || (is_slider && k + 1 == chain.len());
             if legacy {
@@ -3953,7 +3960,11 @@ pub fn select_tool_system(
             (_, _) if tool.port_hover.is_some() || tool.joint_hover.as_ref().is_some_and(|j| j.2.is_some()) => None,
             (Some(view), Some((chain, _))) if !on_grip && !gizmo_hot => {
                 let here: Vec<&Reach> = reaches.iter().filter(|r| r.panel == view.panel).collect();
-                let k = target_index(&geo.contexts(), &chain, &here, mods(MOD_META));
+                let cx = geo.contexts();
+                let mut k = target_index(&cx, &chain, &here, mods(MOD_META) || mods(MOD_CTRL));
+                if !mods(MOD_META) && !mods(MOD_CTRL) && cx.values(&chain, k).is(Field::SELECTION, "modifier") {
+                    k = chain.len() - 1;
+                }
                 Some(Reach { panel: view.panel.clone(), chain: chain[..=k].to_vec() })
             }
             _ => None,
@@ -4448,7 +4459,7 @@ pub fn draw_select_overlay(
         // How this view's chrome looks (`chrome.*`, its focus context).
         let chrome = focus.chrome(&o.panel);
         let blue = peniko::Color::new(chrome.accent.unwrap_or(BLUE));
-        let hover = tool.hover.as_ref().filter(|_| chrome.hover);
+        let hover = tool.hover.as_ref().filter(|r| chrome.hover && geo.contexts().lighting(&r.chain, r.chain.len() - 1, false) != "none");
         // Only what this panel shows invalidates its cached boxes.
         let stamp = GeometryStamp::new(&store.0, geometry_revision.of_view(geo.doc(), view));
         let to_screen = view.affine();
@@ -4459,13 +4470,25 @@ pub fn draw_select_overlay(
         // The path being edited here shows no box and no selection light:
         // its points are its feedback.
         let editing = edit.path_in(&o.panel).map(Reach::node);
+        // Cross-probing promotes a component part to its entity's figures.
+        // Keep the actual hovered control too, for its local handle feedback.
+        let local_highlights = hover.filter(|h| h.panel == o.panel && geo.contexts().lighting(&h.chain, h.chain.len() - 1, false) == "control")
+            .map(|h| crate::document_bridge::Highlights {
+                selected: highlights.selected.clone(),
+                hovered: highlights.hovered.iter().copied().chain(std::iter::once(h.node())).collect(),
+            });
         let lit: Vec<(peniko::Color, f64, kurbo::BezPath)> = geometry_cache
-            .lit(&geo, view, spatial.embeds(), &highlights, boxed, stamp)
+            .lit(&geo, view, spatial.embeds(), local_highlights.as_ref().unwrap_or(&highlights), boxed, stamp)
             .iter()
             .filter(|m| editing.is_none_or(|e| m.chain.last() != Some(&e)))
             .filter(|m| m.selected || chrome.hover)
             .filter_map(|m| match &m.shape {
                 LitShape::Outline(a, path) => {
+                    if !m.selected && geo.contexts().lighting(&m.chain, m.chain.len() - 1, false) == "control" {
+                        let id = *m.chain.last()?;
+                        let c = geo.store.resolved(id, leaf("slider.color"))?.as_color()?;
+                        return Some((peniko::Color::new(c), k, (to_screen * *a) * path.clone()));
+                    }
                     let c = if m.selected { crate::document_bridge::LIT_SELECTED } else { crate::document_bridge::LIT_HOVERED };
                     let c = chrome.accent.map_or(c, |a| [a[0], a[1], a[2], a[3] * c[3]]);
                     Some((peniko::Color::new(c), 2.0 * k, (to_screen * *a) * path.clone()))
@@ -4477,7 +4500,7 @@ pub fn draw_select_overlay(
             })
             .collect();
         let hover_frame = hover.filter(|h| h.panel == o.panel && !sel.selected.contains(&h.node()))
-            .filter(|h| geo.contexts().get(&h.chain, h.chain.len() - 1, Field::LIT) == "frame")
+            .filter(|h| geo.contexts().lighting(&h.chain, h.chain.len() - 1, false) == "frame")
             .and_then(|h| geometry_cache.hover(&geo, h, stamp));
         let mine = movers(&reaches, &o.panel);
         // Parts' own handles (`chrome.handle`): a dot at each one's origin

@@ -36,6 +36,7 @@ pub mod make;
 pub mod expr;
 pub mod geom;
 pub mod slider;
+mod presentation;
 pub mod geometry;
 pub mod interaction;
 pub mod gesture;
@@ -315,6 +316,7 @@ struct Motion {
     /// The host's clock, seconds, as of its last frame.
     clock: f64,
     anims: BTreeMap<NodeId, Anim>,
+    values: BTreeMap<Leaf, presentation::Tween>,
     /// What layout last asked for: where the transitions are heading.
     targets: BTreeMap<Leaf, Value>,
 }
@@ -1928,6 +1930,7 @@ impl StoreCore {
         self.motion.enabled = enabled;
         if !enabled {
             self.motion.anims.clear();
+            self.clear_presentation();
         }
     }
 
@@ -2082,10 +2085,11 @@ impl StoreCore {
     /// moved, so the host renders them; empty when nothing is in flight.
     pub fn advance_motion(&mut self, now: f64) -> Vec<NodeId> {
         self.motion.clock = now;
+        let mut moving = self.advance_presentation();
         if self.motion.anims.is_empty() {
-            return Vec::new();
+            return moving;
         }
-        let moving: Vec<NodeId> = self.motion.anims.keys().copied().collect();
+        moving.extend(self.motion.anims.keys().copied());
         let mut values = self.motion.targets.clone();
         self.motion.apply(&mut values);
         if values != self.reactive.published_by(ProducerId::LAYOUT) {

@@ -310,6 +310,14 @@ impl Store {
         self.call("set_motion", |s| s.set_motion(enabled))
     }
 
+    pub fn animate_presentation(&mut self, leaf: Leaf, from: f64) {
+        self.call("animate_presentation", |s| s.animate_presentation(leaf, from))
+    }
+
+    pub fn cancel_presentation(&mut self, leaf: Leaf) {
+        self.call("cancel_presentation", |s| s.cancel_presentation(leaf))
+    }
+
     pub fn pin_state(&mut self, pin: Option<machine::Pinned>) {
         self.call("pin_state", |s| s.pin_state(pin.clone()))
     }

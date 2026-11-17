@@ -15,7 +15,7 @@
   <!-- A rect's corners round, an ellipse's arc opens, by their own handles. -->
   <rule match="type:rect|ellipse" affords.grips="box shape"/>
   <!-- A slider is a control: a press on it drives its value. -->
-  <rule match="type:slider" affords.drag="track"/>
+  <rule match="type:slider" affords.drag="track" affords.selection="modifier" chrome.hover_lit="control" motion.value="out 120"/>
   <!-- Containers light as frames; shapes as their outlines. -->
   <rule match="type:group|use|empty|embed" chrome.lit="frame"/>
   <rule match="type:text" affords.edit="text"/>
@@ -28,6 +28,12 @@
   <!-- Its commands (commands.rs): Figma's keys, and Figma's right-click
        menu as far as Iron has the commands. -->
   <rule match="view" keys.commands="mod+alt+g:create-control shift+a:layout alt+shift+c:copy-svg mod+alt+k:make-component ]:front [:back" menu.canvas="copy paste-here copy-svg | ask draw-on | front back | create-control place-pivot show-controls layout make-component"/>
+</context>
+
+<!-- Reusable authoring policy for input components. A template's context
+     applies to its instances; individual controls declare their drag mechanism. -->
+<context name="std:input">
+  <rule match="self" affords.selection="modifier" chrome.hover_lit="none"/>
 </context>
 
 <context name="std:3d">
@@ -125,7 +131,7 @@
      not chain, so it states its own selection rules. -->
 <context name="std:schematic">
   <rule match="type:use|text|path|group|empty|rect|ellipse|slider" affords.select="target" affords.drag="point" snap.target="yes"/>
-  <rule match="type:slider" affords.drag="track"/>
+  <rule match="type:slider" affords.drag="track" affords.selection="modifier" chrome.hover_lit="control" motion.value="out 120"/>
   <!-- A symbol does not stretch; words and drawn shapes do. -->
   <rule match="type:text|rect|ellipse" affords.grips="box"/>
   <rule match="type:use|group|empty" chrome.lit="frame"/>

@@ -74,7 +74,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
-| `slider.ts`, each DPR | ~9 s (2026-11-16) |
+| `slider.ts`, each DPR | ~18–22 s (2026-11-16; includes hover and animation pixel checks) |
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–2.5 min (2m 28s with every test binary relinking, 2026-11-09) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
@@ -3609,22 +3609,27 @@ each DPR directory, alongside light/dark Appearance and narrow-window captures.
 The expected output and fast-smoke assertions are unchanged.
 
 
-## Slider handles and resizing (2026-11-16)
+## Slider handles, track clicks and input authoring (2026-11-16)
 
-`slider.ts` creates a plain slider and a Library instance, then uses the real
-pointer to grab their left/right thumb overhangs outside the nominal bounds.
-Using a thumb leaves selection unchanged; the track selects/moves the control.
-Both plain and Library controls resize with the bottom-right selection grip.
-Captures under `.agents/slider/` cover light/dark at each DPR.
+`slider.ts` creates a plain slider and a Library instance. Real pointer checks
+cover endpoint overhangs, track clicks and drags without selection, single-step
+undo, Mod-click selecting and Mod-drag moving the component without changing its value, operation
+while selected, and bottom-right resize grips on both forms. Pixel checks verify
+that hover has no blue editor box and accents both handles, and that a track jump
+animates its drawing while the semantic value is already at the target. The pixel
+fixture slows those transitions on plain and Library sliders through inline metadata; Rust tests check the
+default 120 ms duration. Captures under `.agents/slider/` cover light/dark at each
+DPR, hover on both forms, and an animation's intermediate and final frames.
 
 ```sh
 bun run .claude/skills/run-iron/slider.ts
 DPR=2 bun run .claude/skills/run-iron/slider.ts
 ```
 
-Expected for each DPR: `PASS slider DPR <1|2>: endpoint grabs, no selection on use,
-track move, plain/library width grips, light/dark; no page errors`. About 9 s each.
-The fast smoke's six assertions and expected output are unchanged.
+Expected for each DPR: `PASS slider DPR <1|2>: endpoint grabs, hover pixels, track
+click/drag and easing, modifier selection, plain/library width grips, light/dark;
+no page errors`. About 18–22 s each. Fast smoke's six assertions and expected
+output are unchanged.
 
 
 ## Narrative chat layout (2026-11-16)

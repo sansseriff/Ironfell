@@ -220,20 +220,37 @@ its default 24 px height. `slider.color`, `slider.track_color` and
 `@slider-thumb`. The built-in accent is warm tan (light `#ae743e`, dark `#d5a06a`);
 all three fields accept custom colours or token bindings. The standard component
 exposes a typed `color | auto` input; Auto follows the theme token. Schema 13 adds
-these fields; older schemas are refused.
+these fields; schema 14 adds template contexts. Older schemas are refused.
 
 One geometry module supplies rendering, SVG export and hit testing. The whole
 visible thumb, including its overhang beyond either endpoint, plus a 3 px grab
 margin, is interactive; spatial broad-phase bounds include that margin. In 2D,
-dragging the thumb edits the value without changing the selection. Clicking or
-dragging the track selects/moves the slider or enclosing instance, so its normal
-selection grips remain available for authoring. There is no extra usage mode.
+normal presses anywhere on the control operate it without changing selection.
+Track clicks set the target immediately and ease the drawn handle for 120 ms
+(`out`); dragging follows directly. Cmd-click (Ctrl-click elsewhere), Layers or
+right-click select it for authoring, retaining the ordinary move/resize grips.
+Hover outlines only the handle in the slider accent colour, with no bounding box.
+There is no extra usage mode.
 The Library slider has a sized template whose child follows its width/height;
 its instance's selection grips now resize the control rather than a fixed box.
 
 Verification: `tests/slider.rs` covers endpoint geometry, palette defaults, theme
 switching, custom colours and reload; `tests/standard.rs` covers Library previews
 and typed placement. SVG export and its golden match the new geometry and colours.
-`run-iron/slider.ts` checks actual endpoint grabs outside the bounds, selection-free
-use, track movement and plain/Library width grips, with light/dark captures at DPR
-1 and 2. Fast smoke passes with unchanged expected output.
+`run-iron/slider.ts` checks endpoint grabs, hover pixels (no editor box, accent
+feedback on plain and Library handles), track clicks/drags, animation pixels,
+modifier selection and plain/Library width grips, with light/dark captures at DPR
+1 and 2. Presentation tests cover immediate semantic output, completion,
+interruption, undo, reload and no authored intermediate frames. Fast smoke passes
+with unchanged expected output.
+
+
+The input policy is context metadata: `affords.selection="modifier"`,
+`chrome.hover_lit="none|control"` (independent of selection's `chrome.lit`), and
+`motion.value="out 120"` (or `none`). The Library slider's template names
+`std:input`; linked instances inherit that template context unless explicitly
+assigned their own. This is reusable by authored controls, without subclasses.
+The numeric presentation tween uses the existing frame clock and motion liveness;
+it marks the drawn control dirty without publishing interpolated semantic values.
+Undo, external changes, direct dragging and disabling motion bypass stale easing.
+SVG export and saved files contain the target value.

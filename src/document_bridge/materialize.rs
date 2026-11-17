@@ -601,7 +601,7 @@ impl Reader<'_> {
                 }
                 "slider" => {
                     let (min, max) = (r.num("slider.min", 0.0), r.num("slider.max", 1.0));
-                    let value = r.num("slider.value", 0.0);
+                    let value = store.presented_number(iron_document::Leaf { node: id, path: "slider.value".parse().unwrap() }).unwrap_or(0.0) as f32;
                     let t = if max > min { ((value - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
                     Shape2d::Slider { w: r.num("size.w", 200.0), h: r.num("size.h", 24.0), t }
                 }

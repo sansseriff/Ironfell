@@ -189,6 +189,9 @@ pub const FIELDS: &[FieldSpec] = &[
         options: &["record", "off"],
         doc: "whether a drag in this view writes keyframes: record (an animated leaf's keys, and with auto-keyframe any leaf's) or off (the leaf itself; the timeline, whose drags edit the animation; match=\"view\")",
     },
+    FieldSpec { domain: "chrome", name: "hover_lit", view: false, kind: Kind::Choice, options: &["inherit", "shape", "frame", "none", "control"], doc: "hover feedback independently of selection lighting; inherit uses chrome.lit, control outlines the input handle" },
+    FieldSpec { domain: "affords", name: "selection", view: false, kind: Kind::Choice, options: &["direct", "modifier"], doc: "direct presses select, or normal presses operate a control while Mod-click selects it for authoring" },
+    FieldSpec { domain: "motion", name: "value", view: false, kind: Kind::Motion, options: &["none"], doc: "presentation easing after a control's track jump: <ease> <ms>; direct dragging bypasses it, and the semantic value changes immediately" },
 ];
 
 /// The inspector's sections (contexts.md §2.7): rich widgets the shell draws,
@@ -241,6 +244,9 @@ impl Field {
     pub const COMMAND_KEYS: Field = Field(30);
     pub const MENU: Field = Field(31);
     pub const ANIMATE_KEYS: Field = Field(32);
+    pub const HOVER_LIT: Field = Field(33);
+    pub const SELECTION: Field = Field(34);
+    pub const VALUE_MOTION: Field = Field(35);
 
     pub fn spec(self) -> &'static FieldSpec {
         &FIELDS[self.0 as usize]
@@ -441,7 +447,13 @@ impl Library {
     fn for_node(&self, doc: Tree<'_>, id: NodeId) -> Option<usize> {
         let ty = doc.live(id)?.ty;
         // A `context` facet names the container's context outright.
-        if let Some(name) = doc.get::<crate::facet::ContextOf>(id).and_then(|c| c.name.constant().and_then(|v| v.as_str()).map(str::to_owned)).filter(|n| !n.is_empty()) {
+        let template = crate::expand::reference_template(doc, id).or_else(|| crate::expand::main_template(doc, id)).or_else(|| {
+            let notation = doc.get::<crate::facet::Use>(id)?.notation.constant()?.as_str()?;
+            let def = crate::expand::linked_definition(doc, crate::expand::use_entity(doc, id)?)?;
+            crate::definition::template_of(doc, def, notation)
+        });
+        let context = doc.get::<crate::facet::ContextOf>(id).or_else(|| template.and_then(|t| doc.get::<crate::facet::ContextOf>(t)));
+        if let Some(name) = context.and_then(|c| c.name.constant().and_then(|v| v.as_str()).map(str::to_owned)).filter(|n| !n.is_empty()) {
             return self.get(&name);
         }
         self.contexts.iter().position(|c| {
@@ -587,6 +599,12 @@ impl<'a> Resolver<'a> {
 
     pub fn get(&self, chain: &[NodeId], i: usize, f: Field) -> String {
         self.values(chain, i).get(f).to_owned()
+    }
+
+    pub fn lighting(&self, chain: &[NodeId], i: usize, selected: bool) -> String {
+        let values = self.values(chain, i);
+        let hover = values.get(Field::HOVER_LIT);
+        if selected || hover == "inherit" { values.get(Field::LIT) } else { hover }.to_owned()
     }
 
     /// What a view offers (contexts.md §2.7), from its focus: the view rules

@@ -145,11 +145,15 @@ struct Wanted {
     /// Every definition what was wanted reads: an owner is expanded again
     /// when one of them is edited (`engine::owners`).
     defs: BTreeSet<NodeId>,
+    /// The owner being expanded alone, and the other owners whose derived
+    /// entities its pictures figure: it is expanded again after them.
+    root: Option<NodeId>,
+    reads: BTreeSet<NodeId>,
 }
 
 impl Wanted {
     fn new(cap: usize) -> Wanted {
-        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new() }
+        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new(), root: None, reads: BTreeSet::new() }
     }
 
     /// Want a node, within the document's budget of derived nodes.
@@ -262,6 +266,7 @@ fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
 /// document would give it.
 fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wanted {
     let mut out = Wanted::new(cap);
+    out.root = Some(owner);
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
     match node.ty.name() {
         "entity" => {
@@ -317,6 +322,8 @@ pub(crate) struct OwnersExpanded {
     pub problems: BTreeMap<NodeId, Vec<Problem>>,
     pub counts: BTreeMap<NodeId, usize>,
     pub defs: Vec<(NodeId, NodeId)>,
+    /// (owner read, owner reading it).
+    pub reads: Vec<(NodeId, NodeId)>,
 }
 
 /// Bring `owners`' derived nodes to what they derive now, and touch
@@ -327,12 +334,13 @@ pub(crate) fn expand_owners(doc: &mut Document, stamp: Version, counts: &Items, 
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
-    let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new() };
+    let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
     for &owner in owners {
         let w = wanted_for(Tree::over(doc), owner, counts, room);
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
         out.defs.extend(w.defs.iter().map(|&d| (d, owner)));
+        out.reads.extend(w.reads.iter().map(|&r| (r, owner)));
         want.extend(w.nodes);
         rels.extend(w.rels);
         problems.extend(w.problems);
@@ -649,6 +657,12 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
 /// main has no entity: references to the definition's body stay on it.
 fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted) {
     out.defs.insert(def);
+    // A picture of another owner's derived entity reads that owner's copy.
+    if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())
+        && out.root.is_some_and(|o| o != r)
+    {
+        out.reads.insert(r);
+    }
     if !out.enter(u) {
         return;
     }
@@ -941,15 +955,30 @@ fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: 
             run(doc, Op::Link { rel }, &mut ops);
         }
     }
-    for op in failed {
-        match op::apply_op(doc, 0, &op, stamp) {
-            Ok(_) => ops.push(op),
-            Err(e) => {
+    // Again while any succeeds: a chain of copies reading each other can
+    // need a pass per link.
+    loop {
+        let before = failed.len();
+        let mut still = Vec::new();
+        let mut errors = Vec::new();
+        for op in std::mem::take(&mut failed) {
+            match op::apply_op(doc, 0, &op, stamp) {
+                Ok(_) => ops.push(op),
+                Err(e) => {
+                    errors.push(e);
+                    still.push(op);
+                }
+            }
+        }
+        if still.is_empty() || still.len() == before {
+            for (op, e) in still.into_iter().zip(errors) {
                 if let Some(node) = op_node(Tree::over(doc), &op) {
                     problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
                 }
             }
+            break;
         }
+        failed = still;
     }
     ops
 }

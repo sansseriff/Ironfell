@@ -754,6 +754,49 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
     24 ms; at 100 meters, 15.2 to 4.4 ms. What is left is mostly the old graph's
     rebuild, which stage 3a removes.
 
+- **Council review of stages 1 and 2 (2026-11-17):** Claude Opus 5.5 6.5/10, GPT Sol
+  6/10. Fixed, each with a test in `tests/owners.rs` or `tests/atomicity.rs` (three
+  of the owner tests fail on `b104047`):
+  - deleting a container now re-expands the pictures of the entities it took;
+  - a `use` in a repeat's template that pictures an outside entity follows it;
+  - an unlinked derived relation is derived again by its owner;
+  - an expansion op that failed is retried while a pass makes progress, not once;
+  - a definition at the document root is indexed like one in a library;
+  - owners whose expansion failed in part are expanded again on every update;
+  - a `use` picturing another owner's derived entity is re-expanded in a second
+    wave (`Owners::readers`);
+  - past the node budget the update falls back to a full expansion in id order,
+    so the cut does not depend on edit history;
+  - `fire_at` writes session state and queues events only once its transaction is
+    accepted;
+  - the unused `StoreCore::set_engine` is gone.
+- **Stage 3a, as built: the old graph updated in place, not a new cell engine.**
+  Under `New`, a structural op no longer rebuilds the graph: `Reactive::restructure`
+  re-reads only the bindings of the nodes the ops touched (with the full inverse, so
+  a cascade's nodes are seen), compares the signals connections and anchors derive
+  with what they were, raises heights locally (§6.3) and evaluates what changed and
+  what reads it. `@name` readers are resolved again only when an op can move a
+  provider. `settle_repeats` and `apply_session` take the same path. This departs
+  from this section's plan (dense cell arrays ported from the kernel). The reason:
+  the old graph's rebuild is what 2b's plot targets need gone, and an in-place update
+  keeps every evaluation rule (tracked reads, cycles, boundary checks, messages)
+  identical by construction. The dense engine stays the plan for where measurement
+  shows the old graph's per-read cost matters, and for 2c, where cells evaluate from
+  templates.
+  - Measured (`plot_perf.rs`, native release, load about 2): a step that changes the
+    tick count, `InPlace` against `New`:
+
+    | | pan, 1 plot | zoom, 1 plot | pan, 10 plots | zoom, 10 plots |
+    |---|---|---|---|---|
+    | `InPlace` | 1.34 ms | 1.42 ms | 8.62 ms | 9.02 ms |
+    | `New` | 0.41 ms | 0.60 ms | 0.57 ms | 0.82 ms |
+    | values only (`New`) | 0.10 ms | 0.32 ms | 0.16 ms | 0.41 ms |
+
+    The 2× target holds for zoom and not yet for pan (3.9× and 3.6×).
+  - Found on the way: a set on a port's `datatype` changes what its binding's
+    boundary check accepts with no change of expression; a touched node's own
+    bindings now always run again (`tests/rederive.rs`).
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

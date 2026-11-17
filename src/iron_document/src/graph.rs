@@ -21,8 +21,10 @@
 //! evaluated again; a tracked read that reaches its own binding is an
 //! error on that leaf, since the applier cannot refuse it ahead of time.
 
-use crate::Tree;
+use crate::{NodeId, Tree};
 use crate::expr::{Expr, Leaf};
+use crate::facet::FacetKind;
+use crate::value::Slot;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -115,6 +117,11 @@ pub struct Reactive {
     /// Expressions evaluated since construction. Tests use it to check that
     /// the schedule is glitch-free and the cutoff works.
     pub evaluations: u64,
+    /// The signals connections and anchors derive, as last computed: what
+    /// `restructure` compares against.
+    derived: BTreeMap<Leaf, Expr>,
+    /// Bound leaves whose expression reads context (`@name`).
+    token_readers: BTreeSet<Leaf>,
 }
 
 impl Reactive {
@@ -262,18 +269,23 @@ impl Reactive {
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
+        self.token_readers.clear();
         // Stored bindings, then the signals connections derive (`port`):
         // an in-port reads its partner, evaluated like any binding; then
         // anchors' positions and followers' placements (`anchor`).
         let mut derived = crate::port::derived_signals(doc);
         derived.extend(crate::anchor::derived(doc));
+        self.derived = derived.iter().cloned().collect();
         let tokens = crate::palette::leaves(doc);
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let mut deps = expr.deps();
             // `@name` reads the nearest provider above this node, a colour
             // token at the root (palette.rs).
-            let ctx: BTreeMap<String, Leaf> =
-                expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
+            let names = expr.tokens();
+            if !names.is_empty() {
+                self.token_readers.insert(leaf);
+            }
+            let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
             deps.extend(ctx.values().copied());
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(leaf);
@@ -309,6 +321,169 @@ impl Reactive {
         }
         let all: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.evaluate(doc, &all, &all);
+    }
+
+    /// Bring the graph up to date after structure changed at `nodes` (made,
+    /// removed, rebound, given or stripped of facets), without the rebuild
+    /// (reactive-engine handoff §4.4, stage 3a): only those nodes' bindings
+    /// are read again, the signals connections and anchors derive are
+    /// compared with what they were, heights are raised where an edge needs
+    /// it, and what changed and what reads it are evaluated. With `rescope`
+    /// (a provider may have moved), every `@name` reader is resolved again.
+    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool) {
+        let first = *FacetKind::ALL.iter().min().expect("facet kinds");
+        let start = |n: NodeId| Leaf { node: n, path: crate::facet::LeafPath { facet: first, field: "" } };
+        let mut derived: Vec<(Leaf, Expr)> = crate::port::derived_signals(doc);
+        derived.extend(crate::anchor::derived(doc));
+        let derived: BTreeMap<Leaf, Expr> = derived.into_iter().collect();
+        // The leaves to look at again: every binding the nodes had or have,
+        // and every derived signal that came, went or changed.
+        let mut look: BTreeSet<Leaf> = BTreeSet::new();
+        for &n in nodes {
+            look.extend(self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
+            if doc.is_live(n) {
+                for f in doc.facets_of(n) {
+                    for field in f.field_names() {
+                        if f.get(field).and_then(Slot::expr).is_some() {
+                            look.insert(Leaf { node: n, path: crate::facet::LeafPath::new(f.kind(), field).expect("declared field") });
+                        }
+                    }
+                }
+            }
+        }
+        for (l, e) in &derived {
+            if self.derived.get(l) != Some(e) {
+                look.insert(*l);
+            }
+        }
+        look.extend(self.derived.keys().filter(|l| !derived.contains_key(l)).copied());
+        self.derived = derived;
+        let tokens = crate::palette::leaves(doc);
+        let mut primed: BTreeSet<Leaf> = BTreeSet::new();
+        let mut made: Vec<Leaf> = Vec::new();
+        for leaf in look {
+            // A derived signal takes precedence over a stored binding, as the
+            // rebuild's later insert does.
+            let want: Option<Expr> = self.derived.get(&leaf).cloned().or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
+            match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
+                (Some(old), Some(e)) if *old == e => {}
+                (_, Some(e)) => {
+                    self.set_cell(doc, leaf, e, &tokens);
+                    made.push(leaf);
+                    primed.insert(leaf);
+                }
+                (Some(_), None) => {
+                    self.drop_cell(leaf);
+                    // It reads as its constant again; say so, and its readers
+                    // read that.
+                    self.resolved.remove(&leaf);
+                    self.errors.remove(&leaf);
+                    if let Some(v) = self.read(doc, leaf) {
+                        self.note(leaf, v);
+                    }
+                    primed.extend(self.dependents.get(&leaf).into_iter().flatten().copied());
+                }
+                (None, None) => {}
+            }
+        }
+        if rescope {
+            let readers: Vec<Leaf> = self.token_readers.iter().copied().collect();
+            for leaf in readers {
+                let Some(node) = self.nodes.get(&leaf) else { continue };
+                let ctx: BTreeMap<String, Leaf> = node.expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
+                if ctx != node.ctx {
+                    let expr = node.expr.clone();
+                    self.set_cell(doc, leaf, expr, &tokens);
+                    made.push(leaf);
+                    primed.insert(leaf);
+                }
+            }
+        }
+        // Every leaf of a touched node: a constant set, a node made or gone.
+        // Its own bindings run again (what they check, a port's `datatype`,
+        // may have changed with no change of expression), and its readers
+        // read again.
+        for &n in nodes {
+            let own: Vec<Leaf> = self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).collect();
+            primed.extend(own);
+            let readers: Vec<Leaf> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
+            primed.extend(readers);
+        }
+        primed.retain(|l| self.nodes.contains_key(l));
+        if !self.raise(&made) {
+            self.compute_heights();
+        }
+        let mut dirty = primed.clone();
+        let mut stack: Vec<Leaf> = primed.iter().copied().collect();
+        while let Some(l) = stack.pop() {
+            if let Some(ds) = self.dependents.get(&l) {
+                for d in ds {
+                    if self.nodes.contains_key(d) && dirty.insert(*d) {
+                        stack.push(*d);
+                    }
+                }
+            }
+        }
+        self.evaluate(doc, &dirty, &primed);
+    }
+
+    /// Make or replace the cell for `leaf`, reading `expr`.
+    fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: Expr, tokens: &BTreeMap<String, Leaf>) {
+        self.drop_cell(leaf);
+        let mut deps = expr.deps();
+        let names = expr.tokens();
+        if !names.is_empty() {
+            self.token_readers.insert(leaf);
+        }
+        let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, tokens).map(|l| (n, l))).collect();
+        deps.extend(ctx.values().copied());
+        for d in &deps {
+            self.dependents.entry(*d).or_default().insert(leaf);
+        }
+        let mut tracks = false;
+        expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
+        tracks |= crate::types::declared(doc, leaf).is_some();
+        let height = 1 + deps.iter().filter_map(|d| self.nodes.get(d).map(|n| n.height)).max().unwrap_or(0);
+        self.nodes.insert(leaf, BoundNode { expr, deps, ctx, tracks, tracked: BTreeSet::new(), height });
+    }
+
+    /// Remove `leaf`'s cell and its edges.
+    fn drop_cell(&mut self, leaf: Leaf) {
+        let Some(old) = self.nodes.remove(&leaf) else { return };
+        for d in old.deps.iter().chain(&old.tracked) {
+            if let Some(ds) = self.dependents.get_mut(d) {
+                ds.remove(&leaf);
+                if ds.is_empty() {
+                    self.dependents.remove(d);
+                }
+            }
+        }
+        self.token_readers.remove(&leaf);
+    }
+
+    /// Raise the readers of `made` until every edge goes upward (spec
+    /// §6.3). `false` when that would not end: the caller relaxes the whole
+    /// graph instead.
+    fn raise(&mut self, made: &[Leaf]) -> bool {
+        let mut stack: Vec<Leaf> = made.to_vec();
+        let mut budget = self.nodes.len().saturating_mul(2) + 64;
+        while let Some(l) = stack.pop() {
+            let Some(h) = self.nodes.get(&l).map(|n| n.height) else { continue };
+            let readers: Vec<Leaf> = self.dependents.get(&l).into_iter().flatten().copied().collect();
+            for r in readers {
+                if let Some(rn) = self.nodes.get_mut(&r)
+                    && rn.height <= h
+                {
+                    if budget == 0 {
+                        return false;
+                    }
+                    budget -= 1;
+                    rn.height = h + 1;
+                    stack.push(r);
+                }
+            }
+        }
+        true
     }
 
     /// The values of `changed` leaves moved (a constant was set, or the

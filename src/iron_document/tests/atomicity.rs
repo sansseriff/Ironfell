@@ -141,3 +141,36 @@ fn a_failed_action_queues_no_emit() {
     assert!(err.contains("toggle needs a yes/no value"), "{err}");
     assert!(store.take_emitted().is_empty(), "the failed action's event is not queued");
 }
+
+/// An action whose document write is refused writes no session state: the
+/// session writes wait for the transaction (Opus review of stage 2).
+#[test]
+fn a_refused_action_writes_no_session_state() {
+    let (mut store, comp) = sheet();
+    // Two fixed points held 40 apart: moving either cannot be solved.
+    let markup = r#"<let id="$hot" name="hot" keep="session" value="false"/>
+        <group id="$g" name="button"><rect id="$bar" x="0" y="0" w="80" h="24"/>
+          <on event="click" target="$hot" to="true"/>
+          <on event="click" target="$q" prop="transform2d.x" to="100"/>
+        </group>
+        <ellipse id="$p" x="0" y="0" rx="5" ry="5"/><ellipse id="$q" x="40" y="0" rx="5" ry="5"/>
+        <constraint id="$fp" kind="fix" value="0"/><constraint id="$fq" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#;
+    let (mut ops, n) = draw(&store, comp, markup);
+    let rels = store.authored().next_relation_ids(4);
+    let link = |id: RelationId, from: NodeId, to: NodeId, role: &str| {
+        let mut data = BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str(role.into()));
+        data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+        Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
+    };
+    ops.push(link(rels[0], n["fp"], n["p"], "a"));
+    ops.push(link(rels[1], n["fq"], n["q"], "a"));
+    ops.push(link(rels[2], n["d"], n["p"], "a"));
+    ops.push(link(rels[3], n["d"], n["q"], "b"));
+    store.apply(tx("button", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let hot: LeafPath = "let.value".parse().unwrap();
+    assert_eq!(store.resolved(n["hot"], hot), Some(Value::Bool(false)));
+    let err = store.fire(n["bar"], "click", Actor::Human, 0).unwrap_err();
+    assert!(!err.is_empty());
+    assert_eq!(store.resolved(n["hot"], hot), Some(Value::Bool(false)), "the refused action wrote no session state");
+}

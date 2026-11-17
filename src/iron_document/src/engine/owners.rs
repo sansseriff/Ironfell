@@ -31,6 +31,9 @@ pub(crate) struct Owners {
     counts: BTreeMap<NodeId, usize>,
     /// Definition -> owners whose expansion read it. Only grows.
     by_def: BTreeMap<NodeId, BTreeSet<NodeId>>,
+    /// Owner -> owners whose pictures figure its derived entities. Only
+    /// grows.
+    readers: BTreeMap<NodeId, BTreeSet<NodeId>>,
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -40,23 +43,62 @@ pub(crate) struct Delta {
     problems: BTreeMap<NodeId, Vec<Problem>>,
     counts: BTreeMap<NodeId, usize>,
     defs: Vec<(NodeId, NodeId)>,
+    reads: Vec<(NodeId, NodeId)>,
+}
+
+impl Delta {
+    fn add(&mut self, d: expand::OwnersExpanded) {
+        self.problems.extend(d.problems);
+        self.counts.extend(d.counts);
+        self.defs.extend(d.defs);
+        self.reads.extend(d.reads);
+    }
+
+    fn has_budget_problem(&self) -> bool {
+        self.problems.values().flatten().any(|p| p.kind == "budget")
+    }
 }
 
 impl Owners {
     /// Expand `which` again in `doc`: the ops applied, and what to record.
     pub(crate) fn expand(&self, doc: &mut Document, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
-        let (all, owners) = match which {
-            Which::All => (true, expand::top_owners(Tree::over(doc))),
-            Which::Some(set) => (false, set),
-        };
-        // Owners may derive the budget less what the others hold, taken in
-        // id order. Past the budget the cut falls per owner, not in the old
-        // engine's global order: a difference only past 50,000 derived
-        // nodes, recorded in the handoff (§4.4, stage 2) for the user.
-        let held: usize = if all { 0 } else { self.counts.iter().filter(|(o, _)| !owners.contains(o)).map(|(_, n)| n).sum() };
-        let done = expand::expand_owners(doc, stamp, counts, &owners, expand::NODE_BUDGET.saturating_sub(held));
-        let delta = Delta { all, problems: done.problems, counts: done.counts, defs: done.defs };
-        (done.ops, delta)
+        let Which::Some(mut todo) = which else { return self.expand_all(doc, stamp, counts) };
+        // Owners whose last expansion failed in part are tried again: what
+        // failed may depend on something outside them that has changed.
+        todo.extend(self.problems.iter().filter(|(_, ps)| ps.iter().any(|p| matches!(p.kind, "expansion" | "budget"))).map(|(o, _)| *o));
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        let mut ops = Vec::new();
+        let mut done: BTreeSet<NodeId> = BTreeSet::new();
+        // Each wave expands the owners whose pictures read what the last one
+        // changed.
+        while !todo.is_empty() {
+            let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
+            let held = held.min(expand::NODE_BUDGET);
+            let wave = expand::expand_owners(doc, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
+            ops.extend(std::mem::take(&mut { wave.ops.clone() }));
+            delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
+            done.extend(todo.iter().copied());
+            let reading = |o: &NodeId| self.readers.get(o).into_iter().flatten().copied().chain(delta.reads.iter().filter(move |(r, _)| r == o).map(|(_, w)| *w)).collect::<Vec<_>>();
+            todo = done.iter().flat_map(reading).filter(|o| !done.contains(o)).collect();
+        }
+        // Past the budget the cut must not depend on edit history: expand
+        // everything, in id order.
+        if delta.has_budget_problem() || self.problems.values().flatten().any(|p| p.kind == "budget") {
+            let (more, all) = self.expand_all(doc, stamp, counts);
+            ops.extend(more);
+            return (ops, all);
+        }
+        (ops, delta)
+    }
+
+    /// Every owner, in id order.
+    fn expand_all(&self, doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
+        let owners = expand::top_owners(Tree::over(doc));
+        let mut done = expand::expand_owners(doc, stamp, counts, &owners, expand::NODE_BUDGET);
+        let ops = std::mem::take(&mut done.ops);
+        let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        delta.add(done);
+        (ops, delta)
     }
 
     /// Record what an accepted expansion found.
@@ -81,6 +123,9 @@ impl Owners {
         }
         for (def, o) in d.defs {
             self.by_def.entry(def).or_default().insert(o);
+        }
+        for (read, o) in d.reads {
+            self.readers.entry(read).or_default().insert(o);
         }
     }
 
@@ -113,18 +158,29 @@ impl Owners {
                 }
                 at = doc.node(n).and_then(|x| x.parent);
             }
-            if expand::in_library(doc, id) {
-                match expand::definition_of(doc, id) {
-                    Some(def) => out.extend(self.by_def.get(&def).into_iter().flatten().copied()),
-                    // The library itself, or something outside any definition.
-                    None => return true,
-                }
+            // A definition anywhere, in a library or at the root.
+            match expand::definition_of(doc, id) {
+                Some(def) => out.extend(self.by_def.get(&def).into_iter().flatten().copied()),
+                // The library itself, or something in it outside any
+                // definition.
+                None if expand::in_library(doc, id) => return true,
+                None => {}
             }
             false
         };
-        // An entity's pictures follow it.
-        let pictures = |entity: NodeId, out: &mut BTreeSet<NodeId>| {
-            out.extend(doc.relations_to(entity).filter(|r| r.rel == RelKind::Figures).map(|r| r.from));
+        // An entity's pictures follow it: each picture, and the owners
+        // around it (a picture in a repeat's template is copied into its
+        // items). A derived picture is its top owner's.
+        let pictures = |entity: NodeId, out: &mut BTreeSet<NodeId>| -> bool {
+            let mut all = false;
+            for u in doc.relations_to(entity).filter(|r| r.rel == RelKind::Figures).map(|r| r.from).collect::<Vec<_>>() {
+                if u.is_expanded() {
+                    out.extend(u.path().first().copied());
+                } else {
+                    all |= touch(u, out);
+                }
+            }
+            all
         };
         let is_structure_type = |id: NodeId| doc.node(id).is_some_and(|n| matches!(n.ty.name(), "definition" | "library"));
         let mut all = false;
@@ -133,24 +189,24 @@ impl Owners {
                 Op::Create { id, .. } | Op::Delete { id } => {
                     all |= is_structure_type(*id);
                     all |= touch(*id, &mut out);
-                    pictures(*id, &mut out);
+                    all |= pictures(*id, &mut out);
                 }
                 Op::AddFacet { id, facet } => {
                     all |= expand::owns_items(facet.kind()) || is_structure_type(*id);
                     all |= touch(*id, &mut out);
-                    pictures(*id, &mut out);
+                    all |= pictures(*id, &mut out);
                 }
                 Op::RemoveFacet { id, kind } => {
                     all |= expand::owns_items(*kind) || is_structure_type(*id);
                     all |= touch(*id, &mut out);
-                    pictures(*id, &mut out);
+                    all |= pictures(*id, &mut out);
                 }
                 Op::Set { id, path, .. } => {
                     let shapes = matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || expand::in_library(doc, *id) || expand::in_repeat_template(doc, *id);
                     if shapes {
                         all |= touch(*id, &mut out);
                         if path.facet == FacetKind::Instance {
-                            pictures(*id, &mut out);
+                            all |= pictures(*id, &mut out);
                         }
                     }
                 }
@@ -172,10 +228,13 @@ impl Owners {
             match op {
                 Op::Create { id, .. } if !id.is_expanded() => {
                     all |= touch(*id, &mut out);
+                    all |= pictures(*id, &mut out);
                 }
                 Op::Link { rel } if !rel.id.is_expanded() => {
                     all |= touch(rel.from, &mut out);
                 }
+                // A derived relation unlinked: its owner derives it again.
+                Op::Link { rel } => out.extend(rel.id.root()),
                 _ => {}
             }
         }

@@ -516,18 +516,50 @@ impl StoreCore {
         self.engine
     }
 
-    /// Choose how this store applies transactions: the differential
-    /// harness's reference runs `Old`, and a scratch store follows the store
-    /// it was made from.
-    pub fn set_engine(&mut self, engine: Engine) {
-        debug_assert!(!self.doc.journal_open(), "a transaction is open");
-        self.engine = engine;
-    }
-
     /// A scratch store over a copy of this one's document, applying
     /// transactions the way this one does.
     pub(crate) fn scratch(&self) -> StoreCore {
         StoreCore::with_engine(self.doc.clone(), self.engine)
+    }
+
+    /// Bring the graph up to date after structure changed through `ops`:
+    /// the old engine rebuilds it whole; the new one updates what the ops
+    /// touched (reactive-engine handoff §4.4, stage 3a).
+    fn regraph<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        if self.engine != Engine::New {
+            self.reactive.rebuild(Tree::over(&self.doc));
+            return;
+        }
+        let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
+        let mut rescope = false;
+        let doc = Tree::over(&self.doc);
+        for op in ops {
+            match op {
+                Op::Create { id, .. } | Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } | Op::Reorder { id, .. } => {
+                    nodes.insert(*id);
+                }
+                Op::Reparent { id, .. } => {
+                    nodes.insert(*id);
+                    rescope = true;
+                }
+                Op::Link { rel } => {
+                    nodes.insert(rel.from);
+                    nodes.insert(rel.to);
+                }
+                Op::Unlink { .. } => {}
+            }
+            // What can move a provider (`@name`): a let or a token made,
+            // removed or renamed, a provide flag set.
+            rescope |= match op {
+                Op::Create { ty, .. } => matches!(ty.name(), "let" | "token"),
+                Op::Delete { id } => doc.node(*id).is_some_and(|n| matches!(n.ty.name(), "let" | "token")),
+                Op::Set { path, .. } => names_context(path),
+                Op::AddFacet { facet, .. } => matches!(facet.kind(), FacetKind::Let | FacetKind::Name),
+                Op::RemoveFacet { kind, .. } => matches!(kind, FacetKind::Let | FacetKind::Name),
+                _ => false,
+            };
+        }
+        self.reactive.restructure(doc, &nodes, rescope);
     }
 
     /// Store what an accepted expansion found.
@@ -1539,7 +1571,7 @@ impl StoreCore {
         self.geometry.note_ops(ops.iter());
         if structural {
             self.repeat_inputs = None;
-            self.reactive.rebuild(Tree::over(&self.doc));
+            self.regraph(ops.iter().chain(&undo));
         } else {
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
             if !changed.is_empty() {
@@ -1587,6 +1619,7 @@ impl StoreCore {
         let when = LeafPath::new(facet::FacetKind::When, "is").expect("declared leaf");
         // A round per level of nesting, and one more to see nothing change.
         for round in 0..=expand::DEPTH_MAX + 1 {
+            let mut round_start = applied.len();
             let repeats: Vec<NodeId> = match &self.repeat_inputs {
                 Some(known) => known.iter().map(|k| k.0).collect(),
                 None => expand::drawn_repeats(Tree::over(&self.doc)),
@@ -1698,6 +1731,7 @@ impl StoreCore {
                     expand::sort_problems(&mut self.expansion_problems);
                 }
                 self.geometry.note_ops(ops.iter());
+                round_start = applied.len();
                 applied.extend(ops);
             }
             if values != self.reactive.published_by(ProducerId::ITEMS) {
@@ -1708,7 +1742,8 @@ impl StoreCore {
             if structural {
                 // New items may hold repeats: look again.
                 self.repeat_inputs = None;
-                self.reactive.rebuild(Tree::over(&self.doc));
+                let these: Vec<Op> = applied[round_start..].to_vec();
+                self.regraph(these.iter());
                 self.resample();
                 self.publish_state();
             }
@@ -1915,17 +1950,19 @@ impl StoreCore {
                 ops.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
             }
         }
+        // The document writes first: session state is written, and the
+        // events queued, only once the transaction is accepted.
+        let applied = if ops.is_empty() {
+            None
+        } else {
+            let label = label.unwrap_or_else(|| event.to_owned());
+            Some(self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?)
+        };
         for (leaf, value) in session {
             self.set_state(leaf, value)?;
         }
-        if ops.is_empty() {
-            self.emitted.extend(emits);
-            return Ok(None);
-        }
-        let label = label.unwrap_or_else(|| event.to_owned());
-        let applied = self.apply(TransactionInput { label, actor, ts, idempotency_key: None, ops, exact: false }).map_err(|errors| errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
         self.emitted.extend(emits);
-        Ok(Some(applied))
+        Ok(applied)
     }
 
     /// A continuous event on `node`: `drag` (the pointer moved while held)
@@ -2591,7 +2628,9 @@ impl StoreCore {
     }
 
     /// Keep the graph in step with a transaction that just applied.
-    fn after_transaction(&mut self, tx: &mut Transaction) {
+    /// `full_inverse` is everything the transaction took or replaced,
+    /// derived nodes included (a deleted entity's ports).
+    fn after_transaction(&mut self, tx: &mut Transaction, full_inverse: &[Op]) {
         // Outside a gesture the overlay holds only a live solve's pose (a
         // producer's publish or a playhead move re-solves the clusters).
         // Nothing else owns it, so it would shadow what this transaction
@@ -2611,7 +2650,7 @@ impl StoreCore {
             _ => false,
         });
         if structural {
-            self.reactive.rebuild(Tree::over(&self.doc));
+            self.regraph(tx.ops.iter().chain(full_inverse).chain(tx.expanded.iter()));
             self.resample();
         } else {
             // What re-expansion wrote counts too: an override updated in
@@ -2730,7 +2769,7 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&mut tx);
+        self.after_transaction(&mut tx, &full_inverse);
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
             Err(e) => {
@@ -2793,7 +2832,7 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&mut applied);
+        self.after_transaction(&mut applied, &full_inverse);
         self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -2831,7 +2870,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&mut applied);
+                self.after_transaction(&mut applied, &full_inverse);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -2875,7 +2914,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&mut applied);
+                self.after_transaction(&mut applied, &full_inverse);
                 self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());

@@ -437,7 +437,7 @@ failure stay as they are.
 
 Written 2026-11-16 from the spec's §11 and §17 and the code at `bf7d13f`. Revised the
 same day after a council review (Claude Opus 5.5 and GPT-6.1 Sol; round 1: 6 and
-6/10, round 2: 8 and 9/10, round 3: 8 and 10/10, its last four points applied). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
+6/10, round 2: 8 and 9/10, round 3: 8 and 10/10; round 4, Opus only: 9/10, its two wording points applied). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
 are private, `facet_mut` has one caller (`op.rs` `set`), `expand` and `settle_repeats`
 write through `apply_op`, and load and `set_scope` never run inside a transaction.
 
@@ -458,7 +458,7 @@ last past the call that caused it. Building that mechanism is not 2a's work.
 - `StoreCore` holds which one it runs; only `run` and its callers (`apply_now`,
   `undo`, `redo`, `replay`) look at it. The facade sets it with `set_engine`, which
   `debug_assert!`s that no journal is open; `new`, `with_document` and `load` default
-  to `InPlace`. `engine()` is available without the feature. Scratch stores built
+  to `InPlace`. `engine()` and `set_engine` are available without the feature. Scratch stores built
   from a store (`edit.rs`, `compose.rs`, and the two in `parts.rs` that call
   `StoreCore::with_document(store.authored().clone())`) take the parent's engine
   (`set_engine(store.engine())`), so the reference's scratch work stays `Old`. Without the `differential` feature, `Store`
@@ -509,7 +509,9 @@ bring back part of the cost this phase removes.
 - Derive `PartialEq` for `Document`, so tests compare every field, indexes included.
   The journal and the shadow clone below are `Document` fields (the mutators write
   the journal) kept outside that comparison and outside `Clone`: a wrapper whose
-  `PartialEq` is always true and whose `Clone` is empty.
+  `PartialEq` is always true and whose `Clone` is empty. The shadow is boxed
+  (`Option<Box<Document>>`, since it is a `Document` inside one), and the wrapper's
+  `Debug` prints a short summary rather than a second document.
 - **Under the `differential` feature, `begin` keeps a shadow clone** and `rollback`
   asserts `==` against it, and `check_invariants()`. Every failing call in the suite
   and in the 10,000 seeds then checks rollback at the level of the maps, which the

@@ -5,10 +5,10 @@
 and its decisions settled. **Phases 0, 1 and 2a are done** (2026-11-16; §2):
 baselines, the differential harness, the host reference, the read contract (`Tree`,
 `take_changes()`), and transactions applied in place with a document journal, all on
-the old engine. Nothing of the new engine is built. The current task is **phase 2b**,
-whose tasks are still to be written (§2). This file is for whoever builds it: what to read, the order of
+the old engine. Nothing of the new engine is built. The current task is **phase 2b**
+(§4.4), whose task list awaits its council review. This file is for whoever builds it: what to read, the order of
 work, the phases as tasks, and the rules. Phases 0 to 2 are ready to build;
-phases 3, 4 and 5 each have design points to settle first (§4.4).
+phases 3, 4 and 5 each have design points to settle first (§4.5).
 
 ## 0. Read first, in this order
 
@@ -140,7 +140,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
 | 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
-| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks to be written here first, split further and put through a council review before building (the phase 0–2 readiness review, 2026-11-16) |
+| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks in §4.4, in six stages; council review before building |
 | 2c | Copies leave the document: instances as references | |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
 | 4 | Observation: Dormant, Unloaded, parking, extents | |
@@ -665,7 +665,234 @@ and the drop (10.5 ms) go and the journal costs well under 1 ms. Report it if no
 - the journal's measured cost is more than a third of what the clone cost;
 - a difference between the strategies appears that this section does not explain.
 
-### 4.4 Before phases 3, 4 and 5
+### 4.4 Phase 2b: the new graph, copies still stored
+
+The point: the plot fix. A change to a repeat's items, or any structural transaction,
+stops re-expanding the document and rebuilding the graph; it costs the owners and cells
+it reaches (the spec's G1). The new engine replaces `graph.rs`, `expand::expand` and
+`settle_repeats`. Derived nodes are still written into the document, so every reader
+and the comparison with the old engine stay exact (the spec's §17). Written 2026-11-16
+from the spec (§5–§7, §11, §14 A2, A3 and A5, §15, §16) and the code at `d9ec4ea`,
+before a council review.
+
+**Stages.** 2b is the largest phase, so it is built in six stages. Each ends green on
+the differential suite and is committed and pushed. Stages 1, 2 and 5 are useful on
+their own; 3 is the plot fix; 6 swaps the default and deletes the old engine.
+
+**Three decisions that shape it** (for the review):
+- **One type in front of both graphs.** `StoreCore`'s `reactive` becomes
+  `enum Graph { Old(graph::Reactive), New(engine::Engine) }`. Its methods are the read
+  surface the crate and host call on `Reactive` today: `read`, `signal(s)`,
+  `is_driven`, `driven_by`, `published_by`, `publish`, `retract`, `signal_errors`,
+  `expr_of`, `is_bound`, `is_read`, `errors`, `overlay`, `preview`, `unpreview`,
+  `clear_overlay`, `contexts`, `transitive_deps`, `mark`, and the pending sets behind
+  `take_changes`. Each has the same meaning. Callers do not branch.
+- **`Engine` says which graph a store runs**, as well as how it applies transactions:
+  `Old` (clone, old graph), `InPlace` (2a's journal, old graph), and `New` (journal,
+  new engine). The app stays on `InPlace` until stage 6, so each stage can land
+  without changing what the app runs. The facade's subject runs whatever the stage is
+  building, and its reference stays `Old`.
+- **Atomicity fixes go into both engines,** as in 2a. If only the new engine restored
+  everything after a refusal, the stores would diverge after every refusal, and that
+  is not on the spec's §16.1 list. So each `NOT_ATOMIC` entry is fixed in shared code
+  first (stage 5), and `INTENDED` holds only §16.1's behavioural differences.
+
+**Stage 1. Intended differences the harness can run.** `INTENDED` is descriptive today:
+`Store::call` diffs whole snapshots and reads neither table.
+- Each `Intended` entry gets an executable form, which is one of:
+  - a **normaliser** applied to both snapshots before every comparison (for a
+    difference that is global and harmless, like message text);
+  - a **divergence test** on one call's results. When it matches, the facade records
+    the entry by name, stops comparing that script from then on, and counts it.
+    Continuing would compare two stores that legitimately differ, as round 1 of the
+    2a council found: an accepted-versus-refused transaction leaves different ids and
+    nodes behind it.
+- Any difference no entry explains still panics.
+- The entries 2b needs, all on §16.1's list:
+  - the text of problem and error messages, normalised: problems compared by
+    `(node, kind)` and errors by leaf;
+  - ops emitted for derived structure (`Transaction::expanded` and the derived part
+    of `inverse`), normalised away;
+  - a derived id inside an item validates by its template path: a divergence, when
+    the subject accepted and the reference refused, naming an item id that does not
+    exist;
+  - the old engine's text comparison of NaN inputs, its 4-round machine loop and its
+    129-round cut, each a divergence test written when the case is first met.
+- Tests: an injected unlisted difference panics; each listed one is relaxed only in
+  its narrow form; a divergence ends comparison for that script only.
+- Report the number of scripts each divergence ended, in the 10,000-seed run. If a
+  divergence ends most scripts, the run is weaker than it looks; report that.
+
+**Stage 2. Templates and owners, replacing the whole-document expansion.**
+- **`engine/template.rs`.** Compile a `Template` per (definition, notation, sized, main)
+  and per Collection, including Collections inside templates (today's
+  `template_of_repeat`). It must reproduce what `want_entity`, `want_use`,
+  `rewritten`, `apply_overrides` and `template_of_repeat` produce, exactly:
+  - `port_spec` becomes `port`, each `in` port with a binding to the instance's
+    argument;
+  - `Value::Ref` constants are relocated per owner;
+  - a picture's references into the body go to the entity's body owner, or stay on
+    the definition for a main;
+  - references to the template root go to the `use` in a sized `use`;
+  - machines are copied;
+  - an override's facet is added where the type admits it.
+- **`engine/owner.rs`.**
+  - The owner tree: Root, Composition, Body, Picture, Collection and Item.
+  - An index from template to owners, and overrides indexed per owner by target.
+  - Nested owners are found from effective slots (§5.4), so an override of
+    `instance.def` or `use.notation` reconciles that child.
+  - Depth and budget limits as `Wanted::enter` and `push` apply them (§7.5).
+- **Owners write their copies into the document** through `apply_op` while the
+  journal is open. The ids are `expand`'s path ids, unchanged. Each write is noted in
+  the store's pending `Changes`, never in a transaction's ops or history.
+  - A new owner writes its nodes; disposal deletes them deepest first.
+  - A recompiled template writes only what changed, in each owner of it.
+- **Which owners an op affects** is the spec's §7.2 table, mapped from each applied
+  op. Nothing else is visited. This replaces `affected_by` and the whole-document diff
+  in `expand::expand`.
+- In this stage Collections' keys still come from `settle_repeats`' rounds, which
+  hand each Collection whose keys changed to the owner layer, in place of calling
+  `expand::expand`.
+- **Problems.** Expansion problems are held per owner. `expansion_problems()` returns
+  them in `expand`'s order: entities by id, then uses, then scopes. If that order
+  cannot be kept naturally, stop and report rather than add a normaliser, since order
+  is not on §16.1's list.
+- Exit:
+  - the differential suite is green with the subject on `InPlace`, the old graph and
+    the owner layer;
+  - a structural edit at 1,000 meters is measured: expansion's share should fall to
+    the owners touched, while the graph rebuild remains until stage 3.
+
+**Stage 3. Cells replace `graph.rs`: the plot fix.**
+- **`engine/cell.rs` and `engine/eval.rs`, built from the kernel's R1–R8** (read
+  `src/iron_engine_kernel` first):
+  - dense cell arrays;
+  - heights set on insertion and raised locally (§6.3), not relaxed to a fixpoint;
+  - every cell necessary, through one global observer: observation is phase 4;
+  - one pass lowest height first, with ties in `Leaf` order;
+  - tracked reads per R5, cycles per R6, equality cutoff with NaN equal to NaN;
+  - `Failed` with "depends on" naming the root;
+  - boundary type checks and `as_leaf_kind`, as now.
+- **The read order is §5.2's:** overlay, binding, signal, constant. A solved value
+  does not exist yet, since the solver still writes constants in `post_apply`.
+- **Where cells come from:**
+  - authored bound slots;
+  - derived nodes' bindings, evaluated from the template's expression with `Ref`s
+    resolved against the owner: no `Expr` clone or rewrite per copy;
+  - connections' and anchors' derived signals (`port::derived_signals`,
+    `anchor::derived`), made and removed with the relation or anchor that causes
+    them, not recomputed for the document;
+  - `@name` readers, kept in an index from name to readers; moving or renaming a
+    provider updates only them.
+- **Collections become Structure cells inside the pass** (§7.1), replacing
+  `settle_repeats`:
+  - keys, `max` with its `truncated` problem, key fallback with its `keys` problem,
+    `when`, and presence for `enter_ms` and `exit_ms`;
+  - two Collections whose inputs read each other's items are a cycle with a problem,
+    an intended difference against the 129-round cut;
+  - `item.value`, `item.index`, `presence` and `leaving` are Input cells the
+    Collection writes. They still appear in `signals()` under `ProducerId::ITEMS` and
+    `PRESENCE` with the same stamps, because the snapshot compares signals;
+  - the prototype still reads item 0 through `repeat.item`.
+- **Producers** (`publish`, `retract`, selection, state, network, theme, layout) run
+  in today's order and write Input cells, keeping `publish`'s claim, release and
+  `signal_errors` rules.
+- **No rebuild.** `after_transaction` tells the engine each op (§7.2) instead of
+  calling `rebuild` or `invalidate`. Loading is the same pass with everything new.
+  `rebuild` no longer exists on the new engine.
+- **Tests that read internals** (§16.2: `evaluations`, `height`, `transitive_deps`)
+  read counters the new engine keeps for tests, with the same meaning where one
+  exists. A test whose number depends on the old schedule asserts the new number
+  with a comment saying why.
+- Exit:
+  - the differential suite is green with the subject on `New` (journal, new engine,
+    owners);
+  - measured: `plot_perf.rs` at 1 and 10 plots, and `plot-perf.txt` in a wasm-bench
+    build;
+  - if the tick-count step is still above the target, report how much of it is the
+    engine and how much the whole-document passes after a structural change
+    (`rebuild_clusters`, `resolve_layout`, `solve_network`, palette, contexts) before
+    going further. Those passes belong to phase 5, and the spec's §15 says phase 2
+    reports the engine's share.
+
+**Stage 4. Validation from templates** (§11.1; A2 and A3).
+- `check_binding` (existence, `binding_cycles`, `reads_interaction`),
+  `check_created`, `validate_connection`, `signal_loop`, `check_scope`,
+  `check_context` and `attachment::validate` run in step 3 against the document and
+  templates, with no engine in reach (A2: if one reads a resolved value, name it and
+  stop).
+- Cycle, look-only and signal-loop checks walk templates with item references
+  abstracted, so they cover owners not yet made.
+- A derived id inside an item is valid if its path is valid in the template, for any
+  key. This is stage 1's divergence entry, with its own test of the new behaviour.
+- Exit: the differential suite is green. Every refusal the reference makes, the
+  subject makes too, apart from that one entry (A3).
+
+**Stage 5. The transaction steps in full** (§11.2 steps 4 to 7).
+- **First, in shared code, each `NOT_ATOMIC` entry is fixed for both engines**, with
+  its test turned round:
+  - `apply_session` rolls back by the journal;
+  - `machines.shared` and `machines.snap` change only on success;
+  - an action's `emit` is queued only once its writes succeed;
+  - after a `post_apply` refusal, the old engine restores the out-of-document state
+    `after_transaction` changed (the overlay, geometry revisions, `repeats`,
+    `presence`, `repeat_inputs`, `truncated`, `expansion_problems`, the published
+    items and presence, `signal_stamp`, the pending changes). It saves them before
+    `after_transaction` and puts them back after rebuilding.
+
+  Then `NOT_ATOMIC` is empty, and the reference is atomic too.
+- **The new engine's steps:**
+  - tell the engine each op, set the transaction's drivers, stabilise (step 4);
+  - owners it disposes are **held** with their state until commit or abort;
+  - the solver stays `post_apply`, reading through the engine and stabilising after
+    each cluster's writes (step 5);
+  - on failure (step 6): roll the journal back, tell the engine the reverse changes,
+    re-attach held owners, stabilise, discard the pending `Changes`;
+  - commit (step 7): close the journal, drop held owners, release buffered effects
+    (a query's request, `on.emit`), publish `Changes`, push history.
+- `Transaction::expanded` goes away (§11.3), from both engines. Undo, redo and replay
+  take steps 1 to 4 and 7, with no solve.
+- `apply_session` takes steps 2, 4 and 7.
+- Exit:
+  - differential green with `IRON_ATOMICITY=1` reporting nothing;
+  - `tests/rollback.rs` green on `New`.
+
+**Stage 6. Swap, delete, measure.**
+- `Store` runs `New` by default. `InPlace` is deleted.
+- Then the old engine goes: `graph.rs`, `expand::expand`, `wanted` and its helpers,
+  `settle_repeats`, and `Engine::Old` with its clone.
+  - The spec's §16.1 makes phase 2b's engine the reference for 2c, so the facade
+    pairs two `New` stores from here. Before deleting, record what each stage's
+    differential runs showed.
+  - The deletion waits on the exit below being met and recorded.
+- **Exit,** the spec's §17 for 2b:
+  - the differential suite and the 10,000 random scripts green, run before the
+    deletion, with only §16.1 entries and their counts reported;
+  - the host reference, `bun test`, `smoke.txt`, `regression.txt`, and the scripts
+    §16.2 names (`plot-view.txt`, `actions.txt`, `query.txt`, `fiber.txt`,
+    `pulses.txt`);
+  - **the plot targets of §15**:
+    - a tick-count-changing step within 2× the values-only step at 1 and 10 plots
+      (about 0.3 ms);
+    - values-only no slower;
+    - `plot-perf.txt`'s `action` p95 under 1.5 ms for slow pan and wheel zoom
+      (wasm-bench);
+  - measured and recorded: a structural edit and a placement at 1,000 meters (the
+    engine's share, against §15's later targets); the demo document's load time (no
+    slower); memory per meter (not expected to change until 2c);
+  - the roadmap row "Plot pan and zoom performance" closed.
+
+**Stop and report** if:
+- A2, A3 or A5 fails;
+- a difference appears that §16.1 does not list;
+- a stage's exit cannot be met;
+- the plot targets are missed and the shortfall is not the engine's. Say which passes
+  and how much;
+- `Changes` differ between the engines in a way that is not a listed difference. The
+  facade compares `take_changes()` exactly, so a different evaluation order that adds
+  or drops a moved leaf shows here first.
+
+### 4.5 Before phases 3, 4 and 5
 
 Phases 0 to 2 can be built from the spec as it is. The later phases cannot yet: the
 spec's §14 ends with a list, "Open before a phase starts", of points where the last

@@ -896,6 +896,29 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   suite and the 10,000 random scripts green, **the plot targets are the only stage 5
   exit not met** (above).
 
+- **Stage 4, first part (2026-11-17).** `Transaction::expanded` is gone, in both
+  engines: what expansion and settling write travels with the run (`Run::expanded`)
+  to `after_transaction` and `Changes`, and history holds `ops`, `derived_ops` and
+  `inverse` only, so the snapshot no longer strips it. Stage 4's exit already holds
+  with stage 1's restore-by-copy: the differential suite (467) is green with
+  `IRON_ATOMICITY=1` reporting nothing, and the plain suite (463, `rollback.rs`
+  included) is green on `New`. Effects are already outside the trial: a query's
+  request comes out of `advance` and `on.emit` out of `fire_at`, so a refused
+  transaction releases neither (`tests/atomicity.rs`).
+  **Not built: rollback by telling the engine the reverse changes, with held
+  owners,** in place of `Saved`. It is a performance change only (`Saved` copies the
+  graph and the owners' records on each transaction in a document with a
+  constraint), and it needs decisions this engine's shape leaves open:
+  - `Saved` also covers what is not the engine (clusters, geometry revisions,
+    presence, tables, motion, contexts). Re-derived rather than copied, the
+    geometry revisions would come back newer, which `Old`, the reference, does not
+    do: a §16.1 entry, or the same change in `Old`.
+  - "Held owners" assumes owners that keep cell state. Here an owner's state is
+    the document's derived nodes, which the journal already restores, plus the
+    records `store_found` applies only once a transaction is accepted. So it is
+    unclear what holding would add.
+  Measure the copy on a constraint-heavy document before building it.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

@@ -140,9 +140,8 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
     let live: Vec<NodeId> = doc.live_nodes().map(|n| n.id).collect();
     let view = s.view(&ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: live.clone(), omit_defaults: false });
 
-    let strip = |t: &Transaction| Transaction { expanded: Vec::new(), ..t.clone() };
     let h = s.history();
-    let history = (h.past().iter().map(strip).collect(), h.future().iter().map(strip).collect(), h.log.iter().map(strip).collect());
+    let history = (h.past().to_vec(), h.future().to_vec(), h.log.iter().cloned().collect());
 
     let mut gesture_status = Vec::new();
     if let Some(g) = s.active_gesture() {

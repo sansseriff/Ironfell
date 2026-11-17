@@ -108,11 +108,6 @@ pub struct Transaction {
     pub derived_ops: Vec<Op>,
     /// Applying these in reverse order undoes `ops` and `derived_ops`.
     pub inverse: Vec<Op>,
-    /// What expansion changed in the instances' derived nodes
-    /// (component-model.md §3), for consumers that follow ops. Not history:
-    /// undo, redo and replay re-expand from the authored state.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub expanded: Vec<Op>,
     /// Causes the model is told about: which clusters re-solved and which
     /// requested values were not honoured.
     #[serde(default, skip_serializing_if = "Option::is_none")]

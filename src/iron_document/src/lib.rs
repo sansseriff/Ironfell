@@ -351,6 +351,8 @@ impl Saved {
 /// What `run` returns on success.
 struct Run {
     tx: Transaction,
+    /// What expansion wrote for it: derived, never history.
+    expanded: Vec<Op>,
     /// The whole inverse, derived nodes included, for `Changes`.
     full_inverse: Vec<Op>,
     /// What expansion found, when `run` expanded; `None` leaves the store's
@@ -1444,7 +1446,7 @@ impl StoreCore {
         ops.extend(b.ops);
         let mut inverse = a.inverse;
         inverse.extend(b.inverse);
-        self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, expanded: b.expanded, solver: b.solver });
+        self.history.past.push(Transaction { version: b.version, label: label.into(), actor: b.actor, ts: b.ts, idempotency_key: None, ops, derived_ops: b.derived_ops, inverse, solver: b.solver });
         true
     }
 
@@ -2723,8 +2725,10 @@ impl StoreCore {
 
     /// Keep the graph in step with a transaction that just applied.
     /// `full_inverse` is everything the transaction took or replaced,
-    /// derived nodes included (a deleted entity's ports).
-    fn after_transaction(&mut self, tx: &mut Transaction, full_inverse: &[Op]) {
+    /// derived nodes included (a deleted entity's ports); `expanded` is what
+    /// expansion wrote for it, to which settling adds the repeats' copies.
+    /// Derived ops are never history: undo, redo and replay re-derive.
+    fn after_transaction(&mut self, tx: &Transaction, expanded: &mut Vec<Op>, full_inverse: &[Op]) {
         // Outside a gesture the overlay holds only a live solve's pose (a
         // producer's publish or a playhead move re-solves the clusters).
         // Nothing else owns it, so it would shadow what this transaction
@@ -2736,8 +2740,8 @@ impl StoreCore {
         if live {
             self.reactive.clear_overlay(Tree::over(&self.doc));
         }
-        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(tx.expanded.iter()));
-        let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(tx.expanded.iter()).any(|op| match op {
+        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(expanded.iter()));
+        let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(expanded.iter()).any(|op| match op {
             // A link can be a connection's end, which derives a signal.
             Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
             Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
@@ -2745,7 +2749,7 @@ impl StoreCore {
             Op::Reorder { id, .. } => provides(Tree::over(&self.doc), *id),
         });
         if structural {
-            self.regraph(tx.ops.iter().chain(full_inverse).chain(tx.expanded.iter()));
+            self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
         } else {
             // What re-expansion wrote counts too: an override updated in
@@ -2753,7 +2757,7 @@ impl StoreCore {
             let changed: Vec<Leaf> = tx
                 .ops
                 .iter()
-                .chain(tx.expanded.iter())
+                .chain(expanded.iter())
                 .filter_map(|op| match op {
                     Op::Set { id, path, .. } => Some(Leaf {
                         node: *id,
@@ -2771,7 +2775,7 @@ impl StoreCore {
         // this transaction's derived structure.
         self.repeat_inputs = None;
         let copies = self.settle_repeats();
-        tx.expanded.extend(copies);
+        expanded.extend(copies);
         self.rebuild_clusters();
         if live && !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
@@ -2855,7 +2859,7 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let Run { mut tx, full_inverse, problems, shared, rollback } = self.run(input)?;
+        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback } = self.run(input)?;
         // `post_apply` can refuse only a document that holds a constraint;
         // then what `after_transaction` and the pipeline change is kept to
         // put back (reactive-engine handoff §4.4, stage 1).
@@ -2864,7 +2868,7 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&mut tx, &full_inverse);
+        self.after_transaction(&tx, &mut expanded, &full_inverse);
         let solver = match self.post_apply(&mut tx, exact) {
             Ok(s) => s,
             Err(e) => {
@@ -2885,7 +2889,7 @@ impl StoreCore {
             self.machines.shared += 1;
         }
         tx.solver = solver.clone();
-        self.pending.note(Tree::over(&self.doc), tx.ops.iter().chain(&tx.derived_ops).chain(&tx.expanded), &full_inverse);
+        self.pending.note(Tree::over(&self.doc), tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -2918,7 +2922,7 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: mut applied, full_inverse, problems, shared, rollback } = self.run(input)?;
+        let Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback } = self.run(input)?;
         self.commit(rollback);
         if shared {
             self.machines.shared += 1;
@@ -2927,8 +2931,8 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&mut applied, &full_inverse);
-        self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
+        self.after_transaction(&applied, &mut expanded, &full_inverse);
+        self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -2955,7 +2959,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok(Run { tx: mut applied, full_inverse, problems, shared, rollback }) => {
+            Ok(Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -2965,8 +2969,8 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&mut applied, &full_inverse);
-                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
+                self.after_transaction(&applied, &mut expanded, &full_inverse);
+                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -2999,7 +3003,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input) {
-            Ok(Run { tx: mut applied, full_inverse, problems, shared, rollback }) => {
+            Ok(Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -3009,8 +3013,8 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&mut applied, &full_inverse);
-                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&applied.expanded), &full_inverse);
+                self.after_transaction(&applied, &mut expanded, &full_inverse);
+                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -3231,9 +3235,9 @@ impl StoreCore {
                 ops: input.ops,
                 derived_ops: Vec::new(),
                 inverse,
-                expanded,
                 solver: None,
             },
+            expanded,
             full_inverse,
             problems,
             shared,

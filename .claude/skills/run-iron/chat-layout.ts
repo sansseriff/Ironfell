@@ -43,7 +43,7 @@ try {
     assert.equal(authoringSurface.width, hybridSurface.width, 'mode switching preserves composer width');
     assert.equal(authoringSurface.y + authoringSurface.height, hybridSurface.y + hybridSurface.height, 'mode switching preserves composer bottom');
     const composer = narrative.locator('.composer');
-    assert.equal(await composer.evaluate(el => getComputedStyle(el).paddingBottom), '20px');
+    assert.equal(await composer.evaluate(el => getComputedStyle(el).paddingBottom), '15px');
     assert.equal(await narrative.locator('.chat-threads').evaluate(el => getComputedStyle(el).borderBottomWidth), '0px');
     await page.screenshot({ path: `.agents/chat-layout/dpr${dpr}/authoring-${theme}.png` });
     await narrative.locator('[data-mode-button="hybrid"]').click();

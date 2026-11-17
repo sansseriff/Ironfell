@@ -132,7 +132,7 @@
   }
   .attachment :global(.attachment-remove:hover) { background: var(--danger); color: var(--accent-fg); }
   .image-error { color: var(--danger); margin: 8px 16px; font-size: var(--text-md); }
-  .composer { flex: none; padding: 10px 20px 20px; background: var(--bg); }
+  .composer { flex: none; padding: 7.5px 15px 15px; background: var(--bg); }
   .surface {
     max-width: 736px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: var(--radius-xl);
     background: var(--bg-input); overflow: hidden;

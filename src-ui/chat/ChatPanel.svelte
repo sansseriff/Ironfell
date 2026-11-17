@@ -82,7 +82,7 @@
 </section>
 
 <style>
-  .chat-panel { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; padding-top: 8px; box-sizing: border-box; background: var(--bg); }
+  .chat-panel { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; padding-top: 6px; box-sizing: border-box; background: var(--bg); }
   .compact { flex: none; height: auto; max-height: 320px; }
-  .chat-panel :global(.chat-threads) { border-bottom: 0; background: transparent; padding: 0 20px; }
+  .chat-panel :global(.chat-threads) { border-bottom: 0; background: transparent; padding: 0 15px; }
 </style>

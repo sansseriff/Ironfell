@@ -460,3 +460,7 @@ Spacing follow-up: all chat modes now share the same 20 CSS px composer inset,
 10 px upper gap, 20 px bottom gap, and borderless inset chat header. Switching
 between Authoring and Hybrid preserves the composer’s width and bottom edge.
 `chat-layout.ts` checks those positions at DPR 1/2.
+
+Composer size follow-up: reduce surrounding spacing to 75% of the previous
+values: 15 px sides/bottom, 7.5 px above the composer, and 6 px above the chat
+header. All modes retain matching spacing, giving the composer more room.

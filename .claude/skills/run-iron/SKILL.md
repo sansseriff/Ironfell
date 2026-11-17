@@ -3649,3 +3649,6 @@ is unchanged: six `assertion passed` lines and `(no page errors)`.
 
 The chat-layout fixture also compares composer width, left inset and bottom edge
 between Hybrid and Authoring, so switching modes cannot change those spacings.
+
+Composer side/bottom spacing is now 15 CSS px (75% of the original 20 px),
+with the same geometry checks and expected output.

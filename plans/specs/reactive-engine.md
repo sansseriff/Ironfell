@@ -1317,7 +1317,7 @@ fails, stop and report before designing around it (handoff §5).
 **Open before a phase starts.** A third review (2026-11-16) found these parts
 incomplete. The rule now written for each has not been reviewed or tested. Whoever
 starts the phase checks each against the code as it then is and reports what they
-will build before building it (handoff §4.3).
+will build before building it (handoff §4.4).
 
 | Phase | Point | The rule as written |
 |---|---|---|

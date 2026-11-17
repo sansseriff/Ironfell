@@ -5,9 +5,9 @@
 and its decisions settled. **Phases 0 and 1 are done** (2026-11-16; §2): baselines,
 the differential harness, the host reference, and the read contract (`Tree`,
 `take_changes()`) on the old engine. Nothing of the new engine is built. The current
-task is **phase 2a**, whose tasks are still to be written here (§2). This file is for whoever builds it: what to read, the order of
-work, the first two phases as tasks, and the rules. Phases 0 to 2 are ready to build;
-phases 3, 4 and 5 each have design points to settle first (§4.3).
+task is **phase 2a** (§4.3). This file is for whoever builds it: what to read, the order of
+work, the phases as tasks, and the rules. Phases 0 to 2 are ready to build;
+phases 3, 4 and 5 each have design points to settle first (§4.4).
 
 ## 0. Read first, in this order
 
@@ -137,7 +137,7 @@ The spec's §17 has each phase's contents and exit. In order:
 |---|---|---|
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
-| 2a | Transactions in place on the old engine: the document journal | **Current.** Tasks to be written here from the spec's §11.1 before it starts |
+| 2a | Transactions in place on the old engine: the document journal | **Current.** Tasks in §4.3 |
 | 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | |
 | 2c | Copies leave the document: instances as references | |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
@@ -221,7 +221,7 @@ form of §4, from the spec, before starting it.
   aarch64-apple-darwin`, `bun test`, and the fast smoke (run-iron skill). Rust builds
   and tests need no check-in; other steps over a minute do (AGENTS.md).
 
-## 4. The first two phases as tasks
+## 4. The phases as tasks
 
 ### 4.1 Phase 0: baselines and the harness
 
@@ -425,7 +425,160 @@ output is the same as before the phase, timings aside; `git grep` finds no calle
 the deleted drains and no call of `Store::document` (other types' `document()`
 methods are not this); timings in the smoke are within noise.
 
-### 4.3 Before phases 3, 4 and 5
+### 4.3 Phase 2a: transactions in place, on the old engine
+
+The point: `Store::run` stops cloning the document. That clone and dropping the
+document it replaces are 10.5 of the 12.5 ms of a constant edit at 1,000 meters
+(§1). Ops apply to the store's own document, and a failure rolls back a **journal**
+that `Document`'s mutators write (the spec's §11.1, assumption A1). Nothing else in
+the old engine changes. Validation, expansion, `post_apply` and the graph rebuild
+after a failure stay as they are. Written 2026-11-16 from the spec's §11 and §17 and
+the code at `bf7d13f`.
+
+**What the harness compares.** The spec's §16.1 keeps the old engine as the reference
+until the swap. So in this phase the reference keeps today's clone-based `run` and the
+subject runs in place. Otherwise the facade would compare the journal with itself.
+The suite then shows that applying in place gives the same document, values, history
+and `Changes` as the clone on every script. Task 6 shows that the subject's rollback
+is exact.
+
+**Task 1. Two transaction strategies.** `differential::Engine` gains a second variant:
+`Old` stays as it is at phase 1's end (clone in `run`), and `InPlace` is this phase's.
+`StoreCore` holds which one it runs, and only `run`, `apply_now`, `undo`, `redo`,
+`replay` and `apply_session` look at it. Without the `differential` feature, `Store`
+runs `InPlace`. With it, the facade builds the subject `InPlace` and the reference
+`Old`. `Old` is the reference engine, not a compatibility path. It goes with the rest
+of the old engine at the swap. To keep one call site per caller, `run` returns a
+rollback token in place of the working document:
+`enum Undo { Clone(Document), Journal(Mark) }`.
+- **`Old`:** `run` swaps the working copy in and keeps the previous document in the
+  token, as `apply_now` does now. `rollback` puts it back; `commit` drops it.
+- **`InPlace`:** the token is the journal's mark. `rollback` rolls back to it;
+  `commit` closes the journal.
+
+The callers (`apply_now`, `undo`, `redo`, `replay`) then read the same for both.
+
+**Task 2. The journal, in `Document`.** While a journal is open, every write to a
+field of `Document` records its exact undo. Rolling back to a mark replays the records
+after it in reverse.
+- **API:** `begin() -> Mark`, `rollback(Mark)`, `commit()`. A mark is a position in
+  the record list, so marks nest for free. With no journal open, nothing is recorded
+  (load, `from_parts`, `settle_repeats` outside a transaction).
+- **Records are at the level of the write, not of the entry.** They are:
+  - `nodes[id]`, each `facets[kind][id]` and `relations[id]` as they were, or that
+    each was absent;
+  - each counter that moved (`next_ids` and `next_rels` per client, with whether the
+    client had an entry; the two session counters) and `version`;
+  - for the indexes, the single change: an id inserted into or removed from a set
+    (`by_type`, `by_facet`, `by_source`, `by_target`) or from a child list (`children`,
+    `roots`, at its position), and whether the map key existed before.
+
+  Snapshotting whole index entries would be simpler, but `by_type` and `by_facet`
+  sets hold tens of thousands of ids at 1,000 meters, and cloning them per
+  transaction would bring back part of the cost this phase removes. Empty sets and
+  `children` entries that a mutator creates (`insert_node` makes `children[id]`, and
+  `tombstone` leaves it) must be taken out again on rollback, or the document is
+  equal in content but not in its maps.
+- **`facet_mut` records the facet before handing out `&mut`** (A1).
+- `set_scope` and `set_client` are not transaction writes: `debug_assert!` that no
+  journal is open.
+- Derive `PartialEq` for `Document`, so tests compare every field, indexes included.
+- **Tests (in `document.rs`):** random sequences of mutator calls (insert, restore,
+  tombstone, reparent, reorder, facet insert, remove and `facet_mut`, relation insert
+  and remove, counter advances, version), then rollback, then `==` with a clone taken
+  at the mark. Include nested marks, and a rollback to an inner mark followed by more
+  writes.
+
+**Task 3. `run` in place.** For `InPlace`, following the spec's §11.2 steps 1 to 3 on
+the old engine:
+- Translate and `machine::record` as now. Then `begin`, and apply the ops to
+  `self.doc` with the same per-op error collection.
+- `expand::expand` runs as now, between the ops and the checks; its writes go
+  through `apply_op`, so they are journaled. Its `expansion_problems` are returned,
+  not stored. `apply_now` stores them only after `post_apply` succeeds; `undo`,
+  `redo` and `replay` store them once `run` succeeds.
+- The checks read `Tree::over(&self.doc)`. On any error, roll back to the mark and
+  return the errors.
+- On success, `set_version(stamp)` (journaled). The journal stays open until the
+  caller commits or rolls back.
+- **`apply_now`:** `post_apply`'s solver writes go through `apply_op` and are
+  journaled too. On its `Err`, roll back, then rebuild the graph, resample and
+  rebuild the clusters, as now. The `NOT_ATOMIC` entry for that case (a change left
+  pending) stays: the spec's §17 keeps the rebuild in 2a. On success, commit after
+  history is pushed.
+- `Old` keeps today's order exactly, including storing `expansion_problems` inside
+  `run`, so the reference is the phase 1 engine.
+
+**Task 4. `attachment::validate` from the journal.** Its first loop needs the points
+that had an `Attachment` before the transaction and no longer have one. Split
+`validate` into that input and the document:
+`validate(removed: impl Iterator<Item = NodeId>, doc: Tree)`.
+- `Old` passes what it computes now from the previous document.
+- `InPlace` asks the journal: `Document::facets_removed_since(mark, kind)`, meaning
+  nodes **live at the mark** with that facet then, and live now without it. "Live at
+  the mark" matters because `restore_node` clears a tombstoned node's facets, which
+  the journal also records.
+
+The second loop, over every attachment in the document, is unchanged.
+
+**Task 5. `apply_session` in place.** For `InPlace`, `begin`, apply, and on an error
+roll back to the mark instead of applying inverse ops. Then commit. The rest (the
+session-tier check, the version counter, the graph rebuild) is unchanged. This goes
+beyond §17's list for 2a, because the journal makes it a few lines. It removes
+`NOT_ATOMIC`'s `apply_session` entry, and the spec's §16.1 already lists the
+resulting difference as intended.
+
+**Intended differences and atomicity.** Two entries go into `intended.rs`'s
+`INTENDED`, both already on the spec's §16.1 list, so neither needs a stop-and-report:
+- a failed `apply_session` leaves no tombstone and no advanced counter;
+- a transaction refused after it expanded leaves `expansion_problems` as they were.
+
+Each entry's predicate is "the call returned an error, and the field is the named
+one". `tests/atomicity.rs`'s two tests for these become tests that the subject is
+atomic, and their `NOT_ATOMIC` entries go. The other two entries (the solver's
+refusal, and `fire`'s emit) stay.
+
+**Task 6. The exit test: a failing transaction leaves the document bit-identical.**
+`tests/rollback.rs`, on `StoreCore` running `InPlace` (not the facade). Random
+transactions built to fail at each stage, comparing `authored()` with `==` and the
+saved text before and after:
+- an op error mid-list, including the three ops that change the document and then
+  run a failing check (`reparent`, `set`, `add_facet` in `op.rs`);
+- `check_created`, `check_scope` and `check_context` refusals;
+- an attachment refusal;
+- each `post_apply` refusal (a malformed constraint, a cycle through a cluster, an
+  unsolvable cluster, an exact request unmet), after the solver has written some
+  variables;
+- a refusal after expansion created and deleted derived nodes;
+- the same for `undo`, `redo` and `apply_session`.
+
+Each case also checks that the next successful transaction mints the same ids as it
+would have without the failed one (counters). Generate from
+`differential_random.rs`'s script builder where it can.
+
+**Task 7. Measure.** Re-run §1's constant edit at 1,000 meters (`instance_cost.rs`,
+release) and the profile split, with the same temporary timers, removed afterwards.
+Record the new number in §1 and the roadmap row. The expectation is that the clone
+and the drop (10.5 ms) go and the journal costs well under 1 ms. Report it if not.
+Also note memory: the journal is freed at commit, so a long gesture's commit holds
+only its own records.
+
+**Exit:** the spec's §17 for 2a, plus this phase's own:
+- `git grep -n "doc.clone()" src/iron_document/src/lib.rs` shows a clone only on the
+  `Old` path;
+- task 6 is green, and the `document.rs` journal tests are green;
+- the differential suite (subject `InPlace`, reference `Old`) and the 10,000-seed run
+  are green, with only the two `INTENDED` entries;
+- the host reference passes; `smoke.txt` and `regression.txt` print the same as at
+  `bf7d13f`;
+- the constant edit at 1,000 meters is measured and recorded.
+
+**Stop and report** if a write to `Document` is found that does not go through a
+mutator (A1 fails). The spec's fallback is then the copy-on-write document of §11.3,
+and choosing it is the user's decision. Also stop if the journal's measured cost is
+more than a third of what the clone cost.
+
+### 4.4 Before phases 3, 4 and 5
 
 Phases 0 to 2 can be built from the spec as it is. The later phases cannot yet: the
 spec's §14 ends with a list, "Open before a phase starts", of points where the last

@@ -120,7 +120,8 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
     // Releasing it reads as authored again.
     store.unpublish(gas);
     assert_eq!(f64_of(&store, bar, "size.w"), 50.0);
-    assert!(store.signals().is_empty());
+    // The slider's theme tokens remain published by THEME.
+    assert!(store.signals().values().all(|signal| signal.producer != gas));
     assert!(matches!(store.handle(gauge, path("slider.value")), Handle::Direct));
 }
 
@@ -155,7 +156,7 @@ fn a_bound_leaf_cannot_be_driven() {
     store.publish(gas, BTreeMap::from([(leaf(bar, "size.w"), Value::Number(1.0))]));
     assert_eq!(f64_of(&store, bar, "size.w"), 50.0);
     assert!(store.signal_errors()[&leaf(bar, "size.w")].contains("is bound"));
-    assert!(store.signals().is_empty());
+    assert!(store.signals().values().all(|signal| signal.producer != gas));
 }
 
 #[test]
@@ -168,7 +169,7 @@ fn a_freeze_commits_the_published_values_as_one_transaction() {
 
     let applied = store.freeze(gas, "freeze gas".into(), Actor::Human, 1).unwrap().unwrap();
     assert_eq!(applied.version, Version(2));
-    assert!(store.signals().is_empty(), "the producer holds nothing after a freeze");
+    assert!(store.signals().values().all(|signal| signal.producer != gas), "the producer holds nothing after a freeze");
     assert_eq!(store.tree().leaf(gauge, path("slider.value")).unwrap().constant(), Some(&Value::Number(0.6)));
     assert_eq!(f64_of(&store, bar, "size.w"), 120.0);
     // The release reports the gauge (as a resolved change) and the set

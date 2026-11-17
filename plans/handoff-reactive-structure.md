@@ -140,7 +140,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
 | 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
-| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks in §4.4, in five stages; two moves to 2c await the user |
+| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks in §4.4, in five stages |
 | 2c | Copies leave the document: instances as references | |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
 | 4 | Observation: Dormant, Unloaded, parking, extents | |
@@ -675,10 +675,21 @@ reader and the comparison with the old engine stay exact (the spec's §17).
 
 Written 2026-11-16 from the spec (§5–§7, §11, §14, §15, §16) and the code at
 `d9ec4ea`. Revised after a council review: Claude Opus 5.5 alone, since GPT Sol was
-unavailable, with the user's agreement. Round 1 scored it 6/10, round 2 7.5/10.
+unavailable, with the user's agreement. Rounds 1 to 3 scored it 6, 7.5 and 8.5/10.
 
-**Needs the user's approval: two moves from 2b to 2c** (the review's findings 11 and
-12). Both change the spec's §17 row; the tasks below assume them.
+**The new engine need not copy the old one's quirks** (the user, 2026-11-16). Where
+the old behaviour is a quirk, the new engine does the reasonable, expected thing.
+- **A quirk the old engine can drop cheaply is fixed in both** (stage 1). The
+  comparison then stays exact, and the app, which runs the old graph until stage 5,
+  gets the better behaviour sooner.
+- **Any other case becomes a recorded intended difference:** an `INTENDED` entry
+  (stage 1) with a test of the new behaviour, relaxed for exactly that case and
+  listed at the end of its stage. It is no longer a stop-and-report.
+- **Stop and ask** only when it is not clear which behaviour is right, or when the
+  change alters something a user can see and may rely on.
+
+**Two moves from 2b to 2c** (the review's findings 11 and 12, 2026-11-16). The spec's
+§17 rows say so.
 - **Validation from templates** (§11.1, A2, A3). While copies are stored, the checks
   see them in the document. In 2b, validating from templates would only produce
   §16.1's more permissive item-path rule, and it carries A3's risk. In 2c, 2b's
@@ -721,8 +732,8 @@ surface the crate and host call on `Reactive` today, with the same meaning:
 Callers do not branch.
 
 **Differences the old engine would show, settled in both engines first.** A difference
-the harness can predict is removed by changing shared code, as 2a did. It is not
-allowed for with a normaliser.
+the harness can predict, and that the old engine can drop cheaply, is removed by
+changing shared code, as 2a did, rather than allowed for with a normaliser.
 
 **Stage 1. Shared fixes, and intended differences the harness can run.**
 - **Shared fixes, each with a test, in both engines:**
@@ -734,6 +745,7 @@ allowed for with a normaliser.
     first, `removed` deepest first, then by id; `moved` and `relations` by id. Today
     they are in op order, which follows how expansion happened to walk the document.
   - **Sort `Changes`' tie-breaks fully:**
+    - `created` by depth, then by id;
     - `moved` and `relations` by the whole tuple;
     - `removed` deepest first, by the depth each node had where it was held when the
       change was noted, then by id.
@@ -758,7 +770,8 @@ allowed for with a normaliser.
       dependency. They become dependencies of the boundary binding;
     - `apply_session`, which never expands. It expands when `affected_by` says so,
       so the Latency view's per-frame constant `Set` runs no whole-document
-      `expand`.
+      `expand`. Its expanded ops reach `pending.note`, `geometry.note_ops` and its
+      structural check, as a transaction's do, and its journal rollback covers them.
 
     Each becomes structural (or expanding, or a dependency) in shared code. Any
     further case found later is handled the same way and recorded.
@@ -767,9 +780,10 @@ allowed for with a normaliser.
     - `apply_session` rolls back by the journal;
     - `machines.shared` and `machines.snap` change only on success;
     - an action's `emit` is queued only once its writes succeed;
-    - **after a `post_apply` refusal, under `Old`,** the state that
-      `after_transaction`, `post_apply` and the pipeline changed is copied before
-      `after_transaction` and put back on refusal, with no rebuild. That state is:
+    - **after a `post_apply` refusal, under `Old` and `InPlace`,** the state that
+      `after_transaction`, `post_apply` and the pipeline changed is put back, with no
+      rebuild. It is copied before `apply_now` stores `run`'s expansion problems,
+      which happens just before `after_transaction`. The state is:
       - the whole `Reactive` (the graph's structure, its resolved values, errors,
         overlay, signals and pending sets);
       - `clusters`, and the geometry revisions with their pending structure and
@@ -778,12 +792,16 @@ allowed for with a normaliser.
         `session_state`, `tables`, `motion`, `contexts`, `time_errors`,
         `physics_error`, `signal_stamp` (until it goes), and the pending `Changes`.
 
-      `InPlace` is not compared and keeps its rebuild.
+      `InPlace` takes the same restore (it is the same code in `apply_now`), so the
+      plain suite passes the turned-round test and the app is atomic now.
 
     Then `NOT_ATOMIC` is empty and the reference is atomic. **Until stage 4, `New`
     restores the same state the same way:** by copy, with its owners by their undo
     log and its cells by copy or re-derivation. Stage 4 replaces that copy with
-    "tell the engine the reverse changes".
+    "tell the engine the reverse changes". The copy is taken before every
+    transaction, so stages 2 and 3a time it separately and report each
+    transaction's cost with and without it. The plot path applies no transaction
+    and is unaffected.
 - **Intended differences the harness can run.** `INTENDED` is descriptive today:
   `Store::call` compares return values and then whole snapshots, and reads neither
   table. Each entry gets an executable form, one of two kinds:
@@ -845,8 +863,9 @@ allowed for with a normaliser.
   explicitly, deepest first, including the copies of the owners nested inside it.
   Otherwise the cascade tombstones them and `Changes::removed` never hears of them,
   since `Changes` learns of a derived removal only from an explicit `Delete`. All
-  deletes of one step are sorted deepest first before any create, as `expand`'s
-  diff does.
+  stale deletes of one step are sorted deepest first before any create, as
+  `expand`'s diff does. A node whose type changed is deleted and recreated in
+  place.
 - **Which owners an op affects** is the spec's §7.2 table, plus what `wanted` covers
   today that the table misses:
   - instances and uses inside a node that gains a `repeat` or `when` facet, or is
@@ -868,9 +887,10 @@ allowed for with a normaliser.
   spec's §7.5. If the old cut cannot be reproduced exactly, the budget becomes a
   §16.1 entry, which needs the user's approval. Until then, measure the 1,000-meter
   numbers at 700 meters, where nothing is cut.
-- **Under `differential`, after each op's owner updates** (`wanted` is
-  whole-document, so once per op, not once per owner), the old `wanted` runs on the
-  subject's document and must equal the owners' copies. This names the op that was
+- **Under `differential`, after each op's owner updates, and after each settle round
+  that changed counts** (`wanted` is whole-document, so once per op or round, not
+  once per owner), the old `wanted` runs on the subject's document and must equal
+  the owners' copies. This names the op that was
   missed, not a later snapshot.
 - Exit:
   - the differential suite is green with the subject on `New` (owners and the old
@@ -966,7 +986,9 @@ allowed for with a normaliser.
 
 **Stop and report** if:
 - A5 fails;
-- a difference appears that neither a shared fix nor a §16.1 entry settles;
+- a difference appears where it is not clear which behaviour is right, or that
+  alters something a user can see and may rely on. Any other difference is a shared
+  fix or a recorded entry;
 - a stage's exit cannot be met;
 - the plot targets are missed. Report the shortfall split between the engine and the
   whole-document passes:

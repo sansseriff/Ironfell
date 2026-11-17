@@ -555,6 +555,7 @@ impl Document {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn journal_open(&self) -> bool {
         self.journal.0.is_some()
     }

@@ -1707,17 +1707,23 @@ impl StoreCore {
             let structural = counts != self.repeats;
             if structural {
                 // The owners of the repeats whose items changed.
-                let changed: BTreeSet<NodeId> = counts
+                let changed_repeats: BTreeSet<NodeId> = counts
                     .iter()
                     .filter(|(r, k)| self.repeats.get(r) != Some(k))
                     .map(|(r, _)| *r)
                     .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
-                    .filter_map(|r| r.path().first().copied())
                     .collect();
+                let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
                 self.repeats = counts;
                 let stamp = self.doc.version();
                 let ops = if self.engine == Engine::New {
-                    let (ops, delta) = self.owners.expand(&mut self.doc, stamp, &self.repeats, engine::owners::Which::Some(changed));
+                    // Only the items that changed, where that matches a
+                    // whole expansion of their owners; else the owners.
+                    let items = self.owners.expand_items(&mut self.doc, stamp, &self.repeats, &changed_repeats);
+                    let (ops, delta) = match items {
+                        Some(done) => done,
+                        None => self.owners.expand(&mut self.doc, stamp, &self.repeats, engine::owners::Which::Some(changed)),
+                    };
                     self.store_found(Found::Owners(delta));
                     self.check_owners("settling repeats");
                     ops

@@ -368,6 +368,56 @@ pub(crate) fn expand_owners(doc: &mut Document, stamp: Version, counts: &Items, 
     out
 }
 
+/// What reconciling some repeats' items did (`expand_items`).
+pub(crate) struct ItemsExpanded {
+    pub ops: Vec<Op>,
+    /// Derived nodes the items want now, and held before.
+    pub wanted: usize,
+    pub held: usize,
+    pub defs: Vec<NodeId>,
+    pub reads: Vec<NodeId>,
+}
+
+/// Bring only `repeats`' items to what `counts` says: each item's scope
+/// and everything copied into it, nested owners included, and nothing else
+/// of `owner`, the top owner holding them (reactive-engine handoff §4.4,
+/// stage 3b). A repeat's template and its siblings are as the owner's last
+/// expansion left them, so the items come out as a whole expansion of
+/// `owner` would make them. `None`, with nothing applied, when wanting them
+/// meets a problem (the budget, nesting): the caller expands `owner` whole.
+/// `Some` with `ops` applied otherwise; an op that fails to apply is
+/// reported as a problem, and the caller expands `owner` whole to repair it.
+pub(crate) fn expand_items(doc: &mut Document, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
+    let mut out = Wanted::new(room);
+    out.root = Some(owner);
+    {
+        let tree = Tree::over(doc);
+        for &r in repeats {
+            let ok = r.path().first() == Some(&owner)
+                && tree.is_live(r)
+                && draws_repeat(tree, r, &tree.facets_of(r).cloned().collect::<Vec<_>>())
+                && !in_repeat_template(tree, r);
+            if !ok {
+                return None;
+            }
+            want_items(tree, r, counts.get(&r).map_or(&[][..], Vec::as_slice), &mut out);
+        }
+        want_scopes(tree, counts, &mut out, Vec::new());
+    }
+    if !out.problems.is_empty() || out.full {
+        return None;
+    }
+    let have: Vec<NodeId> = {
+        let tree = Tree::over(doc);
+        repeats.iter().flat_map(|&r| tree.descendants(r).into_iter().filter(move |d| d.item_of(r).is_some())).collect()
+    };
+    let have_rels: Vec<Relation> = doc.relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
+    let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect() };
+    let mut problems = Vec::new();
+    let ops = apply_wanted(doc, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
+    Some((ItemsExpanded { ops, ..done }, problems))
+}
+
 /// Whether `id` is part of a repeat's template (plans/specs/repeat.md):
 /// inside a group with a `repeat` facet but in none of its items. A
 /// template is never drawn; its copies are.
@@ -480,7 +530,18 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
 fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNode>, Vec<Relation>) {
     let mut nodes = Vec::new();
     let mut rels = Vec::new();
-    if r.is_expanded() {
+    if r.is_expanded() && out.get(r).is_none() {
+        // A derived repeat this pass did not want: its items alone are
+        // being brought up to date (`expand_items`), and its template is
+        // the copies its owner's last expansion wrote.
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| c.item_of(r).is_none()).collect();
+        while let Some(n) = stack.pop() {
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
+            rels.extend(doc.relations_from(n).cloned());
+            stack.extend(doc.children(n).iter().rev().copied());
+        }
+    } else if r.is_expanded() {
         let mut parents = BTreeSet::from([r]);
         for w in &out.nodes {
             if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" {

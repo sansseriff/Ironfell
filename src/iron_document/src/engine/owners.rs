@@ -54,6 +54,15 @@ impl Delta {
         self.reads.extend(d.reads);
     }
 
+    /// Fold in a later delta: its owners' entries replace these.
+    fn add_delta(&mut self, d: Delta) {
+        self.all |= d.all;
+        self.problems.extend(d.problems);
+        self.counts.extend(d.counts);
+        self.defs.extend(d.defs);
+        self.reads.extend(d.reads);
+    }
+
     fn has_budget_problem(&self) -> bool {
         self.problems.values().flatten().any(|p| p.kind == "budget")
     }
@@ -89,6 +98,64 @@ impl Owners {
             return (ops, all);
         }
         (ops, delta)
+    }
+
+    /// Reconcile only the items of `repeats`, the repeats a settle round
+    /// found with other items (reactive-engine handoff §4.4, stage 3b), or
+    /// `None`, with nothing applied, when that cannot be done alone and
+    /// the caller expands their owners whole: an owner with problems
+    /// recorded, an owner another owner's pictures read, or what the items
+    /// want meets the budget or a nesting limit. An op that fails to apply
+    /// is repaired by expanding its owner whole, in the same call.
+    pub(crate) fn expand_items(&self, doc: &mut Document, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+        let mut by_owner: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
+        for &r in repeats {
+            by_owner.entry(*r.path().first()?).or_default().insert(r);
+        }
+        if by_owner.keys().any(|o| self.problems.contains_key(o) || self.readers.get(o).is_some_and(|rs| !rs.is_empty())) {
+            return None;
+        }
+        // Each owner's whole count must be known, to keep the budget's share.
+        if by_owner.keys().any(|o| !self.counts.contains_key(o)) {
+            return None;
+        }
+        let held: usize = self.counts.values().sum();
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        let mut ops = Vec::new();
+        let mut repair: BTreeSet<NodeId> = BTreeSet::new();
+        for (owner, rs) in &by_owner {
+            let room = expand::NODE_BUDGET.saturating_sub(held);
+            // Wanting is tried before anything applies, so a `None` from
+            // the first owner leaves the document as it was. A later
+            // owner's `None` is repaired by expanding it whole.
+            let Some((done, problems)) = expand::expand_items(doc, stamp, counts, *owner, rs, room + self.held_under(doc, rs)) else {
+                if ops.is_empty() {
+                    return None;
+                }
+                repair.insert(*owner);
+                continue;
+            };
+            ops.extend(done.ops);
+            let whole = (self.counts[owner] + done.wanted).saturating_sub(done.held);
+            delta.counts.insert(*owner, whole);
+            delta.defs.extend(done.defs.iter().map(|&d| (d, *owner)));
+            delta.reads.extend(done.reads.iter().map(|&r| (r, *owner)));
+            if !problems.is_empty() {
+                repair.insert(*owner);
+            }
+        }
+        if !repair.is_empty() {
+            let (more, d) = self.expand(doc, stamp, counts, Which::Some(repair));
+            ops.extend(more);
+            delta.add_delta(d);
+        }
+        Some((ops, delta))
+    }
+
+    /// How many derived nodes the items of `repeats` hold now.
+    fn held_under(&self, doc: &Document, repeats: &BTreeSet<NodeId>) -> usize {
+        let tree = Tree::over(doc);
+        repeats.iter().map(|&r| tree.descendants(r).into_iter().filter(|d| d.item_of(r).is_some()).count()).sum()
     }
 
     /// Every owner, in id order.

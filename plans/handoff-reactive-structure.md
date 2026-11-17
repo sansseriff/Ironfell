@@ -793,6 +793,29 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
     | values only (`New`) | 0.10 ms | 0.32 ms | 0.16 ms | 0.41 ms |
 
     The 2× target holds for zoom and not yet for pan (3.9× and 3.6×).
+- **Stage 3b, first step: a settle round reconciles only the items that changed.**
+  The profile of a tick change under `New` put most of it in expanding the whole
+  owner around the repeat (the plot's picture, about 70 nodes) again.
+  `Owners::expand_items` (with `expand::expand_items`) wants only the changed repeats'
+  items, with the scopes nested in them, and diffs them against the item subtrees the
+  repeat holds. A derived repeat's template is then read from the copies its owner's
+  last expansion wrote. It is taken only where it matches a whole expansion: the owner
+  has no problems recorded, no other owner reads it, and wanting the items meets no
+  budget or nesting problem. Otherwise the owner expands whole, as before; an op that
+  fails to apply is repaired that way in the same call. Under `IRON_OWNER_CHECK=1` the
+  whole expansion is compared after every update: green over the differential suite
+  (462) and the 10,000 random scripts (274 s).
+
+  | tick change, `New` | pan, 1 plot | zoom, 1 plot | pan, 10 plots | zoom, 10 plots |
+  |---|---|---|---|---|
+  | owner expanded whole | 0.41 ms | 0.60 ms | 0.57 ms | 0.82 ms |
+  | items only | 0.19 ms | 0.38 ms | 0.36 ms | 0.60 ms |
+  | values only | 0.11 ms | 0.32 ms | 0.17 ms | 0.42 ms |
+
+  Within 2× of values-only except pan at 10 plots (2.2×). What is left there is
+  `settle_repeats` polling every drawn repeat each round (reading its inputs and
+  rebuilding every item's published values), the per-Collection Structure cells of
+  this stage's plan, and `solve_network` (phase 5).
   - Found on the way: a set on a port's `datatype` changes what its binding's
     boundary check accepts with no change of expression; a touched node's own
     bindings now always run again (`tests/rederive.rs`).

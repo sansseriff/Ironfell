@@ -1396,10 +1396,12 @@ adding an entry is a stop-and-report unless it is one of these:
   (§11.1);
 - from 2b: the text of problem and error messages (nodes and kinds are still
   compared), and ops emitted for derived structure;
-- a failed `apply_session` leaves no tombstone and no advanced session counter (today
-  it rolls back by inverse ops, `lib.rs:1235`), and a transaction rejected after it
-  expanded leaves `expansion_problems` as they were (`lib.rs:2663`). A failed
-  `apply` already leaves none today, since it works on a clone;
+- a failed `apply_session` leaves no tombstone, no advanced session counter and none
+  of the failing op's own writes (today it rolls back by inverse ops, `lib.rs`
+  `apply_session`; from 2b). A transaction rejected after it expanded leaving
+  `expansion_problems` as they were is no longer a difference: phase 2a fixes it in
+  both engines (handoff §4.3). A failed `apply` already leaves no document change,
+  since it works on a clone;
 - from 5: `SolveReport` and `SolverSummary` counts of clusters solved and of
   iterations;
 - an inner picture's definition follows an override of its entity's `instance.def`

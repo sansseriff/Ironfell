@@ -431,152 +431,186 @@ The point: `Store::run` stops cloning the document. That clone and dropping the
 document it replaces are 10.5 of the 12.5 ms of a constant edit at 1,000 meters
 (§1). Ops apply to the store's own document, and a failure rolls back a **journal**
 that `Document`'s mutators write (the spec's §11.1, assumption A1). Nothing else in
-the old engine changes. Validation, expansion, `post_apply` and the graph rebuild
-after a failure stay as they are. Written 2026-11-16 from the spec's §11 and §17 and
-the code at `bf7d13f`.
+the old engine changes, apart from one fix shared by both strategies (task 3).
+Validation, expansion, `post_apply`, `apply_session` and the graph rebuild after a
+failure stay as they are.
+
+Written 2026-11-16 from the spec's §11 and §17 and the code at `bf7d13f`. Revised the
+same day after a council review (Claude Opus 5.5 and GPT-6.1 Sol, round 1: 6 and
+6/10). A1 was checked by both: no writer bypasses the mutators. `Document`'s tables
+are private, `facet_mut` has one caller (`op.rs` `set`), `expand` and `settle_repeats`
+write through `apply_op`, and load and `set_scope` never run inside a transaction.
 
 **What the harness compares.** The spec's §16.1 keeps the old engine as the reference
-until the swap. So in this phase the reference keeps today's clone-based `run` and the
-subject runs in place. Otherwise the facade would compare the journal with itself.
-The suite then shows that applying in place gives the same document, values, history
-and `Changes` as the clone on every script. Task 6 shows that the subject's rollback
-is exact.
+until the swap. So the reference keeps today's clone-based `run` and the subject runs
+in place. Otherwise the facade would compare the journal with itself. **2a has no
+intended differences**: `INTENDED` stays empty and the facade stays exact, because
+every behaviour this phase changes is changed for both strategies (task 3).
 
-**Task 1. Two transaction strategies.** `differential::Engine` gains a second variant:
-`Old` stays as it is at phase 1's end (clone in `run`), and `InPlace` is this phase's.
-`StoreCore` holds which one it runs, and only `run`, `apply_now`, `undo`, `redo`,
-`replay` and `apply_session` look at it. Without the `differential` feature, `Store`
-runs `InPlace`. With it, the facade builds the subject `InPlace` and the reference
-`Old`. `Old` is the reference engine, not a compatibility path. It goes with the rest
-of the old engine at the swap. To keep one call site per caller, `run` returns a
-rollback token in place of the working document:
-`enum Undo { Clone(Document), Journal(Mark) }`.
-- **`Old`:** `run` swaps the working copy in and keeps the previous document in the
-  token, as `apply_now` does now. `rollback` puts it back; `commit` drops it.
-- **`InPlace`:** the token is the journal's mark. `rollback` rolls back to it;
-  `commit` closes the journal.
+The harness has no way to relax a comparison yet. `Store::call` diffs whole snapshots
+and never reads `INTENDED`, and a difference such as a reference-only tombstone would
+last past the call that caused it. Building that mechanism is not 2a's work.
 
-The callers (`apply_now`, `undo`, `redo`, `replay`) then read the same for both.
+**Task 1. Two transaction strategies.**
+- `Engine` moves out of `differential` (the store needs it without the feature) and
+  gains `InPlace` beside `Old`. `Old` stays as it is at phase 1's end, with the clone
+  in `run`.
+- `StoreCore` holds which one it runs; only `run` and its callers (`apply_now`,
+  `undo`, `redo`, `replay`) look at it. Without the `differential` feature, `Store`
+  runs `InPlace`. With it, the facade builds the subject `InPlace` and the reference
+  `Old`; `Store::pair`'s assertion that both are `Old` changes to match.
+- `Old` is the reference engine, not a compatibility path. It goes with the rest of
+  the old engine at the swap.
+- `run` returns a rollback token in place of the working document:
+  `enum Rollback { Clone(Document), Journal }`, consumed exactly once by
+  `commit(token)` or `abort(token)`.
+  - **`Old`:** `run` swaps the working copy in and keeps the previous document in the
+    token. `abort` puts it back; `commit` drops it.
+  - **`InPlace`:** `abort` rolls the journal back and closes it; `commit` closes it.
 
-**Task 2. The journal, in `Document`.** While a journal is open, every write to a
-field of `Document` records its exact undo. Rolling back to a mark replays the records
-after it in reverse.
-- **API:** `begin() -> Mark`, `rollback(Mark)`, `commit()`. A mark is a position in
-  the record list, so marks nest for free. With no journal open, nothing is recorded
-  (load, `from_parts`, `settle_repeats` outside a transaction).
-- **Records are at the level of the write, not of the entry.** They are:
+  The callers then read the same for both.
+
+**Task 2. The journal, in `Document`.** One transaction at a time, no nesting:
+- **API:** `begin()` (`debug_assert!` that none is open), `rollback()` (restore and
+  close) and `commit()` (close). With no journal open, nothing is recorded: load,
+  `from_parts`, and `settle_repeats` outside a transaction.
+- **Records are at the level of the write, made only when the write changed
+  something.** For a set insert or remove, record only when it returned `true`; an
+  `insert_facet` on a node already in `by_facet` changes nothing. They are:
   - `nodes[id]`, each `facets[kind][id]` and `relations[id]` as they were, or that
     each was absent;
   - each counter that moved (`next_ids` and `next_rels` per client, with whether the
     client had an entry; the two session counters) and `version`;
-  - for the indexes, the single change: an id inserted into or removed from a set
-    (`by_type`, `by_facet`, `by_source`, `by_target`) or from a child list (`children`,
-    `roots`, at its position), and whether the map key existed before.
-
-  Snapshotting whole index entries would be simpler, but `by_type` and `by_facet`
-  sets hold tens of thousands of ids at 1,000 meters, and cloning them per
-  transaction would bring back part of the cost this phase removes. Empty sets and
-  `children` entries that a mutator creates (`insert_node` makes `children[id]`, and
-  `tombstone` leaves it) must be taken out again on rollback, or the document is
-  equal in content but not in its maps.
+  - **every map key a write creates**: `facets[kind]` (outer), `by_type[ty]`,
+    `by_facet[kind]`, `by_source[n]`, `by_target[n]`, `children[id]` (made by
+    `insert_node` and `restore_node`; a tombstoned node loaded from a file has none);
+  - for the indexes, the single change: an id into or out of a set, or into or out
+    of a child list (`children`, `roots`) at its position.
+- **Rollback restores raw fields in reverse order.** It does not call the ordinary
+  mutators and does not rebuild indexes.
+- **`restore_node` clears a tombstoned node's facets directly**; each facet it takes
+  is recorded.
 - **`facet_mut` records the facet before handing out `&mut`** (A1).
-- `set_scope` and `set_client` are not transaction writes: `debug_assert!` that no
-  journal is open.
+- `set_scope` and `set_client` `debug_assert!` that no journal is open.
+
+Why records and not snapshots of whole index entries: `by_type` and `by_facet` sets
+hold tens of thousands of ids at 1,000 meters, and cloning them per transaction would
+bring back part of the cost this phase removes.
+
 - Derive `PartialEq` for `Document`, so tests compare every field, indexes included.
-- **Tests (in `document.rs`):** random sequences of mutator calls (insert, restore,
-  tombstone, reparent, reorder, facet insert, remove and `facet_mut`, relation insert
-  and remove, counter advances, version), then rollback, then `==` with a clone taken
-  at the mark. Include nested marks, and a rollback to an inner mark followed by more
-  writes.
+- **Under the `differential` feature, `begin` keeps a shadow clone** and `rollback`
+  asserts `==` against it, and `check_invariants()`. Every failing call in the suite
+  and in the 10,000 seeds then checks rollback at the level of the maps, which the
+  snapshot cannot see.
+- **Tests (in `document.rs`):**
+  - random sequences of mutator calls (insert, restore, tombstone, reparent, reorder,
+    facet insert, remove and `facet_mut`, relation insert and remove, counter
+    advances, version), then rollback, then `==` with a clone taken at `begin`;
+  - deterministic cases: a facet kind's first insertion; a facet table that exists
+    but is empty; restoring a tombstoned node with no `children` entry; one node
+    touched several times.
 
 **Task 3. `run` in place.** For `InPlace`, following the spec's §11.2 steps 1 to 3 on
 the old engine:
-- Translate and `machine::record` as now. Then `begin`, and apply the ops to
-  `self.doc` with the same per-op error collection.
-- `expand::expand` runs as now, between the ops and the checks; its writes go
-  through `apply_op`, so they are journaled. Its `expansion_problems` are returned,
-  not stored. `apply_now` stores them only after `post_apply` succeeds; `undo`,
-  `redo` and `replay` store them once `run` succeeds.
-- The checks read `Tree::over(&self.doc)`. On any error, roll back to the mark and
-  return the errors.
-- On success, `set_version(stamp)` (journaled). The journal stays open until the
-  caller commits or rolls back.
-- **`apply_now`:** `post_apply`'s solver writes go through `apply_op` and are
-  journaled too. On its `Err`, roll back, then rebuild the graph, resample and
-  rebuild the clusters, as now. The `NOT_ATOMIC` entry for that case (a change left
-  pending) stays: the spec's §17 keeps the rebuild in 2a. On success, commit after
-  history is pushed.
-- `Old` keeps today's order exactly, including storing `expansion_problems` inside
-  `run`, so the reference is the phase 1 engine.
+- Translate and `machine::record` as now, before `begin`. They can refuse, and then no
+  journal is open.
+- `begin`, then apply the ops to `self.doc` with the same per-op error collection,
+  including `expand::refuse`.
+- `expand::expand` runs as now, between the ops and the checks. Its writes go through
+  `apply_op`, so they are journaled. The checks read `Tree::over(&self.doc)`.
+- On any error, `abort` and return the errors. On success, `set_version(stamp)`
+  (journaled); the token goes back to the caller.
+- `apply_now`: `after_transaction` (which can `settle_repeats`) and `post_apply`'s
+  solver writes are journaled too. On `post_apply`'s `Err`, `abort`, then rebuild the
+  graph, resample and rebuild the clusters, as now. On success, `commit` after history
+  is pushed.
+- `undo`, `redo` and `replay` commit once `run` succeeds.
+- **The shared fix: `expansion_problems`.**
+  - Today `run` stores them before its checks (`lib.rs` `run`), so a refused
+    transaction keeps them (`NOT_ATOMIC`).
+  - In both strategies, `run` returns them and the caller stores them as soon as
+    `run` returns `Ok`, before `after_transaction`. `settle_repeats` there can replace
+    them, as it does now, so the last expansion still wins.
+  - A refusal by `run` leaves them as they were, in both. A `post_apply` refusal
+    behaves as today, under the solver's `NOT_ATOMIC` entry.
+  - This removes the second `NOT_ATOMIC` entry. `tests/atomicity.rs`'s test for it
+    becomes a test that the call is atomic. The spec's §16.1 bullet that lists this
+    as an intended difference is updated: it is fixed in both engines in 2a.
 
-**Task 4. `attachment::validate` from the journal.** Its first loop needs the points
-that had an `Attachment` before the transaction and no longer have one. Split
-`validate` into that input and the document:
-`validate(removed: impl Iterator<Item = NodeId>, doc: Tree)`.
-- `Old` passes what it computes now from the previous document.
-- `InPlace` asks the journal: `Document::facets_removed_since(mark, kind)`, meaning
-  nodes **live at the mark** with that facet then, and live now without it. "Live at
-  the mark" matters because `restore_node` clears a tombstoned node's facets, which
-  the journal also records.
+**Task 4. `attachment::validate` without the previous document.** Its first loop needs
+the points that had an `Attachment` before the transaction. Both strategies collect
+`nodes_with(FacetKind::Attachment)` (live, not derived, in id order) before applying,
+and pass that list: `validate(before: &[NodeId], doc: Tree)`. The cost is the same
+order as the second loop, which already scans every attachment. The order, and so
+the first error reported, is the same as today's.
 
-The second loop, over every attachment in the document, is unchanged.
+**`apply_session` stays as it is in 2a.** Its rollback by inverse ops leaves more than
+`NOT_ATOMIC` says (Sol): besides a created node's tombstone and the session counter, a
+failing op's own writes stay, since `reparent`, `set` and `add_facet` write before
+their checks and return no inverse. Making it atomic would change the reference, or
+need the harness mechanism above. It moves to 2b, where the spec's §11.3 takes
+`apply_session` over. Here its `NOT_ATOMIC` text gains the partial-write case.
 
-**Task 5. `apply_session` in place.** For `InPlace`, `begin`, apply, and on an error
-roll back to the mark instead of applying inverse ops. Then commit. The rest (the
-session-tier check, the version counter, the graph rebuild) is unchanged. This goes
-beyond §17's list for 2a, because the journal makes it a few lines. It removes
-`NOT_ATOMIC`'s `apply_session` entry, and the spec's §16.1 already lists the
-resulting difference as intended.
+**Store state outside the document.** These change before a failure, identically in
+both strategies, so the facade cannot see them and 2a does not fix them. Each gets a
+`NOT_ATOMIC` entry, text only:
+- `machines.shared`, incremented in `run` before any check;
+- `machines.snap`, extended by `undo` and `redo` before `run`;
+- the solver refusal's entry is broadened. `after_transaction` has already cleared
+  the overlay, noted geometry, settled repeats (`repeats`, `presence`,
+  `repeat_inputs`, the published items) and stamped signals.
 
-**Intended differences and atomicity.** Two entries go into `intended.rs`'s
-`INTENDED`, both already on the spec's §16.1 list, so neither needs a stop-and-report:
-- a failed `apply_session` leaves no tombstone and no advanced counter;
-- a transaction refused after it expanded leaves `expansion_problems` as they were.
-
-Each entry's predicate is "the call returned an error, and the field is the named
-one". `tests/atomicity.rs`'s two tests for these become tests that the subject is
-atomic, and their `NOT_ATOMIC` entries go. The other two entries (the solver's
-refusal, and `fire`'s emit) stay.
-
-**Task 6. The exit test: a failing transaction leaves the document bit-identical.**
-`tests/rollback.rs`, on `StoreCore` running `InPlace` (not the facade). Random
-transactions built to fail at each stage, comparing `authored()` with `==` and the
-saved text before and after:
-- an op error mid-list, including the three ops that change the document and then
-  run a failing check (`reparent`, `set`, `add_facet` in `op.rs`);
-- `check_created`, `check_scope` and `check_context` refusals;
-- an attachment refusal;
-- each `post_apply` refusal (a malformed constraint, a cycle through a cluster, an
-  unsolvable cluster, an exact request unmet), after the solver has written some
-  variables;
+**Task 5. The exit test: a failing transaction leaves the document bit-identical.**
+`tests/rollback.rs`, on a `StoreCore` running `InPlace` (not the facade). Each case
+compares `authored()` with `==`, the saved text before and after, and
+`check_invariants()`; then applies a successful transaction and checks that it mints
+the same ids as on a store that never saw the failure, and that no journal is open.
+`differential_random.rs`'s failing transactions do not reach expansion or anything
+after it, so these cases need their own builders:
+- refusals before the journal opens (translate, `machine::record`);
+- an op error mid-list:
+  - including `expand::refuse`;
+  - the three ops that write and then fail a check (`reparent`, `set`, `add_facet`);
+  - an op that writes other nodes before a later op fails (`new_input_args` when a
+    `port_spec` is created, `catch_up_args`);
+- `check_created`, `check_scope` and `check_context` refusals, and an attachment
+  refusal;
 - a refusal after expansion created and deleted derived nodes;
-- the same for `undo`, `redo` and `apply_session`.
+- `post_apply` refusals:
+  - before any solver write (a malformed or duplicate constraint, a cycle through a
+    cluster);
+  - an unsolvable cluster after an earlier cluster wrote variables;
+  - an exact request unmet after solver writes;
+  - a refusal after `settle_repeats` re-expanded in `after_transaction` (change a
+    repeat's count, then fail the solver);
+- the same for `undo` (including undoing a delete, the `restore_node` path), `redo`
+  and `replay`;
+- one node touched several times in a failing transaction.
 
-Each case also checks that the next successful transaction mints the same ids as it
-would have without the failed one (counters). Generate from
-`differential_random.rs`'s script builder where it can.
+Also tests that `expansion_problems` follow the last expansion on a successful
+transaction that grows or shrinks a repeat.
 
-**Task 7. Measure.** Re-run §1's constant edit at 1,000 meters (`instance_cost.rs`,
+**Task 6. Measure.** Re-run §1's constant edit at 1,000 meters (`instance_cost.rs`,
 release) and the profile split, with the same temporary timers, removed afterwards.
 Record the new number in §1 and the roadmap row. The expectation is that the clone
 and the drop (10.5 ms) go and the journal costs well under 1 ms. Report it if not.
-Also note memory: the journal is freed at commit, so a long gesture's commit holds
-only its own records.
 
 **Exit:** the spec's §17 for 2a, plus this phase's own:
 - `git grep -n "doc.clone()" src/iron_document/src/lib.rs` shows a clone only on the
   `Old` path;
-- task 6 is green, and the `document.rs` journal tests are green;
-- the differential suite (subject `InPlace`, reference `Old`) and the 10,000-seed run
-  are green, with only the two `INTENDED` entries;
+- task 5 and the `document.rs` journal tests are green;
+- the differential suite (subject `InPlace`, reference `Old`, the shadow-clone
+  assertion on) and the 10,000-seed run are green, with `INTENDED` empty;
 - the host reference passes; `smoke.txt` and `regression.txt` print the same as at
   `bf7d13f`;
 - the constant edit at 1,000 meters is measured and recorded.
 
-**Stop and report** if a write to `Document` is found that does not go through a
-mutator (A1 fails). The spec's fallback is then the copy-on-write document of §11.3,
-and choosing it is the user's decision. Also stop if the journal's measured cost is
-more than a third of what the clone cost.
+**Stop and report** if:
+- a write to `Document` is found that does not go through a mutator (A1 fails). The
+  spec's fallback is then the copy-on-write document of §11.3, and choosing it is the
+  user's decision;
+- the journal's measured cost is more than a third of what the clone cost;
+- a difference between the strategies appears that this section does not explain.
 
 ### 4.4 Before phases 3, 4 and 5
 

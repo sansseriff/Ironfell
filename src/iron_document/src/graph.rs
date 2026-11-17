@@ -71,7 +71,8 @@ pub struct Signal {
 
 #[derive(Clone, Debug)]
 struct BoundNode {
-    expr: Expr,
+    /// Shared, so an evaluation borrows it for the price of a count.
+    expr: std::sync::Arc<Expr>,
     deps: BTreeSet<Leaf>,
     /// What each `@name` it reads resolved to when the graph was built.
     ctx: BTreeMap<String, Leaf>,
@@ -230,7 +231,7 @@ impl Reactive {
     /// The expression a leaf resolves through: its binding, or the signal a
     /// connection derives for it.
     pub fn expr_of(&self, leaf: Leaf) -> Option<&Expr> {
-        self.nodes.get(&leaf).map(|n| &n.expr)
+        self.nodes.get(&leaf).map(|n| &*n.expr)
     }
 
     /// Each bound leaf that reads context, with the provider each `@name`
@@ -299,7 +300,7 @@ impl Reactive {
             self.nodes.insert(
                 leaf,
                 BoundNode {
-                    expr: expr.clone(),
+                    expr: std::sync::Arc::new(expr.clone()),
                     deps,
                     ctx,
                     tracks,
@@ -330,12 +331,19 @@ impl Reactive {
     /// compared with what they were, heights are raised where an edge needs
     /// it, and what changed and what reads it are evaluated. With `rescope`
     /// (a provider may have moved), every `@name` reader is resolved again.
-    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool) {
+    /// `rederive` says whether the ops can have changed what connections and
+    /// anchors derive (`port::derived_signals`, `anchor::derived`), which
+    /// walk the whole document: without it they are kept as they were.
+    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool, rederive: bool) {
         let first = *FacetKind::ALL.iter().min().expect("facet kinds");
         let start = |n: NodeId| Leaf { node: n, path: crate::facet::LeafPath { facet: first, field: "" } };
-        let mut derived: Vec<(Leaf, Expr)> = crate::port::derived_signals(doc);
-        derived.extend(crate::anchor::derived(doc));
-        let derived: BTreeMap<Leaf, Expr> = derived.into_iter().collect();
+        let derived: BTreeMap<Leaf, Expr> = if rederive {
+            let mut derived: Vec<(Leaf, Expr)> = crate::port::derived_signals(doc);
+            derived.extend(crate::anchor::derived(doc));
+            derived.into_iter().collect()
+        } else {
+            self.derived.clone()
+        };
         // The leaves to look at again: every binding the nodes had or have,
         // and every derived signal that came, went or changed.
         let mut look: BTreeSet<Leaf> = BTreeSet::new();
@@ -366,7 +374,7 @@ impl Reactive {
             // rebuild's later insert does.
             let want: Option<Expr> = self.derived.get(&leaf).cloned().or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
             match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
-                (Some(old), Some(e)) if *old == e => {}
+                (Some(old), Some(e)) if **old == e => {}
                 (_, Some(e)) => {
                     self.set_cell(doc, leaf, e, &tokens);
                     made.push(leaf);
@@ -392,7 +400,7 @@ impl Reactive {
                 let Some(node) = self.nodes.get(&leaf) else { continue };
                 let ctx: BTreeMap<String, Leaf> = node.expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
                 if ctx != node.ctx {
-                    let expr = node.expr.clone();
+                    let expr = (*node.expr).clone();
                     self.set_cell(doc, leaf, expr, &tokens);
                     made.push(leaf);
                     primed.insert(leaf);
@@ -444,7 +452,7 @@ impl Reactive {
         expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
         tracks |= crate::types::declared(doc, leaf).is_some();
         let height = 1 + deps.iter().filter_map(|d| self.nodes.get(d).map(|n| n.height)).max().unwrap_or(0);
-        self.nodes.insert(leaf, BoundNode { expr, deps, ctx, tracks, tracked: BTreeSet::new(), height });
+        self.nodes.insert(leaf, BoundNode { expr: std::sync::Arc::new(expr), deps, ctx, tracks, tracked: BTreeSet::new(), height });
     }
 
     /// Remove `leaf`'s cell and its edges.

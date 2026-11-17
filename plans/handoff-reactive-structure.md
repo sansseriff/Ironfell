@@ -816,6 +816,43 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   `settle_repeats` polling every drawn repeat each round (reading its inputs and
   rebuilding every item's published values), the per-Collection Structure cells of
   this stage's plan, and `solve_network` (phase 5).
+- **Stage 3b, second step, and the plot targets (2026-11-17).** Three changes under
+  `New`, each exact by construction and green under the harness:
+  - `settle_repeats` keeps each repeat's settled items (keys, published values,
+    problems) against its inputs, for repeats with no enter or exit timing, and
+    publishes the items again only when one changed;
+  - the across/through network (`port::network`, a whole-document scan) is cached
+    on a count of document writes (`Document::edits`);
+  - `restructure` recomputes what connections and anchors derive only when an op
+    touches a port, an anchor, a connection, a relation or a transform's facet;
+  - and a binding's expression is shared (`Arc`), not cloned per evaluation.
+
+  Native (`plot_perf.rs`), a tick-count step against a values-only step:
+
+  | | pan, 1 plot | zoom, 1 plot | pan, 10 plots | zoom, 10 plots |
+  |---|---|---|---|---|
+  | tick change | 0.20 ms | 0.35 ms | 0.33 ms | 0.51 ms |
+  | values only | 0.11 ms | 0.29 ms | 0.12 ms | 0.33 ms |
+  | ratio | 1.8× | 1.2× | 2.7× | 1.5× |
+
+  Values-only steps no longer grow with the document (0.12 ms at 1 and at 10 plots;
+  `InPlace` 0.11 and 0.16). In the app (wasm-bench, `plot-perf.txt`, `engine-new`
+  against `InPlace` the same day): `action` p95 slow pan 6.85 → **1.45 ms**, fast pan
+  5.74 → 1.29 ms, wheel zoom 7.96 → **1.63 ms**; changed frame p95 12.78 → 7.58,
+  10.32 → 7.10, 11.97 → 6.89 ms. Measured before the second step's network cache.
+
+  **The targets are met except pan at 10 plots natively (2.7× against 2×) and wheel
+  zoom in the app (1.63 against 1.5 ms).** Where that time is (sampled, a 10-plot
+  pan whose steps change the ticks): re-evaluating the plot's bindings is about half,
+  and within it the plot's curve written as SVG path text with exact-precision float
+  formatting and parsed back (`series::path_data`, `as_leaf_kind`) about a sixth of
+  the step; whole-document `resolve_layout` about 8 %; the settle loop about 15 %. A
+  zoom step natively is 0.29 ms of value work and 0.06 ms of structure. So what is
+  left is the plot's own formulas, path text (the spec's §1.3 follow-up) and layout
+  (phase 5), not the structure work 2b replaces. A frame-pacing note: the app's pan
+  runs counted more rAF gaps over 24 ms on `New` (25 and 49 against 13 and 14) while
+  every store and frame-time figure fell; to be re-checked at stage 5 on an idle
+  machine.
   - Found on the way: a set on a port's `datatype` changes what its binding's
     boundary check accepts with no change of expression; a touched node's own
     bindings now always run again (`tests/rederive.rs`).

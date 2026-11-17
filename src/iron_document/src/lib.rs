@@ -418,6 +418,12 @@ pub struct StoreCore {
     /// The items each drawn repeat and conditional has, by key
     /// (plans/specs/repeat.md), as last settled from its inputs.
     repeats: expand::Items,
+    /// Under `New`, what each repeat without enter or exit timing settled
+    /// to last, and from what: a cache, a pure function of its key.
+    item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
+    /// Under `New`, the across/through network as of a count of document
+    /// writes (`Document::edits`): a cache.
+    network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
     /// before doing any work. `None` after structure changed, until the
@@ -532,8 +538,24 @@ impl StoreCore {
         }
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
         let mut rescope = false;
+        let mut rederive = false;
         let doc = Tree::over(&self.doc);
+        // What connections and anchors derive reads ports, anchors,
+        // connections, the relations between them and each anchor's chain
+        // of transformed ancestors (`port::derived_signals`,
+        // `anchor::derived`).
+        let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
+        let made_of = |id: NodeId| doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some();
         for op in ops {
+            rederive |= match op {
+                Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
+                Op::AddFacet { facet, .. } => derives(facet.kind()),
+                Op::RemoveFacet { kind, .. } => derives(*kind),
+                Op::Create { id, ty, facets, .. } => matches!(ty.name(), "port" | "connection") || facets.iter().any(|f| matches!(f.kind(), FacetKind::Port | FacetKind::Anchor)) || made_of(*id),
+                Op::Delete { id } => made_of(*id),
+                Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection),
+                Op::Reorder { .. } => false,
+            };
             match op {
                 Op::Create { id, .. } | Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } | Op::Reorder { id, .. } => {
                     nodes.insert(*id);
@@ -559,7 +581,7 @@ impl StoreCore {
                 _ => false,
             };
         }
-        self.reactive.restructure(doc, &nodes, rescope);
+        self.reactive.restructure(doc, &nodes, rescope, rederive);
     }
 
     /// Store what an accepted expansion found.
@@ -656,6 +678,8 @@ impl StoreCore {
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
             repeat_inputs: None,
+            item_memo: BTreeMap::new(),
+            network: None,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
@@ -1632,9 +1656,15 @@ impl StoreCore {
             if self.repeat_inputs.as_ref() == Some(&inputs) {
                 break;
             }
+            // Under `New`, a repeat with no enter or exit timing settles to
+            // a function of its inputs: what it gave last is reused while
+            // they hold, and the published items are left alone when no
+            // repeat's changed (reactive-engine handoff §4.4, stage 3b).
+            let memo_on = self.engine == Engine::New;
+            let same_repeats = self.repeat_inputs.as_ref().is_some_and(|known| known.iter().map(|k| k.0).eq(inputs.iter().map(|k| k.0)));
+            let mut items_moved = !(memo_on && same_repeats);
             let mut counts = expand::Items::new();
-            let mut values = BTreeMap::new();
-            let mut truncated = Vec::new();
+            let mut results: Vec<ItemsOf> = Vec::with_capacity(inputs.len());
             for (r, [each, count, key, shown]) in &inputs {
                 let r = *r;
                 let is_repeat = self.doc.facet(r, facet::FacetKind::Repeat).is_some();
@@ -1645,60 +1675,89 @@ impl StoreCore {
                     self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: LeafPath::new(kind, f).expect("declared leaf") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(0.0).max(0.0)
                 };
                 let (enter_ms, exit_ms) = (timing("enter_ms"), timing("exit_ms"));
+                let max = if is_repeat { self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize } else { 0 };
+                let memo_key = (memo_on && enter_ms == 0.0 && exit_ms == 0.0).then(|| ItemsKey { inputs: [each.clone(), count.clone(), key.clone()], is_repeat, shown, max });
+                if let Some(k) = &memo_key
+                    && let Some((was, got)) = self.item_memo.get(&r)
+                    && was == k
+                {
+                    counts.insert(r, got.keys.clone());
+                    results.push(got.clone());
+                    continue;
+                }
+                let mut got = ItemsOf { keys: Vec::new(), values: Vec::new(), problems: Vec::new() };
                 if !is_repeat {
                     let wanted = if shown { vec![("on".to_owned(), Value::Bool(true))] } else { Vec::new() };
                     let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
                     for (k, (key, element)) in all.iter().enumerate() {
                         let Some(scope) = NodeId::item_scope(r, key) else { continue };
-                        values.insert(Leaf { node: scope, path: item("value") }, element.clone());
-                        values.insert(Leaf { node: scope, path: item("index") }, Value::Number(k as f64));
+                        got.values.push((Leaf { node: scope, path: item("value") }, element.clone()));
+                        got.values.push((Leaf { node: scope, path: item("index") }, Value::Number(k as f64)));
                     }
-                    counts.insert(r, all.into_iter().map(|(k, _)| k).collect());
-                    continue;
-                }
-                let max = self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize;
-                let listed = each.as_ref().and_then(|v| v.len());
-                let asked = listed.unwrap_or_else(|| count.as_ref().and_then(|v| v.as_f64()).filter(|n| n.is_finite()).map_or(0, |n| n.floor().max(0.0) as usize));
-                let n = asked.min(max);
-                if asked > max {
-                    truncated.push(expand::Problem { node: r, kind: "truncated", message: format!("{asked} items asked for; repeat.max allows {max}") });
-                }
-                let mut elements: Vec<Value> = match (listed, each) {
-                    (Some(_), Some(each)) => each.elements().unwrap_or_default(),
-                    _ => (0..n).map(|k| Value::Number(k as f64)).collect(),
-                };
-                elements.truncate(n);
-                // The template reads the first item's.
-                if let Some(first) = elements.first() {
-                    values.insert(Leaf { node: r, path: path("item") }, first.clone());
-                }
-                let keys = match item_keys(&elements, listed.is_some(), key.as_ref()) {
-                    Ok(keys) => keys,
-                    Err(why) => {
-                        truncated.push(expand::Problem { node: r, kind: "keys", message: format!("{why}; items are keyed by index instead") });
-                        (0..elements.len()).map(|k| k.to_string()).collect()
+                    got.keys = all.into_iter().map(|(k, _)| k).collect();
+                } else {
+                    let listed = each.as_ref().and_then(|v| v.len());
+                    let asked = listed.unwrap_or_else(|| count.as_ref().and_then(|v| v.as_f64()).filter(|n| n.is_finite()).map_or(0, |n| n.floor().max(0.0) as usize));
+                    let n = asked.min(max);
+                    if asked > max {
+                        got.problems.push(expand::Problem { node: r, kind: "truncated", message: format!("{asked} items asked for; repeat.max allows {max}") });
                     }
-                };
-                let wanted: Vec<(String, Value)> = if shown { keys.into_iter().zip(elements).collect() } else { Vec::new() };
-                let here = wanted.len();
-                // Those leaving come after, keeping the element and index
-                // they had.
-                let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
-                for (k, (key, element)) in all.iter().enumerate() {
-                    let Some(scope) = NodeId::item_scope(r, key) else { continue };
-                    values.insert(Leaf { node: scope, path: item("value") }, element.clone());
-                    let index = if k < here { k as f64 } else { self.presence.get(&r).and_then(|p| p.items.get(key)).map_or(k as f64, |e| e.index) };
-                    values.insert(Leaf { node: scope, path: item("index") }, Value::Number(index));
-                }
-                if let Some(p) = self.presence.get_mut(&r) {
-                    for (k, (key, _)) in all.iter().enumerate().take(here) {
-                        if let Some(e) = p.items.get_mut(key) {
-                            e.index = k as f64;
+                    let mut elements: Vec<Value> = match (listed, each) {
+                        (Some(_), Some(each)) => each.elements().unwrap_or_default(),
+                        _ => (0..n).map(|k| Value::Number(k as f64)).collect(),
+                    };
+                    elements.truncate(n);
+                    // The template reads the first item's.
+                    if let Some(first) = elements.first() {
+                        got.values.push((Leaf { node: r, path: path("item") }, first.clone()));
+                    }
+                    let keys = match item_keys(&elements, listed.is_some(), key.as_ref()) {
+                        Ok(keys) => keys,
+                        Err(why) => {
+                            got.problems.push(expand::Problem { node: r, kind: "keys", message: format!("{why}; items are keyed by index instead") });
+                            (0..elements.len()).map(|k| k.to_string()).collect()
+                        }
+                    };
+                    let wanted: Vec<(String, Value)> = if shown { keys.into_iter().zip(elements).collect() } else { Vec::new() };
+                    let here = wanted.len();
+                    // Those leaving come after, keeping the element and index
+                    // they had.
+                    let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
+                    for (k, (key, element)) in all.iter().enumerate() {
+                        let Some(scope) = NodeId::item_scope(r, key) else { continue };
+                        got.values.push((Leaf { node: scope, path: item("value") }, element.clone()));
+                        let index = if k < here { k as f64 } else { self.presence.get(&r).and_then(|p| p.items.get(key)).map_or(k as f64, |e| e.index) };
+                        got.values.push((Leaf { node: scope, path: item("index") }, Value::Number(index)));
+                    }
+                    if let Some(p) = self.presence.get_mut(&r) {
+                        for (k, (key, _)) in all.iter().enumerate().take(here) {
+                            if let Some(e) = p.items.get_mut(key) {
+                                e.index = k as f64;
+                            }
                         }
                     }
+                    got.keys = all.into_iter().map(|(k, _)| k).collect();
                 }
-                counts.insert(r, all.into_iter().map(|(k, _)| k).collect());
+                match memo_key {
+                    Some(k) => {
+                        if self.item_memo.get(&r).is_none_or(|(_, prev)| prev.values != got.values) {
+                            items_moved = true;
+                        }
+                        self.item_memo.insert(r, (k, got.clone()));
+                    }
+                    None => {
+                        items_moved = true;
+                        self.item_memo.remove(&r);
+                    }
+                }
+                counts.insert(r, got.keys.clone());
+                results.push(got);
             }
+            if memo_on {
+                self.item_memo.retain(|r, _| counts.contains_key(r));
+            }
+            let truncated: Vec<expand::Problem> = results.iter().flat_map(|g| g.problems.iter().cloned()).collect();
+            let values: Option<BTreeMap<Leaf, Value>> = items_moved.then(|| results.iter().flat_map(|g| g.values.iter().cloned()).collect());
             let mut truncated = truncated;
             expand::sort_problems(&mut truncated);
             self.truncated = truncated;
@@ -1740,7 +1799,9 @@ impl StoreCore {
                 round_start = applied.len();
                 applied.extend(ops);
             }
-            if values != self.reactive.published_by(ProducerId::ITEMS) {
+            if let Some(values) = values
+                && values != self.reactive.published_by(ProducerId::ITEMS)
+            {
                 self.reactive.publish(Tree::over(&self.doc), ProducerId::ITEMS, values);
             }
             // An item that has just joined starts unseen, in this same pass.
@@ -2473,7 +2534,21 @@ impl StoreCore {
     /// bindings like any value. A network that does not converge keeps its
     /// previous solution and says why.
     fn solve_network(&mut self) {
-        let net = crate::port::network(Tree::over(&self.doc));
+        // What the network is depends only on structure and slots: under
+        // `New` it is kept until the document is written again.
+        let net = if self.engine == Engine::New {
+            let edits = self.doc.edits();
+            match &self.network {
+                Some((at, net)) if *at == edits => net.clone(),
+                _ => {
+                    let net = std::sync::Arc::new(crate::port::network(Tree::over(&self.doc)));
+                    self.network = Some((edits, net.clone()));
+                    net
+                }
+            }
+        } else {
+            std::sync::Arc::new(crate::port::network(Tree::over(&self.doc)))
+        };
         if net.unknowns.is_empty() {
             if !self.reactive.published_by(ProducerId::NETWORK).is_empty() {
                 self.reactive.retract(Tree::over(&self.doc), ProducerId::NETWORK);
@@ -3266,6 +3341,25 @@ struct Present {
 /// dropped), and one wanted again while leaving turns back from where it
 /// is. Answers the keys to expand, the wanted ones first, with each one's
 /// element.
+/// One repeat's or conditional's settled items: their keys, the item values
+/// it publishes, and its problems (`settle_repeats`).
+#[derive(Clone, Debug, PartialEq)]
+struct ItemsOf {
+    keys: Vec<String>,
+    values: Vec<(Leaf, Value)>,
+    problems: Vec<expand::Problem>,
+}
+
+/// What a repeat with no enter or exit timing settles from: its `each`,
+/// `count` and `key`, whether it is a repeat, whether it shows, its `max`.
+#[derive(Clone, Debug, PartialEq)]
+struct ItemsKey {
+    inputs: [Option<Value>; 3],
+    is_repeat: bool,
+    shown: bool,
+    max: usize,
+}
+
 fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<(String, Value)>, enter_ms: f64, exit_ms: f64) -> Vec<(String, Value)> {
     let first = !all.contains_key(&r);
     let p = all.entry(r).or_default();

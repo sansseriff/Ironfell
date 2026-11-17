@@ -1756,4 +1756,67 @@ mod tests {
         times.sort_by(f64::total_cmp);
         println!("load the demo document: p50 {:.2} ms, min {:.2} ms ({} bytes, {nodes} live nodes)", times[4], times[0], text.len());
     }
+
+    /// The store's share of a playing frame: the demo document stepped at
+    /// 60 Hz through the playhead (`Store::set_time`, what `clock::advance`
+    /// calls), optionally with the Fourier page's `t` animated
+    /// (`FOURIER_CLIP=1`). Ignored; run with
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin playback_time -- --ignored --nocapture
+    /// (`SECONDS=n` keeps stepping, for a sampling profiler).
+    #[test]
+    #[ignore]
+    fn playback_time() {
+        let text = super::template_snapshot("demo").unwrap();
+        let mut store = iron_document::Store::load(&text).unwrap();
+        if std::env::var_os("FOURIER_CLIP").is_some() {
+            let v = store.view(&iron_document::ViewQuery { relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
+            let find = |hay: &str, pat: &str| -> String {
+                let at = hay.find(pat).unwrap_or_else(|| panic!("no {pat}"));
+                let open = hay[..at].rfind('<').unwrap();
+                let id = &hay[open..at];
+                id[id.find("id=\"").unwrap() + 4..].split('"').next().unwrap().to_owned()
+            };
+            let fourier = &v[v.find("name=\"fourier\"").unwrap()..];
+            let tl = v[v.find("<timeline id=\"").unwrap() + 14..].split('"').next().unwrap().to_owned();
+            let sl = find(fourier, "name=\"t slider\"");
+            let edit = format!("<edit><clip in=\"{tl}\" id=\"$fc\" name=\"fourier t\" start=\"0\" prop=\"slider.value\"><key t=\"0\" value=\"0\" easing=\"linear\"/><key t=\"2\" value=\"2\" easing=\"linear\"/></clip><link from=\"$fc\" to=\"{sl}\" rel=\"animates\"/></edit>");
+            let (tx, _) = iron_document::edit::transaction(&store, &edit, "probe", iron_document::Actor::System).unwrap();
+            store.apply(tx).unwrap();
+        }
+        if std::env::var_os("NO_WAVEPACKET").is_some() {
+            let v = store.view(&iron_document::ViewQuery { relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
+            let at = v.find("name=\"play t\"").expect("the wave packet's clip");
+            let open = v[..at].rfind('<').unwrap();
+            let id = v[open..at][v[open..at].find("id=\"").unwrap() + 4..].split('"').next().unwrap().to_owned();
+            let (tx, _) = iron_document::edit::transaction(&store, &format!("<edit><delete id=\"{id}\"/></edit>"), "probe", iron_document::Actor::System).unwrap();
+            store.apply(tx).unwrap();
+        }
+        let seconds: f64 = std::env::var("SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(4.0);
+        let mut times = Vec::new();
+        let (start, mut t) = (std::time::Instant::now(), 0.0);
+        while start.elapsed().as_secs_f64() < seconds {
+            t = (t + 1.0 / 60.0) % 2.0;
+            let s = std::time::Instant::now();
+            store.set_time(t);
+            let _ = store.take_changes();
+            times.push(s.elapsed().as_secs_f64() * 1e3);
+        }
+        // What one more step re-evaluates and changes, by composition.
+        let before = store.reactive().evaluations;
+        t = (t + 1.0 / 60.0) % 2.0;
+        store.set_time(t);
+        let evaluated = store.reactive().evaluations - before;
+        let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+        for l in store.take_changes().values {
+            let doc = store.tree();
+            let comp = iron_document::composition::composition_of(doc, l.node)
+                .and_then(|c| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str().map(str::to_owned)))
+                .unwrap_or_else(|| "(none)".into());
+            *by.entry(comp).or_default() += 1;
+        }
+        println!("one step: {evaluated} bindings evaluated; values changed by composition: {by:?}");
+        times.sort_by(f64::total_cmp);
+        let p = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
+        println!("set_time step ({} steps, {} live nodes): p50 {:.3} ms, p95 {:.3} ms", times.len(), store.tree().live_nodes().count(), p(0.5), p(0.95));
+    }
 }

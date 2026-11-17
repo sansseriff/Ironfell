@@ -929,6 +929,24 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   `action` 4.70). `action` p95 across the runs: slow pan 1.53–1.62, fast pan
   1.10–1.22, zoom 1.68–1.81 (`InPlace` 6.3–6.8, 6.2, 5.3–6.8).
 
+- **Playback, the Fourier page (2026-11-17, same build).** The Fourier tab shown,
+  the timeline playing, a clip on its `t` slider: the worker frame is 9.3 ms p50 on
+  either engine (`InPlace` 9.3–9.8; the engines differ by under 0.4 ms, since
+  playback is values only). Removing clips one at a time:
+  - the **Wave packet page's clip, on a hidden tab, costs about 2.6 ms a frame**.
+    Its page is not drawn, but its plot is re-evaluated every frame and its curves
+    written as path text. Natively (`playback_time` in `document_bridge/demo.rs`) a
+    playing step is 3.6 ms with it and 0.39 ms without;
+  - the Main tab's spin and slide clips cost about 0.3 ms;
+  - the Fourier page's own formulas cost under 0.1 ms natively (its partial sum
+    does not read `t`). Drawing its view costs about 2.9 ms (encode 1.5,
+    display list 0.7, submit 0.3, reconcile and bounds 0.35), with both
+    801-point curves re-encoded every frame although only the cursor, phasors
+    and link move;
+  - about 2 ms a frame is outside the named phases even when paused.
+  Unseen pictures costing evaluation is phase 4's (a hidden tab's pure pictures
+  cost 0 evaluations); 2b does not change it.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

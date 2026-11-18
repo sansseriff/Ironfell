@@ -81,22 +81,46 @@ fn a_removed_copy_leaves_nothing_and_comes_back_with_its_id() {
 
 /// A refusal after expansion made and removed copies restores both
 /// documents: the copies the transaction removed are back, and the ones it
-/// made are gone.
+/// made are gone. The refusal is a context's markup, which is checked only
+/// once expansion has run (`check_created`); an op that fails to apply would
+/// refuse before expansion and test nothing.
 #[test]
 fn a_refused_transaction_restores_the_copies() {
     let (mut store, comp) = sheet();
     let n = draw(&mut store, comp, r#"<group id="$r" name="rows" repeat.count="3"><rect name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#);
+    let (ops, context) = contexts::put_ops(store.tree(), r#"<context name="k"></context>"#).unwrap();
+    store.apply(tx("context", ops)).unwrap();
     let kids = |store: &Store| -> Vec<NodeId> { store.tree().children(n["r"]).to_vec() };
     let before = (kids(&store), store.save());
-    let missing = store.authored().next_id().offset(40);
+    let bad = Slot::Const(Value::Str(r#"<context name="k"><rule match="all" affords.wobble="move"/></context>"#.into()));
     for count in [1.0, 5.0] {
-        // The count changes the items, then a set on a node that does not
-        // exist refuses the whole transaction.
-        let ops = vec![Op::Set { id: n["r"], path: path("repeat.count"), slot: num(count) }, Op::Set { id: missing, path: path("size.w"), slot: num(1.0) }];
-        store.apply(tx("bad", ops)).expect_err("a missing node");
+        let ops = vec![Op::Set { id: n["r"], path: path("repeat.count"), slot: num(count) }, Op::Set { id: context, path: path("context_def.markup"), slot: bad.clone() }];
+        let err = store.apply(tx("bad", ops)).expect_err("bad markup");
+        assert_eq!(err[0].kind, ErrorKind::BadContext, "refused after expansion: {err:?}");
         assert_eq!((kids(&store), store.save()), before, "count {count}");
         store.tree().check_invariants().unwrap();
     }
+    // Without the bad markup the same counts apply, so the refusals above
+    // came after expansion had made and removed copies.
+    for (count, items) in [(1.0, 1), (5.0, 5)] {
+        store.apply(tx("count", vec![Op::Set { id: n["r"], path: path("repeat.count"), slot: num(count) }])).unwrap();
+        assert_eq!(kids(&store).iter().filter(|k| k.is_expanded()).count(), items);
+    }
+}
+
+/// An authored link cannot take a derived relation id: only an owner's
+/// expansion makes one, and history would drop its inverse.
+#[test]
+fn an_authored_link_with_a_derived_id_is_refused() {
+    let (mut store, comp) = sheet();
+    let meter = store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let n = draw(&mut store, comp, r#"<rect id="$a" name="a" w="5" h="5"/><rect id="$b" name="b" w="5" h="5"/>"#);
+    let local = store.authored().next_relation_ids(1)[0];
+    let rel = Relation { id: RelationId::expanded(meter, local), from: n["a"], to: n["b"], rel: RelKind::Constrains, data: BTreeMap::new() };
+    let before = store.save();
+    let err = store.apply(tx("link", vec![Op::Link { rel }])).expect_err("a derived relation id");
+    assert_eq!(err[0].kind, ErrorKind::BadId, "{err:?}");
+    assert_eq!(store.save(), before);
 }
 
 /// A copy's children are its owner's: an authored node cannot be created

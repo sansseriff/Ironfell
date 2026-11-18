@@ -53,9 +53,11 @@ fn build() -> String {
     // A sibling tie between an authored and a derived child (handoff §4.6):
     // an authored child of the meter instance given the order key of its
     // first copy. With copies apart, `Tree::children` merges the two
-    // documents' children by (order, id), so the tie must come out the
-    // same however the derived ids are numbered. (A repeat cannot tie: it
-    // keys its items after its last authored child.)
+    // documents' children by (order, id), and a derived id sorts after any
+    // authored one (its `EXPANDED` bit), so the authored child comes first
+    // as it did with copies in the document; the differential harness
+    // compares the two. Registry numbering never decides such a tie. (A
+    // repeat cannot tie: it keys its items after its last authored child.)
     let doc = store.tree();
     let first = doc.children(meter).iter().copied().find(|k| k.is_expanded()).expect("the meter has copies");
     let order = doc.live(first).unwrap().order.clone();

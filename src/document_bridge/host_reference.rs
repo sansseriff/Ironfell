@@ -270,8 +270,20 @@ fn host_reference_follows_derived_structure() {
         set(&mut host, "change the rows", names, "let.value", bound(e));
     }
     // The same items in another order: copies move, none made or removed.
-    for e in ["list('a', 'b', 'c')", "list('c', 'a', 'b')", "list('b', 'c', 'a')"] {
+    set(&mut host, "three rows", names, "let.value", bound("list('a', 'b', 'c')"));
+    let rows = host.doc_named("rows");
+    let items = |host: &Host| host.world.resource::<DocumentStore>().0.tree().children(rows).to_vec();
+    for e in ["list('c', 'a', 'b')", "list('b', 'c', 'a')"] {
+        let was = items(&host);
         set(&mut host, "reorder the rows", names, "let.value", bound(e));
+        let now = items(&host);
+        let sorted = |v: &[NodeId]| {
+            let mut v = v.to_vec();
+            v.sort();
+            v
+        };
+        assert_eq!(sorted(&was), sorted(&now), "{e}: a reorder makes and removes no copy");
+        assert_ne!(was, now, "{e}: the copies move");
     }
     for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {
         host.world.resource_mut::<HistoryRequests>().0.push(op);

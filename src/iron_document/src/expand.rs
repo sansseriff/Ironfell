@@ -1084,6 +1084,11 @@ pub(crate) fn in_library(doc: Tree<'_>, mut id: NodeId) -> bool {
 /// The authored op an edit to an expanded node would need; until edits are
 /// translated (component-model.md §7) such ops are refused with this reason.
 pub fn refuse(op: &Op) -> Option<String> {
+    if let Op::Link { rel } = op
+        && rel.id.is_expanded()
+    {
+        return Some(format!("{} is a derived relation id: only an instance's expansion makes one", rel.id));
+    }
     let target = match op {
         Op::Create { id, parent, .. } => [Some(*id), *parent].into_iter().flatten().find(|n| n.is_expanded()),
         Op::Delete { id } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id).filter(|n| n.is_expanded()),

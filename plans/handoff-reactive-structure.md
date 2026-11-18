@@ -1582,8 +1582,57 @@ an optional step.
     transactions, and a structural edit at 1,000 meters takes 93 ms. Look at this
     before phase 4 counts loaded owners.
 
-Next: the host reference on `Apart` with its removal, reorder and undo fixtures; the
-smoke and §16.2 scripts; the stage-1 measurements.
+- **Stage 1's exit (2026-11-18).**
+  - **The host reference** (`67433dc`) adds rows reordered by key, which move their
+    copies and make or remove none, and an instance raised. Both are undone.
+  - **In the app** (dev-opt build): `bun test`, `smoke.txt` and the §16.2 scripts
+    (`plot-view`, `actions`, `query`, `fiber`, `pulses`) pass.
+  - **`regression.txt`** passes again (`6d2199d`). The slider-styling commit
+    `00151fd` had broken two of its steps without failing it: link-figures
+    named an id the demo no longer had, and a Cmd-held scrub moved the slider.
+  - **Measured before and after,** native release except the app row:
+
+    | | before stage 1 (`518adf0`) | after |
+    |---|---|---|
+    | plot step, values only, pan / zoom, 1 plot | 0.065 / 0.122 ms (fix 1) | 0.039 / 0.111 ms |
+    | plot step, values only, pan / zoom, 10 plots | 0.065 / 0.152 ms | 0.068 / 0.156 ms |
+    | plot step, tick change, pan / zoom, 1 plot | 0.166 / 0.190 ms | 0.093 / 0.167 ms |
+    | plot step, tick change, pan / zoom, 10 plots | 0.257 / 0.322 ms | 0.246 / 0.324 ms |
+    | app `action` p95, wasm-bench: slow pan, fast pan, zoom | 1.32, 1.05, 1.45 ms | 1.30, 1.06, 1.27 ms |
+    | structural edit, 700 meters | 5.2–5.7 ms | 5.1–5.3 ms |
+    | constant edit, 700 meters | 1.09–1.15 ms | 1.14–1.33 ms |
+    | document clone, 700 meters | 7.6–10.8 ms | 0.26–0.55 ms |
+    | save, 700 meters | 2.4–2.8 ms | 1.9–2.0 ms |
+    | load, 700 meters | 107–115 ms | 108–110 ms |
+    | demo: load, save, clone | 1.4–1.8, 0.4, 0.06 ms | 1.5–2.0, 0.4, 0.05 ms |
+
+    The "before" plot rows are fix 1's numbers. The other "before" rows come from
+    `518adf0`, built out of tree and run beside the current tree: `instance_cost`,
+    and a load/save/clone timer over the demo as the app saves it.
+  - **Where an edit plan's time goes,** 23 ms at 700 meters: about 13 ms copying
+    and dropping the store (`scratch`), 7 ms applying the edit to the copy. Planning
+    inside a transaction on the live store, rolled back, would cost about the edit
+    alone. Not done: it is outside stage 1.
+- **Council (Opus only, 2026-11-18): 7/10.** Fixed:
+  - `a_refused_transaction_restores_the_copies` refused before expansion, so it
+    tested nothing. It now refuses on a context's markup, which is checked after
+    expansion.
+  - `scratch` carried an eased or previewed layout. It now publishes the targets
+    when motion or a layout preview is on.
+  - `expand::refuse` turns away an authored `Link` with a derived relation id
+    (`an_authored_link_with_a_derived_id_is_refused`).
+  - `Docs::gone` is journaled, so a rollback takes back what a refused transaction
+    added. `regraph`'s `Create` arm reads the live node.
+  - The A12 test's comment no longer overclaims: the `EXPANDED` bit decides an
+    authored-to-derived tie.
+  - The host reference asserts that a reorder moves copies and makes or removes
+    none.
+
+  Left: the copies document keeps an empty child list for each deleted owner that
+  had copies. It is a small leak that grows with owner churn, and stage 3 replaces
+  the copies document.
+
+Next: stage 2, templates.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

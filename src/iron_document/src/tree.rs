@@ -36,11 +36,14 @@ pub(crate) struct Docs {
     /// it went: a copy leaves no tombstone to read it from afterwards
     /// (`Changes::note`, `Store::regraph`).
     pub(crate) gone: crate::changes::Gone,
+    /// While a transaction is open, what each of its deletes replaced in
+    /// `gone`, so a rollback takes them back out.
+    gone_journal: Option<Vec<(NodeId, Option<crate::changes::Went>)>>,
 }
 
 impl Docs {
     pub(crate) fn new(authored: Document, apart: bool) -> Docs {
-        Docs { authored, copies: Document::new(), apart, gone: Default::default() }
+        Docs { authored, copies: Document::new(), apart, gone: Default::default(), gone_journal: None }
     }
 
     /// Delete one live node, its children already gone: a copy kept apart
@@ -55,7 +58,10 @@ impl Docs {
             ty: node.ty,
             port_or_anchor: tree.facet(id, FacetKind::Port).is_some() || tree.facet(id, FacetKind::Anchor).is_some(),
         };
-        self.gone.insert(id, went);
+        let was = self.gone.insert(id, went);
+        if let Some(journal) = &mut self.gone_journal {
+            journal.push((id, was));
+        }
         if self.apart && id.is_expanded() {
             self.copies.remove_node(id);
         } else {
@@ -77,16 +83,24 @@ impl Docs {
     pub(crate) fn begin(&mut self) {
         self.authored.begin();
         self.copies.begin();
+        self.gone_journal = Some(Vec::new());
     }
 
     pub(crate) fn commit(&mut self) {
         self.authored.commit();
         self.copies.commit();
+        self.gone_journal = None;
     }
 
     pub(crate) fn rollback(&mut self) {
         self.authored.rollback();
         self.copies.rollback();
+        for (id, was) in self.gone_journal.take().into_iter().flatten().rev() {
+            match was {
+                Some(w) => self.gone.insert(id, w),
+                None => self.gone.remove(&id),
+            };
+        }
         #[cfg(feature = "differential")]
         if let Err(e) = Tree::of(self).check_invariants() {
             panic!("journal rollback broke an invariant: {e}");

@@ -475,13 +475,14 @@ impl StoreCore {
     /// this one as it stands, both documents and everything derived from
     /// them copied rather than derived again, which re-expanded every owner
     /// on each plan (115 ms at 700 meters). It has no history, gesture,
-    /// previews or pending changes of its own.
+    /// previews or pending changes of its own, and no motion: its layout is
+    /// settled, never part-way through a transition or a reorder's preview.
     pub(crate) fn scratch(&self) -> StoreCore {
         let mut docs = self.docs.clone();
         docs.gone.clear();
         let mut reactive = self.reactive.clone();
         reactive.clear_overlay(Tree::of(&docs));
-        StoreCore {
+        let mut scratch = StoreCore {
             docs,
             owners: self.owners.clone(),
             history: History { horizon: DEFAULT_HORIZON, ..Default::default() },
@@ -521,7 +522,13 @@ impl StoreCore {
             geometry: self.geometry.clone(),
             producers: self.producers.clone(),
             text_generation: self.text_generation,
+        };
+        // What this store published for layout may be eased or previewed;
+        // the scratch publishes the targets.
+        if self.motion.enabled || self.layout_preview.is_some() {
+            scratch.resolve_layout();
         }
+        scratch
     }
 
     /// Bring the graph up to date after structure changed through `ops`:
@@ -547,7 +554,9 @@ impl StoreCore {
                 Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
                 Op::AddFacet { facet, .. } => derives(facet.kind()),
                 Op::RemoveFacet { kind, .. } => derives(*kind),
-                Op::Create { id, ty, facets, .. } => matches!(ty.name(), "port" | "connection") || facets.iter().any(|f| matches!(f.kind(), FacetKind::Port | FacetKind::Anchor)) || made_of(*id),
+                // A created node is live: read it, not what an earlier node
+                // with its id was when it went.
+                Op::Create { id, ty, facets, .. } => matches!(ty.name(), "port" | "connection") || facets.iter().any(|f| matches!(f.kind(), FacetKind::Port | FacetKind::Anchor)) || doc.facet(*id, FacetKind::Port).is_some() || doc.facet(*id, FacetKind::Anchor).is_some(),
                 Op::Delete { id } => made_of(*id),
                 Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection),
                 Op::Reorder { .. } => false,

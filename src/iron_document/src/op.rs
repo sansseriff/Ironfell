@@ -517,7 +517,7 @@ fn delete(docs: &mut Docs, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> 
             order: node.order,
             facets: comps,
         });
-        docs.of_node(n).tombstone(n, cx.stamp);
+        docs.delete_node(n, cx.stamp);
     }
     Ok(inverse)
 }

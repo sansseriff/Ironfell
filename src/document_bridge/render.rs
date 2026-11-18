@@ -248,7 +248,9 @@ pub fn render_document_layer(
     // referenced: every panel rebuilds.
     let in_templates = changed.nodes.iter().any(|&n| template_of(doc, n).is_some());
     let homes: Option<std::collections::BTreeSet<nest::Home>> = (reason == "document" && !changed.nodes.is_empty() && !in_templates)
-        .then(|| changed.nodes.iter().map(|&n| nest::home(doc, n)).collect())
+        // A copy removed outright is not in the tree; its parent is named
+        // with it, so where it drew is counted.
+        .then(|| changed.nodes.iter().filter(|&&n| doc.node(n).is_some()).map(|&n| nest::home(doc, n)).collect())
         .filter(|h: &std::collections::BTreeSet<nest::Home>| !h.contains(&nest::Home::Unknown));
     let shows = |composition: Option<NodeId>, loose: bool| {
         homes.as_ref().is_none_or(|homes| {

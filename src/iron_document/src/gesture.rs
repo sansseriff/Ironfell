@@ -90,7 +90,10 @@ const GEOMETRY: &[FacetKind] = &[
 ];
 
 fn watched(doc: Tree<'_>, g: &ActiveGesture, n: NodeId) -> bool {
-    g.nodes.contains(&n) || g.nodes.iter().any(|&w| doc.is_ancestor(n, w))
+    // A watched node that went has no ancestors left to move or delete: a
+    // removed copy is not in the document at all, so a tombstone's former
+    // parents do not count either.
+    g.nodes.contains(&n) || g.nodes.iter().any(|&w| doc.is_live(w) && doc.is_ancestor(n, w))
 }
 
 /// Why `ops`, about to apply to `doc`, conflict with the gesture; `None`

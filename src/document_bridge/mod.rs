@@ -253,7 +253,9 @@ impl GeometryRevision {
     /// Bump for a change to `nodes`, by the compositions they draw in.
     fn touch(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>) {
         self.0 = self.0.wrapping_add(1);
-        for &n in nodes {
+        // A copy removed outright is no longer in the tree; its parent is
+        // named with it (`Changes::nodes`), so where it drew is counted.
+        for &n in nodes.iter().filter(|&&n| doc.node(n).is_some()) {
             let r = self.1.entry(nest::home(doc, n)).or_default();
             *r = r.wrapping_add(1);
         }

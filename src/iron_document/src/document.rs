@@ -203,6 +203,8 @@ enum Rec {
     TargetKey(NodeId),
     ByTarget(NodeId, RelationId, bool),
     ChildrenKey(NodeId),
+    /// `children[id]`, empty, was removed.
+    ChildrenUnkeyed(NodeId),
     /// An id was inserted into a child list (`None`: the roots) at `pos`.
     Placed(Option<NodeId>, usize),
     /// `id` was removed from a child list at `pos`.
@@ -653,6 +655,9 @@ impl Document {
             Rec::ChildrenKey(id) => {
                 self.children.remove(&id);
             }
+            Rec::ChildrenUnkeyed(id) => {
+                self.children.insert(id, Vec::new());
+            }
             Rec::Placed(parent, pos) => {
                 self.container(parent).remove(pos);
             }
@@ -823,6 +828,29 @@ impl Document {
         let kinds: Vec<FacetKind> = self.facets.iter().filter(|(_, m)| m.contains_key(&id)).map(|(k, _)| *k).collect();
         for kind in kinds {
             self.facet_index_remove(kind, id);
+        }
+    }
+
+    /// Remove a live node outright, leaving no tombstone: a derived copy,
+    /// which its owner makes again when it is wanted (handoff §4.6). Its
+    /// children go first; relations to it are the caller's.
+    pub(crate) fn remove_node(&mut self, id: NodeId) {
+        self.edits.0 += 1;
+        debug_assert!(self.is_live(id), "only a live node is removed");
+        self.unplace(id);
+        let ty = self.nodes[&id].ty;
+        self.type_remove(ty, id);
+        let kinds: Vec<FacetKind> = self.facets.iter().filter(|(_, m)| m.contains_key(&id)).map(|(k, _)| *k).collect();
+        for kind in kinds {
+            self.remove_facet(id, kind);
+        }
+        if self.children.get(&id).is_some_and(Vec::is_empty) {
+            self.children.remove(&id);
+            self.rec(Rec::ChildrenUnkeyed(id));
+        }
+        let before = self.nodes.remove(&id);
+        if self.recording() {
+            self.rec(Rec::Node(id, before));
         }
     }
 

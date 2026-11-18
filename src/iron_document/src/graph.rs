@@ -826,6 +826,9 @@ fn read_with(
     if let Some(s) = runtime.get(&leaf) {
         return Some(s.value.clone());
     }
+    // A node that went has no stored value: a tombstone's facets are kept
+    // for undo, and a copy removed outright has none (handoff §4.6).
+    doc.live(leaf.node)?;
     doc.leaf(leaf.node, leaf.path)?.constant().cloned()
 }
 

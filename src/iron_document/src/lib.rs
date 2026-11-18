@@ -488,7 +488,12 @@ impl StoreCore {
         // of transformed ancestors (`port::derived_signals`,
         // `anchor::derived`).
         let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
-        let made_of = |id: NodeId| doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some();
+        // A deleted node is read as it was when it went (`Docs::gone`).
+        let gone = &self.docs.gone;
+        let made_of = |id: NodeId| match gone.get(&id) {
+            Some(w) => matches!(w.ty.name(), "port" | "connection") || w.port_or_anchor,
+            None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
+        };
         for op in ops {
             rederive |= match op {
                 Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
@@ -518,7 +523,7 @@ impl StoreCore {
             rescope |= match op {
                 Op::Reorder { id, .. } => provides(doc, *id),
                 Op::Create { ty, .. } => matches!(ty.name(), "let" | "token"),
-                Op::Delete { id } => doc.node(*id).is_some_and(|n| matches!(n.ty.name(), "let" | "token")),
+                Op::Delete { id } => gone.get(id).map(|w| w.ty).or_else(|| doc.node(*id).map(|n| n.ty)).is_some_and(|ty| matches!(ty.name(), "let" | "token")),
                 Op::Set { path, .. } => names_context(path),
                 Op::AddFacet { facet, .. } => matches!(facet.kind(), FacetKind::Let | FacetKind::Name),
                 Op::RemoveFacet { kind, .. } => matches!(kind, FacetKind::Let | FacetKind::Name),
@@ -541,6 +546,14 @@ impl StoreCore {
     }
 
     /// Store what an accepted expansion found.
+    /// Record what `ops` changed, with `inverse`, in the pending changes,
+    /// with the deleted nodes' places as they were when they went
+    /// (`Docs::gone`, kept until the changes are taken: a later delete of
+    /// the same id replaces its entry).
+    fn note_changes<'a>(&mut self, ops: impl IntoIterator<Item = &'a Op>, inverse: &[Op]) {
+        self.pending.note(Tree::of(&self.docs), &self.docs.gone, ops, inverse);
+    }
+
     fn store_found(&mut self, delta: engine::owners::Delta) {
         self.owners.apply(delta);
         self.expansion_problems = self.owners.problems();
@@ -655,6 +668,7 @@ impl StoreCore {
         store.resample();
         store.settle_repeats();
         store.pending = Changes::default();
+        store.docs.gone.clear();
         store.rebuild_clusters();
         store.resolve_physics();
         store
@@ -1108,6 +1122,7 @@ impl StoreCore {
     /// what each has not yet used, so none takes what another needs.
     pub fn take_changes(&mut self) -> Changes {
         let mut c = std::mem::take(&mut self.pending);
+        self.docs.gone.clear();
         c.values = self.reactive.take_changed();
         c.marks = self.reactive.take_marks();
         c.geometry = self.geometry.take(Tree::of(&self.docs), self.reactive.take_moved());
@@ -1338,8 +1353,10 @@ impl StoreCore {
     fn resume_gesture(&mut self, s: gesture::Suspended) {
         self.drivers = s.drivers;
         self.fingers = s.fingers;
+        // A preview of a node that went is dropped with it.
         for (leaf, v) in s.values {
-            if Tree::of(&self.docs).leaf(leaf.node, leaf.path).is_some() {
+            let doc = Tree::of(&self.docs);
+            if doc.is_live(leaf.node) && doc.leaf(leaf.node, leaf.path).is_some() {
                 self.reactive.preview(Tree::of(&self.docs), leaf, v);
             }
         }
@@ -1425,11 +1442,16 @@ impl StoreCore {
         // by the visible mode (timeline.md §12.2), not their authored value,
         // unless the gesture's view records none.
         let unkeyed = gesture.as_ref().is_some_and(|g| g.unkeyed);
+        // A preview of a node that went during the gesture (a copy its
+        // owner's expansion removed) commits nothing: the node is not there
+        // to write to, whether it is a tombstone or gone outright.
+        let gone = |l: &Leaf| !Tree::of(&self.docs).is_live(l.node);
         let driven: Vec<(Leaf, Value)> = self
             .reactive
             .overlay()
             .iter()
             .filter(|_| !unkeyed)
+            .filter(|(l, _)| !gone(l))
             .filter(|(l, _)| self.drivers.contains(l) && Tree::of(&self.docs).leaf(l.node, l.path).is_some_and(|s| s.expr().is_none()))
             .map(|(l, v)| (*l, v.clone()))
             .collect();
@@ -1439,7 +1461,7 @@ impl StoreCore {
         // added, defaults with the previewed fields set, before the `Set`s.
         let mut added: BTreeMap<(NodeId, FacetKind), Facet> = BTreeMap::new();
         for (leaf, value) in self.reactive.overlay() {
-            if !self.drivers.contains(leaf) || keyed.contains(leaf) {
+            if !self.drivers.contains(leaf) || keyed.contains(leaf) || gone(leaf) {
                 continue;
             }
             let Some(slot) = Tree::of(&self.docs).leaf(leaf.node, leaf.path) else {
@@ -1541,7 +1563,7 @@ impl StoreCore {
         // The spatial scene learns of session nodes as of any other: a
         // session composition built after the last transaction (the Latency
         // view's) is otherwise never indexed, so presses miss it.
-        self.pending.note(Tree::of(&self.docs), ops.iter(), &undo);
+        self.note_changes(ops.iter(), &undo);
         self.geometry.note_ops(ops.iter());
         if structural {
             self.repeat_inputs = None;
@@ -2141,7 +2163,7 @@ impl StoreCore {
         // Structure first: what follows places and styles the new items.
         self.publish_selection();
         let derived = self.settle_repeats();
-        self.pending.note(Tree::of(&self.docs), derived.iter(), &[]);
+        self.note_changes(derived.iter(), &[]);
         self.publish_state();
         self.solve_network();
         self.resolve_theme();
@@ -2809,7 +2831,7 @@ impl StoreCore {
             self.machines.shared += 1;
         }
         tx.solver = solver.clone();
-        self.pending.note(Tree::of(&self.docs), tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
+        self.note_changes(tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -2852,7 +2874,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
-        self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+        self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -2890,7 +2912,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -2934,7 +2956,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);

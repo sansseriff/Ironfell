@@ -626,3 +626,12 @@ fn two_hundred_random_scripts() {
 fn ten_thousand_random_scripts() {
     run(0..10_000);
 }
+
+/// One seed, from `IRON_SEED`, with its failure in full: for reproducing
+/// what the runs above report.
+#[test]
+#[ignore]
+fn one_seed() {
+    let seed: u64 = std::env::var("IRON_SEED").expect("set IRON_SEED").parse().expect("a number");
+    script(seed, 30);
+}

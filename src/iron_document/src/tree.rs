@@ -32,11 +32,35 @@ pub(crate) struct Docs {
     pub(crate) authored: Document,
     pub(crate) copies: Document,
     pub(crate) apart: bool,
+    /// Each node deleted since the changes were last taken, as it was when
+    /// it went: a copy leaves no tombstone to read it from afterwards
+    /// (`Changes::note`, `Store::regraph`).
+    pub(crate) gone: crate::changes::Gone,
 }
 
 impl Docs {
     pub(crate) fn new(authored: Document, apart: bool) -> Docs {
-        Docs { authored, copies: Document::new(), apart }
+        Docs { authored, copies: Document::new(), apart, gone: Default::default() }
+    }
+
+    /// Delete one live node, its children already gone: a copy kept apart
+    /// is removed outright, anything else tombstoned. What it was is kept
+    /// in `gone`.
+    pub(crate) fn delete_node(&mut self, id: NodeId, at: crate::id::Version) {
+        let tree = Tree::of(self);
+        let node = tree.node(id).expect("a live node is deleted");
+        let went = crate::changes::Went {
+            parent: node.parent,
+            depth: tree.depth(id),
+            ty: node.ty,
+            port_or_anchor: tree.facet(id, FacetKind::Port).is_some() || tree.facet(id, FacetKind::Anchor).is_some(),
+        };
+        self.gone.insert(id, went);
+        if self.apart && id.is_expanded() {
+            self.copies.remove_node(id);
+        } else {
+            self.authored.tombstone(id, at);
+        }
     }
 
     /// The document a write to node `id` goes to.

@@ -14,8 +14,9 @@ pub struct Snapshot {
     /// `serial`'s saved text: authored nodes, tombstones and the facets they
     /// keep, counters, the version.
     pub saved: String,
-    /// Every node the document holds (live and tombstoned; authored, derived
-    /// and session) with its type, parent, order and every facet.
+    /// Every node the documents hold (live and tombstoned; authored, derived
+    /// and session) with its type, parent, order and every facet, except
+    /// derived tombstones.
     pub nodes: Vec<(Node, Vec<Facet>)>,
     pub relations: Vec<Relation>,
     /// For every declared field of every facet of every live node, and
@@ -117,7 +118,9 @@ pub const NOT_COMPARED: &[(&str, &str)] = &[
 
 pub fn snapshot(s: &StoreCore) -> Snapshot {
     let doc = s.tree();
-    let mut nodes: Vec<(Node, Vec<Facet>)> = doc.nodes().map(|n| (n.clone(), doc.facets_of(n.id).cloned().collect())).collect();
+    // Derived tombstones are not compared: 2b's layout keeps them, copies
+    // kept apart leave none (handoff §4.6).
+    let mut nodes: Vec<(Node, Vec<Facet>)> = doc.nodes().filter(|n| n.is_live() || !n.id.is_expanded()).map(|n| (n.clone(), doc.facets_of(n.id).cloned().collect())).collect();
     nodes.sort_by_key(|(n, _)| n.id);
     let relations: Vec<Relation> = doc.relations().cloned().collect();
 

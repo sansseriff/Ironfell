@@ -1529,9 +1529,33 @@ full traversal as its oracle).
 templates moves to phase 4 (D14). Lazy slots (stage 3) are a goal the user wants, not
 an optional step.
 
-**Progress:** step 1a done (`e2bc90b`): `Docs` and the two-document Tree, `Tree::over`
-deleted, `apart = false` (no behaviour change). Next, step 1b: `apart = true` and the
-`Copies` reference in the facade.
+**Progress:**
+- **Step 1a** (`e2bc90b`): `Docs` and the two-document Tree, `Tree::over` deleted,
+  `apart = false` (no behaviour change).
+- **Step 1b, copies apart** (`7730fbb`): the subject keeps copies in `copies`, and the
+  differential reference keeps them in the document (`with_copies_in_document`). A
+  joint `Tree::check_invariants` runs on both stores after every call and on rollback.
+- **Step 1b, no derived tombstones:** `Docs::delete_node` removes a copy outright
+  (`Document::remove_node`, journaled). It differs from this section's plan in three
+  ways:
+  - **The cascade stays:** an authored delete still reaches its copies through
+    `Tree::descendants`, rather than through the owners' expansion.
+  - **Removed nodes are recorded in `Docs::gone`:** each deletion stores the removed
+    node's parent, depth, type and port/anchor flag (`changes::Went`). This is the
+    capture at mutation time described above. `Changes::note` and `regraph`'s
+    `made_of` read it, and it is cleared in `take_changes`.
+  - **Dead nodes are treated alike, whether tombstoned or removed:**
+    - `read_with` returns no value for them;
+    - `resume_gesture` drops their previews and `commit_gesture` writes none;
+    - for a gesture's conflict check, a dead watched node has no ancestors. Before
+      this, the reference cancelled a gesture when a tombstone's former parent was
+      deleted (random seeds 144, 219 and 7593).
+- **Test layout:** the store's integration tests are one binary, `tests/suite.rs`
+  (filter by module, `--test suite differential_random::`). The font tests are in
+  `fonts` and `instance_cost` is separate. A change relinks in ~5 s rather than ~50 s.
+
+Next: scratch stores clone both documents; `with_document` and `load` refuse derived
+ids; A12; the stage-1 fixtures, the budget test, the host reference and measurements.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).
@@ -1590,8 +1614,8 @@ unreported workaround hides which one gave way.
 
 ```sh
 # Native store probe (fast, no browser)
-cargo test --release -p iron_document --target aarch64-apple-darwin --test plot_perf -- --ignored --nocapture
-PLOTS=10 cargo test --release -p iron_document --target aarch64-apple-darwin --test plot_perf -- --ignored --nocapture
+cargo test --release -p iron_document --target aarch64-apple-darwin --test suite plot_perf:: -- --ignored --nocapture
+PLOTS=10 cargo test --release -p iron_document --target aarch64-apple-darwin --test suite plot_perf:: -- --ignored --nocapture
 
 # In app, optimised build (webgl2 is what the headless driver uses)
 PROFILE=wasm-bench BACKENDS=webgl2 .claude/skills/run-iron/build.sh

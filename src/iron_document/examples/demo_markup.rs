@@ -72,7 +72,7 @@ fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
 
 fn walk(doc: Tree<'_>, id: NodeId, out: &mut Vec<NodeId>) {
     out.push(id);
-    for &c in doc.children(id) {
+    for &c in doc.children(id).iter() {
         if !c.is_expanded() && doc.live(c).is_some() {
             walk(doc, c, out);
         }

@@ -71,7 +71,7 @@ pub fn inputs_of(doc: Tree<'_>, def: NodeId) -> Result<Vec<InputInfo>, String> {
         return Err(format!("{def} is a {}, not a definition", node.ty));
     }
     let mut out = Vec::new();
-    for &child in doc.children(def) {
+    for &child in doc.children(def).iter() {
         let Some(port) = doc.get::<Port>(child).filter(|p| is_input(p)) else { continue };
         if !doc.is_live(child) {
             continue;

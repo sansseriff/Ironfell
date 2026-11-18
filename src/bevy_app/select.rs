@@ -1374,7 +1374,7 @@ impl Geo<'_> {
         let Some((bounds, kind)) = self.local_box(id) else { return };
         let Some(space) = self.space(chain) else { return };
         if resize && kind == Kind::Group {
-            for &c in self.doc().children(id) {
+            for &c in self.doc().children(id).iter() {
                 let mut sub = chain.to_vec();
                 sub.push(c);
                 self.parts(&sub, true, out);
@@ -1417,7 +1417,7 @@ impl Geo<'_> {
         let Some((_, kind)) = self.local_box(id) else { return };
         // Groups resize through children. Controls move and rotate as one.
         if kind == Kind::Group {
-            for &c in self.doc().children(id) {
+            for &c in self.doc().children(id).iter() {
                 let mut sub = chain.to_vec();
                 sub.push(c);
                 self.resize_capabilities(&sub, out);
@@ -1694,11 +1694,11 @@ fn find_reach(doc: Tree<'_>, views: &PanelViews, id: NodeId) -> Option<Reach> {
                     return Some(chain);
                 }
                 if depth < nest::MAX_DEPTH
-                    && let Some(found) = search(doc, doc.children(source), &chain, comp, depth + 1)
+                    && let Some(found) = search(doc, &doc.children(source), &chain, comp, depth + 1)
                 {
                     return Some(found);
                 }
-            } else if let Some(found) = search(doc, doc.children(n), &chain, comp, depth) {
+            } else if let Some(found) = search(doc, &doc.children(n), &chain, comp, depth) {
                 return Some(found);
             }
         }
@@ -2625,7 +2625,7 @@ pub fn select_tool_system(
                 for note in pasted.notes.iter().chain(&frag.dropped) {
                     info!("{verb}: {note}");
                 }
-                let label = if verb == "paste" { format!("paste {}", type_label(Tree::over(&frag.doc), &frag.roots)) } else { verb.to_owned() };
+                let label = if verb == "paste" { format!("paste {}", type_label(Tree::authored_only(&frag.doc), &frag.roots)) } else { verb.to_owned() };
                 pending.0.push(TransactionInput { label, actor: Actor::Human, ts: 0, idempotency_key: None, ops: pasted.ops, exact: false });
                 tool.select_when_live = pasted.roots;
             }
@@ -2728,7 +2728,7 @@ pub fn select_tool_system(
                     let chain = candidates[i].clone();
                     let n = *chain.last().expect("candidate");
                     if geo.ty(n) == "empty" || geo.ty(n) == "group" {
-                        for &child in geo.doc().children(n) { let mut c = chain.clone(); c.push(child); candidates.push(c); }
+                        for &child in geo.doc().children(n).iter() { let mut c = chain.clone(); c.push(child); candidates.push(c); }
                     }
                     i += 1;
                 }
@@ -4514,7 +4514,8 @@ pub fn draw_select_overlay(
                 let r = geo.contexts();
                 let mut dotted = Vec::new();
                 for chain in &looked {
-                    let parts = geo.doc().children(chain[chain.len() - 1]).iter().take(PART_SCAN).map(|&c| [&chain[..], &[c]].concat());
+                    let kids = geo.doc().children(chain[chain.len() - 1]);
+                    let parts = kids.iter().take(PART_SCAN).map(|&c| [&chain[..], &[c]].concat());
                     for chain in std::iter::once(chain.clone()).chain(parts) {
                         if r.get(&chain, chain.len() - 1, Field::HANDLE) == "dot" && !dotted.contains(&chain) {
                             dotted.push(chain);

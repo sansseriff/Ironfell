@@ -201,7 +201,7 @@ fn add_auto_layout_keeps_the_arrangement_it_was_given() {
     assert_eq!(store.resolved(g, path("layout.mode")), Some(Value::Enum("stack_x".into())));
     assert_eq!(num(&store, g, "layout.gap"), 10.0);
     // Ordered as they sit, and nothing moved.
-    assert_eq!(store.tree().children(g), &[ids[2], ids[3], ids[1]]);
+    assert_eq!(*store.tree().children(g), [ids[2], ids[3], ids[1]]);
     for (r, b) in ids[1..].iter().zip(&before) {
         assert_eq!(&world(&store, *r), b);
     }

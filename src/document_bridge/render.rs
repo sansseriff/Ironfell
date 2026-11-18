@@ -613,7 +613,7 @@ impl Draw<'_> {
                 return;
             }
             self.node(b, id, base);
-            self.branches(b, self.doc.children(id), base, clip, key, depth, allowed);
+            self.branches(b, &self.doc.children(id), base, clip, key, depth, allowed);
     }
 
     /// A node's placement in its composition's space (`nest::world_2d`), or

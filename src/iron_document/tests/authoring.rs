@@ -261,7 +261,7 @@ fn attachments_survive_instances_and_port_exposure_and_reject_invalid_edits() {
     assert!(store.apply(tx("remove attachment metadata", vec![Op::RemoveFacet { id: points[0], kind: facet::FacetKind::Attachment }])).is_err());
     assert_eq!(store.save(), before);
     assert!(attachment::attach(&store, control, &points).is_err());
-    let ops = author::expose_control(store.authored(), shown(control), "in", true).unwrap();
+    let ops = author::expose_control(store.tree(), store.authored(), shown(control), "in", true).unwrap();
     apply(&mut store, "expose", ops);
     assert!(store.tree().get::<facet::Anchor>(control).is_some());
     let pasted = copy::duplicate(&store, &[main]).unwrap();
@@ -287,7 +287,7 @@ fn both_paths_follow_a_plugged_instance_and_unplug_without_jumping() {
     let shown = NodeId::expanded(main, control).unwrap();
     let ops = attachment::attach(&store, shown, &points).unwrap();
     apply(&mut store, "attach", ops);
-    let ops = author::expose_control(store.authored(), shown, "in", true).unwrap();
+    let ops = author::expose_control(store.tree(), store.authored(), shown, "in", true).unwrap();
     apply(&mut store, "expose", ops);
     let spec = store.tree().get::<facet::Anchor>(control).unwrap().port.constant().unwrap().as_ref().unwrap();
     let ops = author::edit_port(store.authored(), spec, &PortPatch { kind: Some("optical_power".into()), ..Default::default() }).unwrap();

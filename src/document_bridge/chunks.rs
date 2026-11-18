@@ -259,7 +259,7 @@ impl Cut<'_> {
         // A definition that pictures itself draws nothing the second time.
         self.cost.insert(id, (0, 1));
         let mut c = (self.own(id), 1);
-        for &k in self.doc.children(id) {
+        for &k in self.doc.children(id).iter() {
             let (kc, kn) = self.subtree(k);
             c = (c.0 + kc, c.1 + kn);
         }

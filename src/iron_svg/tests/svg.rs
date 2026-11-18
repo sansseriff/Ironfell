@@ -519,7 +519,7 @@ fn foreign_group_opacity_remains_isolated() {
     paste(&mut store, &imported.fragment, target);
     let group = store.tree().children(target)[0];
     assert_eq!(store.resolved(group, "appearance.opacity".parse().unwrap()), Some(Value::Number(0.5)));
-    for &id in store.tree().children(group) {
+    for &id in store.tree().children(group).iter() {
         assert_eq!(store.resolved(id, "fill.opacity".parse().unwrap()), Some(Value::Number(1.0)));
     }
 }

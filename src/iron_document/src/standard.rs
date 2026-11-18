@@ -176,46 +176,46 @@ impl crate::StoreCore {
         let err = |e: Vec<crate::op::ApplyError>| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
         let tx = |label: String, ops| crate::TransactionInput { label, actor, ts: 0, idempotency_key: None, ops, exact: false };
         let mut first = None;
-        let def = match find(Tree::over(&self.doc), key) {
+        let def = match find(Tree::authored_only(&self.docs.authored), key) {
             Some(d) => d,
             None => {
                 let mut ops = Vec::new();
-                let mut next = self.doc.next_id().raw();
-                let library = match root_of(Tree::over(&self.doc), "library") {
+                let mut next = self.docs.authored.next_id().raw();
+                let library = match root_of(Tree::authored_only(&self.docs.authored), "library") {
                     Some(l) => l,
                     None => {
                         let l = NodeId::from_raw(next);
                         next += 1;
-                        ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after_last(Tree::over(&self.doc), None), facets: vec![] });
+                        ops.push(Op::Create { id: l, ty: ty("library"), parent: None, order: after_last(Tree::authored_only(&self.docs.authored), None), facets: vec![] });
                         l
                     }
                 };
-                let order = if ops.is_empty() { after_last(Tree::over(&self.doc), Some(library)) } else { OrderKey::first() };
+                let order = if ops.is_empty() { after_last(Tree::authored_only(&self.docs.authored), Some(library)) } else { OrderKey::first() };
                 let (def_ops, def) = definition_ops(key, library, order, next)?;
                 ops.extend(def_ops);
                 first = Some(self.apply(tx(format!("add {name}"), ops)).map_err(err)?.version);
                 def
             }
         };
-        let doc = &self.doc;
+        let doc = &self.docs.authored;
         let mut ops = Vec::new();
-        let model = match root_of(Tree::over(doc), "model") {
+        let model = match root_of(Tree::authored_only(doc), "model") {
             Some(m) => m,
             None => {
                 let m = doc.next_id();
-                ops.push(Op::Create { id: m, ty: ty("model"), parent: None, order: after_last(Tree::over(doc), None), facets: vec![] });
+                ops.push(Op::Create { id: m, ty: ty("model"), parent: None, order: after_last(Tree::authored_only(doc), None), facets: vec![] });
                 m
             }
         };
         let place = Placement { entity_parent: Some(model), entity_after: doc.children(model).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max(), figure_parent: Some(composition), figure_after: doc.children(composition).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max() };
         let (_, mut inst) = if ops.is_empty() {
-            definition::instantiate(Tree::over(doc), def, NOTATION, &name, &place)?
+            definition::instantiate(Tree::authored_only(doc), def, NOTATION, &name, &place)?
         } else {
             // A model made in this transaction: instantiate's ids come after it.
-            let mut scratch = doc.clone();
-            let stamp = scratch.version().next();
+            let mut scratch = crate::tree::Docs::new(doc.clone(), false);
+            let stamp = scratch.authored.version().next();
             crate::op::apply_op(&mut scratch, 0, &ops[0], stamp).map_err(|e| e.message)?;
-            definition::instantiate(Tree::over(&scratch), def, NOTATION, &name, &place)?
+            definition::instantiate(Tree::authored_only(&scratch.authored), def, NOTATION, &name, &place)?
         };
         for op in inst.iter_mut() {
             if let Op::Create { ty: t, facets, .. } = op
@@ -398,8 +398,8 @@ pub fn library_theme_ops(doc: Tree<'_>, light: bool) -> Vec<Op> {
             ops.push(Op::Set { id, path: LeafPath::new(kind, field).expect("declared"), slot: Slot::Const(Value::Color(want)) });
         }
     };
-    for &cell in doc.children(lib) {
-        for &c in doc.children(cell) {
+    for &cell in doc.children(lib).iter() {
+        for &c in doc.children(cell).iter() {
             let name = doc.get::<Name>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
             let have_fill = doc.get::<Fill>(c).and_then(|f| f.color.constant().cloned());
             match name.as_deref() {

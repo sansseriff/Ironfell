@@ -468,6 +468,19 @@ impl Document {
         })
     }
 
+    /// `bound_slots` for one facet kind.
+    pub(crate) fn bound_slots_of(&self, kind: FacetKind) -> impl Iterator<Item = (Leaf, &Expr)> {
+        self.facets.get(&kind).into_iter().flat_map(move |table| {
+            table.iter().filter(move |(id, _)| self.is_live(**id)).flat_map(move |(id, comp)| {
+                comp.field_names().into_iter().filter_map(move |field| {
+                    let expr = comp.get(field)?.expr()?;
+                    let path = LeafPath::new(kind, field).expect("declared field");
+                    Some((Leaf { node: *id, path }, expr))
+                })
+            })
+        })
+    }
+
     /// Whether binding `target` to `expr` would let a value depend on itself,
     /// following existing bindings. Checked at apply time so the graph is
     /// always a DAG.

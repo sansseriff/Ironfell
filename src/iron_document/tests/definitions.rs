@@ -131,7 +131,7 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // entity's port.
     let u = store.tree().children(scene).iter().copied().find(|&c| store.tree().live(c).unwrap().ty.name() == "use").unwrap();
     let copy = NodeId::expanded(u, template_rect).unwrap();
-    assert_eq!(store.tree().children(u), &[copy]);
+    assert_eq!(*store.tree().children(u), [copy]);
     assert_eq!(copy.to_string(), format!("{u}/{}", &template_rect.to_string()[1..]));
     let h = store.tree().leaf(copy, path("size.h")).unwrap().expr().unwrap().to_string();
     assert_eq!(h, format!("{level_port}.port.signal * 300"));

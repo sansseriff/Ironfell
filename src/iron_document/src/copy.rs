@@ -244,7 +244,7 @@ pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fra
 fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
-        None => doc.roots(),
+        None => std::borrow::Cow::Borrowed(doc.roots()),
     };
     let next = siblings.iter().filter_map(|&s| doc.live(s)).map(|s| &s.order).find(|k| *k > after);
     OrderKey::between(Some(after), next).unwrap_or_else(|_| OrderKey::after(after))
@@ -254,7 +254,7 @@ fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKe
 fn key_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
-        None => doc.roots(),
+        None => std::borrow::Cow::Borrowed(doc.roots()),
     };
     siblings.last().and_then(|&s| doc.live(s)).map_or_else(OrderKey::first, |s| OrderKey::after(&s.order))
 }
@@ -310,7 +310,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
 
     // Entities shared rather than copied (a move after a cut).
     let shared: BTreeSet<NodeId> = if place.share_entities && same {
-        frag.extras.iter().copied().filter(|&e| type_name(Tree::over(&frag.doc), e) == "entity" && doc.is_live(e)).flat_map(|e| std::iter::once(e).chain(frag.doc.descendants(e))).collect()
+        frag.extras.iter().copied().filter(|&e| type_name(Tree::authored_only(&frag.doc), e) == "entity" && doc.is_live(e)).flat_map(|e| std::iter::once(e).chain(frag.doc.descendants(e))).collect()
     } else {
         BTreeSet::new()
     };
@@ -326,7 +326,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
     }
     // Definitions an SVG import brought go in the library, made if missing.
     let library = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "library");
-    let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(Tree::over(&frag.doc), e) == "definition");
+    let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(Tree::authored_only(&frag.doc), e) == "definition");
     let mut ids = doc.next_ids(create.len() + usize::from(needs_library));
     let made_library = needs_library.then(|| ids.remove(0));
     let library = library.or(made_library);

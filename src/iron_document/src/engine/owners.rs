@@ -12,7 +12,8 @@
 use crate::expand::{self, Items, Problem};
 use crate::facet::FacetKind;
 use crate::op::Op;
-use crate::{Document, NodeId, RelKind, Tree, Version};
+use crate::tree::Docs;
+use crate::{NodeId, RelKind, Tree, Version};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Which owners to expand again.
@@ -69,8 +70,8 @@ impl Delta {
 
 impl Owners {
     /// Expand `which` again in `doc`: the ops applied, and what to record.
-    pub(crate) fn expand(&self, doc: &mut Document, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
-        let Which::Some(mut todo) = which else { return self.expand_all(doc, stamp, counts) };
+    pub(crate) fn expand(&self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
+        let Which::Some(mut todo) = which else { return self.expand_all(docs, stamp, counts) };
         // Owners whose last expansion failed in part are tried again: what
         // failed may depend on something outside them that has changed.
         todo.extend(self.problems.iter().filter(|(_, ps)| ps.iter().any(|p| matches!(p.kind, "expansion" | "budget"))).map(|(o, _)| *o));
@@ -82,7 +83,7 @@ impl Owners {
         while !todo.is_empty() {
             let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(doc, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
+            let wave = expand::expand_owners(docs, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -92,7 +93,7 @@ impl Owners {
         // Past the budget the cut must not depend on edit history: expand
         // everything, in id order.
         if delta.has_budget_problem() || self.problems.values().flatten().any(|p| p.kind == "budget") {
-            let (more, all) = self.expand_all(doc, stamp, counts);
+            let (more, all) = self.expand_all(docs, stamp, counts);
             ops.extend(more);
             return (ops, all);
         }
@@ -106,7 +107,7 @@ impl Owners {
     /// recorded, an owner another owner's pictures read, or what the items
     /// want meets the budget or a nesting limit. An op that fails to apply
     /// is repaired by expanding its owner whole, in the same call.
-    pub(crate) fn expand_items(&self, doc: &mut Document, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+    pub(crate) fn expand_items(&self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
         // The whole-document rules (`expand`): any owner's failed or cut
         // expansion is tried again on every update, and past the budget
         // everything expands in id order. Neither is this path's.
@@ -137,7 +138,7 @@ impl Owners {
             // Wanting is tried before anything applies, so a `None` from
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
-            let Some((done, problems)) = expand::expand_items(doc, stamp, counts, *owner, rs, room + self.held_under(doc, rs)) else {
+            let Some((done, problems)) = expand::expand_items(docs, stamp, counts, *owner, rs, room + self.held_under(Tree::of(docs), rs)) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -155,7 +156,7 @@ impl Owners {
             }
         }
         if !repair.is_empty() {
-            let (more, d) = self.expand(doc, stamp, counts, Which::Some(repair));
+            let (more, d) = self.expand(docs, stamp, counts, Which::Some(repair));
             ops.extend(more);
             delta.add_delta(d);
         }
@@ -163,15 +164,14 @@ impl Owners {
     }
 
     /// How many derived nodes the items of `repeats` hold now.
-    fn held_under(&self, doc: &Document, repeats: &BTreeSet<NodeId>) -> usize {
-        let tree = Tree::over(doc);
+    fn held_under(&self, tree: Tree<'_>, repeats: &BTreeSet<NodeId>) -> usize {
         repeats.iter().map(|&r| tree.descendants(r).into_iter().filter(|d| d.item_of(r).is_some()).count()).sum()
     }
 
     /// Every owner, in id order.
-    fn expand_all(&self, doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
-        let owners = expand::top_owners(Tree::over(doc));
-        let mut done = expand::expand_owners(doc, stamp, counts, &owners, expand::NODE_BUDGET);
+    fn expand_all(&self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
+        let owners = expand::top_owners(Tree::of(docs));
+        let mut done = expand::expand_owners(docs, stamp, counts, &owners, expand::NODE_BUDGET);
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
         delta.add(done);

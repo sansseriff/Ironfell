@@ -450,7 +450,7 @@ pub(crate) fn build(
     let root_controls = b.controls(root, el, None)?;
     let mut parts = BTreeMap::new();
     b.clear_paths(content);
-    for &group in doc.children(content) {
+    for &group in doc.children(content).iter() {
         if let Some(key) = named_child(doc, group, ty("let"), KEY)
             .and_then(|id| value(doc, id))
             .and_then(Value::as_str)

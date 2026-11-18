@@ -63,11 +63,11 @@ fn resync_args(doc: &crate::Document, def: NodeId, ops: &[Op], renamed: &[(Strin
     let mut after = doc.clone();
     let stamp = after.version().next();
     for (i, op) in ops.iter().enumerate() {
-        op::apply_op(&mut after, i, op, stamp).map_err(|e| e.message)?;
+        op::apply_op_to(&mut after, i, op, stamp).map_err(|e| e.message)?;
     }
-    let inputs = definition::inputs_of(Tree::over(&after), def)?;
+    let inputs = definition::inputs_of(Tree::authored_only(&after), def)?;
     let mut out = Vec::new();
-    for e in entities_of(Tree::over(doc), def) {
+    for e in entities_of(Tree::authored_only(doc), def) {
         let old = doc.get::<Args>(e).cloned().unwrap_or_default();
         let mut new = Args::default();
         for input in &inputs {
@@ -94,11 +94,11 @@ fn zero_of(kind: &str) -> Value {
 /// `port_spec` in its definition and an anchor empty in the template there
 /// (component-authoring.md §2). Returns the ops, the spec and the anchor.
 pub fn add_port(doc: &crate::Document, main: NodeId, at: [f64; 2], dir: &str, follow: bool) -> Result<(Vec<Op>, NodeId, NodeId), String> {
-    let def = expand::main_definition(Tree::over(doc), main).ok_or_else(|| format!("{main} is not a main: ports are placed on a component's main"))?;
-    let template = expand::main_template(Tree::over(doc), main).ok_or_else(|| format!("{main} shows no template"))?;
+    let def = expand::main_definition(Tree::authored_only(doc), main).ok_or_else(|| format!("{main} is not a main: ports are placed on a component's main"))?;
+    let template = expand::main_template(Tree::authored_only(doc), main).ok_or_else(|| format!("{main} shows no template"))?;
     let ids = doc.next_ids(2);
     let (spec, anchor) = (ids[0], ids[1]);
-    let name = fresh_name(Tree::over(doc), def, if dir == "out" { "out" } else { "in" });
+    let name = fresh_name(Tree::authored_only(doc), def, if dir == "out" { "out" } else { "in" });
     let last_spec = doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "port_spec")).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
     let spec_order = last_spec.map_or_else(|| doc.children(def).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).min().map_or_else(OrderKey::first, |k| OrderKey::before(&k)), |k| OrderKey::after(&k));
     let mut p = Port::default();
@@ -128,7 +128,7 @@ pub fn add_input(doc: &crate::Document, def: NodeId, name: &str, default: Value)
         return Err(format!("{def} is not a definition"));
     }
     let spec = doc.next_id();
-    let name = fresh_name(Tree::over(doc), def, &ident(name));
+    let name = fresh_name(Tree::authored_only(doc), def, &ident(name));
     let mut p = Port::default();
     p.kind = Slot::Const(Value::Str("value".into()));
     p.dir = Slot::Const(Value::Enum("in".into()));
@@ -178,10 +178,10 @@ pub fn edit_port(doc: &crate::Document, spec: NodeId, patch: &PortPatch) -> Resu
     let mut ops = Vec::new();
     let mut renamed = Vec::new();
     if let Some(name) = &patch.name {
-        let old = name_of(Tree::over(doc), spec).unwrap_or_default();
+        let old = name_of(Tree::authored_only(doc), spec).unwrap_or_default();
         let new = ident(name);
         if new != old {
-            if doc.children(def).iter().any(|&c| c != spec && doc.live(c).is_some_and(|n| n.ty.name() == "port_spec") && name_of(Tree::over(doc), c).as_deref() == Some(new.as_str())) {
+            if doc.children(def).iter().any(|&c| c != spec && doc.live(c).is_some_and(|n| n.ty.name() == "port_spec") && name_of(Tree::authored_only(doc), c).as_deref() == Some(new.as_str())) {
                 return Err(format!("{def} already has a port {new:?}"));
             }
             ops.push(Op::Set { id: spec, path: LeafPath::new(FacetKind::Name, "text").expect("declared"), slot: Slot::Const(Value::Str(new.clone())) });
@@ -351,7 +351,7 @@ pub fn relocate_pivot(store: &crate::StoreCore, control: NodeId, pivot: [f64; 2]
     let doc = store.tree();
     if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err("Select one control to place its pivot".into()); }
     let mut nodes = vec![control];
-    nodes.extend(doc.children(control));
+    nodes.extend(doc.children(control).iter());
     static_coordinates(store, &nodes)?;
     if !pivot.iter().all(|v| v.is_finite()) { return Err("Pivot must be finite".into()); }
     let inv = store.local_affine(control).inverse().ok_or("A zero-scale control has no relocatable pivot")?;
@@ -423,12 +423,14 @@ pub fn ports_of(doc: Tree<'_>, def: NodeId) -> Vec<(NodeId, String, String, bool
 
 /// Give an existing geometric control a port without moving it or creating
 /// another empty. Geometry bindings keep referring to the same control.
-pub fn expose_control(doc: &crate::Document, shown: NodeId, dir: &str, follow: bool) -> Result<Vec<Op>, String> {
+/// `tree` answers for `shown`, a derived node of a main's picture; `doc` is
+/// the authored document the new port is planned in.
+pub fn expose_control(tree: Tree<'_>, doc: &crate::Document, shown: NodeId, dir: &str, follow: bool) -> Result<Vec<Op>, String> {
     let steps = shown.path();
-    if steps.len() != 2 || expand::main_definition(Tree::over(doc), steps[0]).is_none() {
+    if steps.len() != 2 || expand::main_definition(tree, steps[0]).is_none() {
         return Err("Select an empty inside the component's main".into());
     }
-    let control = crate::attachment::authored(Tree::over(doc), shown)?;
+    let control = crate::attachment::authored(tree, shown)?;
     if doc.live(control).map(|n| n.ty.name()) != Some("empty") { return Err("Select an empty control".into()); }
     if doc.get::<Anchor>(control).is_some() { return Err("This control already exposes a port".into()); }
     if !matches!(dir, "in" | "out" | "pair") { return Err("Choose in, out or pair".into()); }

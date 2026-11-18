@@ -36,7 +36,7 @@ fn path(leaf: &str) -> LeafPath {
 pub fn base(store: &StoreCore, id: NodeId, leaf: &str) -> Option<Value> {
     let p = path(leaf);
     match store.reactive.signal(Leaf { node: id, path: p }) {
-        Some(s) if s.producer == ProducerId::LAYOUT => match store.doc.leaf(id, p) {
+        Some(s) if s.producer == ProducerId::LAYOUT => match DocTree::of(&store.docs).leaf(id, p) {
             Some(slot) => slot.constant().cloned(),
             None => p.facet.default_facet().get(p.field).and_then(|s| s.constant().cloned()),
         },
@@ -65,7 +65,7 @@ pub struct Preview {
 
 /// The container a group's `layout` facet describes, if it lays out.
 fn container(store: &StoreCore, id: NodeId) -> Option<Container> {
-    store.doc.facet(id, FacetKind::Layout)?;
+    DocTree::of(&store.docs).facet(id, FacetKind::Layout)?;
     let mode = match word(store, id, "layout.mode").as_str() {
         "stack_x" => Mode::StackX,
         "stack_y" => Mode::StackY,
@@ -146,7 +146,7 @@ struct Entry {
 
 /// Whether a node takes part in its parent's layout.
 fn is_item(store: &StoreCore, id: NodeId) -> bool {
-    let doc = &store.doc;
+    let doc = DocTree::of(&store.docs);
     let Some(n) = doc.live(id) else { return false };
     if !n.ty.spec().allows(FacetKind::Transform2d) || n.ty.name() == "empty" || n.ty.name() == "point" {
         return false;
@@ -162,9 +162,9 @@ fn content_bounds(store: &StoreCore, id: NodeId) -> Option<Rect> {
     }
     let read = |l: Leaf| store.resolved(l.node, l.path);
     let mut out: Option<Rect> = None;
-    for &c in store.doc.children(id) {
+    for &c in DocTree::of(&store.docs).children(id).iter() {
         let Some(r) = content_bounds(store, c) else { continue };
-        let a = crate::geom::local_affine(DocTree::over(&store.doc), &read, c);
+        let a = crate::geom::local_affine(DocTree::of(&store.docs), &read, c);
         let pts = [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]].map(|p| a.apply(p));
         let (x0, x1) = pts.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
         let (y0, y1) = pts.iter().map(|p| p[1]).fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
@@ -209,7 +209,7 @@ impl Builder<'_> {
         let fill = |leaf: &str| word(store, id, leaf) == "fill";
         let mut item = Item { align_self: align(&word(store, id, "layout_item.align")), ..Item::default() };
         let mut fills = [fill("layout_item.w"), fill("layout_item.h")];
-        if store.doc.facet(id, FacetKind::LayoutItem).is_some() {
+        if DocTree::of(&store.docs).facet(id, FacetKind::LayoutItem).is_some() {
             let place = |start: &str, span: &str| {
                 let s = num(store, id, start, 0.0).round();
                 (s >= 1.0).then(|| Area { start: s as u16 - 1, span: num(store, id, span, 1.0).round().max(1.0) as u16 })
@@ -277,7 +277,7 @@ impl Builder<'_> {
         self.tree.nodes.push(Node { key: id.raw(), item, container: container_spec, children: Vec::new(), measured });
         self.entries.push(Entry { id, kind, offset, fill: fills });
         if kind == Kind::Container {
-            let mut kids: Vec<NodeId> = store.doc.children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
+            let mut kids: Vec<NodeId> = DocTree::of(&store.docs).children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
             if let Some(p) = store.layout_preview().filter(|p| p.container == id) {
                 kids.sort_by_key(|k| p.order.iter().position(|o| o == k).unwrap_or(usize::MAX));
             }
@@ -304,7 +304,7 @@ impl Builder<'_> {
 }
 
 fn kind_of(store: &StoreCore, id: NodeId) -> Kind {
-    match store.doc.live(id).map(|n| n.ty.name()) {
+    match DocTree::of(&store.docs).live(id).map(|n| n.ty.name()) {
         Some("group") if container(store, id).is_some() => Kind::Container,
         Some("table") => Kind::Table,
         Some("text") => Kind::Text,
@@ -319,7 +319,7 @@ fn kind_of(store: &StoreCore, id: NodeId) -> Kind {
 pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
     let mut out = BTreeMap::new();
     let mut grids = BTreeMap::new();
-    let doc = &store.doc;
+    let doc = DocTree::of(&store.docs);
     let group = TypeId::lookup("group").expect("registered");
     let table = TypeId::lookup("table").expect("registered");
     let is_container = |k: Kind| matches!(k, Kind::Container | Kind::Table);
@@ -443,21 +443,21 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
 /// it; a bound leaf keeps its binding (one writer, F5).
 fn constrained(store: &StoreCore) -> BTreeMap<Leaf, Value> {
     use crate::facet::Constraints;
-    let doc = &store.doc;
+    let doc = DocTree::of(&store.docs);
     let mut out = BTreeMap::new();
     let use_ty = TypeId::lookup("use").expect("registered");
     for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
-        let def = crate::expand::main_definition(DocTree::over(doc), u).or_else(|| crate::expand::use_entity(DocTree::over(doc), u).and_then(|e| crate::expand::linked_definition(DocTree::over(doc), e)));
+        let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
         let Some(def) = def else { continue };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
-        let Some(t) = crate::definition::template_of(DocTree::over(doc), def, &notation) else { continue };
+        let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
         let constant = |id: NodeId, leaf: &str| doc.leaf(id, path(leaf)).and_then(|s| s.constant()).and_then(|v| v.as_f64());
         let (Some(w0), Some(h0)) = (constant(t, "size.w"), constant(t, "size.h")) else { continue };
         let (w, h) = (num(store, u, "size.w", w0), num(store, u, "size.h", h0));
         if (w - w0).abs() < 1e-9 && (h - h0).abs() < 1e-9 {
             continue;
         }
-        for &part in doc.children(t) {
+        for &part in doc.children(t).iter() {
             let Some(c) = doc.get::<Constraints>(part) else { continue };
             let Some(copy) = NodeId::expanded(u, part) else { continue };
             if !doc.is_live(copy) {

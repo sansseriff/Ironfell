@@ -24,7 +24,8 @@
 
 use crate::Tree;
 use crate::definition;
-use crate::document::{Document, RelKind, Relation};
+use crate::document::{RelKind, Relation};
+use crate::tree::Docs;
 use crate::expr::{Expr, Leaf};
 use crate::facet::{Facet, FacetKind, Instance, LeafPath, LeafStruct, Override, Use};
 use crate::id::{NodeId, RelationId, Version};
@@ -332,13 +333,13 @@ pub(crate) struct OwnersExpanded {
 /// nothing else (reactive-engine handoff §4.4, stage 2). `room` is how many
 /// nodes they may derive together, taken in id order: the budget less what
 /// other owners hold.
-pub(crate) fn expand_owners(doc: &mut Document, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
+pub(crate) fn expand_owners(docs: &mut Docs, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
     let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
     for &owner in owners {
-        let w = wanted_for(Tree::over(doc), owner, counts, room);
+        let w = wanted_for(Tree::of(docs), owner, counts, room);
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
         out.defs.extend(w.defs.iter().map(|&d| (d, owner)));
@@ -350,13 +351,13 @@ pub(crate) fn expand_owners(doc: &mut Document, stamp: Version, counts: &Items, 
     // What the owners hold now: their live derived nodes and the derived
     // relations from them.
     let have: Vec<NodeId> = {
-        let tree = Tree::over(doc);
+        let tree = Tree::of(docs);
         owners.iter().flat_map(|&o| tree.descendants(o).into_iter().filter(move |d| d.is_expanded() && d.path().first() == Some(&o))).collect()
     };
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
-    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
-    out.ops = apply_wanted(doc, stamp, want, rels, have, have_rels, &mut problems);
+    let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
+    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems);
     for o in owners {
         out.problems.insert(*o, Vec::new());
     }
@@ -389,11 +390,11 @@ pub(crate) struct ItemsExpanded {
 /// meets a problem (the budget, nesting): the caller expands `owner` whole.
 /// `Some` with `ops` applied otherwise; an op that fails to apply is
 /// reported as a problem, and the caller expands `owner` whole to repair it.
-pub(crate) fn expand_items(doc: &mut Document, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
+pub(crate) fn expand_items(docs: &mut Docs, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
     let mut out = Wanted::new(room);
     out.root = Some(owner);
     {
-        let tree = Tree::over(doc);
+        let tree = Tree::of(docs);
         for &r in repeats {
             let ok = r.path().first() == Some(&owner)
                 && tree.is_live(r)
@@ -410,13 +411,13 @@ pub(crate) fn expand_items(doc: &mut Document, stamp: Version, counts: &Items, o
         return None;
     }
     let have: Vec<NodeId> = {
-        let tree = Tree::over(doc);
+        let tree = Tree::of(docs);
         repeats.iter().flat_map(|&r| tree.descendants(r).into_iter().filter(move |d| d.item_of(r).is_some())).collect()
     };
-    let have_rels: Vec<Relation> = doc.relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
+    let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
     let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect() };
     let mut problems = Vec::new();
-    let ops = apply_wanted(doc, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
+    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
     Some((ItemsExpanded { ops, ..done }, problems))
 }
 
@@ -662,7 +663,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
             None => leaf,
         }
     };
-    for &child in doc.children(def) {
+    for &child in doc.children(def).iter() {
         let Some(node) = doc.live(child) else { continue };
         let ty = match node.ty.name() {
             "port_spec" => TypeId::lookup("port").expect("registered"),
@@ -935,11 +936,11 @@ fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<
 /// differential harness's owner check runs it (`IRON_OWNER_CHECK=1`): the
 /// owners' copies must leave it nothing to do.
 #[cfg(feature = "differential")]
-pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
-    let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::over(doc), counts);
-    let have: Vec<NodeId> = doc.expanded_ids().filter(|id| doc.is_live(*id)).collect();
-    let have_rels: Vec<Relation> = doc.relations().filter(|r| r.id.is_expanded()).cloned().collect();
-    let ops = apply_wanted(doc, stamp, want, want_rels, have, have_rels, &mut problems);
+pub(crate) fn expand(docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
+    let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::of(docs), counts);
+    let have: Vec<NodeId> = Tree::of(docs).expanded_ids().filter(|id| Tree::of(docs).is_live(*id)).collect();
+    let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.is_expanded()).cloned().collect();
+    let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems);
     sort_problems(&mut problems);
     (ops, problems)
 }
@@ -948,7 +949,7 @@ pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, V
 /// `want` and `want_rels`: stale nodes deleted deepest first, wanted ones
 /// created or brought up to date one field at a time, relations unlinked
 /// and linked. An op that fails is a problem on its node, not an error.
-fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>) -> Vec<Op> {
+fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>) -> Vec<Op> {
     let wanted_ids: BTreeSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
     // An op can fail on something wanted later in the pass (a copy's
@@ -956,48 +957,48 @@ fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: 
     // once everything else has applied, and only what still fails is a
     // problem.
     let mut failed: Vec<Op> = Vec::new();
-    let mut run = |doc: &mut Document, op: Op, ops: &mut Vec<Op>| match op::apply_op(doc, 0, &op, stamp) {
+    let mut run = |docs: &mut Docs, op: Op, ops: &mut Vec<Op>| match op::apply_op(docs, 0, &op, stamp) {
         Ok(_) => ops.push(op),
         Err(_) => failed.push(op),
     };
     // Gone: deepest first, so a parent's delete never meets a dead child.
-    let stale: Vec<NodeId> = have.into_iter().filter(|id| doc.is_live(*id) && !wanted_ids.contains(id)).collect();
-    let mut stale: Vec<(usize, NodeId)> = stale.into_iter().map(|id| (doc.depth(id), id)).collect();
+    let stale: Vec<NodeId> = have.into_iter().filter(|id| Tree::of(docs).is_live(*id) && !wanted_ids.contains(id)).collect();
+    let mut stale: Vec<(usize, NodeId)> = stale.into_iter().map(|id| (Tree::of(docs).depth(id), id)).collect();
     stale.sort_by(|a, b| b.cmp(a));
     for (_, id) in stale {
-        if doc.is_live(id) {
-            run(doc, Op::Delete { id }, &mut ops);
+        if Tree::of(docs).is_live(id) {
+            run(docs, Op::Delete { id }, &mut ops);
         }
     }
     for w in want {
-        let Some(node) = doc.live(w.id) else {
-            run(doc, Op::Create { id: w.id, ty: w.ty, parent: Some(w.parent), order: w.order, facets: w.facets }, &mut ops);
+        let Some(node) = Tree::of(docs).live(w.id) else {
+            run(docs, Op::Create { id: w.id, ty: w.ty, parent: Some(w.parent), order: w.order, facets: w.facets }, &mut ops);
             continue;
         };
         if node.ty != w.ty {
-            run(doc, Op::Delete { id: w.id }, &mut ops);
-            run(doc, Op::Create { id: w.id, ty: w.ty, parent: Some(w.parent), order: w.order, facets: w.facets }, &mut ops);
+            run(docs, Op::Delete { id: w.id }, &mut ops);
+            run(docs, Op::Create { id: w.id, ty: w.ty, parent: Some(w.parent), order: w.order, facets: w.facets }, &mut ops);
             continue;
         }
         if node.parent != Some(w.parent) || node.order != w.order {
-            run(doc, Op::Reparent { id: w.id, parent: Some(w.parent), order: w.order }, &mut ops);
+            run(docs, Op::Reparent { id: w.id, parent: Some(w.parent), order: w.order }, &mut ops);
         }
-        let have: BTreeMap<FacetKind, Facet> = doc.facets_of(w.id).map(|f| (f.kind(), f.clone())).collect();
+        let have: BTreeMap<FacetKind, Facet> = Tree::of(docs).facets_of(w.id).map(|f| (f.kind(), f.clone())).collect();
         let mut kept = BTreeSet::new();
         for f in w.facets {
             kept.insert(f.kind());
             match have.get(&f.kind()) {
-                None => run(doc, Op::AddFacet { id: w.id, facet: f }, &mut ops),
+                None => run(docs, Op::AddFacet { id: w.id, facet: f }, &mut ops),
                 Some(old) if *old != f => {
                     if f.kind().is_dynamic() {
-                        run(doc, Op::RemoveFacet { id: w.id, kind: f.kind() }, &mut ops);
-                        run(doc, Op::AddFacet { id: w.id, facet: f }, &mut ops);
+                        run(docs, Op::RemoveFacet { id: w.id, kind: f.kind() }, &mut ops);
+                        run(docs, Op::AddFacet { id: w.id, facet: f }, &mut ops);
                     } else {
                         for field in f.field_names() {
                             let slot = f.get(field).expect("own field").clone();
                             if old.get(field) != Some(&slot) {
                                 let path = LeafPath::new(f.kind(), field).expect("declared field");
-                                run(doc, Op::Set { id: w.id, path, slot }, &mut ops);
+                                run(docs, Op::Set { id: w.id, path, slot }, &mut ops);
                             }
                         }
                     }
@@ -1006,19 +1007,19 @@ fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: 
             }
         }
         for kind in have.keys().filter(|k| !kept.contains(k)) {
-            run(doc, Op::RemoveFacet { id: w.id, kind: *kind }, &mut ops);
+            run(docs, Op::RemoveFacet { id: w.id, kind: *kind }, &mut ops);
         }
     }
     // Relations: stale ones unlinked, changed ones relinked, new ones linked.
     let wanted_rels: BTreeMap<RelationId, Relation> = want_rels.into_iter().map(|w| (w.rel.id, w.rel)).collect();
     for r in &have_rels {
         if wanted_rels.get(&r.id) != Some(r) {
-            run(doc, Op::Unlink { id: r.id }, &mut ops);
+            run(docs, Op::Unlink { id: r.id }, &mut ops);
         }
     }
     for (id, rel) in wanted_rels {
-        if doc.relation(id) != Some(&rel) && doc.is_live(rel.from) {
-            run(doc, Op::Link { rel }, &mut ops);
+        if Tree::of(docs).relation(id) != Some(&rel) && Tree::of(docs).is_live(rel.from) {
+            run(docs, Op::Link { rel }, &mut ops);
         }
     }
     // Again while any succeeds: a chain of copies reading each other can
@@ -1028,7 +1029,7 @@ fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: 
         let mut still = Vec::new();
         let mut errors = Vec::new();
         for op in std::mem::take(&mut failed) {
-            match op::apply_op(doc, 0, &op, stamp) {
+            match op::apply_op(docs, 0, &op, stamp) {
                 Ok(_) => ops.push(op),
                 Err(e) => {
                     errors.push(e);
@@ -1038,7 +1039,7 @@ fn apply_wanted(doc: &mut Document, stamp: Version, want: Vec<Want>, want_rels: 
         }
         if still.is_empty() || still.len() == before {
             for (op, e) in still.into_iter().zip(errors) {
-                if let Some(node) = op_node(Tree::over(doc), &op) {
+                if let Some(node) = op_node(Tree::of(docs), &op) {
                     problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
                 }
             }

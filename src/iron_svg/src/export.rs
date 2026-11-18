@@ -45,7 +45,7 @@ pub fn export(store: &Store, scope: &Scope) -> Result<Export, String> {
             if composition::dims(doc, *c) == Some(Dims::Three) {
                 return Err(format!("{c} is a 3D composition; only 2D compositions export as SVG"));
             }
-            for &child in doc.children(*c) {
+            for &child in doc.children(*c).iter() {
                 w.node(child, Affine::IDENTITY, 1, 0);
             }
         }

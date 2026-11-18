@@ -564,7 +564,7 @@ fn structural_rules() {
     // Undo brings the subtree back, parents before children.
     store.undo(0).unwrap().unwrap();
     check(&store);
-    assert_eq!(store.tree().children(group), &[rect, s.circle, inner]);
+    assert_eq!(*store.tree().children(group), [rect, s.circle, inner]);
 }
 
 #[test]

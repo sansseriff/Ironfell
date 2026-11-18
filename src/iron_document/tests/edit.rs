@@ -307,7 +307,7 @@ fn reparents_in_one_edit_see_each_others_moves() {
     let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a" name="a"/><rect id="$b" name="b"/><rect id="$c" name="c"/></group></edit>"#));
     let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
     apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
-    assert_eq!(store.tree().children(g), &[cc, a, b]);
+    assert_eq!(*store.tree().children(g), [cc, a, b]);
 }
 
 #[test]
@@ -547,7 +547,7 @@ fn a_node_moved_twice_is_where_its_last_move_put_it() {
     let p = apply(&mut store, &format!(r#"<edit><group in="{c}" id="$g"><rect id="$a"/><rect id="$b"/><rect id="$c"/></group></edit>"#));
     let (g, a, b, cc) = (p.aliases["$g"], p.aliases["$a"], p.aliases["$b"], p.aliases["$c"]);
     apply(&mut store, &format!(r#"<edit><reparent id="{a}" in="{g}" after="{b}"/><reparent id="{a}" in="{g}" after="{cc}"/><reparent id="{b}" in="{g}" after="{a}"/></edit>"#));
-    assert_eq!(store.tree().children(g), &[cc, a, b]);
+    assert_eq!(*store.tree().children(g), [cc, a, b]);
 }
 
 #[test]

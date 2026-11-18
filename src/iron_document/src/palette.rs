@@ -98,9 +98,9 @@ pub fn provided(doc: Tree<'_>, reader: NodeId, name: &str, tokens: &BTreeMap<Str
     loop {
         let siblings = match at {
             Some(p) => doc.children(p),
-            None => doc.roots(),
+            None => std::borrow::Cow::Borrowed(doc.roots()),
         };
-        for &c in siblings {
+        for &c in siblings.iter() {
             if c == reader || !doc.is_live(c) || name_of(doc, c).as_deref() != Some(name) {
                 continue;
             }

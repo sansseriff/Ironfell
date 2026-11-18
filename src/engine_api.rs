@@ -728,7 +728,7 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
                     else { iron_document::attachment::detach(&store.0, &points)? };
                 (verb.replace('_', " "), ops, None)
             }
-            "expose_control" => ("expose control as port".into(), author::expose_control(store.0.authored(), id("control")?, a.get("dir").and_then(|v| v.as_str()).unwrap_or("in"), true)?, None),
+            "expose_control" => ("expose control as port".into(), author::expose_control(store.0.tree(), store.0.authored(), id("control")?, a.get("dir").and_then(|v| v.as_str()).unwrap_or("in"), true)?, None),
             "expand_path_points" => {
                 let path = iron_document::attachment::authored(doc, id("path")?)?;
                 ("expand path points".into(), iron_document::contour::expand_points(&store.0, path), None)

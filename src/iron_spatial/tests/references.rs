@@ -34,7 +34,8 @@ fn compare(text: &str) {
     let (fb, sb) = (fscene.content_bounds(fc).map(round), sscene.content_bounds(sc).map(round));
     println!("content flat {fb:?} shared {sb:?}");
     // Each top-level node's content, geometry and paint.
-    for (&f, &s) in fs.tree().children(fc).iter().zip(ss.tree().children(sc)) {
+    let (fk, sk) = (fs.tree().children(fc), ss.tree().children(sc));
+    for (&f, &s) in fk.iter().zip(sk.iter()) {
         let (a, b) = (fscene.bounds(f), sscene.bounds(s));
         let close = |x: Option<iron_spatial::Bounds>, y: Option<iron_spatial::Bounds>| match (x, y) {
             (Some(x), Some(y)) => round(x.geometry).iter().zip(round(y.geometry)).all(|(p, q)| (p - q).abs() < 0.05),

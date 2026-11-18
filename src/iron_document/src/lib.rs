@@ -317,7 +317,8 @@ struct Run {
 }
 
 pub struct StoreCore {
-    doc: Document,
+    /// The authored document, and the copies when kept apart (handoff §4.6).
+    docs: tree::Docs,
     /// Who derives what (reactive-engine handoff §4.4, stage 2).
     owners: engine::owners::Owners,
     history: History,
@@ -472,7 +473,7 @@ const RECENT_KEYS: usize = 64;
 impl StoreCore {
     /// A scratch store over a copy of this one's document.
     pub(crate) fn scratch(&self) -> StoreCore {
-        StoreCore::with_document(self.doc.clone())
+        StoreCore::build(self.docs.authored.clone(), self.docs.apart)
     }
 
     /// Bring the graph up to date after structure changed through `ops`:
@@ -481,7 +482,7 @@ impl StoreCore {
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
         let mut rescope = false;
         let mut rederive = false;
-        let doc = Tree::over(&self.doc);
+        let doc = Tree::of(&self.docs);
         // What connections and anchors derive reads ports, anchors,
         // connections, the relations between them and each anchor's chain
         // of transformed ancestors (`port::derived_signals`,
@@ -554,8 +555,8 @@ impl StoreCore {
         if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) {
             return;
         }
-        let mut whole = self.doc.clone();
-        let stamp = whole.version();
+        let mut whole = self.docs.clone();
+        let stamp = whole.authored.version();
         let (ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
         assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
     }
@@ -568,19 +569,19 @@ impl StoreCore {
     /// fail to solve.
     fn can_refuse(&self) -> bool {
         let ty = TypeId::lookup("constraint").expect("registered");
-        self.doc.nodes_of_type(ty).any(|n| self.doc.is_live(n))
+        Tree::of(&self.docs).nodes_of_type(ty).any(|n| Tree::of(&self.docs).is_live(n))
     }
 
     /// Keep what `run` applied.
     fn commit(&mut self, r: Rollback) {
         r.take();
-        self.doc.commit();
+        self.docs.commit();
     }
 
     /// Put the document back as it was before `run`.
     fn abort(&mut self, r: Rollback) {
         r.take();
-        self.doc.rollback();
+        self.docs.rollback();
     }
 
     pub fn new() -> StoreCore {
@@ -588,8 +589,14 @@ impl StoreCore {
     }
 
     pub fn with_document(doc: Document) -> StoreCore {
+        StoreCore::build(doc, false)
+    }
+
+    /// A store over `doc`, keeping copies apart from it or not (handoff
+    /// §4.6).
+    pub(crate) fn build(doc: Document, apart: bool) -> StoreCore {
         let mut store = StoreCore {
-            doc,
+            docs: tree::Docs::new(doc, apart),
             owners: Default::default(),
             history: History {
                 horizon: DEFAULT_HORIZON,
@@ -633,11 +640,11 @@ impl StoreCore {
             text_generation: iron_text::engine().generation(),
         };
         // A loaded document holds only authored nodes: derive its instances.
-        let stamp = store.doc.version();
-        let (_, delta) = store.owners.expand(&mut store.doc, stamp, &BTreeMap::new(), engine::owners::Which::All);
+        let stamp = store.docs.authored.version();
+        let (_, delta) = store.owners.expand(&mut store.docs, stamp, &BTreeMap::new(), engine::owners::Which::All);
         store.store_found(delta);
         store.geometry.note_structure();
-        store.reactive.rebuild(Tree::over(&store.doc));
+        store.reactive.rebuild(Tree::of(&store.docs));
         store.resample();
         store.settle_repeats();
         store.pending = Changes::default();
@@ -654,7 +661,7 @@ impl StoreCore {
     fn rebuild_clusters(&mut self) {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
-        if let Ok(c) = solve::clusters(Tree::over(&self.doc), &self.reactive, self.contexts()) {
+        if let Ok(c) = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()) {
             self.clusters = c;
         }
     }
@@ -670,8 +677,8 @@ impl StoreCore {
         let clusters = self.clusters.list.clone();
         for c in &clusters {
             let result = {
-                let read = |l: Leaf| self.reactive.read(Tree::over(&self.doc), l);
-                solve::solve_cluster(Tree::over(&self.doc), &read, c, &[], &self.fingers)
+                let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
+                solve::solve_cluster(Tree::of(&self.docs), &read, c, &[], &self.fingers)
             };
             report.clusters += 1;
             report.vars += c.vars.len();
@@ -684,8 +691,8 @@ impl StoreCore {
             }
             for (leaf, v) in result.values {
                 let value = Value::Number(v);
-                if self.reactive.read(Tree::over(&self.doc), leaf) != Some(value.clone()) {
-                    self.reactive.preview(Tree::over(&self.doc), leaf, value);
+                if self.reactive.read(Tree::of(&self.docs), leaf) != Some(value.clone()) {
+                    self.reactive.preview(Tree::of(&self.docs), leaf, value);
                 }
             }
         }
@@ -742,7 +749,7 @@ impl StoreCore {
                 // parent's transform, then the node's own rotation and scale.
                 let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
                 let num = |s: &StoreCore, f: &str, d: f64| s.resolved(h.node, t2(f)).and_then(|v| v.as_f64()).unwrap_or(d);
-                let parent = match self.doc.live(h.node).and_then(|n| n.parent) {
+                let parent = match Tree::of(&self.docs).live(h.node).and_then(|n| n.parent) {
                     Some(p) => self.world_affine(p),
                     None => Affine2::IDENTITY,
                 };
@@ -764,8 +771,8 @@ impl StoreCore {
 
     /// Every port anchor, with where it is and what it is connected to.
     pub fn port_anchors(&self) -> Vec<plug::PortAnchor> {
-        let read = |l: Leaf| self.reactive.read(Tree::over(&self.doc), l);
-        plug::port_anchors(Tree::over(&self.doc), &read)
+        let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
+        plug::port_anchors(Tree::of(&self.docs), &read)
     }
 
     /// Remove a connection, as one transaction: the far ends that followed
@@ -773,14 +780,14 @@ impl StoreCore {
     /// instance) rather than return to their template positions.
     pub fn unplug(&mut self, connection: NodeId, label: impl Into<String>, actor: Actor) -> Result<Version, String> {
         let t2 = |f: &str| LeafPath::new(FacetKind::Transform2d, f).expect("declared");
-        let ends = port::ends(Tree::over(&self.doc), connection).ok_or_else(|| format!("{connection} is not a connection"))?;
+        let ends = port::ends(Tree::of(&self.docs), connection).ok_or_else(|| format!("{connection} is not a connection"))?;
         let pins: Vec<(NodeId, f64, f64)> = self
             .port_anchors()
             .into_iter()
             .filter(|a| a.follow && (a.outer == ends.0 || a.outer == ends.1 || a.port == ends.0 || a.port == ends.1))
             .filter_map(|a| Some((a.anchor, self.resolved(a.anchor, t2("x"))?.as_f64()?, self.resolved(a.anchor, t2("y"))?.as_f64()?)))
             .collect();
-        let mut ops: Vec<Op> = self.doc.relations_from(connection).map(|r| Op::Unlink { id: r.id }).collect();
+        let mut ops: Vec<Op> = Tree::of(&self.docs).relations_from(connection).map(|r| Op::Unlink { id: r.id }).collect();
         ops.push(Op::Delete { id: connection });
         let label = label.into();
         let tx = |label: &str, ops| TransactionInput { label: label.to_owned(), actor, ts: 0, idempotency_key: None, ops, exact: false };
@@ -833,7 +840,7 @@ impl StoreCore {
 
     /// The ports the drag could plug into now.
     pub fn plug_targets(&self, p: &Plugging) -> Vec<plug::PortAnchor> {
-        self.port_anchors().into_iter().filter(|t| plug::compatible(Tree::over(&self.doc), &p.from, t).is_ok()).collect()
+        self.port_anchors().into_iter().filter(|t| plug::compatible(Tree::of(&self.docs), &p.from, t).is_ok()).collect()
     }
 
     /// Move the drag's port to `world` (its composition), or snap it onto
@@ -893,11 +900,11 @@ impl StoreCore {
             }
         }
         if let Some(t) = target {
-            let id = self.doc.next_id();
-            let rels = self.doc.next_relation_ids(2);
+            let id = self.docs.authored.next_id();
+            let rels = self.docs.authored.next_relation_ids(2);
             // Two loose ends: the one landed on holds the joint.
             let held = (p.from.follow && t.follow).then_some(t.outer);
-            let ops = plug::plug_ops(Tree::over(&self.doc), p.from.outer, t.outer, held, id, [rels[0], rels[1]])?;
+            let ops = plug::plug_ops(Tree::of(&self.docs), p.from.outer, t.outer, held, id, [rels[0], rels[1]])?;
             let input = TransactionInput { label: label.clone(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
             let a = self.apply(input).map_err(|e| e.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "))?;
             fold(self, &mut last, a.version);
@@ -965,15 +972,15 @@ impl StoreCore {
         let root = match self.live_of_type("session") {
             Some(r) => r,
             None => {
-                let r = self.doc.next_session_ids(1)[0];
+                let r = self.docs.authored.next_session_ids(1)[0];
                 ops.push(Op::Create { id: r, ty: ty("session"), parent: None, order: OrderKey::first(), facets: vec![] });
                 r
             }
         };
-        let id = *self.doc.next_session_ids(ops.len() + 1).last().expect("one id");
+        let id = *self.docs.authored.next_session_ids(ops.len() + 1).last().expect("one id");
         let mut clock = FacetKind::Clock.default_facet();
         let _ = clock.set("t", Slot::Const(Value::Number(self.time)));
-        let last = self.doc.live_nodes().filter(|n| n.parent == Some(root)).map(|n| n.order.clone()).max();
+        let last = Tree::of(&self.docs).live_nodes().filter(|n| n.parent == Some(root)).map(|n| n.order.clone()).max();
         let order = last.map_or_else(OrderKey::first, |o| OrderKey::after(&o));
         ops.push(Op::Create { id, ty: ty("clock"), parent: Some(root), order, facets: vec![clock] });
         self.apply_session(ops)?;
@@ -986,7 +993,7 @@ impl StoreCore {
     fn sync_clock(&mut self) -> bool {
         let Some(c) = self.clock() else { return false };
         let leaf = Leaf { node: c, path: clock_path("t") };
-        let Some(Value::Number(t)) = self.reactive.read(Tree::over(&self.doc), leaf) else { return false };
+        let Some(Value::Number(t)) = self.reactive.read(Tree::of(&self.docs), leaf) else { return false };
         if t == self.time || !t.is_finite() {
             return false;
         }
@@ -996,9 +1003,9 @@ impl StoreCore {
     }
 
     fn resample(&mut self) {
-        let sample = time::sample(Tree::over(&self.doc), self.time);
+        let sample = time::sample(Tree::of(&self.docs), self.time);
         self.time_errors = sample.errors;
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::CLIPS, sample.values);
+        self.reactive.publish(Tree::of(&self.docs), ProducerId::CLIPS, sample.values);
     }
 
     /// Name a host producer of runtime signals (a simulation, a Model) and
@@ -1036,7 +1043,7 @@ impl StoreCore {
     /// A leaf another producer holds, or a bound leaf, is refused and listed
     /// in `signal_errors`.
     pub fn publish(&mut self, producer: ProducerId, values: std::collections::BTreeMap<Leaf, Value>) {
-        self.reactive.publish(Tree::over(&self.doc), producer, values);
+        self.reactive.publish(Tree::of(&self.docs), producer, values);
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
@@ -1079,7 +1086,7 @@ impl StoreCore {
     /// The value a reader sees for a leaf: the gesture preview if one is in
     /// progress, else the binding's resolved value, else the constant.
     pub fn resolved(&self, id: NodeId, path: LeafPath) -> Option<Value> {
-        self.reactive.read(Tree::over(&self.doc), Leaf { node: id, path })
+        self.reactive.read(Tree::of(&self.docs), Leaf { node: id, path })
     }
 
     /// Whether `take_changes` would return anything: for a consumer that
@@ -1096,8 +1103,8 @@ impl StoreCore {
         let mut c = std::mem::take(&mut self.pending);
         c.values = self.reactive.take_changed();
         c.marks = self.reactive.take_marks();
-        c.geometry = self.geometry.take(Tree::over(&self.doc), self.reactive.take_moved());
-        c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
+        c.geometry = self.geometry.take(Tree::of(&self.docs), self.reactive.take_moved());
+        c.revisions = changes::Revisions { authored: self.docs.authored.version(), session: self.session_version };
         c.sorted()
     }
 
@@ -1109,8 +1116,8 @@ impl StoreCore {
         let (values, marks, touched) = self.reactive.peek();
         c.values = values;
         c.marks = marks;
-        c.geometry = self.geometry.classify(Tree::over(&self.doc), touched);
-        c.revisions = changes::Revisions { authored: self.doc.version(), session: self.session_version };
+        c.geometry = self.geometry.classify(Tree::of(&self.docs), touched);
+        c.revisions = changes::Revisions { authored: self.docs.authored.version(), session: self.session_version };
         c.sorted()
     }
 
@@ -1118,17 +1125,17 @@ impl StoreCore {
     /// ancestor, reading resolved values (previews, bindings, clips). Equal
     /// to the materialised entity's `GlobalTransform`; see `geom`.
     pub fn world_affine(&self, id: NodeId) -> Affine2 {
-        geom::world_affine(Tree::over(&self.doc), &|l| self.reactive.read(Tree::over(&self.doc), l), id)
+        geom::world_affine(Tree::of(&self.docs), &|l| self.reactive.read(Tree::of(&self.docs), l), id)
     }
 
     /// The node's local 3D space to its composition's (`geom::world_affine3`).
     pub fn world_affine3(&self, id: NodeId) -> geom::Affine3 {
-        geom::world_affine3(Tree::over(&self.doc), &|l| self.reactive.read(Tree::over(&self.doc), l), id)
+        geom::world_affine3(Tree::of(&self.docs), &|l| self.reactive.read(Tree::of(&self.docs), l), id)
     }
 
     /// The node's own transform in its parent's space, from resolved values.
     pub fn local_affine(&self, id: NodeId) -> Affine2 {
-        geom::local_affine(Tree::over(&self.doc), &|l| self.reactive.read(Tree::over(&self.doc), l), id)
+        geom::local_affine(Tree::of(&self.docs), &|l| self.reactive.read(Tree::of(&self.docs), l), id)
     }
 
     /// A node's extent in its parent's space: its own bounds and its
@@ -1137,7 +1144,7 @@ impl StoreCore {
         let a = self.local_affine(id).0;
         let to_parent = kurbo::Affine::new([a[0], a[1], a[2], a[3], a[4], a[5]]);
         let own = self.local_bounds(id).map(|b| b.geometry);
-        let kids = self.doc.children(id).iter().filter(|c| !c.is_expanded() || id.is_expanded() || self.doc.live(id).is_some_and(|n| n.ty.name() == "use")).filter_map(|&c| self.extent(c)).reduce(|x, y| x.union(y));
+        let kids = Tree::of(&self.docs).children(id).iter().filter(|c| !c.is_expanded() || id.is_expanded() || Tree::of(&self.docs).live(id).is_some_and(|n| n.ty.name() == "use")).filter_map(|&c| self.extent(c)).reduce(|x, y| x.union(y));
         let r = match (own, kids) {
             (Some(a), Some(b)) => a.union(b),
             (a, b) => a.or(b)?,
@@ -1168,10 +1175,10 @@ impl StoreCore {
         self.text_generation = generation;
         let text = TypeId::lookup("text").expect("registered");
         let path: LeafPath = "text.content".parse().expect("declared leaf");
-        let ids: Vec<NodeId> = self.doc.nodes_of_type(text).filter(|&n| self.doc.is_live(n)).collect();
+        let ids: Vec<NodeId> = Tree::of(&self.docs).nodes_of_type(text).filter(|&n| Tree::of(&self.docs).is_live(n)).collect();
         for id in &ids {
             let leaf = Leaf { node: *id, path };
-            let value = self.reactive.read(Tree::over(&self.doc), leaf).unwrap_or(Value::Str(String::new()));
+            let value = self.reactive.read(Tree::of(&self.docs), leaf).unwrap_or(Value::Str(String::new()));
             self.reactive.mark(leaf, value);
         }
         // New faces measure differently: layouts holding text reflow.
@@ -1186,7 +1193,7 @@ impl StoreCore {
         self.watch(id);
         let leaf = Leaf { node: id, path };
         self.drivers.insert(leaf);
-        self.reactive.preview(Tree::over(&self.doc), leaf, value);
+        self.reactive.preview(Tree::of(&self.docs), leaf, value);
         self.sync_clock();
         if !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
@@ -1198,7 +1205,7 @@ impl StoreCore {
     pub fn unpreview(&mut self, id: NodeId, path: LeafPath) {
         let leaf = Leaf { node: id, path };
         self.drivers.remove(&leaf);
-        self.reactive.unpreview(Tree::over(&self.doc), leaf);
+        self.reactive.unpreview(Tree::of(&self.docs), leaf);
         if self.sync_clock() && !self.clusters.list.is_empty() {
             self.resolve_clusters_live();
         }
@@ -1209,7 +1216,7 @@ impl StoreCore {
     /// inverting a linear binding onto its one constant source, or not at
     /// all (see `handle`).
     pub fn handle(&self, id: NodeId, path: LeafPath) -> Handle {
-        handle::handle(Tree::over(&self.doc), &self.reactive, Leaf { node: id, path })
+        handle::handle(Tree::of(&self.docs), &self.reactive, Leaf { node: id, path })
     }
 
     /// Preview a *target* value for a leaf through its handle: a constant is
@@ -1219,10 +1226,10 @@ impl StoreCore {
         // A view that moves its subject rigidly: both leaves by the same
         // amount, each held in range, so a slice pushed against the end of
         // its transition shortens there rather than stopping (`handle::rigid`).
-        if let (Some((with, (lo, hi))), Handle::Linear { source, a, b }) = (handle::rigid(Tree::over(&self.doc), id), self.handle(id, path))
+        if let (Some((with, (lo, hi))), Handle::Linear { source, a, b }) = (handle::rigid(Tree::of(&self.docs), id), self.handle(id, path))
             && let Some(y) = value.as_f64()
         {
-            let authored = |l: Leaf| self.doc.leaf(l.node, l.path).and_then(|s| s.constant()).and_then(Value::as_f64);
+            let authored = |l: Leaf| Tree::of(&self.docs).leaf(l.node, l.path).and_then(|s| s.constant()).and_then(Value::as_f64);
             if let Some(s0) = authored(source) {
                 let d = (y - b) / a - s0;
                 let moved: Vec<(Leaf, f64)> = std::iter::once(source).chain(with.into_iter().filter(|l| *l != source)).filter_map(|l| Some((l, authored(l)?))).collect();
@@ -1232,7 +1239,7 @@ impl StoreCore {
                 return Ok(());
             }
         }
-        let (target, v) = handle::resolve_target(Tree::over(&self.doc), &self.reactive, Leaf { node: id, path }, value)?;
+        let (target, v) = handle::resolve_target(Tree::of(&self.docs), &self.reactive, Leaf { node: id, path }, value)?;
         self.preview(target.node, target.path, v);
         Ok(())
     }
@@ -1297,7 +1304,7 @@ impl StoreCore {
     fn end_gesture(&mut self, status: GestureStatus) {
         self.drivers.clear();
         self.fingers.clear();
-        self.reactive.clear_overlay(Tree::over(&self.doc));
+        self.reactive.clear_overlay(Tree::of(&self.docs));
         // A previewed playhead goes back to the clock's own `t`.
         if self.sync_clock() {
             if !self.clusters.list.is_empty() {
@@ -1316,7 +1323,7 @@ impl StoreCore {
         self.gesture.as_ref()?;
         let values = self.reactive.overlay().iter().filter(|(l, _)| self.drivers.contains(l)).map(|(l, v)| (*l, v.clone())).collect();
         let suspended = gesture::Suspended { values, drivers: std::mem::take(&mut self.drivers), fingers: std::mem::take(&mut self.fingers) };
-        self.reactive.clear_overlay(Tree::over(&self.doc));
+        self.reactive.clear_overlay(Tree::of(&self.docs));
         Some(suspended)
     }
 
@@ -1325,8 +1332,8 @@ impl StoreCore {
         self.drivers = s.drivers;
         self.fingers = s.fingers;
         for (leaf, v) in s.values {
-            if self.doc.leaf(leaf.node, leaf.path).is_some() {
-                self.reactive.preview(Tree::over(&self.doc), leaf, v);
+            if Tree::of(&self.docs).leaf(leaf.node, leaf.path).is_some() {
+                self.reactive.preview(Tree::of(&self.docs), leaf, v);
             }
         }
         if !self.clusters.list.is_empty() {
@@ -1376,8 +1383,8 @@ impl StoreCore {
     /// one-off edits (an inspector field); a running gesture is unaffected
     /// unless the edit conflicts with it. `Ok(None)` when nothing changes.
     pub fn set_through_handle(&mut self, id: NodeId, path: LeafPath, value: Value, label: impl Into<String>, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
-        let (target, v) = handle::resolve_target(Tree::over(&self.doc), &self.reactive, Leaf { node: id, path }, value)?;
-        let same = match (self.doc.leaf(target.node, target.path).and_then(|s| s.constant()), &v) {
+        let (target, v) = handle::resolve_target(Tree::of(&self.docs), &self.reactive, Leaf { node: id, path }, value)?;
+        let same = match (Tree::of(&self.docs).leaf(target.node, target.path).and_then(|s| s.constant()), &v) {
             (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
             (c, v) => c == Some(v),
         };
@@ -1416,7 +1423,7 @@ impl StoreCore {
             .overlay()
             .iter()
             .filter(|_| !unkeyed)
-            .filter(|(l, _)| self.drivers.contains(l) && self.doc.leaf(l.node, l.path).is_some_and(|s| s.expr().is_none()))
+            .filter(|(l, _)| self.drivers.contains(l) && Tree::of(&self.docs).leaf(l.node, l.path).is_some_and(|s| s.expr().is_none()))
             .map(|(l, v)| (*l, v.clone()))
             .collect();
         let (key_ops, keyed) = timeline_view::key_ops(self, &driven);
@@ -1428,9 +1435,9 @@ impl StoreCore {
             if !self.drivers.contains(leaf) || keyed.contains(leaf) {
                 continue;
             }
-            let Some(slot) = self.doc.leaf(leaf.node, leaf.path) else {
-                let allowed = self.doc.live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet));
-                if allowed && self.doc.facet(leaf.node, leaf.path.facet).is_none() {
+            let Some(slot) = Tree::of(&self.docs).leaf(leaf.node, leaf.path) else {
+                let allowed = Tree::of(&self.docs).live(leaf.node).is_some_and(|n| n.ty.spec().allows(leaf.path.facet));
+                if allowed && Tree::of(&self.docs).facet(leaf.node, leaf.path.facet).is_none() {
                     let c = added.entry((leaf.node, leaf.path.facet)).or_insert_with(|| leaf.path.facet.default_facet());
                     let _ = c.set(leaf.path.field, Slot::Const(value.clone()));
                 }
@@ -1473,7 +1480,7 @@ impl StoreCore {
         });
         self.drivers.clear();
         self.fingers.clear();
-        self.reactive.clear_overlay(Tree::over(&self.doc));
+        self.reactive.clear_overlay(Tree::of(&self.docs));
         Some(result)
     }
 
@@ -1489,12 +1496,12 @@ impl StoreCore {
     /// undo never see it, and it is never saved. All or nothing: an error
     /// rolls back the ops already applied.
     pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
-        let stamp = self.doc.version();
+        let stamp = self.docs.authored.version();
         let mut undo: Vec<Op> = Vec::new();
         let mut structural = false;
         // A failure part-way puts the document back exactly, through the
         // journal (reactive-engine handoff §4.4, stage 1).
-        self.doc.begin();
+        self.docs.begin();
         for (i, op) in ops.iter().enumerate() {
             let in_session = match op {
                 Op::Create { id, parent, .. } => id.is_session() && parent.is_none_or(|p| p.is_session()),
@@ -1503,14 +1510,14 @@ impl StoreCore {
                 Op::Unlink { id } => id.is_session(),
             };
             let result = if in_session {
-                op::apply_op(&mut self.doc, i, op, stamp)
+                op::apply_op(&mut self.docs, i, op, stamp)
             } else {
                 Err(ApplyError { op: i, kind: ErrorKind::BadId, message: "not a session-tier op".into() })
             };
             match result {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
-                    self.doc.rollback();
+                    self.docs.rollback();
                     return Err(e);
                 }
             }
@@ -1523,11 +1530,11 @@ impl StoreCore {
         // Session ops never need expansion: a derived id cannot sit under a
         // session-tier id (`NodeId::from_path`), so no session node derives
         // anything, and session ops touch only session nodes.
-        self.doc.commit();
+        self.docs.commit();
         // The spatial scene learns of session nodes as of any other: a
         // session composition built after the last transaction (the Latency
         // view's) is otherwise never indexed, so presses miss it.
-        self.pending.note(Tree::over(&self.doc), ops.iter(), &undo);
+        self.pending.note(Tree::of(&self.docs), ops.iter(), &undo);
         self.geometry.note_ops(ops.iter());
         if structural {
             self.repeat_inputs = None;
@@ -1540,11 +1547,11 @@ impl StoreCore {
                 // move even when nothing binds to it (the Latency view's
                 // square, recentred by `engine_api::document_latency`).
                 for &leaf in &changed {
-                    if let Some(v) = self.reactive.read(Tree::over(&self.doc), leaf) {
+                    if let Some(v) = self.reactive.read(Tree::of(&self.docs), leaf) {
                         self.reactive.mark(leaf, v);
                     }
                 }
-                self.reactive.invalidate(Tree::over(&self.doc), changed);
+                self.reactive.invalidate(Tree::of(&self.docs), changed);
             }
         }
         self.session_version += 1;
@@ -1582,11 +1589,11 @@ impl StoreCore {
             let mut round_start = applied.len();
             let repeats: Vec<NodeId> = match &self.repeat_inputs {
                 Some(known) => known.iter().map(|k| k.0).collect(),
-                None => expand::drawn_repeats(Tree::over(&self.doc)),
+                None => expand::drawn_repeats(Tree::of(&self.docs)),
             };
             let inputs: Vec<(NodeId, [Option<Value>; 4])> = repeats
                 .iter()
-                .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: p }))))
+                .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: p }))))
                 .collect();
             // `Value`'s `==` holds NaN equal to NaN ("no series").
             if self.repeat_inputs.as_ref() == Some(&inputs) {
@@ -1602,15 +1609,15 @@ impl StoreCore {
             let mut results: Vec<ItemsOf> = Vec::with_capacity(inputs.len());
             for (r, [each, count, key, shown]) in &inputs {
                 let r = *r;
-                let is_repeat = self.doc.facet(r, facet::FacetKind::Repeat).is_some();
+                let is_repeat = Tree::of(&self.docs).facet(r, facet::FacetKind::Repeat).is_some();
                 // A conditional that fails to evaluate shows nothing.
-                let shown = self.doc.facet(r, facet::FacetKind::When).is_none() || (shown.as_ref().and_then(|v| v.as_bool()) == Some(true) && !self.reactive.errors.contains_key(&Leaf { node: r, path: when }));
+                let shown = Tree::of(&self.docs).facet(r, facet::FacetKind::When).is_none() || (shown.as_ref().and_then(|v| v.as_bool()) == Some(true) && !self.reactive.errors.contains_key(&Leaf { node: r, path: when }));
                 let timing = |f: &str| {
                     let kind = if is_repeat { facet::FacetKind::Repeat } else { facet::FacetKind::When };
-                    self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: LeafPath::new(kind, f).expect("declared leaf") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(0.0).max(0.0)
+                    self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: LeafPath::new(kind, f).expect("declared leaf") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(0.0).max(0.0)
                 };
                 let (enter_ms, exit_ms) = (timing("enter_ms"), timing("exit_ms"));
-                let max = if is_repeat { self.reactive.read(Tree::over(&self.doc), Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize } else { 0 };
+                let max = if is_repeat { self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: path("max") }).and_then(|v| v.as_f64()).filter(|m| m.is_finite()).unwrap_or(1000.0).clamp(0.0, 10_000.0) as usize } else { 0 };
                 let memo_key = (enter_ms == 0.0 && exit_ms == 0.0).then(|| ItemsKey { inputs: [each.clone(), count.clone(), key.clone()], is_repeat, shown, max });
                 if let Some(k) = &memo_key
                     && let Some((was, got)) = self.item_memo.get(&r)
@@ -1707,13 +1714,13 @@ impl StoreCore {
                     .collect();
                 let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
                 self.repeats = counts;
-                let stamp = self.doc.version();
+                let stamp = self.docs.authored.version();
                 // Only the items that changed, where that matches a whole
                 // expansion of their owners; else the owners.
-                let items = self.owners.expand_items(&mut self.doc, stamp, &self.repeats, &changed_repeats);
+                let items = self.owners.expand_items(&mut self.docs, stamp, &self.repeats, &changed_repeats);
                 let (ops, delta) = match items {
                     Some(done) => done,
-                    None => self.owners.expand(&mut self.doc, stamp, &self.repeats, engine::owners::Which::Some(changed)),
+                    None => self.owners.expand(&mut self.docs, stamp, &self.repeats, engine::owners::Which::Some(changed)),
                 };
                 self.store_found(delta);
                 self.check_owners("settling repeats");
@@ -1728,7 +1735,7 @@ impl StoreCore {
             if let Some(values) = values
                 && values != self.reactive.published_by(ProducerId::ITEMS)
             {
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::ITEMS, values);
+                self.reactive.publish(Tree::of(&self.docs), ProducerId::ITEMS, values);
             }
             // An item that has just joined starts unseen, in this same pass.
             self.publish_presence();
@@ -1751,7 +1758,7 @@ impl StoreCore {
         let mut values = BTreeMap::new();
         for (r, p) in &self.presence {
             for (key, e) in &p.items {
-                let Some(scope) = NodeId::item_scope(*r, key).filter(|s| self.doc.is_live(*s)) else { continue };
+                let Some(scope) = NodeId::item_scope(*r, key).filter(|s| Tree::of(&self.docs).is_live(*s)) else { continue };
                 if e.p < 1.0 || e.leaving {
                     values.insert(leaf(scope, "presence"), Value::Number(e.p));
                     values.insert(leaf(scope, "leaving"), Value::Bool(e.leaving));
@@ -1759,7 +1766,7 @@ impl StoreCore {
             }
         }
         if values != self.reactive.published_by(ProducerId::PRESENCE) {
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::PRESENCE, values);
+            self.reactive.publish(Tree::of(&self.docs), ProducerId::PRESENCE, values);
         }
     }
 
@@ -1806,16 +1813,16 @@ impl StoreCore {
         if self.session_state.is_empty() && self.reactive.published_by(ProducerId::STATE).is_empty() {
             return;
         }
-        let doc = &self.doc;
+        let doc = Tree::of(&self.docs);
         self.session_state.retain(|leaf, _| doc.is_live(leaf.node));
         if self.session_state != self.reactive.published_by(ProducerId::STATE) {
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::STATE, self.session_state.clone());
+            self.reactive.publish(Tree::of(&self.docs), ProducerId::STATE, self.session_state.clone());
         }
     }
 
     /// Publish what is selected onto every node with a `selection` facet.
     fn publish_selection(&mut self) {
-        let nodes: Vec<NodeId> = self.doc.nodes_with(facet::FacetKind::Selection).filter(|&n| self.doc.is_live(n)).collect();
+        let nodes: Vec<NodeId> = Tree::of(&self.docs).nodes_with(facet::FacetKind::Selection).filter(|&n| Tree::of(&self.docs).is_live(n)).collect();
         if nodes.is_empty() && self.reactive.published_by(ProducerId::SELECTION).is_empty() {
             return;
         }
@@ -1828,7 +1835,7 @@ impl StoreCore {
             values.insert(Leaf { node: n, path: leaf("count") }, Value::Number(picked.len() as f64));
         }
         if values != self.reactive.published_by(ProducerId::SELECTION) {
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::SELECTION, values);
+            self.reactive.publish(Tree::of(&self.docs), ProducerId::SELECTION, values);
         }
     }
 
@@ -1837,7 +1844,7 @@ impl StoreCore {
     pub fn is_session_state(&self, leaf: Leaf) -> bool {
         leaf.path.facet == facet::FacetKind::Let
             && leaf.path.field == "value"
-            && self.doc.get::<facet::Let>(leaf.node).is_some_and(|l| l.keep.constant().and_then(|v| v.as_str()) == Some("session") && l.value.expr().is_none())
+            && Tree::of(&self.docs).get::<facet::Let>(leaf.node).is_some_and(|l| l.keep.constant().and_then(|v| v.as_str()) == Some("session") && l.value.expr().is_none())
     }
 
     /// Set a session state cell. Not a transaction: never saved, never in
@@ -1847,7 +1854,7 @@ impl StoreCore {
             return Err(format!("{leaf} is not session state (a let with keep=\"session\" holding a constant)"));
         }
         // Back at its initial value, it is no longer held.
-        if self.doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()) == Some(&value) {
+        if Tree::of(&self.docs).leaf(leaf.node, leaf.path).and_then(|s| s.constant()) == Some(&value) {
             self.session_state.remove(&leaf);
         } else {
             self.session_state.insert(leaf, value);
@@ -1865,13 +1872,13 @@ impl StoreCore {
     fn listeners(&self, event: &str) -> BTreeMap<NodeId, Vec<NodeId>> {
         let ty = TypeId::lookup("on").expect("registered");
         let mut by_node: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-        for on in self.doc.nodes_of_type(ty).filter(|&n| self.doc.is_live(n) && !expand::in_repeat_template(Tree::over(&self.doc), n)) {
-            let Some(f) = self.doc.get::<facet::On>(on) else { continue };
+        for on in Tree::of(&self.docs).nodes_of_type(ty).filter(|&n| Tree::of(&self.docs).is_live(n) && !expand::in_repeat_template(Tree::of(&self.docs), n)) {
+            let Some(f) = Tree::of(&self.docs).get::<facet::On>(on) else { continue };
             if f.event.constant().and_then(|v| v.as_str()) != Some(event) {
                 continue;
             }
             let named = f.node.constant().and_then(|v| v.as_ref()).filter(|n| n.raw() != 0);
-            let Some(listens) = named.or_else(|| self.doc.node(on).and_then(|n| n.parent)) else { continue };
+            let Some(listens) = named.or_else(|| Tree::of(&self.docs).node(on).and_then(|n| n.parent)) else { continue };
             by_node.entry(listens).or_default().push(on);
         }
         by_node
@@ -1890,7 +1897,7 @@ impl StoreCore {
             if let Some(found) = by_node.remove(&n) {
                 return Some((n, found));
             }
-            at = self.doc.node(n).and_then(|x| x.parent);
+            at = Tree::of(&self.docs).node(n).and_then(|x| x.parent);
         }
         None
     }
@@ -1909,14 +1916,14 @@ impl StoreCore {
             if enter.contains_key(&n) || leave.contains_key(&n) {
                 out.push(n);
             }
-            at = self.doc.node(n).and_then(|x| x.parent);
+            at = Tree::of(&self.docs).node(n).and_then(|x| x.parent);
         }
         out
     }
 
     /// Whether the document declares any action at all.
     pub fn has_actions(&self) -> bool {
-        self.doc.nodes_with(facet::FacetKind::On).next().is_some()
+        Tree::of(&self.docs).nodes_with(facet::FacetKind::On).next().is_some()
     }
 
     /// Run what `event` on `node`, or on the nearest node above it that
@@ -1938,8 +1945,8 @@ impl StoreCore {
         let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
         let mut ops: Vec<Op> = Vec::new();
         for (leaf, value) in writes {
-            let (source, v) = handle::resolve_target(Tree::over(&self.doc), &self.reactive, leaf, value)?;
-            if self.reactive.read(Tree::over(&self.doc), source).as_ref() != Some(&v) {
+            let (source, v) = handle::resolve_target(Tree::of(&self.docs), &self.reactive, leaf, value)?;
+            if self.reactive.read(Tree::of(&self.docs), source).as_ref() != Some(&v) {
                 ops.push(Op::Set { id: source.node, path: source.path, slot: Slot::Const(v) });
             }
         }
@@ -1974,9 +1981,9 @@ impl StoreCore {
                 shown.insert(Leaf { node: on, path: LeafPath::new(facet::FacetKind::On, field).expect("declared leaf") }, Value::Number(v));
             }
         }
-        let doc = &self.doc;
+        let doc = Tree::of(&self.docs);
         shown.retain(|l, _| doc.is_live(l.node));
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::EVENTS, shown);
+        self.reactive.publish(Tree::of(&self.docs), ProducerId::EVENTS, shown);
         let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
         for (leaf, value) in writes {
             self.preview_target(leaf.node, leaf.path, value)?;
@@ -2010,20 +2017,20 @@ impl StoreCore {
         let mut label = None;
         let mut emits = Vec::new();
         for on in actions {
-            if let Some(name) = self.doc.get::<facet::On>(on).and_then(|f| f.emit.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()) {
+            if let Some(name) = Tree::of(&self.docs).get::<facet::On>(on).and_then(|f| f.emit.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()) {
                 emits.push((listens, name.to_owned()));
             }
             if label.is_none() {
-                label = self.doc.get::<facet::Name>(on).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()).map(str::to_owned);
+                label = Tree::of(&self.docs).get::<facet::Name>(on).and_then(|n| n.text.constant()).and_then(|v| v.as_str()).filter(|n| !n.is_empty()).map(str::to_owned);
             }
-            let writers: Vec<NodeId> = std::iter::once(on).chain(self.doc.children(on).iter().copied()).filter(|&w| self.doc.is_live(w) && self.doc.facet(w, facet::FacetKind::Write).is_some()).collect();
+            let writers: Vec<NodeId> = std::iter::once(on).chain(Tree::of(&self.docs).children(on).iter().copied()).filter(|&w| Tree::of(&self.docs).is_live(w) && Tree::of(&self.docs).facet(w, facet::FacetKind::Write).is_some()).collect();
             for w in writers {
-                let read = |f: &str| self.reactive.read(Tree::over(&self.doc), Leaf { node: w, path: leaf_of(f) });
+                let read = |f: &str| self.reactive.read(Tree::of(&self.docs), Leaf { node: w, path: leaf_of(f) });
                 let Some(target) = read("target").and_then(|v| v.as_ref()).filter(|n| n.raw() != 0) else { continue };
                 let prop = read("prop").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
                 let path: LeafPath = prop.parse().map_err(|e| format!("{w}: write.prop {prop:?}: {e}"))?;
                 let leaf = Leaf { node: target, path };
-                let now = self.reactive.read(Tree::over(&self.doc), leaf);
+                let now = self.reactive.read(Tree::of(&self.docs), leaf);
                 let value = match read("verb").as_ref().and_then(|v| v.as_str()) {
                     Some("toggle") => match now {
                         Some(Value::Bool(b)) => Value::Bool(!b),
@@ -2072,7 +2079,7 @@ impl StoreCore {
             let shown = p.node.path()[0];
             // A repeat's template is evaluated for item 0 only so that it
             // has values; what fails there fails in the items too.
-            if p.kind == "binding" && (expand::in_repeat_template(Tree::over(&self.doc), p.node) || !self.doc.is_live(p.node)) {
+            if p.kind == "binding" && (expand::in_repeat_template(Tree::of(&self.docs), p.node) || !Tree::of(&self.docs).is_live(p.node)) {
                 continue;
             }
             let note = if shown == p.node { p.message } else { format!("{}: {}", p.node, p.message) };
@@ -2099,15 +2106,15 @@ impl StoreCore {
     pub fn context_reads(&self, figure: NodeId) -> Vec<(String, Option<NodeId>, Option<Value>)> {
         let mut out: BTreeMap<String, (Option<NodeId>, Option<Value>)> = BTreeMap::new();
         for (leaf, ctx) in self.reactive.contexts() {
-            if leaf.node != figure && !self.doc.is_ancestor(figure, leaf.node) {
+            if leaf.node != figure && !Tree::of(&self.docs).is_ancestor(figure, leaf.node) {
                 continue;
             }
             for (name, provider) in ctx {
-                if palette::is_token(Tree::over(&self.doc), name) && provider.path.facet == facet::FacetKind::Token {
+                if palette::is_token(Tree::of(&self.docs), name) && provider.path.facet == facet::FacetKind::Token {
                     continue;
                 }
-                let own = self.doc.is_ancestor(figure, provider.node);
-                out.entry(name.clone()).or_insert_with(|| ((!own).then_some(provider.node), self.reactive.read(Tree::over(&self.doc), *provider)));
+                let own = Tree::of(&self.docs).is_ancestor(figure, provider.node);
+                out.entry(name.clone()).or_insert_with(|| ((!own).then_some(provider.node), self.reactive.read(Tree::of(&self.docs), *provider)));
             }
         }
         out.into_iter().map(|(n, (p, v))| (n, p, v)).collect()
@@ -2127,7 +2134,7 @@ impl StoreCore {
         // Structure first: what follows places and styles the new items.
         self.publish_selection();
         let derived = self.settle_repeats();
-        self.pending.note(Tree::over(&self.doc), derived.iter(), &[]);
+        self.pending.note(Tree::of(&self.docs), derived.iter(), &[]);
         self.publish_state();
         self.solve_network();
         self.resolve_theme();
@@ -2139,11 +2146,10 @@ impl StoreCore {
     /// their markup changed (contexts.md §2.2).
     fn resolve_contexts(&mut self) {
         let ty = TypeId::lookup("context").expect("registered");
-        let markups: Vec<(NodeId, String)> = self
-            .doc
+        let markups: Vec<(NodeId, String)> = Tree::of(&self.docs)
             .nodes_of_type(ty)
-            .filter(|&n| self.doc.is_live(n))
-            .filter_map(|n| Some((n, self.doc.get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
+            .filter(|&n| Tree::of(&self.docs).is_live(n))
+            .filter_map(|n| Some((n, Tree::of(&self.docs).get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
             .collect();
         if markups.is_empty() {
             self.contexts = None;
@@ -2170,7 +2176,7 @@ impl StoreCore {
             self.tables = grids;
             for t in moved {
                 let leaf = Leaf { node: t, path: columns };
-                let value = self.reactive.read(Tree::over(&self.doc), leaf).unwrap_or(Value::Str(String::new()));
+                let value = self.reactive.read(Tree::of(&self.docs), leaf).unwrap_or(Value::Str(String::new()));
                 self.reactive.mark(leaf, value);
             }
         }
@@ -2180,13 +2186,13 @@ impl StoreCore {
         if values == self.reactive.published_by(ProducerId::LAYOUT) {
             return;
         }
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values);
+        self.reactive.publish(Tree::of(&self.docs), ProducerId::LAYOUT, values);
     }
 
     /// A resolver over this document's contexts that sees nodes'
     /// interaction states.
     pub fn resolver(&self) -> contexts::Resolver<'_> {
-        contexts::Resolver { doc: Tree::over(&self.doc), lib: self.contexts(), states: Some(&self.interaction), editing: self.machines.pinned.as_ref().map(|p| p.def) }
+        contexts::Resolver { doc: Tree::of(&self.docs), lib: self.contexts(), states: Some(&self.interaction), editing: self.machines.pinned.as_ref().map(|p| p.def) }
     }
 
     /// The nodes that are hovered, selected, pressed or dragged now, as the
@@ -2261,7 +2267,7 @@ impl StoreCore {
     pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
         // A pin whose state is gone (deleted, or a rename undone) lets go.
         if let Some(pin) = &self.machines.pinned
-            && !machine::state_names(Tree::over(&self.doc), pin.machine).contains(&pin.state)
+            && !machine::state_names(Tree::of(&self.docs), pin.machine).contains(&pin.state)
         {
             self.machines.pinned = None;
         }
@@ -2272,9 +2278,9 @@ impl StoreCore {
         for _ in 0..4 {
             let (values, now_running) = {
                 let reactive = &self.reactive;
-                let doc = &self.doc;
-                let read = |l: Leaf| reactive.read(Tree::over(doc), l);
-                self.machines.advance(Tree::over(doc), &read, now, self.time())
+                let doc = Tree::of(&self.docs);
+                let read = |l: Leaf| reactive.read(doc, l);
+                self.machines.advance(doc, &read, now, self.time())
             };
             running = now_running;
             if values == self.reactive.published_by(ProducerId::MACHINES) {
@@ -2291,10 +2297,10 @@ impl StoreCore {
     pub fn advance_queries(&mut self, now: f64) -> Vec<query::Request> {
         let (values, due) = {
             let reactive = &self.reactive;
-            let doc = &self.doc;
-            let read = |l: Leaf| reactive.read(Tree::over(doc), l);
+            let doc = Tree::of(&self.docs);
+            let read = |l: Leaf| reactive.read(doc, l);
             let wanted = |n: NodeId| query::OUTPUTS.iter().any(|f| reactive.is_read(Leaf { node: n, path: LeafPath { facet: FacetKind::Query, field: f } }));
-            self.queries.advance(Tree::over(doc), &read, &wanted, now)
+            self.queries.advance(doc, &read, &wanted, now)
         };
         if values != self.reactive.published_by(ProducerId::QUERIES) {
             self.publish(ProducerId::QUERIES, values);
@@ -2325,7 +2331,7 @@ impl StoreCore {
         // them is moving. Frame times jitter, and republishing a length
         // nothing uses would redraw every frame (step.rs `restless`).
         let dt = self.steps.tick(now);
-        let leaves = step::Steps::dt_leaves(Tree::over(&self.doc));
+        let leaves = step::Steps::dt_leaves(Tree::of(&self.docs));
         if !leaves.is_empty() {
             let mut shown = self.reactive.published_by(ProducerId::STEPS);
             let positive = |v: Option<&Value>| v.and_then(Value::as_f64).is_some_and(|x| x > 0.0);
@@ -2335,23 +2341,23 @@ impl StoreCore {
                         shown.insert(*l, Value::Number(1.0 / 60.0));
                     }
                 }
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown.clone());
+                self.reactive.publish(Tree::of(&self.docs), ProducerId::STEPS, shown.clone());
             }
             let restless = {
-                let (reactive, doc) = (&self.reactive, &self.doc);
-                self.steps.restless(Tree::over(doc), &|l: Leaf| reactive.read(Tree::over(doc), l), paused)
+                let (reactive, doc) = (&self.reactive, Tree::of(&self.docs));
+                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), paused)
             };
             if restless {
                 shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
-                self.reactive.publish(Tree::over(&self.doc), ProducerId::STEPS, shown);
+                self.reactive.publish(Tree::of(&self.docs), ProducerId::STEPS, shown);
             }
         }
         let dts: BTreeMap<Leaf, Value> = self.reactive.published_by(ProducerId::STEPS).into_iter().filter(|(l, _)| leaves.contains(l)).collect();
         let (mut values, active) = {
             let reactive = &self.reactive;
-            let doc = &self.doc;
-            let read = |l: Leaf| reactive.read(Tree::over(doc), l);
-            self.steps.advance(Tree::over(doc), &read, now, paused)
+            let doc = Tree::of(&self.docs);
+            let read = |l: Leaf| reactive.read(doc, l);
+            self.steps.advance(doc, &read, now, paused)
         };
         values.extend(dts);
         if values != self.reactive.published_by(ProducerId::STEPS) {
@@ -2373,7 +2379,7 @@ impl StoreCore {
         let mut values = self.motion.targets.clone();
         self.motion.apply(&mut values);
         if values != self.reactive.published_by(ProducerId::LAYOUT) {
-            self.reactive.publish(Tree::over(&self.doc), ProducerId::LAYOUT, values);
+            self.reactive.publish(Tree::of(&self.docs), ProducerId::LAYOUT, values);
         }
         moving
     }
@@ -2394,11 +2400,11 @@ impl StoreCore {
                 continue;
             }
             let (Some(sx), Some(sy)) = (num(&shown, node, xp), num(&shown, node, yp)) else { continue };
-            let chain = contexts::chain_of(Tree::over(&self.doc), node);
+            let chain = contexts::chain_of(Tree::of(&self.docs), node);
             if chain.is_empty() {
                 continue;
             }
-            let declared = contexts::Resolver::new(Tree::over(&self.doc), self.contexts()).get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
+            let declared = contexts::Resolver::new(Tree::of(&self.docs), self.contexts()).get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
             let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) else { continue };
             self.motion.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: self.motion.clock, ms: m.ms, ease: m.ease });
         }
@@ -2420,11 +2426,11 @@ impl StoreCore {
 
     /// Publish each token's colour for the theme (`ProducerId::THEME`).
     fn resolve_theme(&mut self) {
-        let values = palette::publish(Tree::over(&self.doc), self.dark);
+        let values = palette::publish(Tree::of(&self.docs), self.dark);
         if values == self.reactive.published_by(ProducerId::THEME) {
             return;
         }
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::THEME, values);
+        self.reactive.publish(Tree::of(&self.docs), ProducerId::THEME, values);
     }
 
     /// Lay a container out in a previewed order, or stop (`None`): the
@@ -2462,18 +2468,18 @@ impl StoreCore {
     fn solve_network(&mut self) {
         // What the network is depends only on structure and slots: it is
         // kept until the document is written again.
-        let edits = self.doc.edits();
+        let edits = self.docs.edits();
         let net = match &self.network {
             Some((at, net)) if *at == edits => net.clone(),
             _ => {
-                let net = std::sync::Arc::new(crate::port::network(Tree::over(&self.doc)));
+                let net = std::sync::Arc::new(crate::port::network(Tree::of(&self.docs)));
                 self.network = Some((edits, net.clone()));
                 net
             }
         };
         if net.unknowns.is_empty() {
             if !self.reactive.published_by(ProducerId::NETWORK).is_empty() {
-                self.reactive.retract(Tree::over(&self.doc), ProducerId::NETWORK);
+                self.reactive.retract(Tree::of(&self.docs), ProducerId::NETWORK);
             }
             self.physics_error = None;
             return;
@@ -2486,7 +2492,7 @@ impl StoreCore {
         let index: std::collections::BTreeMap<Leaf, usize> = net.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
         let x0: Vec<f64> = net.unknowns.iter().map(|(l, _)| self.reactive.signal(*l).map(|s| &s.value).and_then(magnitude).unwrap_or(0.0)).collect();
         let solution = {
-            let doc = &self.doc;
+            let doc = Tree::of(&self.docs);
             let reactive = &self.reactive;
             let unknowns = &net.unknowns;
             let mut problem = iron_solve::Problem::uniform(x0, 1.0);
@@ -2510,7 +2516,7 @@ impl StoreCore {
                         problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars.clone(), 1, move |v, out| {
                             let read = |l: Leaf| match index.get(&l).and_then(|i| vars.iter().position(|j| j == i)) {
                                 Some(pos) => Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
-                                None => reactive.read(Tree::over(doc), l),
+                                None => reactive.read(doc, l),
                             };
                             let side = |e: &Expr| e.eval(&read).ok().as_ref().and_then(magnitude);
                             out[0] = match (side(&lhs), side(&rhs)) {
@@ -2533,7 +2539,7 @@ impl StoreCore {
         }
         self.physics_error = None;
         let values = net.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
-        self.reactive.publish(Tree::over(&self.doc), ProducerId::NETWORK, values);
+        self.reactive.publish(Tree::of(&self.docs), ProducerId::NETWORK, values);
     }
 
     /// Why the across/through network kept its last solution, if it did.
@@ -2541,7 +2547,7 @@ impl StoreCore {
     /// selected pictures (component-model.md §5.5, `make`).
     pub fn make_component(&self, selection: &[NodeId], name: &str, actor: Actor) -> Result<(make::Made, TransactionInput), String> {
         let read = |l: Leaf| self.resolved(l.node, l.path);
-        let shapes = selection.iter().all(|&n| self.doc.live(n).is_some_and(|x| x.ty.name() != "use"));
+        let shapes = selection.iter().all(|&n| Tree::of(&self.docs).live(n).is_some_and(|x| x.ty.name() != "use"));
         let made = if shapes {
             // Plain shapes: they become a definition shown by its main.
             let mut top_left = [f64::INFINITY, f64::INFINITY];
@@ -2553,9 +2559,9 @@ impl StoreCore {
             if !top_left[0].is_finite() {
                 top_left = [0.0, 0.0];
             }
-            make::make_main(Tree::over(&self.doc), selection, top_left, name)?
+            make::make_main(Tree::of(&self.docs), selection, top_left, name)?
         } else {
-            make::make(Tree::over(&self.doc), &read, selection, name)?
+            make::make(Tree::of(&self.docs), &read, selection, name)?
         };
         let tx = TransactionInput { label: format!("make component {name}"), actor, ts: 0, idempotency_key: None, ops: made.ops.clone(), exact: false };
         Ok((made, tx))
@@ -2563,7 +2569,7 @@ impl StoreCore {
 
     /// Overrides that apply nothing, and why (component-model.md §5.3).
     pub fn stale_overrides(&self) -> Vec<(NodeId, String)> {
-        expand::stale_overrides(Tree::over(&self.doc))
+        expand::stale_overrides(Tree::of(&self.docs))
     }
 
     /// What the last expansion could not derive, if anything.
@@ -2581,16 +2587,16 @@ impl StoreCore {
 
     fn live_of_type(&self, name: &str) -> Option<NodeId> {
         let ty = TypeId::lookup(name)?;
-        self.doc.live_nodes().find(|n| n.ty == ty).map(|n| n.id)
+        Tree::of(&self.docs).live_nodes().find(|n| n.ty == ty).map(|n| n.id)
     }
 
     /// The selected nodes, in pick order, with how each was reached
     /// (`data.panel`, `data.chain`). Deleted nodes drop out.
     pub fn selection(&self) -> Vec<(NodeId, std::collections::BTreeMap<String, Value>)> {
         let Some(sel) = self.live_of_type("selection") else { return Vec::new() };
-        self.doc
+        Tree::of(&self.docs)
             .relations_from(sel)
-            .filter(|r| r.rel == RelKind::Selects && self.doc.is_live(r.to))
+            .filter(|r| r.rel == RelKind::Selects && Tree::of(&self.docs).is_live(r.to))
             .map(|r| (r.to, r.data.clone()))
             .collect()
     }
@@ -2606,22 +2612,22 @@ impl StoreCore {
         let sel = match self.live_of_type("selection") {
             Some(sel) => sel,
             None => {
-                let ids = self.doc.next_session_ids(2);
+                let ids = self.docs.authored.next_session_ids(2);
                 let ty = |n: &str| TypeId::lookup(n).expect("registered");
                 ops.push(Op::Create { id: ids[0], ty: ty("session"), parent: None, order: OrderKey::first(), facets: vec![] });
                 ops.push(Op::Create { id: ids[1], ty: ty("selection"), parent: Some(ids[0]), order: OrderKey::first(), facets: vec![] });
                 ids[1]
             }
         };
-        for r in self.doc.relations_from(sel).filter(|r| r.rel == RelKind::Selects) {
+        for r in Tree::of(&self.docs).relations_from(sel).filter(|r| r.rel == RelKind::Selects) {
             ops.push(Op::Unlink { id: r.id });
         }
-        for ((to, data), id) in items.iter().zip(self.doc.next_session_relation_ids(items.len())) {
+        for ((to, data), id) in items.iter().zip(self.docs.authored.next_session_relation_ids(items.len())) {
             ops.push(Op::Link { rel: Relation { id, from: sel, to: *to, rel: RelKind::Selects, data: data.clone() } });
         }
         self.apply_session(ops)?;
         // Bindings that read the selection follow it.
-        if self.doc.nodes_with(facet::FacetKind::Selection).next().is_some() {
+        if Tree::of(&self.docs).nodes_with(facet::FacetKind::Selection).next().is_some() {
             if !self.clusters.list.is_empty() {
                 self.resolve_clusters_live();
             }
@@ -2645,7 +2651,7 @@ impl StoreCore {
         // itself.
         let live = self.gesture.is_none() && self.drivers.is_empty() && self.fingers.is_empty() && !self.reactive.overlay().is_empty();
         if live {
-            self.reactive.clear_overlay(Tree::over(&self.doc));
+            self.reactive.clear_overlay(Tree::of(&self.docs));
         }
         self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(expanded.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(expanded.iter()).any(|op| match op {
@@ -2653,7 +2659,7 @@ impl StoreCore {
             Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
             Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
             // The first provider among siblings answers `@name`.
-            Op::Reorder { id, .. } => provides(Tree::over(&self.doc), *id),
+            Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
         });
         if structural {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
@@ -2673,7 +2679,7 @@ impl StoreCore {
                     _ => None,
                 })
                 .collect();
-            self.reactive.invalidate(Tree::over(&self.doc), changed);
+            self.reactive.invalidate(Tree::of(&self.docs), changed);
             // A set on a clip's timing, or a link, changes the sample too.
             // Cheap enough to do unconditionally: clips are few.
             self.resample();
@@ -2694,18 +2700,18 @@ impl StoreCore {
     /// authored nodes only from phase 2c on (reactive-engine.md §12.1); a
     /// reader that can meet a derived node reads `tree()`.
     pub fn authored(&self) -> &Document {
-        &self.doc
+        &self.docs.authored
     }
 
     /// The read interface for authored and derived nodes alike
     /// (reactive-engine.md §12.1).
     pub fn tree(&self) -> Tree<'_> {
-        Tree::over(&self.doc)
+        Tree::of(&self.docs)
     }
 
     /// The document, without copying it; the store's history goes with it.
     pub fn into_document(self) -> Document {
-        self.doc
+        self.docs.authored
     }
 
     pub fn history(&self) -> &History {
@@ -2733,7 +2739,7 @@ impl StoreCore {
     pub fn apply(&mut self, input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
         // A transaction from outside a running gesture is classified against
         // it (`gesture`) and applied without its previews.
-        let conflict = self.gesture.as_ref().and_then(|g| gesture::conflict(Tree::over(&self.doc), &input.ops, g, &self.drivers));
+        let conflict = self.gesture.as_ref().and_then(|g| gesture::conflict(Tree::of(&self.docs), &input.ops, g, &self.drivers));
         let suspended = self.suspend_gesture();
         let result = self.apply_now(input);
         if let Some(s) = suspended {
@@ -2754,7 +2760,7 @@ impl StoreCore {
         // document, in the same transaction (palette.rs).
         // After the transaction's own ops: its ids come after theirs, and
         // bindings are checked once all have applied.
-        let theme = palette::ensure_ops(Tree::over(&self.doc), &input.ops);
+        let theme = palette::ensure_ops(Tree::of(&self.docs), &input.ops);
         input.ops.extend(theme);
         if let Some(k) = &input.idempotency_key
             && let Some((_, v)) = self.recent_keys.iter().find(|(key, _)| key == k)
@@ -2784,7 +2790,7 @@ impl StoreCore {
                     Some(saved) => saved.restore(self),
                     // Not reached: without a constraint nothing refuses.
                     None => {
-                        self.reactive.rebuild(Tree::over(&self.doc));
+                        self.reactive.rebuild(Tree::of(&self.docs));
                         self.resample();
                         self.rebuild_clusters();
                     }
@@ -2796,7 +2802,7 @@ impl StoreCore {
             self.machines.shared += 1;
         }
         tx.solver = solver.clone();
-        self.pending.note(Tree::over(&self.doc), tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
+        self.pending.note(Tree::of(&self.docs), tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -2839,7 +2845,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
-        self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+        self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -2877,7 +2883,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -2921,7 +2927,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.pending.note(Tree::over(&self.doc), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.pending.note(Tree::of(&self.docs), applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -2948,10 +2954,10 @@ impl StoreCore {
         let last = tx.ops.len().saturating_sub(1);
         let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
         {
-            let read = |l: Leaf| self.reactive.read(Tree::over(&self.doc), l);
-            constraint::validate_all(Tree::over(&self.doc), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
+            let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
+            constraint::validate_all(Tree::of(&self.docs), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
         }
-        let clusters = solve::clusters(Tree::over(&self.doc), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
+        let clusters = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
         self.clusters = clusters.clone();
         if clusters.list.is_empty() {
             return Ok(None);
@@ -2970,8 +2976,8 @@ impl StoreCore {
         let mut summary = SolverSummary::default();
         for c in &clusters.list {
             let result = {
-                let read = |l: Leaf| self.reactive.read(Tree::over(&self.doc), l);
-                solve::solve_cluster(Tree::over(&self.doc), &read, c, &drivers, &self.fingers)
+                let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
+                solve::solve_cluster(Tree::of(&self.docs), &read, c, &drivers, &self.fingers)
             };
             if result.status != iron_solve::Status::Converged {
                 let names: Vec<String> = result.culprits.iter().map(|c| c.to_string()).collect();
@@ -2987,12 +2993,12 @@ impl StoreCore {
             }
             let mut changed = Vec::new();
             for (leaf, v) in result.values {
-                let current = self.doc.leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
+                let current = Tree::of(&self.docs).leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
                 if current.is_some_and(|c| (c - v).abs() < 1e-9) {
                     continue;
                 }
                 let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };
-                let inverse = op::apply_op(&mut self.doc, last, &op, tx.version).map_err(|e| vec![e])?;
+                let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).map_err(|e| vec![e])?;
                 tx.derived_ops.push(op);
                 tx.inverse.extend(inverse);
                 changed.push(leaf);
@@ -3003,7 +3009,7 @@ impl StoreCore {
             if !changed.is_empty() || !result.unmet.is_empty() {
                 summary.clusters.push(c.id);
             }
-            self.reactive.invalidate(Tree::over(&self.doc), changed);
+            self.reactive.invalidate(Tree::of(&self.docs), changed);
             summary.unmet.extend(result.unmet);
         }
         if exact && !summary.unmet.is_empty() {
@@ -3023,21 +3029,21 @@ impl StoreCore {
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
         let mut input = input;
-        input.ops = expand::translate(Tree::over(&self.doc), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
+        input.ops = expand::translate(Tree::of(&self.docs), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
         let mut shared = false;
         if let Some(pin) = self.machines.pinned.clone() {
             // Counted once the transaction is accepted (`count_shared`).
-            shared = machine::shared_edit(Tree::over(&self.doc), &pin, &input.ops);
-            input.ops = machine::record(Tree::over(&self.doc), &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
+            shared = machine::shared_edit(Tree::of(&self.docs), &pin, &input.ops);
+            input.ops = machine::record(Tree::of(&self.docs), &pin, std::mem::take(&mut input.ops)).map_err(|message| vec![ApplyError { op: 0, kind: ErrorKind::BadInstance, message }])?;
         }
         // What `attachment::validate` compares against: the points attached
         // before.
-        let attached: Vec<NodeId> = Tree::over(&self.doc).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
-        self.doc.begin();
-        let doc = &mut self.doc;
-        let stamp = doc.version().next();
+        let attached: Vec<NodeId> = Tree::of(&self.docs).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
+        self.docs.begin();
+        let docs = &mut self.docs;
+        let stamp = docs.authored.version().next();
         let mut inverse = Vec::new();
         let mut errors = Vec::new();
         for (i, op) in input.ops.iter().enumerate() {
@@ -3045,7 +3051,7 @@ impl StoreCore {
                 errors.push(ApplyError { op: i, kind: ErrorKind::BadId, message: reason });
                 continue;
             }
-            match op::apply_op(doc, i, op, stamp) {
+            match op::apply_op(docs, i, op, stamp) {
                 Ok(inv) => inverse.extend(inv),
                 Err(e) => errors.push(e),
             }
@@ -3056,8 +3062,8 @@ impl StoreCore {
         let mut problems = None;
         if errors.is_empty() {
             // Only the owners these ops can change (stage 2).
-            if let Some(which) = self.owners.affected(Tree::over(doc), &input.ops, &inverse) {
-                let (ops, delta) = self.owners.expand(doc, stamp, &self.repeats, which);
+            if let Some(which) = self.owners.affected(Tree::of(docs), &input.ops, &inverse) {
+                let (ops, delta) = self.owners.expand(docs, stamp, &self.repeats, which);
                 expanded = ops;
                 problems = Some(delta);
             }
@@ -3073,10 +3079,10 @@ impl StoreCore {
                 {
                     continue;
                 }
-                if let Err(e) = op::check_created(Tree::over(doc), i, op, stamp) {
+                if let Err(e) = op::check_created(Tree::of(docs), i, op, stamp) {
                     errors.push(e);
                 }
-                if let Err(message) = expand::check_scope(Tree::over(doc), op) {
+                if let Err(message) = expand::check_scope(Tree::of(docs), op) {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
                 // What may take a context declaration away (expand.rs).
@@ -3086,22 +3092,22 @@ impl StoreCore {
                     _ => None,
                 };
                 if let Some(id) = undeclares.filter(|id| !id.is_expanded())
-                    && let Err(message) = expand::check_context(Tree::over(doc), id)
+                    && let Err(message) = expand::check_context(Tree::of(docs), id)
                 {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });
                 }
             }
         }
         if errors.is_empty() {
-            if let Err(message) = attachment::validate(&attached, Tree::over(doc)) {
+            if let Err(message) = attachment::validate(&attached, Tree::of(docs)) {
                 errors.push(ApplyError { op: 0, kind: ErrorKind::BadParent, message });
             }
         }
         if !errors.is_empty() {
-            self.doc.rollback();
+            self.docs.rollback();
             return Err(errors);
         }
-        doc.set_version(stamp);
+        docs.authored.set_version(stamp);
         let rollback = Rollback(true);
         // Derived nodes and relations come back by re-expansion, never by
         // undo: a deleted instance's expanded children are not restored by
@@ -3133,11 +3139,11 @@ impl StoreCore {
     }
 
     pub fn view(&self, q: &ViewQuery) -> Result<String, ViewError> {
-        view::with_problems(self.problem_notes(), || view::render_tree(Tree::over(&self.doc), &self.reactive, &self.clusters.var_cluster, q))
+        view::with_problems(self.problem_notes(), || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))
     }
 
     pub fn save(&self) -> String {
-        serial::save(&self.doc)
+        serial::save(&self.docs.authored)
     }
 
     /// A store over a loaded document, with empty history.
@@ -3150,27 +3156,27 @@ impl StoreCore {
 
     /// The scope this store's document is, if it has been given one.
     pub fn scope(&self) -> Option<ScopeId> {
-        self.doc.scope()
+        self.docs.authored.scope()
     }
 
     /// Name the scope (scopes.md §3). Identity metadata, not content: not an
     /// op, not in history, and it does not bump the version. It is written
     /// in the next save's header.
     pub fn set_scope(&mut self, scope: Option<ScopeId>) {
-        self.doc.set_scope(scope);
+        self.docs.authored.set_scope(scope);
     }
 
     /// The client this store mints new ids as (`id.rs`): 0 for a scope
     /// edited locally; the number a server handed out, while syncing.
     pub fn client(&self) -> u32 {
-        self.doc.client()
+        self.docs.authored.client()
     }
 
     /// Mint new ids as `client` from now on. Like the scope, who is editing
     /// is not content: not an op, not in history, never saved. Panics if
     /// `client` is not below [`id::CLIENT_LIMIT`].
     pub fn set_client(&mut self, client: u32) {
-        self.doc.set_client(client);
+        self.docs.authored.set_client(client);
     }
 
     /// Forget undo, redo and the log, keeping the document (scopes.md §4.3).
@@ -3188,7 +3194,7 @@ impl StoreCore {
     /// reaches back that far (the horizon dropped some): the caller cannot
     /// append, and must write a fresh snapshot instead.
     pub fn log_since(&self, version: Version) -> Option<Vec<&Transaction>> {
-        if self.doc.version() <= version {
+        if self.docs.authored.version() <= version {
             return Some(Vec::new());
         }
         let first = self.history.log.front()?;

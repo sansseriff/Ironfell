@@ -748,7 +748,7 @@ impl crate::StoreCore {
     /// first use, then a linked instance named by its next designator.
     pub fn place_part(&mut self, key: &str, composition: NodeId, at_: [f64; 2], rot: f64, actor: crate::Actor) -> Result<Placed, String> {
         let part = find(key).ok_or_else(|| format!("no part {key:?}"))?;
-        let (ops, placed) = place_ops(&self.doc, part, composition, at_, rot, None)?;
+        let (ops, placed) = place_ops(&self.docs.authored, part, composition, at_, rot, None)?;
         let label = format!("place {}", part.name.to_lowercase());
         self.apply(crate::TransactionInput { label, actor, ts: 0, idempotency_key: None, ops, exact: false }).map_err(|e| e.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))?;
         Ok(placed)
@@ -764,41 +764,41 @@ pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [
     let stamp = scratch.version().next();
     let push = |scratch: &mut crate::document::Document, ops: &mut Vec<Op>, new: Vec<Op>| -> Result<(), String> {
         for op in &new {
-            crate::op::apply_op(scratch, 0, op, stamp).map_err(|e| e.message)?;
+            crate::op::apply_op_to(scratch, 0, op, stamp).map_err(|e| e.message)?;
         }
         ops.extend(new);
         Ok(())
     };
-    let def = match find_in(Tree::over(&scratch), &part.key) {
+    let def = match find_in(Tree::authored_only(&scratch), &part.key) {
         Some(d) => d,
         None => {
-            let library = match root_of(Tree::over(&scratch), "library") {
+            let library = match root_of(Tree::authored_only(&scratch), "library") {
                 Some(l) => l,
                 None => {
                     let l = scratch.next_id();
-                    let order = after_last(Tree::over(&scratch), None);
+                    let order = after_last(Tree::authored_only(&scratch), None);
                     push(&mut scratch, &mut ops, vec![Op::Create { id: l, ty: ty("library"), parent: None, order, facets: vec![] }])?;
                     l
                 }
             };
-            let (def_ops, def) = definition_ops(part, library, after_last(Tree::over(&scratch), Some(library)), scratch.next_id().raw())?;
+            let (def_ops, def) = definition_ops(part, library, after_last(Tree::authored_only(&scratch), Some(library)), scratch.next_id().raw())?;
             push(&mut scratch, &mut ops, def_ops)?;
             def
         }
     };
-    let model = match root_of(Tree::over(&scratch), "model") {
+    let model = match root_of(Tree::authored_only(&scratch), "model") {
         Some(m) => m,
         None => {
             let m = scratch.next_id();
-            let order = after_last(Tree::over(&scratch), None);
+            let order = after_last(Tree::authored_only(&scratch), None);
             push(&mut scratch, &mut ops, vec![Op::Create { id: m, ty: ty("model"), parent: None, order, facets: vec![] }])?;
             m
         }
     };
-    let designator = name.map_or_else(|| next_designator(Tree::over(&scratch), part), str::to_owned);
+    let designator = name.map_or_else(|| next_designator(Tree::authored_only(&scratch), part), str::to_owned);
     let last = |p: NodeId| scratch.children(p).iter().filter(|c| !c.is_expanded()).filter_map(|&c| scratch.live(c)).map(|n| n.order.clone()).max();
     let place = crate::definition::Placement { entity_parent: Some(model), entity_after: last(model), figure_parent: Some(composition), figure_after: last(composition) };
-    let (entity, mut inst) = crate::definition::instantiate(Tree::over(&scratch), def, NOTATION, &designator, &place)?;
+    let (entity, mut inst) = crate::definition::instantiate(Tree::authored_only(&scratch), def, NOTATION, &designator, &place)?;
     let mut figure = None;
     for op in inst.iter_mut() {
         let Op::Create { id, ty: t, facets, .. } = op else { continue };
@@ -828,7 +828,7 @@ pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [
     // A turned part's labels stay upright: overrides on its picture.
     let quarter = (rot / std::f64::consts::FRAC_PI_2).round().rem_euclid(4.0) as u8;
     if quarter != 0
-        && let Some(template) = crate::definition::template_of(Tree::over(&scratch), def, NOTATION)
+        && let Some(template) = crate::definition::template_of(Tree::authored_only(&scratch), def, NOTATION)
     {
         let labels: Vec<NodeId> = scratch.children(template).iter().copied().filter(|&c| scratch.live(c).is_some_and(|n| n.ty.name() == "text")).collect();
         let marks = part.symbol.iter().filter_map(|m| match m {
@@ -979,7 +979,7 @@ pub fn elbow(from: [f64; 2], to: [f64; 2], vertical_first: bool) -> Option<[f64;
 pub fn pins_on(store: &crate::StoreCore, sheet: NodeId) -> Vec<(End, [f64; 2])> {
     let doc = store.tree();
     let mut out = Vec::new();
-    for &f in doc.children(sheet) {
+    for &f in doc.children(sheet).iter() {
         if doc.live(f).is_none_or(|n| n.ty.name() != "use") {
             continue;
         }
@@ -1055,7 +1055,7 @@ pub fn wire_at(store: &crate::StoreCore, sheet: NodeId, at: [f64; 2], reach: f64
     let doc = store.tree();
     let p = Point::new(at[0], at[1]);
     let mut best: Option<(f64, NodeId, Point)> = None;
-    for &path in doc.children(sheet) {
+    for &path in doc.children(sheet).iter() {
         let Some(points) = wire_points(store, path) else { continue };
         for w in points.windows(2) {
             let (a, b) = (Point::new(w[0][0], w[0][1]), Point::new(w[1][0], w[1][1]));
@@ -1294,7 +1294,7 @@ pub fn netlist(store: &crate::StoreCore, sheet: NodeId) -> String {
     let name_of = |n: NodeId| doc.get::<Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned).unwrap_or_default();
     // The parts on the sheet, in drawing order, with their part.
     let mut items: Vec<(NodeId, &Part)> = Vec::new();
-    for &f in doc.children(sheet) {
+    for &f in doc.children(sheet).iter() {
         let Some(e) = doc.relations_from(f).find(|r| r.rel == crate::document::RelKind::Figures).map(|r| r.to) else { continue };
         let Some(def) = doc.get::<crate::facet::Instance>(e).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()) else { continue };
         let key = doc.get::<Import>(def).and_then(|i| i.source.constant()).and_then(|v| v.as_str()).and_then(|s| s.strip_prefix("std:")).map(str::to_owned);

@@ -2,7 +2,7 @@ import type { ModelImage } from '../model/images';
 import { marked } from 'marked';
 import type { AskResult } from '../model/agent';
 import { boundedHistory, type ConversationMessage } from '../model/conversation';
-import type { AgentEvent, AgentPhase, AskLive } from '../model/progress';
+import type { AgentEvent, AgentPhase, AgentPicture, AskLive } from '../model/progress';
 import type { StreamVerb, StreamView } from '../model/api';
 import type { EditOutcome } from '../model/edit';
 
@@ -31,6 +31,8 @@ export interface WorkStep {
   endedAt?: number;
   /** Reasoning the runtime shared during this step (summaries or thinking). */
   reasoning: string;
+  /** A renderer capture from this step, independent of the live document. */
+  picture?: AgentPicture;
   /** What the model wrote during this step, once it started writing. */
   wrote?: 'prose' | 'edit' | 'revise';
   /** Characters of reply and of shared reasoning this step, for estimates. */
@@ -61,6 +63,8 @@ export function applyAgentEvents(progress: TurnProgress, events: AgentEvent[], n
       if (step && step.endedAt === undefined) step.endedAt = now;
       progress.steps.push({ phase: event.phase, attempt: event.attempt, startedAt: now, reasoning: '' });
       if (event.phase === 'thinking') { progress.text = ''; progress.view = undefined; }
+    } else if (event.kind === 'picture') {
+      if (step?.phase === 'capturing') step.picture = event.picture;
     } else if (event.kind === 'usage') {
       if (step) {
         step.usage = { output: event.output, ...(event.thinking !== undefined ? { thinking: event.thinking } : {}) };
@@ -129,6 +133,10 @@ export function stepLabel(step: WorkStep, done: boolean): string {
   switch (step.phase) {
     case 'reading': return done ? 'Read the document' : 'Reading the document';
     case 'looking': return done ? 'Looked inside components' : 'Looking inside components';
+    case 'capturing': {
+      const picture = step.picture;
+      return picture ? (picture.error ? `Couldn’t capture ${picture.source}` : `Captured ${picture.source}`) : 'Capturing composition';
+    }
     case 'applying': return done ? 'Applied the edit' : 'Applying the edit';
     case 'thinking': {
       const repair = step.attempt > 1;
@@ -230,6 +238,7 @@ export function turnLog(turn: ChatTurn, now = Date.now()) {
       attempt: step.attempt,
       seconds: Number((((step.endedAt ?? now) - step.startedAt) / 1000).toFixed(1)),
       ...(step.phase === 'thinking' ? { tokens: stepTokens(step) } : {}),
+      ...(step.picture ? { picture: { source: step.picture.source, error: step.picture.error } } : {}),
       ...(step.reasoning ? { reasoning: step.reasoning } : {}),
     })) ?? [],
     trace: turn.result?.trace ?? [],

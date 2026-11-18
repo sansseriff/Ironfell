@@ -3432,8 +3432,9 @@ has not mounted yet. The new fast default smoke passes all six assertions in
 
 `agent-vision.ts` verifies an unopened composition's GPU pixels (a red rectangle),
 unchanged document serialization, invalid/cancelled capture requests, file/paste/drop
-attachments, removal, malformed SVG rejection, model bridge image bytes and transcript
-thumbnails. It uses a fixture model, without live inference. Run from the repo
+attachments, removal, malformed SVG rejection, and model bridge image bytes. It
+also checks that the work log shows the exact PNG sent to the agent and that the
+composition card displays a renderer snapshot. It uses a fixture model. Run from the repo
 root with a worktree-local Vite server:
 
 ```sh

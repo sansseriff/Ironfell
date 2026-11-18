@@ -7,7 +7,7 @@
  * sessions.svelte.ts.
  */
 import { previewOf, validImages, type ModelImage } from '../model/images';
-import type { ChatSession, ChatTurn } from './conversation';
+import type { ChatSession, ChatTurn, TurnProgress } from './conversation';
 
 /** One conversation in a panel's history. */
 export interface ChatThread extends ChatSession {
@@ -73,9 +73,26 @@ function budgetImages(threads: ChatThread[]): ChatThread[] {
   });
   return threads.map(thread => {
     const draftImages = thread.draftImages?.length ? fit(thread.draftImages) : thread.draftImages;
-    const turns = [...thread.turns].reverse().map(turn => turn.images?.length ? { ...turn, images: fit(turn.images) } : turn).reverse();
+    const turns = [...thread.turns].reverse().map(turn => {
+      const images = turn.images?.length ? fit(turn.images) : turn.images;
+      const progress = mapPictures(turn.progress, image => {
+        if (image.data.length > budget) return undefined;
+        budget -= image.data.length;
+        return image;
+      });
+      return { ...turn, images, progress };
+    }).reverse();
     return { ...thread, draftImages, turns };
   });
+}
+
+function mapPictures(progress: TurnProgress | undefined, image: (image: ModelImage) => ModelImage | undefined): TurnProgress | undefined {
+  if (!progress || !Array.isArray(progress.steps)) return undefined;
+  const steps = [...progress.steps].reverse().map(step => {
+    if (!step.picture?.image) return step;
+    return { ...step, picture: { ...step.picture, image: image(step.picture.image) } };
+  }).reverse();
+  return { ...progress, steps };
 }
 
 /** Read `chats.json`; anything unreadable is an empty history, never an error. */
@@ -93,7 +110,12 @@ export function parseChats(json: string | null): SavedChats {
           id: t.id, created: Number(t.created) || 0, updated: Number(t.updated) || 0,
           draft: typeof t.draft === 'string' ? t.draft : '',
           draftImages: validImages(t.draftImages) ? t.draftImages : [],
-          turns: t.turns.filter((turn: any) => typeof turn?.id === 'string' && typeof turn.instruction === 'string' && turn.status !== 'running').map((turn: ChatTurn) => ({ ...turn, images: validImages(turn.images) ? turn.images : [] })),
+          turns: t.turns.filter((turn: any) => typeof turn?.id === 'string' && typeof turn.instruction === 'string' && turn.status !== 'running')
+            .map((turn: ChatTurn) => ({
+              ...turn,
+              images: validImages(turn.images) ? turn.images : [],
+              progress: mapPictures(turn.progress, image => validImages([image]) ? image : undefined),
+            })),
           annotations: typeof t.annotations === 'object' && t.annotations ? t.annotations : {},
         }));
       views[key] = { current: typeof view.current === 'string' ? view.current : '', threads };

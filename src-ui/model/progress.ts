@@ -4,14 +4,22 @@
  * produces them. Events are plain data so they cross the worker boundary.
  */
 import type { StreamView } from './api';
+import type { ModelImage } from './images';
 
 /** reading: gathering the document; thinking: waiting on the model (attempt > 1
  *  is a repair); looking: answering a `<look>`; applying: the edit's transaction. */
-export type AgentPhase = 'reading' | 'thinking' | 'looking' | 'applying';
+export type AgentPhase = 'reading' | 'thinking' | 'looking' | 'capturing' | 'applying';
+
+export interface AgentPicture {
+  source: string;
+  image?: ModelImage;
+  error?: string;
+}
 
 export type AgentEvent =
   | { kind: 'phase'; phase: AgentPhase; attempt: number }
   | { kind: 'reasoning'; delta: string }
+  | { kind: 'picture'; picture: AgentPicture }
   | { kind: 'text'; delta: string }
   /** The runtime's running estimate of this model call's thinking tokens
    *  (Claude Code reports one while the thinking itself stays hidden). */

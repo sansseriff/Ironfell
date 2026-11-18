@@ -61,6 +61,19 @@ render frames; the capture then times out and the model is told it failed. The
 first slice supports 2D compositions, including those not open in a panel; 3D
 requests return an explicit unsupported error.
 
+## Chat previews
+
+Built 2026-11-17. A `<look picture>` adds a capture step to the turn’s work
+log. Its preview uses the exact PNG sent to the model. Saved chats retain
+recent captures within the panel’s image budget. Captures remain associated
+with the turn and stay out of later model requests. The local bridge log
+keeps references to its original PNGs.
+
+The `::view` composition card renders a fresh snapshot through the same GPU
+capture path. It refreshes on demand and releases pending requests when the
+card is removed. SVG export also handles empty text labels, whose synthetic
+caret space had caused the RC charging preview to fail.
+
 ## Verification
 
 - Unit tests: attachment validation, real bytes delivered to both runtime subprocess

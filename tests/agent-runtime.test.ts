@@ -509,6 +509,7 @@ test('agent receives pasted pixels and can inspect an applied edit then refine i
   let captured = 0;
   fixtureDoc.api.picture = async () => { assert.ok(fixtureDoc.calls() > 0); captured++; return testImage; };
   let calls = 0;
+  const previews: unknown[] = [];
   const result = await ask(fixtureDoc.api, { name: 'vision-fixture', complete: async (_system, messages) => {
     calls++;
     if (calls === 1) {
@@ -518,9 +519,12 @@ test('agent receives pasted pixels and can inspect an applied edit then refine i
     assert.deepEqual(messages.at(-1)?.images, [testImage]);
     if (calls === 2) return { text: said({ edit: setX }, { picture: 'test' }) };
     return { text: 'The composition now matches the reference.' };
-  } }, 'Match this picture', { images: [testImage], allowTextReply: true });
+  } }, 'Match this picture', { images: [testImage], allowTextReply: true }, {
+    onEvent(event) { if (event.kind === 'picture') previews.push(event.picture); },
+  });
   assert.equal(result.ok, true);
   assert.equal(captured, 2);
+  assert.deepEqual(previews, [{ source: 'test', image: testImage }, { source: 'test', image: testImage }]);
   assert.equal(fixtureDoc.calls(), 2);
   assert.equal(fixtureDoc.nodes['#fixture'].x, 240);
   assert.equal(result.outcome?.ok, true);

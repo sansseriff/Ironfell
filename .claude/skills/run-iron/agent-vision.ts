@@ -9,7 +9,15 @@ const backend = process.env.BACKEND ?? 'webgpu';
 const mode = process.env.RUNTIME ?? 'worker';
 const dpr = Number(process.env.DPR ?? 1);
 let received = 0;
+let agentCapture = '';
 const runtime = async (request: any) => {
+  const latest = request.messages.at(-1);
+  if (latest.content.includes('Capture the test composition')) return { text: '<look picture="vision-test"/>' };
+  if (latest.content.startsWith('PICTURE of vision-test')) {
+    agentCapture = latest.images?.[0]?.data ?? '';
+    assert.ok(agentCapture, 'model must receive the requested capture');
+    return { text: 'Here is the composition.\n\n::view{show=VISION-TEST}' };
+  }
   const images = request.messages.flatMap((m: any) => m.images ?? []);
   assert.ok(images.length > 0, 'model must receive pixels');
   assert.ok(images.every((i: any) => i.mediaType === 'image/png' && i.data.length > 50));
@@ -90,7 +98,16 @@ try {
   assert.equal(received, 1);
   assert.equal(await page.locator('.user-message img').count(), 2);
   assert.equal(await page.locator('.attachment img').count(), 0);
+  await page.getByRole('textbox', { name: 'Agent instruction' }).fill('Capture the test composition');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  const captureTurn = page.locator('.chat-turn').last();
+  await captureTurn.locator('[data-chat-visual] img').waitFor();
+  const card = captureTurn.locator('[data-chat-visual] img');
+  assert.match(await card.getAttribute('src') ?? '', /^data:image\/png;base64,/);
+  await captureTurn.getByRole('button', { name: 'Show work log' }).click();
+  const preview = captureTurn.getByRole('img', { name: 'Agent capture of vision-test' });
+  assert.equal(await preview.getAttribute('src'), `data:image/png;base64,${agentCapture}`);
   await page.screenshot({ path: `.agents/vision/chat-${backend}-${mode}-${dpr}.png` });
   assert.deepEqual(errors, []);
-  console.log(`PASS ${backend} ${mode} DPR ${dpr}: offscreen GPU pixels, read-only capture, image attachment through bridge, transcript thumbnail`);
+  console.log(`PASS ${backend} ${mode} DPR ${dpr}: GPU capture, attachments, exact agent capture in work log, renderer snapshot card`);
 } finally { clearTimeout(deadline); await browser.close(); bridge.stop(); }

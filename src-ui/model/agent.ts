@@ -122,15 +122,17 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
   let applied = false;
   let lastApplied: { edit: string; outcome: EditOutcome } | null = null;
   const pictureMessage = async (source: string) => {
-    emit({ kind: 'phase', phase: 'looking', attempt: attempts });
+    emit({ kind: 'phase', phase: 'capturing', attempt: attempts });
     pictures++;
     try {
       if (!api.picture) throw new Error('Composition capture is unavailable');
       const { node, ...image } = await api.picture(source, live.signal);
       trace.push({ attempt: attempts, kind: 'picture', source, ok: true });
+      emit({ kind: 'picture', picture: { source, image } });
       return { node, message: { role: 'user' as const, content: `PICTURE of ${source}. Inspect it, then refine with an edit or finish with prose.`, images: wireImages([image]) } };
     } catch (error) {
       trace.push({ attempt: attempts, kind: 'picture', source, ok: false });
+      emit({ kind: 'picture', picture: { source, error: error instanceof Error ? error.message : String(error) } });
       return { node: undefined, message: { role: 'user' as const, content: `Picture failed: ${String(error)}. Do not claim you saw it. Finish or continue from document data.` } };
     }
   };

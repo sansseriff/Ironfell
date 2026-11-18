@@ -1,35 +1,32 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
   import ExternalLink from '@lucide/svelte/icons/external-link';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Button from '../lib/ui/Button.svelte';
   import IconButton from '../lib/ui/IconButton.svelte';
   import { controllerManager } from '../controller-manager.svelte';
   import { showComposition } from '../views/workspace';
+  import { imageUrl } from '../model/images';
 
   let { show, focus = '' }: { show: string; focus?: string } = $props();
   const doc = controllerManager.docClient;
   let src = $state('');
   let error = $state('');
   let pending = $state(false);
-  let alive = true;
-  let revision = 0;
+  let capture: AbortController | undefined;
 
-  async function refresh() {
-    const request = ++revision;
+  async function refresh(source: string) {
+    capture?.abort();
+    const request = new AbortController();
+    capture = request;
     const generation = doc.generation;
     pending = true;
     error = '';
     try {
-      const result = await doc.exportSvg(show);
-      if (!alive || request !== revision || generation !== doc.generation) return;
-      if (!result.ok || !result.svg) throw new Error(result.error || 'No 2D snapshot available');
-      if (result.svg.length > 1000000) throw new Error('Snapshot is too large; open the composition instead');
-      if (src) URL.revokeObjectURL(src);
-      src = URL.createObjectURL(new Blob([result.svg], { type: 'image/svg+xml' }));
+      const result = await doc.capturePicture(source, request.signal);
+      if (!request.signal.aborted && generation === doc.generation) src = imageUrl(result);
     } catch (reason) {
-      if (alive && request === revision) error = String(reason);
-    } finally { if (alive && request === revision) pending = false; }
+      if (!request.signal.aborted && generation === doc.generation) error = reason instanceof Error ? reason.message : String(reason);
+    } finally { if (!request.signal.aborted) pending = false; }
   }
 
   function open() {
@@ -37,12 +34,15 @@
     if (focus) void doc.command({ op: 'focus', node: focus }).catch(reason => { error = String(reason); });
   }
 
-  onMount(() => { void refresh(); });
-  onDestroy(() => { alive = false; revision++; if (src) URL.revokeObjectURL(src); });
+  $effect(() => {
+    src = '';
+    void refresh(show);
+    return () => capture?.abort();
+  });
 </script>
 
 <figure class="visual" data-chat-visual={show}>
-  <figcaption><span>{show}</span><span class="hint">2D snapshot</span><IconButton icon={RefreshCw} label="Refresh visual snapshot" disabled={pending} onclick={refresh} /></figcaption>
+  <figcaption><span>{show}</span><span class="hint">2D snapshot</span><IconButton icon={RefreshCw} label="Refresh visual snapshot" disabled={pending} onclick={() => refresh(show)} /></figcaption>
   {#if src}<img {src} alt={`Composition ${show}`} />{/if}
   {#if error}<p role="status">{error}</p>{:else if pending}<p role="status">Loading visual…</p>{/if}
   <div class="actions"><Button small variant="outline" onclick={open}><ExternalLink size={14} strokeWidth={1.75} />Open composition</Button></div>

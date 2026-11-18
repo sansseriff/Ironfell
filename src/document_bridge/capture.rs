@@ -65,7 +65,7 @@ pub fn start(world: &mut World, source: &str) -> Result<u64, String> {
     let id = if source.starts_with('#') { source.parse::<NodeId>().map_err(|e| e.to_string())? } else {
         doc.nodes_of_type(iron_document::TypeId::lookup("composition").unwrap())
             .find(|&id| doc.is_live(id) && doc.get::<iron_document::facet::Name>(id)
-                .and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(source))
+                .and_then(|n| n.text.constant()).and_then(|v| v.as_str()).is_some_and(|name| name.eq_ignore_ascii_case(source)))
             .ok_or_else(|| format!("no composition named {source}"))?
     };
     if !doc.is_live(id) || composition::dims(doc, id) != Some(Dims::Two) {

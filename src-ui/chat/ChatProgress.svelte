@@ -11,6 +11,7 @@
   import Eye from '@lucide/svelte/icons/eye';
   import WandSparkles from '@lucide/svelte/icons/wand-sparkles';
   import { formatTokens, stepLabel, stepTokens, turnTokens, type TurnProgress, type WorkStep } from './conversation';
+  import { imageUrl } from '../model/images';
 
   let { progress, running, startedAt, completedAt }: {
     progress: TurnProgress; running: boolean; startedAt: number; completedAt?: number;
@@ -44,7 +45,7 @@
     const counted = stepTokens(step);
     return counted.tokens ? `${counted.exact ? '' : '~'}${formatTokens(counted.tokens)} tok · ` : '';
   };
-  const iconFor = (step: WorkStep) => step.phase === 'reading' ? FileSearch : step.phase === 'looking' ? Eye : step.phase === 'applying' ? WandSparkles : step.wrote ? PencilLine : Brain;
+  const iconFor = (step: WorkStep) => step.phase === 'reading' ? FileSearch : step.phase === 'looking' || step.phase === 'capturing' ? Eye : step.phase === 'applying' ? WandSparkles : step.wrote ? PencilLine : Brain;
 </script>
 
 <div class="work" class:running data-chat-progress data-phase={running ? current?.phase : 'done'}>
@@ -71,6 +72,11 @@
             </div>
             {#if step.reasoning.trim()}
               <div class="reasoning"><p>{step.reasoning.trim()}</p></div>
+            {/if}
+            {#if step.picture?.image}
+              <img class="capture" src={imageUrl(step.picture.image)} alt={`Agent capture of ${step.picture.source}`} loading="lazy" />
+            {:else if step.picture?.error}
+              <p class="capture-error">{step.picture.error}</p>
             {/if}
           </li>
         {/each}
@@ -100,4 +106,6 @@
   /* Newest reasoning stays in view: the column runs bottom-up. */
   .reasoning { display: flex; flex-direction: column-reverse; max-height: 132px; overflow-y: auto; margin: 4px 0 0 19px; }
   .reasoning p { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-muted); font-style: italic; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .capture { display: block; max-width: calc(100% - 19px); max-height: 240px; object-fit: contain; margin: 4px 0 2px 19px; border-radius: var(--radius); border: 1px solid var(--border); }
+  .capture-error { margin: 4px 0 2px 19px; color: var(--fg-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
 </style>

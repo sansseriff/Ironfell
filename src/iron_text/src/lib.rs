@@ -222,6 +222,11 @@ impl TextLayout {
     /// `breaks` (style-run boundaries), with where the piece starts (its
     /// caret's x) and its line's baseline. Line breaks are left out.
     pub fn segments(&self, breaks: &[usize]) -> Vec<(std::ops::Range<usize>, f64, f64)> {
+        // Parley lays out a synthetic space for empty text so a caret can
+        // still be placed. That range has no bytes in the authored string.
+        if self.text.is_empty() {
+            return Vec::new();
+        }
         let mut out = Vec::new();
         for line in self.layout.lines() {
             let r = line.text_range();
@@ -736,6 +741,13 @@ mod tests {
         let wrapped = engine().layout("one two three four", &TextStyle::default(), &[], Some(80.0));
         assert_eq!(wrapped.width, 80.0);
         assert!(wrapped.height > one.height * 2.0);
+    }
+
+    #[test]
+    fn empty_text_has_no_svg_segments_after_shaping() {
+        inter();
+        let layout = engine().layout("", &TextStyle::default(), &[], None);
+        assert!(layout.segments(&[]).is_empty());
     }
 
     #[test]

@@ -500,6 +500,11 @@ export class DocumentClient {
     return r;
   }
 
+  async capturePicture(source: string, signal?: AbortSignal) {
+    const { capturePicture } = await import('../model/api');
+    return capturePicture(command => this.request('documentCall', documentArguments(command)), source, signal);
+  }
+
   /** Import SVG text as a paste: under the pointer or at the view's centre,
    *  one "import SVG" transaction. `cuts` lists what it could not carry. */
   async importSvg(text: string, opts: { share?: boolean } = {}): Promise<{ ok: boolean; cuts?: string[]; nodes?: number; anchors?: number; definitions?: number; references?: number; error?: string }> {

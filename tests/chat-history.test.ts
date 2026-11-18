@@ -70,15 +70,18 @@ test('scope storage keeps chats.json per scope, counted in its size', async () =
 test('saved chat images and image-only drafts round trip, invalid attachments are dropped', () => {
   const image = { name: 'picture.png', mediaType: 'image/png' as const, data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==' };
   const chat = thread('images', [{ ...turn('image', 'Inspect this'), images: [image] }]);
+  chat.turns[0].progress = { text: '', steps: [{ phase: 'capturing', attempt: 1, startedAt: 1, reasoning: '', picture: { source: '#C', image } }] };
   chat.draftImages = [image];
   const saved = savedView([chat], chat.id);
   const loaded = parseChats(JSON.stringify({ version: 1, views: { model: saved } })).views.model.threads[0];
   assert.deepEqual(loaded.turns[0].images, [image]);
+  assert.deepEqual(loaded.turns[0].progress?.steps[0].picture, { source: '#C', image });
   assert.deepEqual(loaded.draftImages, [image]);
   const draft = thread('draft', []); draft.draftImages = [image];
   assert.equal(mergeView([draft], draft.id, saved).current, draft.id);
   const malformed = JSON.stringify({ version: 1, views: { model: saved } }).replaceAll('image/png', 'image/svg+xml');
   assert.deepEqual(parseChats(malformed).views.model.threads[0].turns[0].images, []);
+  assert.deepEqual(parseChats(malformed).views.model.threads[0].turns[0].progress?.steps[0].picture, { source: '#C', image: undefined });
   // A declared type the bytes do not match is dropped too.
   const mislabelled = JSON.stringify({ version: 1, views: { model: saved } }).replaceAll('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'AAAA');
   assert.deepEqual(parseChats(mislabelled).views.model.threads[0].turns[0].images, []);

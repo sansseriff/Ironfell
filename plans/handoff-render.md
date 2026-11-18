@@ -68,6 +68,16 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
+**2026-11-18: the user wants render-cache phase 3 built** (vector retention for live
+layers, [`specs/render-cache.md`](specs/render-cache.md) §6), no longer only "if the
+inspector asks". It is unblocked: the reactive engine's 2b swap gives it `Changes`.
+Place it after reactive-engine phase 2c, or beside it if this track has a free hand.
+Measure bytes uploaded to the GPU per render as part of it (strips, coverage masks,
+encoded paints; `vello_gpu` uploads all three every render, unchanged layers
+included), during a Prussia pan and Fourier playback. Retention saves the encode, not
+the upload, and the user's concern is CPU-to-GPU transfer: the number says whether
+per-layer textures (unchanged live layers kept resident) are worth their memory.
+
 **2026-10-24: [`specs/instance-cache.md`](specs/instance-cache.md) built** (phases 0, A–D):
 split groups move rigidly with their tiles (the Prussia near-whole drag 235.5 → 0.6 ms),
 equal component instances share drawings and tiles, and SVG repeats import as

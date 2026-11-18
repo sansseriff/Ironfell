@@ -147,6 +147,10 @@ The spec's §17 has each phase's contents and exit. In order:
 | 5 | The pipeline as cells: layout, the network solve, clips, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters | |
 | 6 | Value slices | |
 
+After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
+layers, with GPU upload bytes measured), which the user wants built (2026-11-18;
+handoff-render.md §4). It reads `Changes`, so it can start any time after 2b.
+
 **Phase 0, as done (2026-11-16).** Exit: both harnesses green on old-vs-old.
 
 - `cargo test -p iron_document --features differential --target aarch64-apple-darwin`:

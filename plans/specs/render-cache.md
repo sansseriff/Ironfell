@@ -246,7 +246,10 @@ The result for the measured scenes:
   overlap and opacity order, eviction, two views, every geometry changing per frame
   (the live floor, no claimed benefit).
 
-## 6. Vector retention for live layers (phase 3, if measurement asks)
+## 6. Vector retention for live layers (phase 3)
+
+**The user wants this built (2026-11-18)**, after reactive-engine phase 2c or beside it;
+with it, bytes uploaded per render are measured (handoff-render.md §4).
 
 After phase 2 the live layers are the hot chunks, which change anyway. A retained Vello
 scene per live layer saves encode only when a *different* live layer changes while the

@@ -55,7 +55,7 @@ As built (phase 1; the names a document uses today):
   </machine>
   <template notation="free">
     <group name="body" appearance.opacity="{= #fade.channel.value}" y="{= #lift.channel.value}">
-      <path name="series 1" d="{= 'M ' + points(…)}" trim.end="{= #reveal.channel.value}"/>
+      <path name="series 1" d="{= points(…)}" trim.end="{= #reveal.channel.value}"/>
     </group>
   </template>
 </definition>

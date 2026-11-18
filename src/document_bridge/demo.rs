@@ -1815,8 +1815,21 @@ mod tests {
             *by.entry(comp).or_default() += 1;
         }
         println!("one step: {evaluated} bindings evaluated; values changed by composition: {by:?}");
+        let quarter = times.len() / 4;
+        let q50 = |v: &[f64]| { let mut v = v.to_vec(); v.sort_by(f64::total_cmp); v[v.len() / 2] };
+        println!("p50 by quarter of the run: {:?}", (0..4).map(|i| format!("{:.3}", q50(&times[i * quarter..(i + 1) * quarter]))).collect::<Vec<_>>());
         times.sort_by(f64::total_cmp);
         let p = |q: f64| times[((times.len() - 1) as f64 * q) as usize];
-        println!("set_time step ({} steps, {} live nodes): p50 {:.3} ms, p95 {:.3} ms", times.len(), store.tree().live_nodes().count(), p(0.5), p(0.95));
+        let mean = times.iter().sum::<f64>() / times.len() as f64;
+        println!(
+            "set_time step ({} steps, {} live nodes): p50 {:.3} ms, p95 {:.3} ms, mean {:.3} ms, max {:.1} ms, {} over 5 ms",
+            times.len(),
+            store.tree().live_nodes().count(),
+            p(0.5),
+            p(0.95),
+            mean,
+            times[times.len() - 1],
+            times.iter().filter(|&&t| t > 5.0).count()
+        );
     }
 }

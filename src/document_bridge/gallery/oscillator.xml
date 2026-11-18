@@ -22,7 +22,7 @@
       <path name="equilibrium line" path.d="M 440 120 L 440 250" stroke.color="@muted" stroke.dash="4 4"/>
       <text name="equilibrium label" transform2d.x="446" transform2d.y="112" text.content="x = 0" font.size="12" fill.color="@muted"/>
       <rect id="$block" name="block" transform2d.x="{= 400 + 100 * $x_now.let.value}" transform2d.y="180" size.w="80" size.h="60" corners.tl="4" corners.tr="4" corners.br="4" corners.bl="4" fill.color="@series-1"/>
-      <path name="spring" path.d="{= 'M ' + points(80 + ($block.transform2d.x - 80) * range(0, 24, 25) / 24, 210 + 14 * where(range(0, 24, 25) &gt; 1.5, 1, 0) * where(22.5 &gt; range(0, 24, 25), 1, 0) * sin(pi / 2 * range(0, 24, 25)))}" stroke.color="@ink-2" stroke.width="2"/>
+      <path name="spring" path.d="{= points(80 + ($block.transform2d.x - 80) * range(0, 24, 25) / 24, 210 + 14 * where(range(0, 24, 25) &gt; 1.5, 1, 0) * where(22.5 &gt; range(0, 24, 25), 1, 0) * sin(pi / 2 * range(0, 24, 25)))}" stroke.color="@ink-2" stroke.width="2"/>
       <text name="displacement readout" transform2d.x="60" transform2d.y="256" text.content="x(t) = A·e^(−ζωt)·cos(ω_d t),  A = 1 m" font.size="13" fill.color="@muted"/>
       <text name="state readout" transform2d.x="60" transform2d.y="280" text.content="{= 'x = ' + fmt($x_now.let.value, 3) + ' m      v = ' + fmt($v_now.let.value, 3) + ' m/s'}" font.size="14" font.weight="500" fill.color="@ink"/>
     </group>

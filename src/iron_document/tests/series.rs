@@ -97,24 +97,63 @@ fn lambdas_parse_print_and_close_over_their_references() {
     assert!(Value::from_json(&serde_json::json!({"fn": "x => x"})).is_err());
 }
 
+/// A helper's geometry (plot.md §2.1).
+fn geom(text: &str) -> std::sync::Arc<Geometry> {
+    match eval(text).unwrap() {
+        Value::Geometry(g) => g,
+        other => panic!("{text} gave {other:?}, not geometry"),
+    }
+}
+
+/// The same contours as `svg` parses to, anchors within a hair: the path
+/// helpers build what the path data they used to write gave.
+fn same_as_svg(text: &str, svg: &str) {
+    let (got, want) = (geom(text), Geometry::from_svg_path(svg).unwrap());
+    assert_eq!(got.contours().len(), want.contours().len(), "{text} against {svg}");
+    for (c, d) in got.contours().iter().zip(want.contours()) {
+        assert_eq!((c.closed, c.anchors.len()), (d.closed, d.anchors.len()), "{text} against {svg}");
+        for (x, y) in c.anchors.iter().zip(&d.anchors) {
+            let near = |p: kurbo::Point, q: kurbo::Point| (p - q).hypot() < 1e-4;
+            assert!(near(x.at, y.at) && near(x.at + x.inn, y.at + y.inn) && near(x.at + x.out, y.at + y.out), "{text} against {svg}: {x:?} {y:?}");
+        }
+    }
+}
+
 #[test]
-fn path_data_writers_and_reading() {
-    assert_eq!(eval("'M ' + points(series(0, 10, 20), series(0, 5, 0))").unwrap(), Value::Str("M 0,0 10,5 20,0".into()));
+fn path_helpers_build_geometry() {
+    same_as_svg("points(series(0, 10, 20), series(0, 5, 0))", "M 0,0 10,5 20,0");
     // A non-finite sample breaks the line.
-    assert_eq!(eval("'M ' + points(series(0, 1, 2, 3), series(0, 1 / 0, 2, 3))").unwrap(), Value::Str("M 0,0 M 2,2 3,3".into()));
-    assert_eq!(eval("segments(series(0, 10), 0, series(0, 10), 4)").unwrap(), Value::Str("M 0,0 L 0,4 M 10,0 L 10,4".into()));
+    same_as_svg("points(series(0, 1, 2, 3), series(0, 1 / 0, 2, 3))", "M 0,0 M 2,2 3,3");
+    same_as_svg("polygon(series(0, 10, 10), series(0, 0, 10))", "M 0,0 L 10,0 L 10,10 Z");
+    same_as_svg("segments(series(0, 10), 0, series(0, 10), 4)", "M 0,0 L 0,4 M 10,0 L 10,4");
+    same_as_svg("line(0, 0, 10, 5)", "M 0,0 L 10,5");
+    same_as_svg("smooth(series(0, 10, 20), series(0, 10, 0))", "M 0,0 C 1.6667,1.6667 6.6667,10 10,10 C 13.3333,10 18.3333,1.6667 20,0");
+    same_as_svg("circles(series(5), series(5), 5)", "M 0,5 a 5,5 0 1,0 10,0 a 5,5 0 1,0 -10,0 Z");
+    same_as_svg("bars(series(10), series(2), 8, 4)", "M 8,8 L 8,2 L 12,2 L 12,8 Z");
+    same_as_svg("area(series(0, 10), series(2, 4), 10)", "M 0,10 L 0,2 L 10,4 L 10,10 Z");
+    same_as_svg("arc(0, 0, 10, 0, pi / 2)", "M 10,0 A 10,10 0 0,1 0,10");
+    same_as_svg("arc(0, 0, 10, pi / 2, 0)", "M 0,10 A 10,10 0 0,0 10,0");
+    same_as_svg("arc(5, 5, 5, 0, 2 * pi)", "M 10,5 A 5,5 0 0,1 0,5 A 5,5 0 0,1 10,5");
     assert!(eval("points(range(1 mm, 2 mm, 2), series(0, 1))").unwrap_err().contains("plain numbers"));
-    let g = Geometry::from_svg_path("M 0,0 10,5 20,0").unwrap();
-    assert_eq!(g.contours().len(), 1);
-    assert_eq!(g.anchor_count(), 3);
-    assert!(!g.contours()[0].closed);
-    let circle = Geometry::from_svg_path(&eval("circles(series(5), series(5), 5)").unwrap().as_str().unwrap().to_owned()).unwrap();
-    assert!(circle.contours()[0].closed);
-    let b = circle.bounds();
-    assert!((b.x0 - 0.0).abs() < 1e-6 && (b.x1 - 10.0).abs() < 1e-6 && (b.y1 - 10.0).abs() < 1e-6, "{b:?}");
-    let area = Geometry::from_svg_path(&eval("area(series(0, 10), series(2, 4), 10)").unwrap().as_str().unwrap().to_owned()).unwrap();
-    assert_eq!((area.contours().len(), area.anchor_count(), area.contours()[0].closed), (1, 4, true));
+    assert_eq!(eval("kind(line(0, 0, 1, 1))").unwrap(), Value::Str("geometry".into()));
+    // Coordinates are not rounded.
+    assert!((geom("line(0, 0.123456789, 1, 1)").contours()[0].anchors[0].at.y - 0.123456789).abs() < 1e-12);
     assert!(Geometry::from_svg_path("M 0 0 Q").is_err());
+}
+
+#[test]
+fn plus_joins_paths() {
+    same_as_svg("line(0, 0, 1, 1) + circles(series(5), series(5), 5)", "M 0,0 L 1,1 M 0,5 a 5,5 0 1,0 10,0 a 5,5 0 1,0 -10,0 Z");
+    // Text beside a path is path data: '' is the empty path.
+    same_as_svg("'' + line(0, 0, 1, 1) + ' '", "M 0,0 L 1,1");
+    same_as_svg("'M 5 5 L 6 6' + line(0, 0, 1, 1)", "M 5 5 L 6 6 M 0,0 L 1,1");
+    // A branch that picks '' gives text, which path.d parses as the empty path.
+    assert_eq!(eval("true ? '' : line(0, 0, 1, 1)").unwrap(), Value::Str(String::new()));
+    // Text that is not path data on its own is an error naming it.
+    assert!(eval("'M ' + points(series(0, 1), series(0, 1))").unwrap_err().contains("not SVG path data"));
+    assert!(eval("line(0, 0, 1, 1) + 3").unwrap_err().contains("joins only"));
+    // Text joined to text is still text.
+    assert_eq!(eval("'M 0 0' + ' L 1 1'").unwrap(), Value::Str("M 0 0 L 1 1".into()));
 }
 
 #[test]
@@ -139,7 +178,7 @@ fn a_path_bound_to_path_data_follows_its_inputs() {
     let mut sl = Slider::default();
     sl.value = Slot::Const(Value::Number(1.0));
     let mut d = PathShape::default();
-    d.d = Slot::Bound(Expr::parse(&format!("'M ' + points(range(0, 100, 11), {slider}.slider.value * 10 * sin(range(0, 100, 11) / 10))")).unwrap());
+    d.d = Slot::Bound(Expr::parse(&format!("points(range(0, 100, 11), {slider}.slider.value * 10 * sin(range(0, 100, 11) / 10))")).unwrap());
     let k0 = OrderKey::first();
     let k1 = OrderKey::after(&k0);
     store
@@ -192,7 +231,7 @@ fn runaway_functions_fail_instead_of_hanging() {
 
 #[test]
 fn an_empty_area_draws_nothing() {
-    assert_eq!(eval("area(range(0, 1, 0), range(0, 1, 0), range(0, 1, 0))").unwrap().as_str(), Some(""));
+    assert!(geom("area(range(0, 1, 0), range(0, 1, 0), range(0, 1, 0))").is_empty());
 }
 
 /// `Z` then `M`: the pen left at the first subpath's start is not a contour.

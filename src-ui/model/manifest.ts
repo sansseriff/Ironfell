@@ -154,10 +154,11 @@ ${p.standard}
   Functions: x => body or (x, y) => body is a function value; map(s, f), sample(f, a, b,
   n), and f(x) calls one. Its references are read when it is made, so a function bound
   to a slider is remade when the slider moves.
-  Path data (plain-number coordinates, pixels) for a bound path.d: 'M ' + points(xs, ys)
-  a polyline, smooth(xs, ys) a curve through the points, circles(xs, ys, r) scatter
-  dots, segments(x0, y0, x1, y1) ticks or grid lines, bars(xs, ys, base, w), area(xs,
-  ys, base); a non-finite sample breaks the line. Map data to pixels with scale(xs,
+  Paths from numbers (plain-number coordinates, pixels) for a bound path.d:
+  points(xs, ys) a polyline, polygon(xs, ys) the same closed, smooth(xs, ys) a curve
+  through the points, circles(xs, ys, r) scatter dots, segments(x0, y0, x1, y1) ticks
+  or grid lines, bars(xs, ys, base, w), area(xs, ys, base); a non-finite sample breaks
+  the line. Each gives a path, not text: join paths with +, and '' is the empty path. Map data to pixels with scale(xs,
   lo, hi, 0, w). Colours: rgb(r, g, b[, a]) 0–255, hsl(h, s, l[, a]) degrees and 0–100,
   mix(c1, c2, t), spectrum(λ) visible light's colour for a wavelength.`,
   },
@@ -385,7 +386,7 @@ ${p.contextFields}`,
   and series alike.
   The template may hold a component: an entity bound to the item
   (args.in="{= $g.repeat.item * 1 mW}") and a use with a figures link to it give every
-  item its own instance. A path with generated path data (segments, circles, bars) is
+  item its own instance. A path drawn by a path function (segments, circles, bars) is
   lighter for marks that need no node each; use a repeat when each copy is its own
   node: a label, a cell with its own colour, a component.
   A let names a value for bindings to read, computed once: a series, a number, a
@@ -673,7 +674,7 @@ VALUES
   relative to the point) and closed or not; a second contour inside the first is a hole
   when it runs the other way, or always under fill_rule evenodd. Write a path's shape
   as SVG path data instead: <path in="#C" d="M 0 0 C 20 0 20 40 40 40"/>, and
-  bind d to path data to draw a curve from numbers (EXPRESSIONS); such a path has no
+  bind d to a path function to draw a curve from numbers (EXPRESSIONS); such a path has no
   contour children. trim (rect, ellipse, path) is Trim Paths: trim.start..trim.end of
   the outline is stroked (fractions; trim.offset shifts it), the fill stays whole, so
   trim.end="{= …}" from 0 to 1 draws a shape on. stroke.path_length is SVG's
@@ -699,9 +700,9 @@ EXPRESSIONS (for {= …} bindings)
   depend on itself. with(a = expr, b = expr, result) names values inside one formula,
   each readable after it: {= with(s = #n1.slider.value * sin(#t.slider.value) /
   #n2.slider.value, s > 1 ? 0 : asin(s))}: never write one subexpression twice.
-  Path data for a bound path.d (pixels): line(x0, y0, x1, y1) a straight line,
+  Paths for a bound path.d (pixels): line(x0, y0, x1, y1) a straight line,
   arc(cx, cy, r, a0, a1) an arc from angle a0 to a1 (radians, clockwise on screen),
-  joined with + ' ' +; more in the data topic. Inside an attribute write < as &lt; (or flip the comparison).
+  joined with +; more in the data topic. Inside an attribute write < as &lt; (or flip the comparison).
   Text: '…' strings (single quotes inside an attribute), + joins them; fmt(x) a
   number or quantity as text, fmt(x, d) with d decimals, fmt(q, 'nm', d) converted
   to that unit with it appended, sci(x, d) scientific, str(v) anything. So a text

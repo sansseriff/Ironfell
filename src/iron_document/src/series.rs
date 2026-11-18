@@ -185,7 +185,7 @@ pub fn call(func: &str, args: &[Value]) -> Option<Result<Value, EvalError>> {
         "map" => map(args),
         "sample" => sample(args),
         "rgb" | "hsl" | "mix" | "spectrum" => colour(func, args),
-        "points" | "smooth" | "circles" | "segments" | "line" | "arc" | "bars" | "area" => path_data(func, args),
+        "points" | "polygon" | "smooth" | "circles" | "segments" | "line" | "arc" | "bars" | "area" => path_data(func, args),
         "ease" => ease(args),
         "window" => window(args),
         "isnan" => isnan(args),
@@ -566,18 +566,18 @@ fn colour(func: &str, args: &[Value]) -> Result<Value, EvalError> {
 }
 
 // ---------------------------------------------------------------------------
-// SVG path data
+// Paths from numbers (plans/specs/plot.md §2.1)
 // ---------------------------------------------------------------------------
 
-/// A coordinate in path data: at most 4 decimals, no trailing zeros.
-fn pn(x: f64) -> String {
-    let s = format!("{x:.4}");
-    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
-    if s == "-0" { "0".to_owned() } else { s.to_owned() }
-}
-
-fn xy(x: f64, y: f64) -> String {
-    format!("{},{}", pn(x), pn(y))
+/// An SVG arc from the pen to `to`, as the SVG parser draws it: cubics
+/// within 0.1 px (kurbo's tolerance there), or a line when the arc is
+/// degenerate.
+fn svg_arc(path: &mut kurbo::BezPath, from: kurbo::Point, to: kurbo::Point, r: f64, large_arc: bool, sweep: bool) {
+    let arc = kurbo::SvgArc { from, to, radii: kurbo::Vec2::new(r, r), x_rotation: 0.0, large_arc, sweep };
+    match kurbo::Arc::from_svg_arc(&arc) {
+        Some(arc) => arc.to_cubic_beziers(0.1, |p1, p2, p3| path.curve_to(p1, p2, p3)),
+        None => path.line_to(to),
+    }
 }
 
 /// Plain-number coordinate arguments, each a series or one number.
@@ -612,7 +612,7 @@ fn runs(x: Arg, y: Arg, n: usize) -> Vec<Vec<(f64, f64)>> {
 
 fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
     let need = match func {
-        "points" | "smooth" => 2,
+        "points" | "polygon" | "smooth" => 2,
         "circles" | "area" => 3,
         "arc" => 5,
         _ => 4,
@@ -621,37 +621,44 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
         return arity(func, need, args.len());
     }
     let (p, n) = coords(func, args)?;
-    let mut out: Vec<String> = Vec::new();
+    use kurbo::Point as P;
+    let mut path = kurbo::BezPath::new();
     match func {
-        // SVG's `points` list; a break starts a new subpath with M, so
-        // `'M ' + points(xs, ys)` is a polyline with gaps.
-        "points" => {
-            for (k, run) in runs(p[0], p[1], n).into_iter().enumerate() {
-                if k > 0 {
-                    out.push("M".into());
+        // Each run of finite points is a contour: a break starts a new one.
+        "points" | "polygon" => {
+            for run in runs(p[0], p[1], n) {
+                path.move_to(P::new(run[0].0, run[0].1));
+                for &(x, y) in &run[1..] {
+                    path.line_to(P::new(x, y));
                 }
-                out.extend(run.iter().map(|&(x, y)| xy(x, y)));
+                if func == "polygon" {
+                    path.close_path();
+                }
             }
         }
         // Catmull-Rom through the points, as cubic Béziers.
         "smooth" => {
             for run in runs(p[0], p[1], n) {
-                out.push(format!("M {}", xy(run[0].0, run[0].1)));
+                path.move_to(P::new(run[0].0, run[0].1));
                 for i in 0..run.len().saturating_sub(1) {
                     let at = |k: isize| run[k.clamp(0, run.len() as isize - 1) as usize];
                     let (p0, p1, p2, p3) = (at(i as isize - 1), at(i as isize), at(i as isize + 1), at(i as isize + 2));
-                    let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
-                    let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
-                    out.push(format!("C {} {} {}", xy(c1.0, c1.1), xy(c2.0, c2.1), xy(p2.0, p2.1)));
+                    let c1 = P::new(p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+                    let c2 = P::new(p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+                    path.curve_to(c1, c2, P::new(p2.0, p2.1));
                 }
             }
         }
+        // Two half arcs from the leftmost point, as `a r,r 0 1,0 2r,0` drew.
         "circles" => {
             for i in 0..n {
                 let (x, y, r) = (p[0].at(i), p[1].at(i), p[2].at(i).abs());
                 if x.is_finite() && y.is_finite() && r.is_finite() && r > 0.0 {
-                    let (rr, d) = (pn(r), pn(2.0 * r));
-                    out.push(format!("M {} a {rr},{rr} 0 1,0 {d},0 a {rr},{rr} 0 1,0 -{d},0 Z", xy(x - r, y)));
+                    let (left, right) = (P::new(x - r, y), P::new(x + r, y));
+                    path.move_to(left);
+                    svg_arc(&mut path, left, right, r, true, false);
+                    svg_arc(&mut path, right, left, r, true, false);
+                    path.close_path();
                 }
             }
         }
@@ -661,7 +668,8 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
             for i in 0..n {
                 let (x0, y0, x1, y1) = (p[0].at(i), p[1].at(i), p[2].at(i), p[3].at(i));
                 if [x0, y0, x1, y1].iter().all(|v| v.is_finite()) {
-                    out.push(format!("M {} L {}", xy(x0, y0), xy(x1, y1)));
+                    path.move_to(P::new(x0, y0));
+                    path.line_to(P::new(x1, y1));
                 }
             }
         }
@@ -673,17 +681,17 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
                 if ![cx, cy, r, a0, a1].iter().all(|v| v.is_finite()) || r == 0.0 {
                     continue;
                 }
-                let at = |a: f64| xy(cx + r * a.cos(), cy + r * a.sin());
-                let sweep = if a1 >= a0 { 1 } else { 0 };
+                let at = |a: f64| P::new(cx + r * a.cos(), cy + r * a.sin());
+                let sweep = a1 >= a0;
                 let span = (a1 - a0).abs();
-                let rr = pn(r);
+                path.move_to(at(a0));
                 if span >= std::f64::consts::TAU - 1e-9 {
                     // A whole turn is two half arcs (SVG draws no arc to its own start).
                     let mid = a0 + (a1 - a0) / 2.0;
-                    out.push(format!("M {} A {rr},{rr} 0 0,{sweep} {} A {rr},{rr} 0 0,{sweep} {}", at(a0), at(mid), at(a0)));
+                    svg_arc(&mut path, at(a0), at(mid), r, false, sweep);
+                    svg_arc(&mut path, at(mid), at(a0), r, false, sweep);
                 } else {
-                    let large = if span > std::f64::consts::PI { 1 } else { 0 };
-                    out.push(format!("M {} A {rr},{rr} 0 {large},{sweep} {}", at(a0), at(a1)));
+                    svg_arc(&mut path, at(a0), at(a1), r, span > std::f64::consts::PI, sweep);
                 }
             }
         }
@@ -693,7 +701,11 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
                 let (x, y, base, w) = (p[0].at(i), p[1].at(i), p[2].at(i), p[3].at(i).abs());
                 if [x, y, base, w].iter().all(|v| v.is_finite()) {
                     let (l, r) = (x - w / 2.0, x + w / 2.0);
-                    out.push(format!("M {} L {} L {} L {} Z", xy(l, base), xy(l, y), xy(r, y), xy(r, base)));
+                    path.move_to(P::new(l, base));
+                    path.line_to(P::new(l, y));
+                    path.line_to(P::new(r, y));
+                    path.line_to(P::new(r, base));
+                    path.close_path();
                 }
             }
         }
@@ -703,15 +715,15 @@ fn path_data(func: &str, args: &[Value]) -> Result<Value, EvalError> {
             if b.is_finite() {
                 for run in runs(p[0], p[1], n) {
                     let (first, last) = (run[0], run[run.len() - 1]);
-                    let mut s = format!("M {}", xy(first.0, b));
+                    path.move_to(P::new(first.0, b));
                     for &(x, y) in &run {
-                        s.push_str(&format!(" L {}", xy(x, y)));
+                        path.line_to(P::new(x, y));
                     }
-                    s.push_str(&format!(" L {} Z", xy(last.0, b)));
-                    out.push(s);
+                    path.line_to(P::new(last.0, b));
+                    path.close_path();
                 }
             }
         }
     }
-    Ok(Value::Str(out.join(" ")))
+    Ok(Value::Geometry(std::sync::Arc::new(crate::geometry::Geometry::from_bez(&path))))
 }

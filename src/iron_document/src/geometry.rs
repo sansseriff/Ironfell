@@ -61,8 +61,15 @@ impl Geometry {
     /// relative; arcs become cubics) as packed contours: how a `path.d`
     /// written or bound as text becomes geometry (plans/specs/plot.md §2).
     pub fn from_svg_path(data: &str) -> Result<Geometry, String> {
-        use kurbo::PathEl;
         let path = BezPath::from_svg(data).map_err(|e| format!("not SVG path data ({e}): {}", preview(data)))?;
+        Ok(Geometry::from_bez(&path))
+    }
+
+    /// A kurbo path as packed contours, as its SVG path data would parse:
+    /// how the path helpers (`points`, `smooth`, …) build geometry from
+    /// numbers without writing text (plans/specs/plot.md §2.1).
+    pub fn from_bez(path: &BezPath) -> Geometry {
+        use kurbo::PathEl;
         let mut contours: Vec<PackedContour> = Vec::new();
         let mut cur: Option<PackedContour> = None;
         let finish = |c: Option<PackedContour>, out: &mut Vec<PackedContour>| {
@@ -132,7 +139,12 @@ impl Geometry {
             cur = None;
         }
         finish(cur, &mut contours);
-        Ok(Geometry::new(contours))
+        Geometry::new(contours)
+    }
+
+    /// `self`'s contours followed by `other`'s: `+` on paths (plot.md §2.1).
+    pub fn join(&self, other: &Geometry) -> Geometry {
+        Geometry::new(self.contours.iter().chain(other.contours.iter()).cloned().collect())
     }
 
     pub fn contours(&self) -> &[PackedContour] {

@@ -150,25 +150,25 @@
         <set target="$vcx" to="{= $vcx + ($zoom.on.x / $aw - 0.5) * (1 / $vz - 1 / $nz)}"/>
         <set target="$vcy" to="{= $vcy + (0.5 - $zoom.on.y / $ah) * (1 / $vz - 1 / $nz)}"/>
       </on>
-      <path name="grid" x="0" y="0" d="{= $grid ? segments($xp($xt), 0, $xp($xt), $ah) + ' ' + segments(0, $yp($yt), $aw, $yp($yt)) : ''}"
+      <path name="grid" x="0" y="0" d="{= $grid ? segments($xp($xt), 0, $xp($xt), $ah) + segments(0, $yp($yt), $aw, $yp($yt)) : ''}"
         stroke.color="@grid" stroke.width="1" fill.opacity="0" appearance.opacity="{= $ch_ticks}"/>
       <!-- One path per series, drawn by its style; drawn on by trim. -->
       <path name="series 3" x="0" y="0"
-        d="{= len($ys3) == 0 ? '' : ($st3 == 'scatter' ? circles($xp($xs), $yp($ys3), 3) : ($st3 == 'smooth' ? smooth($xp($xs), $yp($ys3)) : ($st3 == 'area' ? area($xp($xs), $yp($ys3), $base) : ($st3 == 'bars' ? bars($xp($xs), $yp($ys3), $base, max(1, $aw / max(1, len($ys3)) * 0.7)) : (points($xp($xs), $yp($ys3)) == '' ? '' : 'M ' + points($xp($xs), $yp($ys3))) + ($st3 == 'line+markers' ? ' ' + circles($xp($xs), $yp($ys3), 3) : '')))))}"
+        d="{= len($ys3) == 0 ? '' : ($st3 == 'scatter' ? circles($xp($xs), $yp($ys3), 3) : ($st3 == 'smooth' ? smooth($xp($xs), $yp($ys3)) : ($st3 == 'area' ? area($xp($xs), $yp($ys3), $base) : ($st3 == 'bars' ? bars($xp($xs), $yp($ys3), $base, max(1, $aw / max(1, len($ys3)) * 0.7)) : points($xp($xs), $yp($ys3)) + ($st3 == 'line+markers' ? circles($xp($xs), $yp($ys3), 3) : '')))))}"
         stroke.color="{= $st3 == 'scatter' || $st3 == 'bars' ? rgb(0, 0, 0, 0) : $c3}" stroke.width="2" stroke.dash="{= $st3 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c3}" fill.opacity="{= $st3 == 'scatter' || $st3 == 'bars' ? $shown : ($st3 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
       <path name="series 2" x="0" y="0"
-        d="{= len($ys2) == 0 ? '' : ($st2 == 'scatter' ? circles($xp($xs), $yp($ys2), 3) : ($st2 == 'smooth' ? smooth($xp($xs), $yp($ys2)) : ($st2 == 'area' ? area($xp($xs), $yp($ys2), $base) : ($st2 == 'bars' ? bars($xp($xs), $yp($ys2), $base, max(1, $aw / max(1, len($ys2)) * 0.7)) : (points($xp($xs), $yp($ys2)) == '' ? '' : 'M ' + points($xp($xs), $yp($ys2))) + ($st2 == 'line+markers' ? ' ' + circles($xp($xs), $yp($ys2), 3) : '')))))}"
+        d="{= len($ys2) == 0 ? '' : ($st2 == 'scatter' ? circles($xp($xs), $yp($ys2), 3) : ($st2 == 'smooth' ? smooth($xp($xs), $yp($ys2)) : ($st2 == 'area' ? area($xp($xs), $yp($ys2), $base) : ($st2 == 'bars' ? bars($xp($xs), $yp($ys2), $base, max(1, $aw / max(1, len($ys2)) * 0.7)) : points($xp($xs), $yp($ys2)) + ($st2 == 'line+markers' ? circles($xp($xs), $yp($ys2), 3) : '')))))}"
         stroke.color="{= $st2 == 'scatter' || $st2 == 'bars' ? rgb(0, 0, 0, 0) : $c2}" stroke.width="2" stroke.dash="{= $st2 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c2}" fill.opacity="{= $st2 == 'scatter' || $st2 == 'bars' ? $shown : ($st2 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
       <path name="series 1" x="0" y="0"
-        d="{= len($py1) == 0 ? '' : ($st1 == 'scatter' ? circles($xp($px1), $yp($py1), 3) : ($st1 == 'smooth' ? smooth($xp($px1), $yp($py1)) : ($st1 == 'area' ? area($xp($px1), $yp($py1), $base) : ($st1 == 'bars' ? bars($xp($px1), $yp($py1), $base, max(1, $aw / max(1, len($py1)) * 0.7)) : (points($xp($px1), $yp($py1)) == '' ? '' : 'M ' + points($xp($px1), $yp($py1))) + ($st1 == 'line+markers' ? ' ' + circles($xp($px1), $yp($py1), 3) : '')))))}"
+        d="{= len($py1) == 0 ? '' : ($st1 == 'scatter' ? circles($xp($px1), $yp($py1), 3) : ($st1 == 'smooth' ? smooth($xp($px1), $yp($py1)) : ($st1 == 'area' ? area($xp($px1), $yp($py1), $base) : ($st1 == 'bars' ? bars($xp($px1), $yp($py1), $base, max(1, $aw / max(1, len($py1)) * 0.7)) : points($xp($px1), $yp($py1)) + ($st1 == 'line+markers' ? circles($xp($px1), $yp($py1), 3) : '')))))}"
         stroke.color="{= $st1 == 'scatter' || $st1 == 'bars' ? rgb(0, 0, 0, 0) : $c1}" stroke.width="2" stroke.dash="{= $st1 == 'dashed' ? '7 5' : ''}"
         fill.color="{= $c1}" fill.opacity="{= $st1 == 'scatter' || $st1 == 'bars' ? $shown : ($st1 == 'area' ? 0.18 * $shown : 0)}"
         trim.end="{= $shown}" trim.mode="individually"/>
-      <path name="reference lines" x="0" y="0" d="{= segments(0, $yp($hls), $aw, $yp($hls)) + ' ' + segments($xp($vls), 0, $xp($vls), $ah)}"
+      <path name="reference lines" x="0" y="0" d="{= segments(0, $yp($hls), $aw, $yp($hls)) + segments($xp($vls), 0, $xp($vls), $ah)}"
         stroke.color="@muted" stroke.width="1" stroke.dash="6 4" fill.opacity="0" appearance.opacity="{= $ch_series}"/>
       <path name="marks" x="0" y="0" d="{= circles($xp($mxs), $yp($mys), 5)}"
         stroke.color="{= $mc}" stroke.width="2" fill.color="@surface" appearance.opacity="{= $ch_series}"/>
@@ -189,9 +189,9 @@
 
     <!-- Axes, tick marks and labels, unclipped, in the same space. -->
     <group name="axes" x="54" y="{= $top}">
-      <path name="axis lines" x="0" y="0" d="{= 'M 0,0 L 0,' + str($ah) + ' L ' + str($aw) + ',' + str($ah)}"
+      <path name="axis lines" x="0" y="0" d="{= points(series(0, 0, $aw), series(0, $ah, $ah))}"
         stroke.color="@axis" stroke.width="1" fill.opacity="0" trim.end="{= $ch_axes}"/>
-      <path name="tick marks" x="0" y="0" d="{= segments($xp($xt), $ah, $xp($xt), $ah + 4) + ' ' + segments(-4, $yp($yt), 0, $yp($yt))}"
+      <path name="tick marks" x="0" y="0" d="{= segments($xp($xt), $ah, $xp($xt), $ah + 4) + segments(-4, $yp($yt), 0, $yp($yt))}"
         stroke.color="@axis" stroke.width="1" fill.opacity="0" trim.end="{= $ch_ticks}"/>
       <!-- A label per tick: each copy reads its own tick as repeat.item. -->
       <group id="$xl" name="x tick labels" repeat.each="{= $xt}">

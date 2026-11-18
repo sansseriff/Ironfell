@@ -769,6 +769,22 @@ fn binary(op: BinOp, a: Value, b: Value) -> Result<Value, EvalError> {
     if let Some(r) = quantity_op(op, &a, &b) {
         return r;
     }
+    // Paths join (plot.md §2.1): text beside a path is SVG path data.
+    if op == BinOp::Add && (matches!(a, Geometry(_)) || matches!(b, Geometry(_))) {
+        let path = |v: &Value| -> Result<std::sync::Arc<crate::geometry::Geometry>, EvalError> {
+            match v {
+                Geometry(g) => Ok(g.clone()),
+                Str(t) | Enum(t) => crate::geometry::Geometry::from_svg_path(t).map(std::sync::Arc::new).map_err(EvalError::Type),
+                other => Err(EvalError::Type(format!("geometry + {}: a path joins only a path or SVG path data", other.kind().name()))),
+            }
+        };
+        let (x, y) = (path(&a)?, path(&b)?);
+        return Ok(match (x.is_empty(), y.is_empty()) {
+            (_, true) => Geometry(x),
+            (true, false) => Geometry(y),
+            _ => Geometry(std::sync::Arc::new(x.join(&y))),
+        });
+    }
     // Text joins: a choice's value joins like text (`'mode: ' + $self.style`).
     if op == BinOp::Add
         && let (Str(_) | Enum(_), Str(_) | Enum(_)) = (&a, &b)
@@ -890,7 +906,7 @@ pub mod floor {
         "abs", "floor", "ceil", "round", "min", "max", "clamp", "lerp", "scale", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sqrt",
         "pow", "hypot", "log10", "ln", "exp", "sinc", "fmt", "sci", "str", "series", "range", "step", "len", "at", "first",
         "last", "sum", "mean", "interp", "ticks", "nice_lo", "nice_hi", "where", "map", "sample", "rgb", "hsl", "mix",
-        "spectrum", "points", "smooth", "circles", "segments", "line", "arc", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
+        "spectrum", "points", "polygon", "smooth", "circles", "segments", "line", "arc", "bars", "area", "isnan", "kind", "concat", "unit_of", "in_unit", "sig",
         "ease", "window", "list", "record", "get", "filter", "sort_by", "zip", "enumerate", "unique", "deref",
     ];
 
@@ -1720,18 +1736,18 @@ mod tests {
     }
 
     #[test]
-    fn line_and_arc_are_path_data() {
+    fn line_and_arc_are_geometry() {
         let read = |_: Leaf| None;
-        let line = Expr::parse("line(0, 0, 10, 5)").unwrap().eval(&read).unwrap();
-        assert_eq!(line, Value::Str("M 0,0 L 10,5".into()));
-        let quarter = Expr::parse("arc(0, 0, 10, 0, pi / 2)").unwrap().eval(&read).unwrap();
-        assert_eq!(quarter, Value::Str("M 10,0 A 10,10 0 0,1 0,10".into()));
-        let back = Expr::parse("arc(0, 0, 10, pi / 2, 0)").unwrap().eval(&read).unwrap();
-        assert_eq!(back, Value::Str("M 0,10 A 10,10 0 0,0 10,0".into()));
+        let contours = |t: &str| match Expr::parse(t).unwrap().eval(&read).unwrap() {
+            Value::Geometry(g) => g.contours().iter().map(|c| (c.closed, c.anchors.len())).collect::<Vec<_>>(),
+            other => panic!("{t} gave {other:?}"),
+        };
+        assert_eq!(contours("line(0, 0, 10, 5)"), vec![(false, 2)]);
+        assert_eq!(contours("arc(0, 0, 10, 0, pi / 2)"), vec![(false, 2)]);
         assert_eq!(Expr::parse("asin(1) * 2").unwrap().eval(&read).unwrap(), Value::Number(std::f64::consts::PI));
         assert!(Expr::parse("asin(2)").unwrap().eval(&read).unwrap().as_f64().unwrap().is_nan());
-        let whole = Expr::parse("arc(5, 5, 5, 0, 2 * pi)").unwrap().eval(&read).unwrap();
-        assert_eq!(whole.as_str().unwrap().matches(" A ").count(), 2);
+        // A whole turn is two half arcs, each one or more cubics.
+        assert!(contours("arc(5, 5, 5, 0, 2 * pi)")[0].1 >= 3);
     }
 
     #[test]

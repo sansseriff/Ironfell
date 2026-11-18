@@ -580,12 +580,11 @@ impl Document {
         for r in journal.recs.into_iter().rev() {
             self.undo(r);
         }
+        // Invariants are checked over both documents together, by
+        // `Docs::rollback`: a copy's parent is in the other one.
         #[cfg(feature = "differential")]
         if let Some(shadow) = journal.shadow {
             assert!(*self == *shadow, "journal rollback did not restore the document");
-            if let Err(e) = self.check_invariants() {
-                panic!("journal rollback broke an invariant: {e}");
-            }
         }
     }
 
@@ -1050,11 +1049,17 @@ impl Document {
     /// Cross-check the indexes against the tables. Cheap enough to run in
     /// tests after every transaction; not run in production.
     pub fn check_invariants(&self) -> Result<(), String> {
+        self.check_invariants_over(&|p| self.is_live(p))
+    }
+
+    /// The invariants, with `parent_live` answering for parents: a copy
+    /// kept apart has its owner in the other document (`Tree::check_invariants`).
+    pub(crate) fn check_invariants_over(&self, parent_live: &dyn Fn(NodeId) -> bool) -> Result<(), String> {
         for n in self.nodes.values() {
             if n.is_live() {
                 let container: &[NodeId] = match n.parent {
                     Some(p) => {
-                        if !self.is_live(p) {
+                        if !parent_live(p) {
                             return Err(format!("{} has non-live parent {p}", n.id));
                         }
                         self.children(p)

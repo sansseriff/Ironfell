@@ -8,10 +8,11 @@
 //!
 //! Through phase 2b the reference ran the old engine (the whole-document
 //! expansion and graph rebuild, with a working copy) and the subject the
-//! new one. Since 2b's swap there is one engine, so both stores run it:
-//! the comparison checks its determinism, and `IRON_OWNER_CHECK=1` checks
-//! the owners against the whole-document expansion kept for it
-//! (`expand::expand`). Phase 2c's engine becomes the subject, against 2b's.
+//! new one. In phase 2c (handoff §4.6) the subject keeps copies apart from
+//! the authored document, as every store does, and the reference keeps
+//! them in it, as 2b did; the snapshot reads both through the joined Tree.
+//! `IRON_OWNER_CHECK=1` checks the owners against the whole-document
+//! expansion kept for it (`expand::expand`).
 //!
 //! Shared by both stores, and necessarily so: the id registries (`id.rs`),
 //! so one path gets one id in both, and the text engine. Register fonts
@@ -99,6 +100,11 @@ impl Store {
         if self.diverged.is_some() {
             return;
         }
+        for (which, s) in [("subject", &self.subject), ("reference", &self.reference)] {
+            if let Err(e) = s.tree().check_invariants() {
+                panic!("differential: after `{method}` the {which} breaks an invariant: {e}");
+            }
+        }
         let (mut a, mut b) = (snapshot(&self.subject), snapshot(&self.reference));
         let Some(mut left) = a.diff(&b) else { return };
         for e in intended::entries() {
@@ -159,15 +165,15 @@ impl Store {
     }
 
     pub fn new() -> Store {
-        Store::pair(StoreCore::new(), StoreCore::new(), "new")
+        Store::pair(StoreCore::new(), StoreCore::with_copies_in_document(Document::new()), "new")
     }
 
     pub fn with_document(doc: Document) -> Store {
-        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_document(doc), "with_document")
+        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_copies_in_document(doc), "with_document")
     }
 
     pub fn load(text: &str) -> Result<Store, LoadError> {
-        match (StoreCore::load(text), StoreCore::load(text)) {
+        match (StoreCore::load(text), serial::load(text).map(StoreCore::with_copies_in_document)) {
             (Ok(subject), Ok(reference)) => Ok(Store::pair(subject, reference, "load")),
             (Err(a), Err(b)) => {
                 assert_eq!(a.to_string(), b.to_string(), "differential: `load` failed differently");

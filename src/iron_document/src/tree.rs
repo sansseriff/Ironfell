@@ -63,6 +63,10 @@ impl Docs {
     pub(crate) fn rollback(&mut self) {
         self.authored.rollback();
         self.copies.rollback();
+        #[cfg(feature = "differential")]
+        if let Err(e) = Tree::of(self).check_invariants() {
+            panic!("journal rollback broke an invariant: {e}");
+        }
     }
 
     /// Writes to either document, a key for caches of what is derived from
@@ -91,6 +95,22 @@ impl<'a> Tree<'a> {
     /// loaded. A derived node it does not hold is not there.
     pub fn authored_only(doc: &'a Document) -> Tree<'a> {
         Tree { doc, copies: None }
+    }
+
+    /// Each document's invariants, with parents answered across both (a
+    /// copy's owner is authored), and that each node is in the document its
+    /// id says. A live node's parent is live, so no live copy is under a
+    /// dead authored ancestor.
+    pub fn check_invariants(self) -> Result<(), String> {
+        self.doc.check_invariants_over(&|p| self.is_live(p))?;
+        let Some(copies) = self.copies else { return Ok(()) };
+        if let Some(n) = self.doc.nodes().find(|n| n.id.is_expanded()) {
+            return Err(format!("derived {} is in the authored document", n.id));
+        }
+        if let Some(n) = copies.nodes().find(|n| !n.id.is_expanded()) {
+            return Err(format!("{} is in the copies document", n.id));
+        }
+        copies.check_invariants_over(&|p| self.is_live(p))
     }
 
     /// The document that holds node `id`.

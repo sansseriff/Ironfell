@@ -589,6 +589,13 @@ impl StoreCore {
     }
 
     pub fn with_document(doc: Document) -> StoreCore {
+        StoreCore::build(doc, true)
+    }
+
+    /// A store over `doc` with copies kept in it, as phase 2b kept them:
+    /// the differential reference for 2c (handoff §4.6).
+    #[cfg(feature = "differential")]
+    pub(crate) fn with_copies_in_document(doc: Document) -> StoreCore {
         StoreCore::build(doc, false)
     }
 

@@ -528,6 +528,20 @@ async function run(line: string) {
       const re = rest.length ? new RegExp(rest.join(" ")) : null;
       return out(logs.filter((l) => !re || re.test(l)).join("\n") || "(no matching console output)");
     }
+    case "trace": {
+      // trace start | trace stop <name>: a Chrome trace of every thread
+      // (the engine worker's tasks, GC, the GPU process), saved to
+      // screenshots/<name>.trace.json for chrome://tracing or Perfetto.
+      // Read the worker's time from its task durations: a V8 CPU profile
+      // of the worker misses most wasm time (2026-11-17: 0.17 of 1.2 ms).
+      if (rest[0] === "start") {
+        await browser.startTracing(page, { categories: ["devtools.timeline", "disabled-by-default-devtools.timeline", "v8", "v8.execute", "blink", "gpu", "toplevel", "disabled-by-default-v8.gc"] });
+        return out("trace started");
+      }
+      const file = `${SHOTS}${rest[1] ?? "trace"}.trace.json`;
+      await Bun.write(file, await browser.stopTracing());
+      return out(`trace ${file}`);
+    }
     case "errors": {
       if (errors.length || late.length) commandFailed = true;
       const lateLines = late.splice(0).map((l) => `late: ${l}`);

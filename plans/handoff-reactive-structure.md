@@ -140,8 +140,8 @@ The spec's §17 has each phase's contents and exit. In order:
 | 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
 | 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
-| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Current.** Tasks in §4.4, in five stages |
-| 2c | Copies leave the document: instances as references | |
+| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Done 2026-11-17** (§4.4; swap `9f4ac59`) |
+| 2c | Copies leave the document: instances as references | **Next.** Its tasks are written here first (§4.5) |
 | 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
 | 4 | Observation: Dormant, Unloaded, parking, extents | |
 | 5 | The pipeline as cells: layout, the network solve, clips, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters | |
@@ -988,8 +988,55 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   Playback (Fourier tab, the timeline playing, both engines alike): frame 9.3 →
   7.2 ms; the hidden Wave packet page 2.6 → 0.7 ms; native store step 3.6 → 1.1 ms.
   Which reading of the tick-change target holds is the user's call before the swap.
+  **The user's call (2026-11-17): the absolute, so the target is met; swap.**
 
-**How the engines are chosen.**
+- **Stage 5 done: the swap (2026-11-17, `9f4ac59`).** The exit, run before anything
+  was deleted, on both engines where it compares them:
+  - the 10,000 random differential scripts green (258 s), no intended entries;
+  - the plot targets met (fix 1, above);
+  - recorded, native release, `InPlace` → `New` (`tests/instance_cost.rs`, now at
+    100, 700 and 1,000 meters; load about 14, so the ratios count):
+
+    | | `InPlace` | `New` |
+    |---|---|---|
+    | structural edit, 700 meters | 116.5 ms | 5.6 ms |
+    | placement, 700 meters | 56.5 ms | 3.4 ms |
+    | structural edit, 1,000 meters (past the node budget) | 123 ms | 96 ms |
+    | placement, 1,000 meters | 76 ms | 28 ms |
+    | the demo's load | 150 ms | 78 ms |
+    | memory per meter | 110.0 KiB | 110.5 KiB |
+
+    Past the budget, `New` falls back to a whole expansion in id order on every
+    update (the council's fix), which is why 1,000 meters gains little. The budget
+    rule itself (the cut per owner in id order, 50,000 nodes kept where the old
+    engine kept 50,506) is still the user's to approve.
+  - **The changed frame's fixed cost (fix 2):** a paused, unchanged frame is about
+    1.2 ms on the worker, and `?bevy=empty` (Bevy's default plugins, no Iron
+    systems) is 1.17 of it. So it is the host's schedule, not the store's polling,
+    and goes to the rendering track: [`handoff-render.md`](handoff-render.md) §3,
+    finding 8, with the per-schedule numbers. Phase 3 does not take it.
+
+  Then deleted: `Engine` (`Old`, `InPlace`, `New`), `with_engine`, `load_with`, the
+  `engine-new` feature and `IRON_ENGINE`, the clone rollback (`Rollback` is the
+  journal's token), `regraph`'s whole rebuild, `Found::Problems`,
+  `expand::affected_by`, and the whole-document expansion on the transaction and
+  settle paths. **Kept, departing from the stage's list:** `graph.rs`, updated in
+  place (stage 3a as built), and `settle_repeats` with its kept items (stage 3b as
+  built), since they are the new engine; `expand::expand` and `wanted`, compiled
+  only under `differential`, as `IRON_OWNER_CHECK`'s oracle. The facade pairs two
+  stores of the one engine until 2c's engine is its subject.
+
+  After the swap: `iron_document` 464; the differential suite 468 with
+  `IRON_ATOMICITY=1 IRON_OWNER_CHECK=1`, nothing reported; the app's 16 (the host
+  reference's 2 among them); `iron_spatial` and `iron_svg` 43; `bun test` 116; on a
+  dev-opt webgl2 build, `smoke.txt`, `regression.txt`, `plot-view.txt`,
+  `actions.txt`, `query.txt`, `fiber.txt` and `pulses.txt` pass with no page errors,
+  their output as on `engine-new` but for the two sampled-in-time readings.
+  The roadmap's "Plot pan and zoom performance" row is to be closed; `roadmap.md`
+  holds another agent's uncommitted edits, so it waits for them.
+
+**How the engines were chosen, until the swap.** (History: stage 5 deleted all of
+this; one engine remains.)
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.
 - `Old` is the clone and the old graph, the reference. `InPlace` is 2a's journal and

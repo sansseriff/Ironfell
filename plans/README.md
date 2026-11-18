@@ -19,7 +19,9 @@ finishes, or is superseded.
      in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
      phases 0 (baselines, the harnesses), 1 (the read contract: `Tree`,
      `take_changes()`) and 2a (transactions in place, a document journal) done
-     2026-11-16. Next: phase 2b, whose tasks the handoff's §2 says to write first.
+     2026-11-16; 2b (owners, the graph updated in place: the plot fix) done and
+     swapped in 2026-11-17, the old engine deleted. Next: phase 2c, whose tasks the
+     handoff's §4.5 says to write and report first.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as

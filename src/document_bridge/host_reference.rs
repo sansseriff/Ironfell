@@ -269,6 +269,14 @@ fn host_reference_follows_derived_structure() {
     for e in ["list('b', 'c', 'd')", "list('d')", "list(1, 2, 3)", "list()", "list('a', 'b')"] {
         set(&mut host, "change the rows", names, "let.value", bound(e));
     }
+    // The same items in another order: copies move, none made or removed.
+    for e in ["list('a', 'b', 'c')", "list('c', 'a', 'b')", "list('b', 'c', 'a')"] {
+        set(&mut host, "reorder the rows", names, "let.value", bound(e));
+    }
+    for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {
+        host.world.resource_mut::<HistoryRequests>().0.push(op);
+        host.frame("rows history");
+    }
     set(&mut host, "open", open, "let.value", iron_document::Slot::Const(Value::Bool(true)));
     set(&mut host, "close", open, "let.value", iron_document::Slot::Const(Value::Bool(false)));
     // Pan the plot: its ticks come and go outside any transaction.
@@ -295,6 +303,16 @@ fn host_reference_follows_derived_structure() {
     // Instances placed and deleted, and undone.
     host.apply("place", &format!(r#"<place def="std:meter" in="{c}" x="0" y="300"/><place def="std:laser" in="{c}" x="200" y="300"/>"#));
     let plot = host.world.resource::<DocumentStore>().0.tree().children(c).iter().copied().find(|&n| host.world.resource::<DocumentStore>().0.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    // An instance moved to the front of its siblings, its copies with it.
+    let front = {
+        let doc = host.world.resource::<DocumentStore>().0.tree();
+        let first = doc.children(c).iter().filter_map(|&k| doc.live(k)).map(|n| n.order.clone()).min().unwrap();
+        iron_document::OrderKey::before(&first)
+    };
+    host.world.resource_mut::<PendingTransactions>().push("raise the plot", Actor::Human, vec![Op::Reorder { id: plot, order: front }]);
+    host.frame("raise the plot");
+    host.world.resource_mut::<HistoryRequests>().0.push(HistoryOp::Undo);
+    host.frame("undo the raise");
     host.world.resource_mut::<PendingTransactions>().push("delete the plot", Actor::Human, vec![Op::Delete { id: plot }]);
     host.frame("delete the plot");
     for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {

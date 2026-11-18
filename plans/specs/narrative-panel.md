@@ -227,6 +227,10 @@ revisit.
 
 Phases 1–5 of §5 in a first form, on the §7 decisions.
 
+**2026-11-16:** View following now responds to narrative scrolling; resizing the
+panel updates the reading-zone baseline without opening a composition.
+`narrative-resize.ts` exercises divider drags, scrolling and view-block clicks.
+
 - **Store (`iron_document`).** Types `narrative` and `block`; facets `block` and
   `richtext` (§7.1). `narrative.rs`: read blocks; `plan` turns block edits
   (`insert` with a key, `set`, `delete`, `move`, `after` naming an id or an earlier

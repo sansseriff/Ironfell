@@ -206,7 +206,6 @@
     void editor?.flush();
     editor?.destroy();
     registry.delete(panel ?? source);
-    observer?.disconnect();
   });
 
   // The store changed (any edit, undo, a model turn): read it again.
@@ -251,30 +250,44 @@
   }
 
   // ---- view blocks follow the reading position ------------------------
-  let observer: IntersectionObserver | null = null;
   $effect(() => {
     void status.version;
     void follow;
-    observer?.disconnect();
     if (!scroller || !editor || !follow || mode === "exploration") return;
-    // A view block entering the top quarter of the panel shows its composition.
-    // The observer's first report is where the blocks already are, not a
-    // scroll: opening the panel (or an edit) never switches the view.
-    let first = true;
-    observer = new IntersectionObserver(
-      (entries) => {
-        if (first) {
-          first = false;
-          return;
+    const root = scroller;
+    const currentEditor = editor;
+    const blocks = currentEditor.viewBlocks();
+    // Reflow can move a block into the reading zone without a scroll. Keep
+    // the baseline current on resize, and only open newly entered blocks in
+    // response to a scroll of the narrative itself.
+    const inZone = () => {
+      const r = root.getBoundingClientRect();
+      return new Set(blocks.filter((el) => {
+        const b = el.getBoundingClientRect();
+        return b.bottom >= r.top && b.top <= r.top + root.clientHeight / 4;
+      }));
+    };
+    let visible = inZone();
+    let width = root.clientWidth, height = root.clientHeight;
+    const resize = new ResizeObserver(() => {
+      width = root.clientWidth;
+      height = root.clientHeight;
+      visible = inZone();
+    });
+    resize.observe(root);
+    const scroll = () => {
+      const next = inZone();
+      if (root.clientWidth === width && root.clientHeight === height) {
+        for (const el of next) {
+          if (!visible.has(el) && el.dataset.show && currentEditor.shown !== el.dataset.show) currentEditor.showView(el.dataset.show, el.dataset.focus ?? "");
         }
-        for (const en of entries) {
-          const el = en.target as HTMLElement;
-          if (en.isIntersecting && el.dataset.show && editor && editor.shown !== el.dataset.show) editor.showView(el.dataset.show, el.dataset.focus ?? "");
-        }
-      },
-      { root: scroller, rootMargin: "0px 0px -75% 0px", threshold: 0 },
-    );
-    for (const el of editor.viewBlocks()) observer.observe(el);
+      }
+      width = root.clientWidth;
+      height = root.clientHeight;
+      visible = next;
+    };
+    root.addEventListener("scroll", scroll, { passive: true });
+    return () => { root.removeEventListener("scroll", scroll); resize.disconnect(); };
   });
 
   // ---- the conversation ----------------------------------------------

@@ -75,6 +75,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
 | `slider.ts`, each DPR | ~18–22 s (2026-11-16; includes hover and animation pixel checks) |
+| `narrative-resize.ts` | ~5–10 s |
 | `timeline.txt` | ~30 s |
 | ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–5 min (2m 28s with every test binary relinking, 2026-11-09; 5m 13s after a `document.rs` and `lib.rs` change, 2026-11-16) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
@@ -2826,6 +2827,11 @@ status()}`; engine calls `narrative_list/read/edit/create/markdown/values/target
 through `__iron.call` (a model's `<write>` and `<rewrite>` are edit verbs, planned by
 `edit_plan`).
 
+`narrative-resize.ts` checks that resizing the left divider preserves the central
+tab, while scrolling and clicking view blocks still select their compositions.
+Run `bun run narrative-resize.ts` from this directory; expected: `narrative resize,
+scroll and click: passed; no page errors`.
+
 `narrative.txt` (no `showcase=0`, so ids differ from other scripts; masked
 below as `#ID`). Expected, minus `nav`, `ready`, `tab`, `key` and `screenshot`
 lines:
@@ -2834,7 +2840,7 @@ lines:
 "12 blocks, mode authoring; values [\"500\",\"0.40\"]; mentions [\"square\",\"shadow\",\"level\",\"torus\"]"
 "typed; store has it: true; versions advanced by 1"
 "Cmd+Z: store undone true, editor undone true"
-"menu offers [\"square\",\"square note\"]"
+"menu offers [\"square\",\"square face\",\"square note\"]"
 "heading now \"A tour of the demo with the square \"; mention of square"
 "hover lights [\"#U\"] (#U); after: []"
 "x is now shown as 612"
@@ -3442,7 +3448,7 @@ URL=http://localhost:5183/Ironfell/ BACKEND=webgpu RUNTIME=worker DPR=1 bun run 
 ```
 
 Repeat with `BACKEND=webgl2`, `RUNTIME=main` and `DPR=2`. Expected output:
-`PASS <backend> <runtime> DPR <n>: offscreen GPU pixels, read-only capture, image attachment through bridge, transcript thumbnail`.
+`PASS <backend> <runtime> DPR <n>: GPU capture, attachments, exact agent capture in work log, renderer snapshot card`.
 Capture's Rust unit tests (`encode()` row padding and premultiplied flattening,
 abandoned-ticket expiry) run natively: `cargo test -p ironfell --lib --features
 native --target aarch64-apple-darwin --profile dev-opt capture::tests` (~9 s warm,

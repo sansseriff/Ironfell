@@ -38,7 +38,7 @@ pub struct Request {
     pub input: Value,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct State {
     /// The model and input last seen, and when they last changed.
     seen: Option<(String, Value)>,
@@ -54,7 +54,7 @@ struct State {
     waiting: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Queries {
     states: BTreeMap<NodeId, State>,
     seq: u64,

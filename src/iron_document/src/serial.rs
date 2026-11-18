@@ -330,5 +330,8 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
     let mut doc = Document::from_parts(nodes, facets, relations, next, version);
     doc.set_scope(scope);
     doc.check_invariants().map_err(LoadError)?;
+    if let Some(why) = doc.derived_content() {
+        return Err(LoadError(format!("{why}: a document holds authored nodes only")));
+    }
     Ok(doc)
 }

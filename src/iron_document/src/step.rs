@@ -24,7 +24,7 @@ use crate::facet::{FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::value::Value;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Steps {
     /// Each trace's changes, oldest first: when, and the value from then.
     traces: BTreeMap<NodeId, VecDeque<(f64, Value)>>,

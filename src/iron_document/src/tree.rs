@@ -403,3 +403,28 @@ impl<'a> Tree<'a> {
         self.both().flat_map(move |d| d.relations_to(id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::facet::{Composition, Name};
+    use crate::*;
+
+    /// `with_document` takes authored documents only: one holding copies (as
+    /// a store that keeps them in the document has) is refused.
+    #[test]
+    #[should_panic(expected = "with_document takes an authored document")]
+    fn with_document_refuses_a_document_holding_a_copy() {
+        let mut store = StoreCore::build(Document::new(), false);
+        let comp = store.authored().next_id();
+        let mut c = Composition::default();
+        c.dims = Slot::Const(Value::Enum("2d".into()));
+        let mut name = Name::default();
+        name.text = Slot::Const(Value::Str("sheet".into()));
+        let ops = vec![Op::Create { id: comp, ty: TypeId::lookup("composition").unwrap(), parent: None, order: OrderKey::first(), facets: vec![name.wrap(), c.wrap()] }];
+        store.apply(TransactionInput { label: "sheet".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
+        store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+        let doc = store.authored().clone();
+        assert!(doc.derived_content().is_some_and(|why| why.contains("derived copy")));
+        StoreCore::with_document(doc);
+    }
+}

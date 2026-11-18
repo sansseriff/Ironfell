@@ -1029,6 +1029,21 @@ impl Document {
         &self.nodes
     }
 
+    /// Why this is not an authored document, if it is not: it holds a
+    /// derived node or relation, or an authored node or relation hangs from
+    /// a copy. A store derives its copies itself (reactive-engine handoff
+    /// §4.6), so `load` and `with_document` refuse such a document. A
+    /// relation may still end at a copy (a wire bound to a pin in an
+    /// instance).
+    pub fn derived_content(&self) -> Option<String> {
+        if let Some((id, n)) = self.nodes.iter().find(|(id, n)| id.is_expanded() || n.parent.is_some_and(|p| p.is_expanded())) {
+            return Some(if id.is_expanded() { format!("node {id} is a derived copy") } else { format!("node {id} is placed under the copy {}", n.parent.expect("a parent")) });
+        }
+        self.relations.values().find(|r| r.id.is_expanded() || r.from.is_expanded()).map(|r| {
+            if r.id.is_expanded() { format!("relation {} is derived", r.id) } else { format!("relation {} leaves the copy {}", r.id, r.from) }
+        })
+    }
+
     pub(crate) fn raw_facets(&self) -> &BTreeMap<FacetKind, BTreeMap<NodeId, Facet>> {
         &self.facets
     }

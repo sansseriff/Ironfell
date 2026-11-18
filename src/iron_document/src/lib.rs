@@ -471,9 +471,57 @@ const DEFAULT_HORIZON: usize = 200;
 const RECENT_KEYS: usize = 64;
 
 impl StoreCore {
-    /// A scratch store over a copy of this one's document.
+    /// A scratch store for planning an edit (`edit`, `compose`, `parts`):
+    /// this one as it stands, both documents and everything derived from
+    /// them copied rather than derived again, which re-expanded every owner
+    /// on each plan (115 ms at 700 meters). It has no history, gesture,
+    /// previews or pending changes of its own.
     pub(crate) fn scratch(&self) -> StoreCore {
-        StoreCore::build(self.docs.authored.clone(), self.docs.apart)
+        let mut docs = self.docs.clone();
+        docs.gone.clear();
+        let mut reactive = self.reactive.clone();
+        reactive.clear_overlay(Tree::of(&docs));
+        StoreCore {
+            docs,
+            owners: self.owners.clone(),
+            history: History { horizon: DEFAULT_HORIZON, ..Default::default() },
+            recent_keys: VecDeque::new(),
+            reactive,
+            time: self.time,
+            time_errors: self.time_errors.clone(),
+            clusters: self.clusters.clone(),
+            drivers: Default::default(),
+            fingers: Vec::new(),
+            session_version: self.session_version,
+            physics_error: self.physics_error.clone(),
+            tables: self.tables.clone(),
+            contexts: self.contexts.clone(),
+            layout_preview: None,
+            dark: self.dark,
+            motion: Motion::default(),
+            machines: self.machines.clone(),
+            steps: self.steps.clone(),
+            queries: self.queries.clone(),
+            presence: self.presence.clone(),
+            presence_at: self.presence_at,
+            interaction: self.interaction.clone(),
+            expansion_problems: self.expansion_problems.clone(),
+            repeats: self.repeats.clone(),
+            item_memo: self.item_memo.clone(),
+            network: self.network.clone(),
+            repeat_inputs: self.repeat_inputs.clone(),
+            session_state: self.session_state.clone(),
+            emitted: Vec::new(),
+            truncated: self.truncated.clone(),
+            pending: Changes::default(),
+            settling: false,
+            gesture: None,
+            ended: None,
+            next_gesture: self.next_gesture,
+            geometry: self.geometry.clone(),
+            producers: self.producers.clone(),
+            text_generation: self.text_generation,
+        }
     }
 
     /// Bring the graph up to date after structure changed through `ops`:
@@ -601,7 +649,13 @@ impl StoreCore {
         StoreCore::with_document(Document::new())
     }
 
+    /// A store over an authored document: it derives every copy itself.
+    /// Panics on a document holding derived content (`derived_content`);
+    /// `load` reports the same as an error.
     pub fn with_document(doc: Document) -> StoreCore {
+        if let Some(why) = doc.derived_content() {
+            panic!("with_document takes an authored document: {why}");
+        }
         StoreCore::build(doc, true)
     }
 

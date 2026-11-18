@@ -18,6 +18,7 @@ mod compositions;
 mod constraints;
 mod contexts;
 mod copies;
+mod copies_apart;
 mod definitions;
 mod differential_harness;
 mod differential_random;

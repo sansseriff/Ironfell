@@ -115,7 +115,11 @@ fn expanded_instances_cost() {
         let clone = store.authored().clone();
         let clone_ms = t.elapsed().as_secs_f64() * 1000.0;
         drop(clone);
-        println!("{count} meters: {nodes} live nodes ({expanded} expanded); place {place_ms:.2} ms each; structural edit p50 {:.2} ms; constant edit {set_ms:.2} ms; clone {clone_ms:.2} ms", times[2]);
+        // An edit planned (a rect added): planning runs on a scratch store.
+        let t = Instant::now();
+        iron_document::edit::plan(&store, &format!(r#"<edit><rect in="{comp}" w="5" h="5"/></edit>"#), None).unwrap();
+        let plan_ms = t.elapsed().as_secs_f64() * 1000.0;
+        println!("{count} meters: {nodes} live nodes ({expanded} expanded); place {place_ms:.2} ms each; structural edit p50 {:.2} ms; constant edit {set_ms:.2} ms; clone {clone_ms:.2} ms; edit plan {plan_ms:.2} ms", times[2]);
     }
 }
 

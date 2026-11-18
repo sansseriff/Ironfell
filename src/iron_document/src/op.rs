@@ -266,11 +266,18 @@ fn live<'d>(doc: Tree<'d>, cx: &Ctx, id: NodeId) -> Result<&'d Node, ApplyError>
 fn check_parent(
     doc: Tree<'_>,
     cx: &Ctx,
+    id: NodeId,
     parent: Option<NodeId>,
     child_ty: TypeId,
 ) -> Result<(), ApplyError> {
     let Some(p) = parent else { return Ok(()) };
     let pn = live(doc, cx, p).map_err(|e| cx.err(ErrorKind::BadParent, e.message))?;
+    // A copy's children are its owner's to derive: an authored or session
+    // node placed there would outlive the copy when the owner expands again
+    // (handoff §4.6).
+    if p.is_expanded() && !id.is_expanded() {
+        return Err(cx.err(ErrorKind::BadParent, format!("{p} is a derived copy: only its owner places children in it")));
+    }
     if !pn.ty.spec().admits_child(child_ty) {
         return Err(cx.err(
             ErrorKind::ChildNotAdmitted,
@@ -338,7 +345,7 @@ fn create(
     if parent == Some(id) {
         return Err(cx.err(ErrorKind::Cycle, format!("{id} cannot be its own parent")));
     }
-    check_parent(Tree::of(docs), cx, parent, ty)?;
+    check_parent(Tree::of(docs), cx, id, parent, ty)?;
     check_facets(cx, ty, comps)?;
     let doc = docs.of_node(id);
     if restoring {
@@ -539,7 +546,7 @@ fn reparent(
             return Err(cx.err(ErrorKind::Cycle, format!("{p} is a descendant of {id}")));
         }
     }
-    check_parent(Tree::of(docs), cx, parent, ty)?;
+    check_parent(Tree::of(docs), cx, id, parent, ty)?;
     docs.of_node(id).set_parent(id, parent, order.clone());
     // A refused op leaves the document as it was.
     if let Err(e) = check_embeds(Tree::of(docs), cx, id) {

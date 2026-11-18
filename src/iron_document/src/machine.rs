@@ -247,7 +247,7 @@ struct Run {
 
 /// The player: what each instance's machines were last seen in, and what
 /// is running.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Player {
     known: BTreeMap<(NodeId, NodeId), Known>,
     /// Instances whose next state change snaps instead of playing: those

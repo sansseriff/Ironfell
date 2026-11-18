@@ -41,7 +41,7 @@ fn build() -> String {
         .unwrap();
     let comp = ids[0];
     store.place_standard("plot", comp, [0.0, 0.0], Actor::Human).unwrap();
-    store.place_standard("meter", comp, [800.0, 0.0], Actor::Human).unwrap();
+    let meter = store.place_standard("meter", comp, [800.0, 0.0], Actor::Human).unwrap();
     store.place_standard("plot", comp, [0.0, 500.0], Actor::Human).unwrap();
     let markup = r#"<let id="$lo" value="3"/>
         <group id="$t" name="ticks" repeat.each="{= range($lo, $lo + 30, 4)}" repeat.key="{= t => t}"><text name="tick" x="{= $t.repeat.item}" y="0" content="{= fmt($t.repeat.item)}"/></group>
@@ -50,6 +50,21 @@ fn build() -> String {
     store.apply(tx("draw", built.ops)).unwrap_or_else(|e| panic!("{e:?}"));
     // Move the value-keyed repeat, so items come and go.
     store.apply(tx("slide", vec![Op::Set { id: built.named["lo"], path: "let.value".parse().unwrap(), slot: Slot::Const(Value::Number(11.0)) }])).unwrap();
+    // A sibling tie between an authored and a derived child (handoff §4.6):
+    // an authored child of the meter instance given the order key of its
+    // first copy. With copies apart, `Tree::children` merges the two
+    // documents' children by (order, id), so the tie must come out the
+    // same however the derived ids are numbered. (A repeat cannot tie: it
+    // keys its items after its last authored child.)
+    let doc = store.tree();
+    let first = doc.children(meter).iter().copied().find(|k| k.is_expanded()).expect("the meter has copies");
+    let order = doc.live(first).unwrap().order.clone();
+    let tie = store.authored().next_id();
+    store.apply(tx("tie", vec![Op::Create { id: tie, ty: ty("group"), parent: Some(meter), order: order.clone(), facets: vec![] }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let doc = store.tree();
+    let kids = doc.children(meter);
+    let at = kids.iter().position(|&k| k == tie).unwrap();
+    assert!(kids[at + 1..].iter().any(|&k| k.is_expanded() && doc.live(k).is_some_and(|n| n.order == order)), "the authored child ties a copy and sorts before it: {kids:?}");
     let live: Vec<NodeId> = store.tree().live_nodes().map(|n| n.id).collect();
     let view = store.view(&ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: live, omit_defaults: false }).unwrap();
     let derived: Vec<String> = store.tree().nodes().map(|n| n.id).filter(|id| id.is_expanded()).map(|id| id.to_string()).collect();

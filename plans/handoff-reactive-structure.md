@@ -1553,8 +1553,37 @@ an optional step.
   (filter by module, `--test suite differential_random::`). The font tests are in
   `fonts` and `instance_cost` is separate. A change relinks in ~5 s rather than ~50 s.
 
-Next: scratch stores clone both documents; `with_document` and `load` refuse derived
-ids; A12; the stage-1 fixtures, the budget test, the host reference and measurements.
+- **Step 1c, the rest of stage 1's store items:**
+  - **`StoreCore::scratch` copies the store** rather than building one: both
+    documents, the owners, the graph without its previews, repeats, clusters and
+    presentation state. It has no history, gesture or pending changes, and it now
+    plans at the store's playhead rather than at 0. An edit plan at 700 meters went
+    from 115 to 23.6 ms (`instance_cost`'s new `edit plan` column); at 1,000 meters,
+    201 → 109 ms.
+  - **Derived content is refused:** `load` and `with_document` refuse a document
+    holding it (`Document::derived_content`: a derived node or relation, or a node or
+    relation hanging from a copy). `load` returns an error; `with_document` panics.
+  - **Nothing but its owner places children in a copy:** `check_parent` refuses a
+    non-derived child under a copy. Authored ops were already refused earlier, as
+    edits of the instance (`BadId`); this rule is what stops session ops.
+  - **A12:** `id_order.rs` adds an authored child of an instance that ties its first
+    copy's order key. A repeat cannot tie: it keys its items after its last authored
+    child.
+  - **`tests/copies_apart.rs`:**
+    - removal with no tombstone, and reappearance with the same ids;
+    - ops naming a copy refused, whether it is there or removed;
+    - a refusal restoring both documents;
+    - no children placed in a copy;
+    - a solver-written copy transform with history, undo and redo;
+    - `load`'s refusal;
+    - the node budget against the reference (D12), `#[ignore]`d because it needs
+      release.
+  - **The budget path is slow:** 60,000 wanted nodes take 11 s in release for three
+    transactions, and a structural edit at 1,000 meters takes 93 ms. Look at this
+    before phase 4 counts loaded owners.
+
+Next: the host reference on `Apart` with its removal, reorder and undo fixtures; the
+smoke and §16.2 scripts; the stage-1 measurements.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

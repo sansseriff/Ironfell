@@ -1,6 +1,8 @@
-//! Differences between the engines that are intended, and the calls the
-//! old engine once left changed after an error (reactive-engine handoff
-//! §4.1, task 4; spec §16.1). The harness reads both tables.
+//! Differences between subject and reference that are intended, and the
+//! calls the old engine once left changed after an error (reactive-engine
+//! handoff §4.1, task 4; spec §16.1). The harness reads both tables. Both
+//! are empty since phase 2b, whose engine now runs on both sides; 2c's
+//! differences from it are entered here.
 //!
 //! **Intended differences.** The new engine need not copy the old one's
 //! quirks (the user, 2026-11-16). A quirk the old engine can drop cheaply is

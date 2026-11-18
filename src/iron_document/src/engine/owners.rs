@@ -17,8 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Which owners to expand again.
 pub(crate) enum Which {
-    /// Every owner, as the old engine does on load and on what this layer
-    /// does not map (a reparent, a definition made or removed).
+    /// Every owner: on load, and on what this layer does not map (a reparent, a definition made or removed).
     All,
     Some(BTreeSet<NodeId>),
 }

@@ -1,5 +1,4 @@
-//! The new reactive engine (plans/specs/reactive-engine.md), built in
-//! stages beside the old one (handoff §4.4). A store runs it when built
-//! with `Engine::New`.
+//! The reactive engine's owners (plans/specs/reactive-engine.md; handoff
+//! §4.4): which authored nodes derive what, expanded per owner.
 
 pub(crate) mod owners;

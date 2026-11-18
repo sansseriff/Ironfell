@@ -6,9 +6,12 @@
 //! first difference. `&self` calls read the subject. So every test written
 //! against `Store` is a differential script without being rewritten.
 //!
-//! Until phase 2b both stores run the old engine, which proves the facade,
-//! the snapshot and the old engine's determinism. From 2b the subject runs
-//! the new one.
+//! Through phase 2b the reference ran the old engine (the whole-document
+//! expansion and graph rebuild, with a working copy) and the subject the
+//! new one. Since 2b's swap there is one engine, so both stores run it:
+//! the comparison checks its determinism, and `IRON_OWNER_CHECK=1` checks
+//! the owners against the whole-document expansion kept for it
+//! (`expand::expand`). Phase 2c's engine becomes the subject, against 2b's.
 //!
 //! Shared by both stores, and necessarily so: the id registries (`id.rs`),
 //! so one path gets one id in both, and the text engine. Register fonts
@@ -16,9 +19,8 @@
 //! (`TOKENS`, `BUDGET`) are scoped to one evaluation and put back after it,
 //! so the two stores, run one after the other, do not see each other's.
 //!
-//! **Atomicity** (a failed call leaves its store as it was) is measured, not
-//! required, while the reference is the old engine: set `IRON_ATOMICITY=1`
-//! and each failure of it is printed to stderr with the method and the
+//! **Atomicity** (a failed call leaves its store as it was) is measured:
+//! set `IRON_ATOMICITY=1` and each failure of it is printed to stderr with the method and the
 //! first difference. `intended::NOT_ATOMIC` lists those known.
 
 pub mod intended;
@@ -29,8 +31,6 @@ pub use snapshot::{NOT_COMPARED, Snapshot, snapshot};
 use crate::parts::Placed;
 use crate::*;
 use std::fmt::Debug;
-
-pub use crate::Engine;
 
 /// The facade: `Store` with the `differential` feature.
 pub struct Store {
@@ -85,11 +85,9 @@ fn atomicity_on() -> bool {
 }
 
 impl Store {
-    /// The subject runs the new engine as far as it is built; the reference
-    /// the old engine with its working copy (reactive-engine handoff §4.4).
+    /// Two stores over the same start (reactive-engine handoff §4.4, stage
+    /// 5: phase 2b's engine is the reference for 2c's).
     fn pair(subject: StoreCore, reference: StoreCore, method: &str) -> Store {
-        debug_assert_eq!(subject.engine(), Engine::New);
-        debug_assert_eq!(reference.engine(), Engine::Old);
         let store = Store { subject, reference, diverged: None };
         store.agree(method);
         store
@@ -161,15 +159,15 @@ impl Store {
     }
 
     pub fn new() -> Store {
-        Store::pair(StoreCore::with_engine(Document::new(), Engine::New), StoreCore::with_engine(Document::new(), Engine::Old), "new")
+        Store::pair(StoreCore::new(), StoreCore::new(), "new")
     }
 
     pub fn with_document(doc: Document) -> Store {
-        Store::pair(StoreCore::with_engine(doc.clone(), Engine::New), StoreCore::with_engine(doc, Engine::Old), "with_document")
+        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_document(doc), "with_document")
     }
 
     pub fn load(text: &str) -> Result<Store, LoadError> {
-        match (StoreCore::load_with(text, Engine::New), StoreCore::load_with(text, Engine::Old)) {
+        match (StoreCore::load(text), StoreCore::load(text)) {
             (Ok(subject), Ok(reference)) => Ok(Store::pair(subject, reference, "load")),
             (Err(a), Err(b)) => {
                 assert_eq!(a.to_string(), b.to_string(), "differential: `load` failed differently");

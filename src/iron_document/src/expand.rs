@@ -231,7 +231,9 @@ pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
 }
 
 /// Every expanded node and relation a document should have, with
-/// `counts[r]` the items of each repeat and conditional `r`.
+/// `counts[r]` the items of each repeat and conditional `r`: the
+/// whole-document expansion, kept as the owners' check (`expand`).
+#[cfg(feature = "differential")]
 fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
     let mut out = Wanted::new(NODE_BUDGET);
     let entity_ty = TypeId::lookup("entity").expect("registered");
@@ -926,10 +928,13 @@ fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<
         .collect()
 }
 
-/// Bring the document's expanded nodes to what its linked instances derive.
-/// Returns the ops applied (for consumers that follow ops) and the problems
-/// met (a template node the registry no longer admits, say), which leave
-/// that node out rather than failing the transaction.
+/// Bring the document's expanded nodes to what its linked instances derive,
+/// all at once. Returns the ops applied and the problems met (a template
+/// node the registry no longer admits, say), which leave that node out
+/// rather than failing the transaction. Since phase 2b's swap only the
+/// differential harness's owner check runs it (`IRON_OWNER_CHECK=1`): the
+/// owners' copies must leave it nothing to do.
+#[cfg(feature = "differential")]
 pub fn expand(doc: &mut Document, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
     let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::over(doc), counts);
     let have: Vec<NodeId> = doc.expanded_ids().filter(|id| doc.is_live(*id)).collect();
@@ -1060,16 +1065,6 @@ fn op_target(op: &Op) -> String {
         Op::Link { rel } => rel.id.to_string(),
         Op::Unlink { id } => id.to_string(),
     }
-}
-
-/// Whether a transaction's ops can change what instances derive: anything
-/// structural, or a set on an instance, a `use`, or a node of a definition.
-pub fn affected_by(doc: Tree<'_>, ops: &[Op]) -> bool {
-    ops.iter().any(|op| match op {
-        // A repeat's template child: its items copy it.
-        Op::Set { id, path, .. } => matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || in_library(doc, *id) || in_repeat_template(doc, *id),
-        _ => true,
-    })
 }
 
 pub(crate) fn in_library(doc: Tree<'_>, mut id: NodeId) -> bool {

@@ -34,8 +34,7 @@ fi
 # ironfell.wasm path is shared, so each is bound before the next build.
 for backend in $BACKENDS; do
   echo "building $backend ($PROFILE)"
-  # EXTRA_FEATURES adds app features, e.g. EXTRA_FEATURES=engine-new to run the
-  # new reactive engine (reactive-engine handoff §4.4).
+  # EXTRA_FEATURES adds app features to the build.
   cargo build --profile "$PROFILE" --no-default-features --features "$backend${EXTRA_FEATURES:+,$EXTRA_FEATURES}" --target wasm32-unknown-unknown
   mkdir -p "src-ui/wasm/$backend"
   rm -f "src-ui/wasm/$backend/.stub"   # left by older versions of this script

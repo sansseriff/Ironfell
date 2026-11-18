@@ -4,9 +4,9 @@
 //! not yet used (the app's `document_bridge::ChangeInbox`), so one consumer
 //! never takes what another still needs.
 //!
-//! In phase 1 the old engine fills it from what it already knows: the ops
-//! it applied and their inverses, the reactive graph's changed leaves, and
-//! the geometry revisions.
+//! The store fills it from what it already knows: the ops it applied and
+//! their inverses, the reactive graph's changed leaves, and the geometry
+//! revisions.
 
 use crate::expr::Leaf;
 use crate::facet::{Facet, FacetKind, LeafPath};

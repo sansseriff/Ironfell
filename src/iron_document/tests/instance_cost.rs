@@ -84,7 +84,7 @@ fn desk() -> (Store, NodeId) {
 #[test]
 #[ignore]
 fn expanded_instances_cost() {
-    for count in [100, 1000] {
+    for count in [100, 700, 1000] {
         let (mut store, comp) = desk();
         let started = Instant::now();
         for i in 1..count {

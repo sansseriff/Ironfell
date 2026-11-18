@@ -1,8 +1,8 @@
 //! The graph updated in place (reactive-engine handoff §4.4, stage 3a)
 //! against the rebuild it replaces: cases the council's review of stages 3a
-//! and 3b found (2026-11-17), each where `New` and `Old` disagreed. Run
-//! through the differential facade they compare the two engines; each also
-//! asserts the right outcome directly.
+//! and 3b found (2026-11-17), each where the new engine and the old one
+//! (removed at phase 2b's swap) disagreed. Each asserts the right outcome
+//! directly.
 
 use iron_document::facet::{Composition, Name, Port};
 use iron_document::*;

@@ -964,6 +964,31 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
      frame (~1.5 ms).
   4. **Hidden pages' evaluation: phase 4,** as planned; nothing partial before it.
 
+- **Fix 1 built: paths as geometry (2026-11-17, `9ba2ed5`).** Green: `iron_document`
+  464, differential 468, the app's 16; on an `engine-new` wasm-bench build, `smoke.txt`
+  and `plot-view.txt` pass, and the rewritten gallery pages (Kepler, Interference,
+  Oscillator, Fourier) draw as before. The plot targets again:
+
+  | | `New` | `InPlace` | target |
+  |---|---|---|---|
+  | values-only step, native, pan / zoom, 1 plot | 0.065 / 0.122 ms | 0.041 / 0.121 | no slower than 0.13 (phase 0) |
+  | values-only step, native, pan / zoom, 10 plots | 0.065 / 0.152 ms | 0.098 / 0.230 | |
+  | tick change, native, pan / zoom, 1 plot | 0.166 / 0.190 ms (2.6× / 1.6×) | 0.90 / 1.01 | within 2× values-only, "so about 0.3 ms" |
+  | tick change, native, pan / zoom, 10 plots | 0.257 / 0.322 ms (4.0× / 2.1×) | 7.58 / 7.66 | |
+  | app `action` p95: slow pan, fast pan, zoom | **1.32, 1.05, 1.45 ms** | 5.26, 6.12, 6.39 | under 1.5 ms |
+
+  - **The app target is met.**
+  - **The native tick-change target is met as an absolute** (about 0.3 ms; 10-plot
+    zoom 0.32), **not as a ratio:** values-only steps fell to 0.065 ms (from 0.11),
+    so 2× is now 0.13 ms.
+  - **Values-only steps:** under the phase 0 baseline at every size. At 1 plot,
+    `New`'s pan is 0.024 ms slower than `InPlace`'s at the same commit (the settle
+    poll); at 10 plots `New` is faster.
+
+  Playback (Fourier tab, the timeline playing, both engines alike): frame 9.3 →
+  7.2 ms; the hidden Wave packet page 2.6 → 0.7 ms; native store step 3.6 → 1.1 ms.
+  Which reading of the tick-change target holds is the user's call before the swap.
+
 **How the engines are chosen.**
 - The engine is chosen **when a store is built**, not set afterwards:
   `StoreCore::with_engine(doc, engine)`. `New` builds differently from the others.

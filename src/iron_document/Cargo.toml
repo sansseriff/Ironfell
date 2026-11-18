@@ -3,6 +3,23 @@ name = "iron_document"
 version = "0.1.0"
 edition = "2024"
 description = "The authored store: identity-stable nodes, operations, history, and views. Depends on nothing renderer-shaped."
+# The integration tests are modules of one binary (`tests/suite.rs`), not a
+# binary per file: a change relinks one test executable instead of ~60.
+autotests = false
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
+
+# Binaries of their own, for state the whole process shares: the tests that
+# register real fonts, and a counting global allocator.
+[[test]]
+name = "fonts"
+path = "tests/fonts.rs"
+
+[[test]]
+name = "instance_cost"
+path = "tests/instance_cost.rs"
 
 # No Bevy, by design (plans/specs/document-spine.md §5). This crate compiles and
 # tests natively; the app crate wraps it in a resource and owns the reconciler.

@@ -71,7 +71,7 @@ fn derived_id_order_does_not_depend_on_what_the_process_interned_first() {
     let file = std::env::temp_dir().join(format!("iron-id-order-{}.txt", std::process::id()));
     let run = |mode: &str| {
         let out = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "derived_id_order_does_not_depend_on_what_the_process_interned_first", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "id_order::derived_id_order_does_not_depend_on_what_the_process_interned_first", "--nocapture", "--test-threads=1"])
             .env(CHILD, mode)
             .env(FILE, &file)
             .output()

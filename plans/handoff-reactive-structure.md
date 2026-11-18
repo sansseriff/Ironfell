@@ -1344,141 +1344,185 @@ changing shared code, as 2a did, rather than allowed for with a normaliser.
 ### 4.6 Phase 2c: copies leave the document
 
 The point: the authored document holds authored nodes only, and the Tree answers for
-derived ones from the owners (spec §5.4, §12.1). What it buys: memory per instance
-(spec §15), no derived writes in the journal, save, clone or `Document::edits`, and the
-ground phase 4's Unloaded owners need. Exit (spec §17): the Tree equals 2b's stored
-copies on every script; memory per instance measured against phase 0.
+derived ones from the owners (spec §5.4, §12.1). What it buys: no derived writes in
+the authored document's journal, save, clone or `edits`; the ground phase 4's
+Unloaded owners need; and later, memory per instance (spec §15). Exit (spec §17): the
+Tree equals 2b's stored copies on every script; memory per instance measured against
+phase 0.
 
 Written 2026-11-17 from the spec and the code at `e0d520d`, after a survey of every
-reader of derived nodes. **Draft for council review; not started.**
+reader of derived nodes, then revised after a council review (Claude Opus 5.5 5/10,
+GPT-6.2 Sol 5/10, both on stage 1's buildability). Their findings are folded in below;
+the ones that change the design are marked *(review)*.
 
-**What the survey found** (counts are non-test call sites, upper bounds):
-- Every reader outside the crate reads nodes through `Store::tree()`. The host's
-  roughly 85 `authored()` calls read the version or mint ids, except one: the
-  `expose_control` command (`engine_api.rs:731`) passes `authored()` to
+**What the code looks like now.**
+- Every reader outside the crate reads nodes through `Store::tree()`, except the
+  `expose_control` command (`engine_api.rs:731`), which hands `authored()` to
   `attachment::authored`, which asks whether a **derived** id is live
-  (`author.rs:426`, `attachment.rs:13`). That breaks the moment copies leave.
-- Inside the crate, about 20 places in `lib.rs` read copies from `self.doc` directly
-  (gesture and handle leaves, `settle_repeats`' repeat facets on derived repeats,
-  `publish_presence`, the `on` listeners and handlers, `action_writes`,
-  `context_reads`, `resolve_contexts`, `can_refuse`, `post_apply`'s solved leaves,
-  `refresh_text`, `begin_drag`), and `layout.rs` reads `store.doc` throughout
-  (`compute` enumerates every group and table, copies included; `constrained` reads
-  `NodeId::expanded(u, part)`).
-- The writer is one path: `expand::apply_wanted` through `op::apply_op` on a
-  `&mut Document`, from `expand_owners` and `expand_items`. Derived relations are
-  made in three places (`RelationId::expanded`: items, an entity's template
-  relations, a `use`'s `figures`). Authored relations *to* a derived node (a
-  connection to an instance's port) are authored and stay.
-- `Tree`'s surface is `Document`'s read methods (`live` about 360 calls, `get` 240,
-  `children` 200 returning `&[NodeId]`, `node` 140, `is_live` 140, …) and the
-  enumerations `nodes`, `live_nodes`, `nodes_of_type`, `nodes_with`, `bound_slots`,
-  `relations`, `expanded_ids`, plus `binding_cycles` and `reads_interaction`, which
-  follow bindings across nodes. Authored nodes with derived children: a `use` (its
-  picture), an `entity` (its body's copies, interleaved by order with its authored
-  children), a repeat (its items).
-- `serial::save` already filters derived nodes, facets and relations. Validation reads
-  copies (`check_created`'s connection and binding checks, `check_scope`,
-  `binding_cycles`) and two steps read resolved values (`translate` through handles,
-  before the ops apply; `post_apply`'s solver, after): A2 holds for the checks proper.
+  (`author.rs:426`, `attachment.rs:13`).
+- *(review)* Inside the crate the problem is not a list of direct readers but the
+  constructor: `Tree::over(&Document)` is built at 179 non-test sites (about 100 in
+  `lib.rs`, 20 in `op.rs`, and `expand.rs`, `owners.rs`, `author.rs`, `standard.rs`,
+  `compose.rs`, `parts.rs`, `DocTree::over` in `layout.rs`), each over one document.
+  Beside them, 39 direct `self.doc` reads in about 25 functions, among them
+  `selection()` (drops a selected copy), `problem_notes` (drops notes on copies),
+  `extent`, `set_state` and `is_session_state`, `drag_to`, `make_component`, the
+  gesture and handle paths, `handlers` and `hover_listeners` (parent walks),
+  `settle_repeats`, `publish_presence`, `publish_state`, `publish_selection`,
+  `action_writes`, `context_reads`, `resolve_contexts`, `can_refuse`, `post_apply`,
+  `refresh_text`; and `layout.rs` throughout.
+- The writer of copies is `expand::apply_wanted` through `op::apply_op`. Authored ops
+  read copies too: `set`'s `check_binding` on a binding reading a derived node
+  (`op.rs:611`), `link` accepting a derived end (`op.rs:755`), `check_created`'s
+  connection checks. Writes to copies read authored nodes (`check_parent`,
+  `check_entity`). An authored delete tombstones its derived descendants
+  (`op.rs:486`). `post_apply` can write a solved derived transform as a solver op
+  (`solve.rs:175`, `lib.rs:2988`; traced, not run).
+- Derived relations are made in three places (`RelationId::expanded`,
+  `expand.rs:645, 691, 784`). Authored relations *to* a copy stay authored.
+  `serial::save` already filters derived records.
+- Validation in `run` (`check_created`, `check_scope`, `check_context`,
+  `attachment::validate`) reads structure and slots, not values: A2 holds for it.
+  `translate` (before the ops) and `post_apply`'s `constraint::validate_all` (after)
+  read resolved values.
 
-**Stages.** Four, each ending green on the differential suite, committed and pushed.
+**The reference.** For this phase a switch chosen at construction comes back:
+`Copies::InDocument` (2b as built) and `Copies::Apart`. The facade's subject is
+`Apart`, its reference `InDocument`. *(review)* Both run the same code: under
+`InDocument` the routing below sends every write to the authored document and the
+copies document stays empty. The snapshot compares the joined Tree (live nodes, in
+traversal order) and `authored()` filtered to authored and session records with the
+counters. Derived tombstones are not compared (stage 1 stops keeping them, below).
+Stage 4 deletes `InDocument`.
 
-**The reference.** A switch chosen at construction comes back for this phase only:
-`Copies::InDocument` (2b as built: copies written into the document) and
-`Copies::Apart` (this phase). The facade's subject is `Apart`, its reference
-`InDocument`. The snapshot already reads through `Tree`, so the Tree's answers must be
-equal; `authored()` differs by design, so the snapshot compares `authored()` with the
-reference's document **filtered to authored nodes and relations**, which must be equal
-too. Stage 4 deletes `InDocument`.
+**Stage 1. Two documents behind one Tree.** Eager: every copy is materialised, in a
+second `Document` (`copies`). This is the spec's A4 fallback, taken first so that the
+join is exact before anything is lazy.
+- **`StoreCore` holds `docs: Docs { authored, copies }`**, one field, so a Tree over
+  it borrows apart from `reactive`, `machines` and the rest (the split borrows at
+  `lib.rs:2275, 2294, 2341, 2352` need that).
+- **`Tree::over` is deleted** *(review)*, as phase 1 renamed `document()`: every one
+  of the 179 sites becomes a compile error and is decided one by one, to
+  `Tree::of(&docs)` or to `Tree::authored_only(&doc)` where only authored nodes can
+  matter (scratch documents cloned for planning: `compose.rs:213`, `parts.rs:763`,
+  `standard.rs:215`, `author.rs:63`, audited for reads of an instance's copies).
+  Direct `self.doc` reads go the same way: `docs.authored` is named, so each is a
+  decision.
+- **Writes route by id** *(review)*. `apply_op` takes `&mut Docs`, sends each write
+  to the document its id belongs to (`id.is_expanded()`; a relation by `rel.id`), and
+  builds a fresh `Tree::of(&*docs)` for each check, so a check sees the other
+  document and the write it follows (`reparent` writes then checks `check_embeds`;
+  `apply_wanted` retries failed ops). This routes expansion, authored ops, the
+  solver's writes and undo and replay with no special case. An authored delete no
+  longer cascades into copies; the owners' expansion deletes them, as it already
+  does for the ops `owners.affected` sees. A fixture: a solved derived transform,
+  its history and undo.
+- **Walks that cross documents are the Tree's** *(review)*: `depth`, `is_ancestor`,
+  `order_path`, `descendants`, `descendants_within`, `binding_cycles`,
+  `reads_interaction` follow parents from a copy into its authored owner.
+  `apply_wanted` orders stale deletes by joined depth, so `expanded`'s order, and
+  with it `Changes` and `regraph`, match the reference.
+- **`children` returns `Cow<'_, [NodeId]>`** *(review)*: borrowed when one document
+  has the parent's children, merged by `(order, id)` (the document's own tie-break,
+  `document.rs:934`) when both do. A derived node's authored parent is always its
+  owner (an entity's body, a `use`'s picture, a repeat's items), so a merge happens
+  only at an owner; assert it. Repeats interleave too (a new authored child can share
+  the first item's key). Fallback if the merge's allocations show in the plot's frame:
+  a merging iterator over the two slices with a slice fast path (Sol's preference).
+- **Enumerations chain** because every derived id sorts after every authored and
+  session id (`EXPANDED = 1 << 63`, `id.rs:44`): `nodes`, `live_nodes`,
+  `nodes_of_type`, `nodes_with`, `relations`. **`bound_slots` merges per facet kind**
+  *(review)*: it is kind-major, and its order reaches `graph.rs:286`,
+  `derived_signals` and an error message at `op.rs:576`.
+- **No derived tombstones** *(review)*: the copies document removes a deleted copy
+  outright (a new mutator, journaled). They grow with item churn and the end state
+  has none.
+- **`Changes`** *(review)*: a deleted owner's copies are reported from expansion's
+  own deletes, not from a cascade in `full_inverse`. `Changes::note` reads a removed
+  node's former parent and an unlinked relation's ends, so those are captured at
+  mutation time and passed with the ops, and fed alike to `regraph`, the geometry
+  notes and the host. Their order is the reference's.
+- **Journal and restore** *(review)*: `begin`, `commit` and `rollback` act on both
+  documents together (`lib.rs:575-584, 3038, 3101`), and the shadow copy under
+  `differential` covers both. `settle_repeats` writes under the transaction's
+  journal from `after_transaction` and under none from `lib.rs:2129` and load: keep
+  that, for both. `Saved` is unchanged (it does not hold the document). The network
+  cache's key advances on rollback too (a generation, not `edits`, which rollback
+  would repeat). `apply_session` touches session nodes only; its reparent guard
+  checks only the child's id, so a test that a session child cannot be moved under
+  a copy.
+- **Scratch stores and construction** *(review)*: `StoreCore::scratch` clones both
+  documents instead of re-expanding every owner on each edit plan (`edit.rs:162`,
+  `compose.rs:81`, `parts.rs:1141, 1198`). `with_document` and `load` take authored
+  documents only and refuse one holding derived ids. `into_document` gives the
+  authored document.
+- **Invariants** *(review)*: a joint `Tree::check_invariants`, with one new rule (no
+  live copy under a dead authored ancestor), run after every call under
+  `differential`. `Document::check_invariants` on `copies` alone is not meaningful
+  (its parents are elsewhere).
+- **The owner check and the budget:** `check_owners` builds a joined scratch and runs
+  the whole expansion over it. The 50,000-node cut is kept exactly; a test over the
+  cap against `InDocument`.
+- **A12** *(review)*: extend `tests/id_order.rs` to sibling ties between authored and
+  derived children.
+- Exit:
+  - the differential suite, with `IRON_ATOMICITY=1` and `IRON_OWNER_CHECK=1`, and the
+    10,000 scripts, green with the subject `Apart`; fixtures for a derived removal,
+    reappearance and refusal;
+  - the host reference on `Apart`, with removal, reorder and undo fixtures; the smoke
+    and the §16.2 scripts;
+  - measured before and after: values-only and tick-change plot steps, picking and
+    drawing in the app (`plot-perf.txt`), a constant and a structural edit at 700
+    meters, the demo's load, a document clone and save.
 
-**Stage 1. The derived document, joined by the Tree.** Copies move out of the
-authored document into a second `Document` the store keeps for them (`copies`),
-written by the same `apply_wanted` and `apply_op`. Eager, as now: every copy is
-materialised. This is the spec's A4 fallback ("materialise a loaded owner in full"),
-taken first so that the Tree's join is exact before anything is lazy.
-- **The Tree holds both documents.** A node, facet or leaf is answered by the
-  document its id belongs to (`is_expanded()`). Enumerations chain both.
-  `relations_from` and `relations_to` chain both, since an authored relation can end
-  at a copy and a derived one can start at an authored node.
-- **`children` cannot return one slice for an `entity`,** whose authored and derived
-  children interleave by order key. Options, for the review:
-  (a) `children` returns a small `Children` type (a slice, or a merged list) and the
-  200 callers take it, a mechanical change;
-  (b) the copies document keeps, per authored parent, its derived children, and the
-  Tree merges on the fly into an iterator;
-  (c) the authored document keeps no derived children and the merged list is
-  cached per authored parent in the store, invalidated by `Changes::structure`.
-  The draft prefers (a): no cache to keep right, and the merge costs only where
-  both lists are non-empty.
-- **Ids, versions, counters:** derived ids are path ids and mint nothing; the copies
-  document's version is unused. `Document::edits`, which keys the network cache,
-  becomes the sum over both.
-- **The journal covers both.** `run`, `apply_session` and `settle_repeats` open and
-  close both together; `rollback` rolls both back. The shadow-copy assertion under
-  `differential` covers both.
-- **Every direct reader moves to the Tree:** the `lib.rs` sites and `layout.rs`
-  above, and `expose_control`. A reader that wants authored nodes only keeps
-  `authored()` and drops its `!is_expanded()` filter where that filter now always
-  holds (the filter is deleted, not kept as dead code).
-- **Writers that cross:** `apply_op` on the copies document must accept a copy whose
-  parent is an authored node it does not hold (`place` already allows a parent it
-  has not seen) and checks that read the parent or other nodes (`check_created`'s
-  reads) must read through a Tree over both. So `apply_op` takes the copies document
-  to write and a Tree to read.
-- **Validation in `run` reads the Tree over both,** unchanged in what it accepts.
-- **`check_owners` (`IRON_OWNER_CHECK`)** builds the whole expansion over a merged
-  scratch and compares.
-- Exit: the differential suite and the 10,000 scripts green with the subject `Apart`;
-  the host reference; the smoke; `regression.txt`. Measured: a constant edit and a
-  structural edit at 700 meters, the demo's load, a document clone and save.
+**Stage 2. Templates, materialising copies** *(review: reordered)*. Compile a
+`Template` per (definition, notation, sized, main) and per Collection (a Collection
+in a template is a sub-template, today's `template_of_repeat`), with
+`Ref::{Inside, Body, Item, Arg, Outside, Context}`, and a `materialise(owner, local)`
+that produces an eager copy from it in place of `want_entity`, `want_use`,
+`rewritten`, `apply_overrides` and `template_of_repeat`.
+- Checked by `IRON_OWNER_CHECK`'s whole-expansion oracle, and by parity tests on
+  effective slots, relocated literal refs, dependency edges and errors: override
+  precedence, overridden nested templates, derived repeat prototypes carrying a
+  picture's overrides.
+- Exit: green; the meters' structural edit and placement measured.
 
-**Stage 2. Cells evaluate from templates** (spec §5.4). A derived binding evaluates
-its template's expression, with `Ref`s resolved per owner, instead of the expression
-`rewritten` wrote into the copy.
-- `engine/template.rs`: compile a `Template` per (definition, notation, sized, main)
-  and per Collection (a Collection in a template is a sub-template, today's
-  `template_of_repeat`), with `Ref::{Inside, Body, Item, Arg, Outside, Context}`.
-  It must reproduce `want_entity`, `want_use`, `rewritten`, `apply_overrides` and
-  `template_of_repeat` (the list in the 2b plan's stage 2).
-- The graph keeps one binding per (owner, template binding); its reads resolve
-  through the owner's environment.
-- Under `differential`, each derived binding's resolved expression is compared with
-  the copy's rewritten one, naming the owner and leaf where they differ.
-- Exit: green; the plot probes and the meters measured (a structural edit should
-  stop paying for `rewritten`).
+**Stage 3. Copies materialised on read** (spec §5.4, A4). Per loaded owner, one
+write-once slot per template node, filled on first read, replacing the copies
+document. Needed first *(review)*:
+- an id → (owner, local) index that does not take the path registry's lock
+  (`id.path()` takes an `RwLock` and clones a `Vec`, `id.rs:83`), so a read of a
+  derived id costs no lock or allocation;
+- per-template indexes for the enumerations (`nodes_of_type`, `nodes_with`,
+  `relations_to`, `bound_slots`), or they materialise everything;
+- `Changes` for copies created and removed, now that no derived ops exist;
+- a graph read path that evaluates without filling slots;
+- A4's threading: `OnceLock::get_or_init` can wait on another initialiser. Verify
+  that no reader can, or keep stage 1's eager copies per owner.
+- **Memory may not fall in 2c** *(review)*: until phase 4 every owner is loaded, and
+  drawing, the graph and the snapshot read every copy, so every slot fills. The exit
+  is memory per meter **measured** against phase 0 (92.4 KiB; 110.5 KiB now), cold
+  and traversed owners apart, not a promised gain. A10 is decided before the slot
+  and id indexes are chosen.
 
-**Stage 3. Copies materialised on read** (spec §5.4, A4). The copies document is
-replaced by per-owner slots: each loaded owner holds one write-once slot per template
-node, filled the first time the Tree reads it, with references relocated and
-overrides applied; the engine stores nothing per derived node but its cells and its
-`diffs`.
-- A4 is settled here: a slot is handed out as `&T` from `&Store` without a lock a
-  reader could contend on (`OnceLock` per slot). If that fails, keep stage 1's eager
-  copies per owner and report.
-- An owner's slots clear when its template's version changes, or an override, an
-  argument or a boundary relation of its environment changes.
-- Enumerations visit loaded owners only (spec §12.1); with every owner loaded until
-  phase 4, that is every owner.
-- Exit: green; memory per meter against phase 0's 92.4 KiB (now 110.5 KiB); the
-  meters' structural edit and placement.
+**Stage 4. Cells from templates, if measurement justifies it** *(review)*. `graph.rs`
+is keyed by concrete `Leaf`; evaluating one template expression per owner needs an
+evaluator hook that resolves `Ref`s, or the dense engine stage 3a deferred. Build it
+only if stage 3's measurements show the per-copy expressions cost memory or time that
+matters. Then delete `InDocument`.
 
-**Stage 4. Validation from templates; the host from the Tree; delete.**
-- **Validation from templates** (spec §11.1; A2, A3): the cycle, look-only and
-  signal-loop checks walk templates with item references abstracted, and a derived
-  id inside an item is valid if its path is valid in the template, for any key. This
-  is the one intended difference of 2c (§16.1: more permissive than today), entered
-  in `intended.rs` as a divergence with its test.
-- **Paint order and the spatial scene from the Tree** (spec §12.3, required from 2c):
-  `paint_order` per changed parent from `Changes::structure`, not a whole walk.
-- **Delete** `Copies::InDocument`; the facade pairs two `Apart` stores until phase 3.
-- Exit: the spec's §17 row for 2c; the host reference; the smoke and the §16.2
-  scripts; memory per instance recorded.
+**Proposed: validation from templates moves to phase 4** *(review; the user decides,
+since the spec's §17 lists it under 2c)*. While every owner is loaded the Tree answers
+all derived structure, so validating from templates buys only §16.1's more permissive
+item-path rule. It matters once owners can be Unloaded. If it stays in 2c, A3's
+fallback is written in: validate against materialised structure for the owners the
+ops touch and their dependency closure. Incremental paint order per changed parent
+moves with it (paint order already reads the Tree; a subtree inserted shifts every
+later preorder index, so per-parent invalidation needs its own design and keeps the
+full traversal as its oracle).
 
-**Open, for the user before stage 3:**
-- A10, the id registry's growth (about 530 bytes per value-keyed item, never freed):
-  the spec says reclaiming becomes part of 2c if it is too much.
-- The node budget rule from 2b (the cut per owner in id order).
+**Open, for the user:** A10 (before stage 3); the node budget rule from 2b; moving
+validation from templates to phase 4.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

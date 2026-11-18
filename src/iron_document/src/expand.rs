@@ -980,8 +980,10 @@ fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec
             run(docs, Op::Create { id: w.id, ty: w.ty, parent: Some(w.parent), order: w.order, facets: w.facets }, &mut ops);
             continue;
         }
-        if node.parent != Some(w.parent) || node.order != w.order {
+        if node.parent != Some(w.parent) {
             run(docs, Op::Reparent { id: w.id, parent: Some(w.parent), order: w.order }, &mut ops);
+        } else if node.order != w.order {
+            run(docs, Op::Reorder { id: w.id, order: w.order }, &mut ops);
         }
         let have: BTreeMap<FacetKind, Facet> = Tree::of(docs).facets_of(w.id).map(|f| (f.kind(), f.clone())).collect();
         let mut kept = BTreeSet::new();
@@ -1094,10 +1096,13 @@ pub fn refuse(op: &Op) -> Option<String> {
         Op::Delete { id } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id).filter(|n| n.is_expanded()),
         Op::Reparent { id, parent, .. } => [Some(*id), *parent].into_iter().flatten().find(|n| n.is_expanded()),
         Op::Link { rel } => Some(rel.from).filter(|n| n.is_expanded()),
+        Op::Unlink { id } if id.is_expanded() => return Some(format!("{id} is a derived relation: its instance's definition makes it")),
         Op::Unlink { .. } => None,
     }?;
-    let (owner, _) = target.expanded_parts()?;
-    Some(format!("{target} is part of instance {owner}, derived from its definition; edit the definition or detach the instance"))
+    Some(match target.expanded_parts() {
+        Some((owner, _)) => format!("{target} is part of instance {owner}, derived from its definition; edit the definition or detach the instance"),
+        None => format!("{target} is a derived id: only an instance's expansion makes one"),
+    })
 }
 
 /// Translate edits aimed at expanded nodes into authored ones

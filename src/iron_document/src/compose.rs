@@ -273,7 +273,10 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
 
     let fresh = existing.is_none();
     let (entity, inst) = if let Some(entity) = existing {
-        (entity, definition::place_figures(Tree::authored_only(&scratch), entity, &notation, Some(parent), last(Tree::authored_only(&scratch), parent))?)
+        // Nothing is pushed on this branch, so the store's own tree reads
+        // as the scratch would, copies included: the entity may be a copy,
+        // nested in another instance.
+        (entity, definition::place_figures(doc, entity, &notation, Some(parent), last(doc, parent))?)
     } else {
         let model = root(&mut scratch, &mut push, "model")?;
         let name = match el.attr("name") {

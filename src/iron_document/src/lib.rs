@@ -241,6 +241,7 @@ struct Saved {
     clusters: solve::Clusters,
     geometry: geom::Revisions,
     repeats: expand::Items,
+    item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
     presence: BTreeMap<NodeId, Presence>,
     repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
     truncated: Vec<expand::Problem>,
@@ -263,6 +264,7 @@ impl Saved {
             clusters: s.clusters.clone(),
             geometry: s.geometry.clone(),
             repeats: s.repeats.clone(),
+            item_memo: s.item_memo.clone(),
             presence: s.presence.clone(),
             repeat_inputs: s.repeat_inputs.clone(),
             truncated: s.truncated.clone(),
@@ -284,6 +286,7 @@ impl Saved {
         s.clusters = self.clusters;
         s.geometry = self.geometry;
         s.repeats = self.repeats;
+        s.item_memo = self.item_memo;
         s.presence = self.presence;
         s.repeat_inputs = self.repeat_inputs;
         s.truncated = self.truncated;
@@ -314,6 +317,8 @@ struct Run {
     /// the transaction is accepted.
     shared: bool,
     rollback: Rollback,
+    /// A recorded transaction's writes to copies, for `apply_recorded`.
+    recorded: Vec<Op>,
 }
 
 pub struct StoreCore {
@@ -523,9 +528,9 @@ impl StoreCore {
             producers: self.producers.clone(),
             text_generation: self.text_generation,
         };
-        // What this store published for layout may be eased or previewed;
-        // the scratch publishes the targets.
-        if self.motion.enabled || self.layout_preview.is_some() {
+        // What this store published for layout is eased while a transition
+        // runs, or previewed; the scratch publishes the targets then.
+        if !self.motion.anims.is_empty() || self.layout_preview.is_some() {
             scratch.resolve_layout();
         }
         scratch
@@ -627,7 +632,10 @@ impl StoreCore {
         }
         let mut whole = self.docs.clone();
         let stamp = whole.authored.version();
-        let (ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
+        let (mut ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
+        // A copy's leaf a solver cluster moves holds the solved value, which
+        // expansion cannot know: the solver's, not the owner's.
+        ops.retain(|op| !matches!(op, Op::Set { id, path, .. } if self.clusters.var_cluster.contains_key(&Leaf { node: *id, path: *path })));
         assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
     }
 
@@ -2864,7 +2872,7 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback } = self.run(input)?;
+        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _ } = self.run(input, false)?;
         // `post_apply` can refuse only a document that holds a constraint;
         // then what `after_transaction` and the pipeline change is kept to
         // put back (reactive-engine handoff §4.4, stage 1).
@@ -2927,7 +2935,7 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback } = self.run(input)?;
+        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded } = self.run(input, true)?;
         self.commit(rollback);
         if shared {
             self.machines.shared += 1;
@@ -2937,6 +2945,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
+        self.apply_recorded(&mut applied, recorded, &mut full_inverse);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -2963,8 +2972,8 @@ impl StoreCore {
             ops: tx.undo_ops(),
             exact: false,
         };
-        Some(match self.run(input) {
-            Ok(Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback }) => {
+        Some(match self.run(input, true) {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -2975,6 +2984,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
+                self.apply_recorded(&mut applied, recorded, &mut full_inverse);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -3007,8 +3017,8 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        Some(match self.run(input) {
-            Ok(Run { tx: applied, mut expanded, full_inverse, problems, shared, rollback }) => {
+        Some(match self.run(input, true) {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -3019,6 +3029,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
+                self.apply_recorded(&mut applied, recorded, &mut full_inverse);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
@@ -3113,14 +3124,49 @@ impl StoreCore {
         Ok((!summary.is_empty()).then_some(summary))
     }
 
+    /// A recorded transaction's writes to copies (the solver's, or their
+    /// inverses), applied as `post_apply` writes them: after expansion, the
+    /// owners' check and `after_transaction`, never translated into
+    /// overrides. A copy the transaction left gone takes none.
+    fn apply_recorded(&mut self, tx: &mut Transaction, recorded: Vec<Op>, full_inverse: &mut Vec<Op>) {
+        let mut changed = Vec::new();
+        for op in recorded {
+            let Op::Set { id, path, .. } = &op else { continue };
+            let leaf = Leaf { node: *id, path: *path };
+            if !Tree::of(&self.docs).is_live(*id) {
+                continue;
+            }
+            if let Ok(inverse) = op::apply_op(&mut self.docs, 0, &op, tx.version) {
+                changed.push(leaf);
+                tx.inverse.extend(inverse.iter().cloned());
+                full_inverse.extend(inverse);
+                tx.derived_ops.push(op);
+            }
+        }
+        if !changed.is_empty() {
+            self.reactive.invalidate(Tree::of(&self.docs), changed);
+        }
+    }
+
     /// Apply the ops, expand, and check; on success the document holds the
     /// transaction and the token can put it back (`commit` or `abort`). On
     /// failure the document is as it was. The ops apply to the store's own
     /// document with its journal open (reactive-engine handoff §4.3).
-    fn run(&mut self, input: TransactionInput) -> Result<Run, Vec<ApplyError>> {
+    /// `history`: the ops are a recorded transaction's (undo, redo, replay).
+    fn run(&mut self, input: TransactionInput, history: bool) -> Result<Run, Vec<ApplyError>> {
+        let mut input = input;
+        // A recorded transaction's sets on copies are the solver's writes
+        // and their inverses, not edits: they are not translated into
+        // overrides, and apply after the transaction (`apply_recorded`).
+        let recorded: Vec<Op> = if history {
+            let (recorded, ops) = std::mem::take(&mut input.ops).into_iter().partition(|op| matches!(op, Op::Set { id, .. } if id.is_expanded()));
+            input.ops = ops;
+            recorded
+        } else {
+            Vec::new()
+        };
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
-        let mut input = input;
         input.ops = expand::translate(Tree::of(&self.docs), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
@@ -3227,6 +3273,7 @@ impl StoreCore {
             problems,
             shared,
             rollback,
+            recorded,
         })
     }
 

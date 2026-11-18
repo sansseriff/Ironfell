@@ -312,7 +312,9 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         let r: Relation =
             serde_json::from_value(v.clone()).map_err(|e| LoadError(e.to_string()))?;
         // An expanded endpoint exists once its instance is expanded.
-        let known = |id: NodeId| nodes.contains_key(&id) || id.expanded_parts().is_some_and(|(owner, _)| nodes.contains_key(&owner));
+        // An expanded endpoint exists once its authored root is expanded,
+        // however deep it is nested.
+        let known = |id: NodeId| nodes.contains_key(&id) || id.expanded_root().is_some_and(|root| nodes.contains_key(&root));
         if !known(r.from) || !known(r.to) {
             return Err(LoadError(format!(
                 "relation {} references an unknown node",

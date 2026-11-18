@@ -4,7 +4,7 @@
 //! each of these also runs against the reference that keeps copies in the
 //! document, compared after every call.
 
-use iron_document::facet::{Composition, Name};
+use iron_document::facet::{Composition, Name, Size, Transform2d};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -81,31 +81,52 @@ fn a_removed_copy_leaves_nothing_and_comes_back_with_its_id() {
 
 /// A refusal after expansion made and removed copies restores both
 /// documents: the copies the transaction removed are back, and the ones it
-/// made are gone. The refusal is a context's markup, which is checked only
-/// once expansion has run (`check_created`); an op that fails to apply would
-/// refuse before expansion and test nothing.
+/// made are gone. The transaction changes the repeat's template (a rect
+/// added, the old one deleted), which `run`'s own expansion copies into
+/// every item; a count would not, since items settle after `run`. Then a
+/// context's markup refuses it, checked only once expansion has run
+/// (`check_created`).
 #[test]
 fn a_refused_transaction_restores_the_copies() {
     let (mut store, comp) = sheet();
-    let n = draw(&mut store, comp, r#"<group id="$r" name="rows" repeat.count="3"><rect name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#);
+    let n = draw(&mut store, comp, r#"<group id="$r" name="rows" repeat.count="3"><rect id="$row" name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#);
     let (ops, context) = contexts::put_ops(store.tree(), r#"<context name="k"></context>"#).unwrap();
     store.apply(tx("context", ops)).unwrap();
-    let kids = |store: &Store| -> Vec<NodeId> { store.tree().children(n["r"]).to_vec() };
-    let before = (kids(&store), store.save());
-    let bad = Slot::Const(Value::Str(r#"<context name="k"><rule match="all" affords.wobble="move"/></context>"#.into()));
-    for count in [1.0, 5.0] {
-        let ops = vec![Op::Set { id: n["r"], path: path("repeat.count"), slot: num(count) }, Op::Set { id: context, path: path("context_def.markup"), slot: bad.clone() }];
-        let err = store.apply(tx("bad", ops)).expect_err("bad markup");
-        assert_eq!(err[0].kind, ErrorKind::BadContext, "refused after expansion: {err:?}");
-        assert_eq!((kids(&store), store.save()), before, "count {count}");
-        store.tree().check_invariants().unwrap();
-    }
-    // Without the bad markup the same counts apply, so the refusals above
-    // came after expansion had made and removed copies.
-    for (count, items) in [(1.0, 1), (5.0, 5)] {
-        store.apply(tx("count", vec![Op::Set { id: n["r"], path: path("repeat.count"), slot: num(count) }])).unwrap();
-        assert_eq!(kids(&store).iter().filter(|k| k.is_expanded()).count(), items);
-    }
+    let copies = |store: &Store| -> Vec<NodeId> {
+        let doc = store.tree();
+        let mut v: Vec<NodeId> = doc.descendants(n["r"]).into_iter().filter(|d| d.is_expanded()).collect();
+        v.sort();
+        v
+    };
+    let before = (copies(&store), store.save());
+    assert!(!before.0.is_empty());
+    let fresh = store.authored().next_id();
+    let order = OrderKey::after(&store.tree().live(n["row"]).unwrap().order);
+    let edit = |bad: bool| {
+        let mut size = Size::default();
+        size.w = num(5.0);
+        size.h = num(5.0);
+        let mut ops = vec![
+            Op::Create { id: fresh, ty: ty("rect"), parent: Some(n["r"]), order: order.clone(), facets: vec![Transform2d::default().wrap(), size.wrap()] },
+            Op::Delete { id: n["row"] },
+        ];
+        if bad {
+            ops.push(Op::Set { id: context, path: path("context_def.markup"), slot: Slot::Const(Value::Str(r#"<context name="k"><rule match="all" affords.wobble="move"/></context>"#.into())) });
+        }
+        ops
+    };
+    let err = store.apply(tx("bad", edit(true))).expect_err("bad markup");
+    assert_eq!(err[0].kind, ErrorKind::BadContext, "refused after expansion: {err:?}");
+    assert_eq!((copies(&store), store.save()), before);
+    store.tree().check_invariants().unwrap();
+    // Without the bad markup the same edit removes each item's copy of the
+    // old rect and makes one of the new, so the refusal above came after
+    // expansion had made and removed them.
+    store.apply(tx("good", edit(false))).unwrap();
+    let after = copies(&store);
+    let removed = before.0.iter().filter(|c| !after.contains(c)).count();
+    let made = after.iter().filter(|c| !before.0.contains(c)).count();
+    assert_eq!((removed, made), (3, 3), "{:?} → {after:?}", before.0);
 }
 
 /// An authored link cannot take a derived relation id: only an owner's
@@ -228,4 +249,93 @@ fn the_node_budget_cuts_the_later_owner() {
     store.undo(0).unwrap().unwrap();
     assert_eq!(under(&store), [20_000, 20_000, 10_000]);
     assert!(budget(&store));
+}
+
+fn constrains(id: RelationId, from: NodeId, to: NodeId, role: &str) -> Op {
+    let mut data = BTreeMap::new();
+    data.insert("role".to_owned(), Value::Str(role.into()));
+    data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+    Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
+}
+
+/// A copy with constant x and y under `under`.
+fn placed_copy(store: &Store, under: NodeId) -> NodeId {
+    let doc = store.tree();
+    doc.descendants(under)
+        .into_iter()
+        .find(|&k| k.is_expanded() && doc.leaf(k, path("transform2d.x")).is_some_and(|s| s.expr().is_none()) && doc.leaf(k, path("transform2d.y")).is_some_and(|s| s.expr().is_none()))
+        .expect("a copy with a constant position")
+}
+
+/// Deleting an instance one of whose copies an authored constraint holds:
+/// the operand goes with the copy, and the deletion applies.
+#[test]
+fn deleting_an_instance_whose_copy_is_constrained() {
+    let (mut store, comp) = sheet();
+    let meter = store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let copy = placed_copy(&store, meter);
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let rel = store.authored().next_relation_ids(1)[0];
+    let fix = built.named["fix"];
+    store.apply(tx("fix", built.ops.into_iter().chain([constrains(rel, fix, copy, "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("delete", vec![Op::Delete { id: meter }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.undo(0).unwrap().unwrap();
+    assert!(store.tree().live(copy).is_some());
+}
+
+/// Undo and redo of a transaction whose solve wrote a copy leave the
+/// authored document as it was before and after it: the copy's values are
+/// the solver's, never turned into overrides on the instance.
+#[test]
+fn undoing_a_solved_copy_adds_no_override() {
+    let (mut store, comp) = sheet();
+    let meter = store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let copy = placed_copy(&store, meter);
+    let before = store.save();
+    let built = markup::ops(r#"<ellipse id="$p" x="-300" y="0" rx="5" ry="5"/><constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let rels = store.authored().next_relation_ids(3);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], n["fix"], n["p"], "a"), constrains(rels[1], n["d"], n["p"], "a"), constrains(rels[2], n["d"], copy, "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let overrides = |store: &Store| store.tree().live_nodes().filter(|n| n.ty.name() == "override").count();
+    let x = path("transform2d.x");
+    let (was, moved) = (Store::load(&before).unwrap().resolved(copy, x), store.resolved(copy, x));
+    assert_ne!(was, moved, "the solver moved the copy");
+    assert_eq!(overrides(&store), 0);
+    store.undo(0).unwrap().unwrap();
+    assert_eq!((overrides(&store), store.resolved(copy, x)), (0, was.clone()), "undo puts the copy back and adds no override");
+    store.redo(0).unwrap().unwrap();
+    assert_eq!((overrides(&store), store.resolved(copy, x)), (0, moved.clone()), "redo writes the copy again, as the solver did");
+    store.undo(0).unwrap().unwrap();
+    assert_eq!((overrides(&store), store.resolved(copy, x)), (0, was));
+}
+
+/// An authored link to a copy nested in a repeat's item saves, and the
+/// file loads.
+#[test]
+fn a_link_to_a_nested_copy_saves_and_loads() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<group id="$r" name="rows" repeat.count="2"><rect name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#);
+    let doc = store.tree();
+    let nested = doc.descendants(n["r"]).into_iter().find(|d| d.expanded_parts().is_some_and(|(owner, _)| owner.is_expanded())).expect("a copy inside an item");
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let rel = store.authored().next_relation_ids(1)[0];
+    let fix = built.named["fix"];
+    store.apply(tx("fix", built.ops.into_iter().chain([constrains(rel, fix, nested, "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let saved = store.save();
+    let loaded = Store::load(&saved).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(loaded.save(), saved);
+}
+
+/// The same items in another order move their copies: nothing is made or
+/// removed, and each move names the repeat as the parent it had.
+#[test]
+fn a_reorder_moves_copies_and_makes_none() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<let id="$names" name="names" value="{= list('a', 'b', 'c')}"/><group id="$rows" name="rows" repeat.each="{= $names}"><rect name="row" x="0" y="{= $rows.repeat.index * 10}" w="5" h="5"/></group>"#);
+    store.take_changes();
+    store.apply(tx("reorder", vec![Op::Set { id: n["names"], path: path("let.value"), slot: Slot::Bound(Expr::parse("list('c', 'a', 'b')").unwrap()) }])).unwrap();
+    let changes = store.take_changes();
+    assert!(changes.created.is_empty() && changes.removed.is_empty(), "{changes:?}");
+    assert!(!changes.moved.is_empty(), "{changes:?}");
+    assert!(changes.moved.iter().all(|(_, was)| *was == Some(n["rows"])), "{:?}", changes.moved);
 }

@@ -1631,6 +1631,43 @@ an optional step.
   Left: the copies document keeps an empty child list for each deleted owner that
   had copies. It is a small leak that grows with owner churn, and stage 3 replaces
   the copies document.
+- **Council round 2 (2026-11-18): Opus 7/10, Sol 6/10** (Sol's first look at the
+  stage). Each finding was reproduced as a failing test before it was fixed. Only
+  the first was new with stage 1; the reference behaves the same way in the
+  others.
+  - **Deleting an instance that a constraint holds by one of its copies was
+    refused** (`constraint::read`: the operand had no `transform2d`). A copy that
+    went now leaves the operand dead and the constraint inactive, as a tombstone
+    did (`deleting_an_instance_whose_copy_is_constrained`).
+  - **Undo and redo turned the solver's writes to a copy into overrides on the
+    instance** (`expand::translate`). A recorded transaction's sets on copies now
+    skip translation. They apply as `post_apply` writes them, after expansion, the
+    owners' check and `after_transaction` (`StoreCore::apply_recorded`)
+    (`undoing_a_solved_copy_adds_no_override`).
+  - **`IRON_OWNER_CHECK` failed on any transaction after the solver had moved a
+    copy.** The whole expansion cannot know a solved value, so the check now skips
+    leaves that are cluster variables.
+  - **A link to a copy nested in a repeat's item made the file unloadable.**
+    `load` now checks an expanded endpoint's authored root, not its immediate
+    owner (`a_link_to_a_nested_copy_saves_and_loads`).
+  - **A reorder recorded its moves with the roots as the parent each had.**
+    Expansion now emits `Reorder` when a copy keeps its parent
+    (`a_reorder_moves_copies_and_makes_none`).
+  - **A post-apply refusal left `item_memo` ahead of the restored store.** It is in
+    `Saved` now.
+  - **`<place entity>` read a nested entity from the authored-only clone.** It now
+    reads the store's tree.
+  - **`expand::refuse`** now refuses an authored `Unlink` of a derived relation,
+    and an expanded id whether or not a path is registered for it.
+  - **The refusal fixture refused before any copy changed** (items settle after
+    `run`). It now changes the repeat's template in the refused transaction.
+  - **`scratch` laid out the whole document on every plan in the app,** where
+    motion is always on. It now does so only while a transition runs or a layout
+    preview is set.
+
+  Not taken: Sol's point that a plan translates against settled layout while live
+  apply may meet a preview. Round 1 asked for the settled layout, and a plan is
+  applied later, mostly once the preview has ended.
 
 Next: stage 2, templates.
 

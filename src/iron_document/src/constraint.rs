@@ -136,7 +136,10 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
             None => 0.0,
             Some(v) => v.as_f64().ok_or_else(|| format!("{id}: turn must be a number"))?,
         };
-        if doc.facet(r.to, crate::facet::FacetKind::Transform2d).is_none() {
+        // A copy that went (an instance deleted, a repeat's item gone)
+        // leaves the operand dead, and the constraint inactive (`solve`).
+        let gone_copy = r.to.is_expanded() && !doc.is_live(r.to);
+        if !gone_copy && doc.facet(r.to, crate::facet::FacetKind::Transform2d).is_none() {
             return Err(format!("{id} ({kind}): operand {} has no transform2d", r.to));
         }
         operands.push(Operand { role, node: r.to, anchor, at, turn });

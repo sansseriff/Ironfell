@@ -124,9 +124,13 @@ sleep 400
 # 5. Scrub the length slider to about 1.2: the links re-solve live and the
 #    release is one "set slider" transaction. Rest on the knob first, so the
 #    press lands on a picked slider rather than a frame behind the pointer.
+#    Cmd is released for it: Cmd on a slider reaches its box (a move), not
+#    its value.
+keyup Meta
 dmove 250 672
 sleep 400
 ddrag 250 672 310 672
+keydown Meta
 # The release commits on the next frame; at a few fps the model edit below
 # would otherwise apply first and the slider's commit re-solve from the
 # ball's fix (the platform would rise instead of the ball dropping).
@@ -208,8 +212,9 @@ eval (async () => { const v = await __iron.view({fidelity:'full', relation:'mode
 # The model surface links the same way; when both pictures already have
 # entities it is asked which survives, and answers with keep.
 eval (async () => { const r = await __iron.edit('<edit><link-figures a="#l" b="#Q"/></edit>'); return r.ok; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q"/></edit>'); return r.failure; })()
-eval (async () => { const r = await __iron.edit('<edit><link-figures a="#12" b="#Q" keep="#10"/></edit>'); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
+# The bar's ids move whenever the demo grows, so they are read by name.
+eval (async () => { const bar = (await __iron.view({fidelity:'full'})).match(/<rect id="(#\w+)" name="bar"/)[1]; const r = await __iron.edit(`<edit><link-figures a="${bar}" b="#Q"/></edit>`); return r.failure; })()
+eval (async () => { const bar = (await __iron.view({fidelity:'full'})).match(/<rect id="(#\w+)" name="bar"/)[1]; const ent = (await __iron.view({fidelity:'full', relation:'model'})).match(/<entity id="(#\w+)" name="bar"/)[1]; const r = await __iron.edit(`<edit><link-figures a="${bar}" b="#Q" keep="${ent}"/></edit>`); const v = await __iron.view({fidelity:'full', relation:'model'}); return [r.ok, v.match(/<entity[^>]*name="bar"[\s\S]*?<\/entity>/)?.[0]]; })()
 key Meta+z
 # Long enough for the undo to land before the load replaces the history
 # (a slow frame here once left "nothing to Undo" after the load).

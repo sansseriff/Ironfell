@@ -45,7 +45,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
-| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10): the document crate rebuilds everything above it |
+| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10; 1m 27s, 2026-11-18): the document crate rebuilds everything above it |
 | ⏱ `BACKENDS=webgl2 build.sh`, first build in a worktree seeded from the main checkout's `target/` (`setup-worktree.sh`) | ~2–2.5 min (2m 18s: only the 7 workspace crates compile, 2026-11-13). A different `RUSTFLAGS` from the main checkout's build recompiles everything |
 | ⏱ `build.sh` cold | ~3–5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06; 3m 00s in a fresh T3 worktree, 2026-11-12) |
 | ⏱ `BACKENDS=webgl2 build.sh`, cold isolated worktree | ~4–5 min (cargo 4m 38s plus binding generation in composition-settings, 2026-11-10; cargo 3m 25s, 2026-11-03) |
@@ -793,105 +793,106 @@ selection's SVG on the clipboard; undo; the same SVG imported by a paste event a
 by the model's `<import-svg>`, each undone; each count is the Controls
 composition's nodes). Expected output, minus screenshot lines,
 `nav`/`ready` lines, and the per-frame `solve:` lines (2026-11-09; `regression.txt`, then
-`gestures.txt`, re-run whole 2026-11-14; `regression.txt` re-checked 2026-11-16, where the first redraw counts 16 nodes and the model's link steps are labelled "model edit", both already so before reactive-engine phase 1; a long number's last digits and a hunt's found
+`gestures.txt`, re-run whole 2026-11-14; `regression.txt` re-run whole 2026-11-18 after its stale ids and Cmd-held slider scrub were fixed (the demo's palette tokens had shifted its ids, and Cmd on a slider now moves it), and re-checked 2026-11-16, where the first redraw counts 16 nodes and the model's link steps are labelled "model edit", both already so before reactive-engine phase 1; a long number's last digits and a hunt's found
 point may vary). Run it with nothing else loading the machine: a `cargo check` alongside
 made the Thermal tab activate late, so its readings came back empty:
 
 ```
 {"enabled":false,"guides":[]}
 ["<rect id=\"#M\" name=\"square\" x=\"620\" y=\"340\"","<rect id=\"#U\" name=\"shadow\" x=\"720\" x.bind=\"#M.transform2d.x + 100\" y=\"340\" y.bind=\"#M.transform2d.y\""]
-DEBUG src/document_bridge/render.rs:408 redraw (document): 2 of 16 nodes changed [#M #U]; damage 560,340–800,460
-"<rect id=\"#12\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #11.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#11.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
-"<rect id=\"#12\" name=\"bar\" x=\"730\" y=\"400\""
-"value=\"0.8\"/>"
+DEBUG src/document_bridge/render.rs:498 redraw (document): 2 of 16 nodes changed [#M #U]; damage 500,380–740,500
+DEBUG src/document_bridge/render.rs:498 redraw (document): 2 of 16 nodes changed [#M #U]; damage 560,340–800,460
+"<rect id=\"#1L\" name=\"bar\" x=\"780\" y=\"370\" y.bind=\"640 - #1K.port.signal * 300\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"60\" h=\"270\" h.bind=\"#1K.port.signal * 300\" color=\"#3380e6ff\" opacity=\"1\">"
+"<rect id=\"#1L\" name=\"bar\" x=\"730\" y=\"400\""
+"value=\"0.8\" color=\"#ae743eff\" color.bind=\"@slider-accent\" track_color=\"#d5d2ccff\" track_color.bind=\"@slider-track\" thumb_color=\"#ffffffff\" thumb_color.bind=\"@slider-thumb\"/>"
 "<mesh id=\"#Q\" name=\"torus\" pos=\"0,1.5,0\" rot=\"0,4.886921905584122,0\" scale=\"1,1,1\" asset=\"torus\"> <driven-by ref=\"#S\" rel=\"animates\" prop=\"transform3d.rot\"/>"
-{"ok":true,"version":9,"aliases":{"$n":"#3x"},"summary":"<applied version=\"9\">\n  <created alias=\"$n\" id=\"#3x\"/>\n</applied>"}
+{"ok":true,"version":9,"aliases":{"$n":"#5n"},"summary":"<applied version=\"9\">\n  <created alias=\"$n\" id=\"#5n\"/>\n</applied>"}
 "<edit-failed applied=\"none\" version=\"9\">\n  <error op=\"0\" verb=\"set #zz\" kind=\"unknown_node\">no node #zz</error>\n  <error op=\"1\" verb=\"set #N\" kind=\"cycle\">binding #N.radius.rx would depend on itself</error>\n</edit-failed>"
-"<rect id=\"#3x\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
+"<rect id=\"#5n\" name=\"from-model\" x=\"300\" y=\"120\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" w.bind=\"#O.slider.value * 100\" h=\"40\" color=\"#22aa55ff\" opacity=\"1\"/>"
 ["<ellipse id=\"#a\" name=\"ball\" x=\"440\" x.by=\"#V\" y=\"300\" y.by=\"#V\""," rot=\"-1.1254151928860334\""," h=\"240\""]
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 25 iterations, 5546 evaluations, 1.15 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 3 iterations, 1159 evaluations, 0.31 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 26 iterations, 5318 evaluations, 0.95 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 3 iterations, 394 evaluations, 0.27 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.20 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.15 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.06 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.18 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.25 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.21 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.20 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.27 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.22 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
-DEBUG src/bevy_app/manipulate.rs:426 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
-DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<ellipse id=\"#a\" name=\"ball\" x=\"323.714903353\" x.by=\"#V\" y=\"359.976998273\" y.by=\"#V\""
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 25 iterations, 5546 evaluations, 1.36 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 3 iterations, 1159 evaluations, 0.45 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.15 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.17 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.28 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 26 iterations, 5318 evaluations, 2.83 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 3 iterations, 394 evaluations, 0.30 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.18 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.08 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.06 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.13 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.15 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.25 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.19 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.06 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.07 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.10 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.11 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.21 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.17 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.21 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.20 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.12 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.09 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.15 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.14 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.22 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.24 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
+DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
+DEBUG src/document_bridge/mod.rs:548 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+"<ellipse id=\"#a\" name=\"ball\" x=\"323.714905573\" x.by=\"#V\" y=\"359.976998246\" y.by=\"#V\""
 ["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
-DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 "<applied version=\"14\">\n  <solver clusters=\"#V\" moved=\"#Y #Z #a\"/>\n  <unmet leaf=\"#a.transform2d.x\" requested=\"900\" solved=\"619.999999990091\">constrained by cluster #V: the constraints allow 619.999999990091 at most</unmet>\n</applied>"
 "<edit-failed applied=\"none\" version=\"14\">\n  <error op=\"0\" verb=\"set #a\" kind=\"unsatisfiable\">exact transaction not honoured: #a.transform2d.x requested 900 but constraints allow 619.999999999234</error>\n</edit-failed>"
 "<constraint id=\"#i\" name=\"link1\" kind=\"distance\" value=\"120.00000000000001\" value.bind=\"#f.slider.value * 100\" enabled=\"true\">"
@@ -904,55 +905,54 @@ found at 940 165
 true
 ["#l","#Q"]
 clicked Link
-DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Human) -> v21
-"<entity id=\"#3z\" name=\"box\" def=\"#3y\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
-"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#3z\">"
+DEBUG src/document_bridge/mod.rs:543 applied "link" (4 ops, Human) -> v21
+"<entity id=\"#5p\" name=\"box\" def=\"#5o\" mode=\"linked\" definition=\"thing\">\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"
+"<mesh id=\"#Q\" name=\"torus\" … asset=\"torus\" of=\"#5p\">"
 clicked Show in assembly
 clicked Show in scene
-INFO src/bevy_app/scene3d.rs:258 focus #Q: panel assembly camera frames it
-INFO src/bevy_app/scene3d.rs:258 focus #Q: panel assembly camera frames it
-INFO src/bevy_app/scene3d.rs:232 focus #l: panel scene pans to centre it
-INFO src/bevy_app/scene3d.rs:232 focus #l: panel scene pans to centre it
+INFO src/bevy_app/scene3d.rs:255 focus #Q: panel assembly camera frames it
+INFO src/bevy_app/scene3d.rs:255 focus #Q: panel assembly camera frames it
+INFO src/bevy_app/scene3d.rs:229 focus #l: panel scene pans to centre it
+INFO src/bevy_app/scene3d.rs:229 focus #l: panel scene pans to centre it
 false
 true
-"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#12\" b=\"#Q\">\n    <entity id=\"#10\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#12\"/>\n    <entity id=\"#41\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#10\" or keep=\"#41\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
-[true,"<entity id=\"#10\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#11\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#12\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
-{"roundtrip_equal":true,"bytes":58876}
+"<edit-failed applied=\"none\" version=\"23\">\n  <question kind=\"merge\" a=\"#1L\" b=\"#Q\">\n    <entity id=\"#1J\" name=\"bar\" definition=\"bar\" level=\"{= #O.slider.value}\" figures=\"#1L\"/>\n    <entity id=\"#5r\" name=\"box\" definition=\"thing\" figures=\"#l #Q\"/>\n    Both already picture an entity. Resend <link-figures> with keep=\"#1J\" or keep=\"#5r\"; the other entity is deleted and its figures move to the one kept.\n  </question>\n</edit-failed>"
+[true,"<entity id=\"#1J\" name=\"bar\" def=\"#w\" mode=\"detached\" level=\"0.8\" level.bind=\"#O.slider.value\" definition=\"bar\">\n    <port id=\"#1K\" name=\"level\" kind=\"value\" dir=\"in\" signal=\"0.8\"/>\n    <figure id=\"#1L\" type=\"rect\" name=\"bar\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#l\" type=\"rect\" name=\"box\" in=\"#1\" composition=\"scene\"/>\n    <figure id=\"#Q\" type=\"mesh\" name=\"torus\" in=\"#P\" composition=\"assembly\"/>\n  </entity>"]
+{"roundtrip_equal":true,"bytes":64939}
 "<document version=\"25\"> |   <composition id=\"#1\" name=\"scene\" notation=\"free\" dims=\"2d\" run=\"auto\" background=\"theme\" background_color=\"#ffffffff\" grid=\"off\" grid_spacing=\"20\" grid_snap=\"true\" grid_opacity=\"0.15\" count=\"6\"> |     <rect id=\"#M\" name=\"square\" x=\"650\" y=\"320\" rot=\"0\" sx=\"1\" sy=\"1\" w=\"80\" h=\"80\" color=\"#333333ff\" opacity=\"1\"> |       <driven-by ref=\"#T\" rel=\"animates\" prop=\"transform2d.x\"/>"
-Access to fetch at 'http://127.0.0.1:4318/pair' from origin 'http://localhost:5173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource.
-DEBUG src/document_bridge/mod.rs:492 applied "open demo scene" (282 ops, System) -> v1
-DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v2
-DEBUG src/document_bridge/mod.rs:492 applied "move mesh" (1 ops, Human) -> v3
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move mesh" (1 ops, System) -> v4
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move rect" (2 ops, System) -> v5
-DEBUG src/document_bridge/mod.rs:492 applied "redo: move rect" (2 ops, System) -> v6
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v7
-DEBUG src/document_bridge/mod.rs:492 applied "move rect" (2 ops, Human) -> v8
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v9
-DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (2 ops, Human) -> v10
-DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (3 ops, Human) -> v11
-DEBUG src/document_bridge/mod.rs:497 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (7 ops, System) -> v12
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (6 ops, System) -> v13
-DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-DEBUG src/bevy_app/select.rs:3010 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (1 ops, Model) -> v14
-DEBUG src/document_bridge/mod.rs:497 "model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.999999990091
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (7 ops, System) -> v15
-DEBUG src/document_bridge/mod.rs:492 applied "set slider" (1 ops, Human) -> v16
-DEBUG src/document_bridge/mod.rs:497 "set slider" by Human: cluster #V re-solved; moved 3 node(s): #Y #Z #a
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (2 ops, Model) -> v17
-DEBUG src/document_bridge/mod.rs:492 applied "move rect" (3 ops, Human) -> v18
-DEBUG src/document_bridge/mod.rs:497 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
-DEBUG src/document_bridge/mod.rs:492 applied "move ellipse" (2 ops, Human) -> v19
-DEBUG src/document_bridge/mod.rs:492 applied "undo: move ellipse" (2 ops, System) -> v20
-DEBUG src/document_bridge/mod.rs:492 applied "link" (4 ops, Human) -> v21
-DEBUG src/document_bridge/mod.rs:492 applied "undo: link" (4 ops, System) -> v22
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (4 ops, Model) -> v23
-DEBUG src/document_bridge/mod.rs:492 applied "model edit" (5 ops, Model) -> v24
-DEBUG src/document_bridge/mod.rs:492 applied "undo: model edit" (5 ops, System) -> v25
-DEBUG src/document_bridge/mod.rs:433 loaded document v25 (274 live nodes)
+DEBUG src/document_bridge/mod.rs:543 applied "open demo scene" (301 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:543 applied "move rect" (2 ops, Human) -> v2
+DEBUG src/document_bridge/mod.rs:543 applied "move mesh" (1 ops, Human) -> v3
+DEBUG src/document_bridge/mod.rs:543 applied "undo: move mesh" (1 ops, System) -> v4
+DEBUG src/document_bridge/mod.rs:543 applied "undo: move rect" (2 ops, System) -> v5
+DEBUG src/document_bridge/mod.rs:543 applied "redo: move rect" (2 ops, System) -> v6
+DEBUG src/document_bridge/mod.rs:543 applied "set slider" (1 ops, Human) -> v7
+DEBUG src/document_bridge/mod.rs:543 applied "move rect" (2 ops, Human) -> v8
+DEBUG src/document_bridge/mod.rs:543 applied "model edit" (2 ops, Model) -> v9
+DEBUG src/document_bridge/mod.rs:543 applied "move ellipse" (2 ops, Human) -> v10
+DEBUG src/document_bridge/mod.rs:548 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+DEBUG src/document_bridge/mod.rs:543 applied "move ellipse" (3 ops, Human) -> v11
+DEBUG src/document_bridge/mod.rs:548 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
+DEBUG src/document_bridge/mod.rs:543 applied "undo: move ellipse" (7 ops, System) -> v12
+DEBUG src/document_bridge/mod.rs:543 applied "undo: move ellipse" (6 ops, System) -> v13
+DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
+DEBUG src/document_bridge/mod.rs:543 applied "model edit" (1 ops, Model) -> v14
+DEBUG src/document_bridge/mod.rs:548 "model edit" by Model: cluster #V re-solved; moved 3 node(s): #Y #Z #a; unmet: #a.transform2d.x wanted 900 got 619.999999990091
+DEBUG src/document_bridge/mod.rs:543 applied "undo: model edit" (7 ops, System) -> v15
+DEBUG src/document_bridge/mod.rs:543 applied "set slider" (1 ops, Human) -> v16
+DEBUG src/document_bridge/mod.rs:548 "set slider" by Human: cluster #V re-solved; moved 3 node(s): #Y #Z #a
+DEBUG src/document_bridge/mod.rs:543 applied "model edit" (2 ops, Model) -> v17
+DEBUG src/document_bridge/mod.rs:543 applied "move rect" (3 ops, Human) -> v18
+DEBUG src/document_bridge/mod.rs:548 "move rect" by Human: cluster #V re-solved; moved 3 node(s): #X #Y #Z
+DEBUG src/document_bridge/mod.rs:543 applied "move ellipse" (2 ops, Human) -> v19
+DEBUG src/document_bridge/mod.rs:543 applied "undo: move ellipse" (2 ops, System) -> v20
+DEBUG src/document_bridge/mod.rs:543 applied "link" (4 ops, Human) -> v21
+DEBUG src/document_bridge/mod.rs:543 applied "undo: link" (4 ops, System) -> v22
+DEBUG src/document_bridge/mod.rs:543 applied "model edit" (4 ops, Model) -> v23
+DEBUG src/document_bridge/mod.rs:543 applied "model edit" (5 ops, Model) -> v24
+DEBUG src/document_bridge/mod.rs:543 applied "undo: model edit" (5 ops, System) -> v25
+DEBUG src/document_bridge/mod.rs:484 loaded document v25 (293 live nodes)
 (no page errors)
 ```
 

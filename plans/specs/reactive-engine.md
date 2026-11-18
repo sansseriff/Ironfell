@@ -1514,6 +1514,9 @@ blocking does not change it; that is a stop-and-report (handoff §5).
 | D9 | Limits | 50,000 loaded derived nodes; also a limit on owners in total, loaded or not, since each keeps a summary |
 | D10 | Structure per slice | Not built: phase 6 is value slices, and a time whose structure differs is seen by moving the live clock. The full form is left open until something needs two structures at once (a side-by-side "before and after", say) |
 | D11 | A constraint cluster nothing observes | **Solves whenever an input changes**, as an integrator runs (D1), because its pose depends on the pose before it. A cluster at rest costs nothing. `pause` and `coarse` are for the author to set, on the composition; they are named here and built with the live simulation, not before. At commit the rule is today's: any cluster not converged fails the transaction, and every pose that differs from the document is written (§9.4) |
+| D12 | Which owners the node budget cuts (settled 2026-11-18) | **Per owner in id order**, oldest first, with a full expansion in id order past the budget so the cut never depends on edit history (2b as built). Revisited in phase 4, when the budget counts loaded owners and observed ones should win |
+| D13 | A10: interned id paths under churned value keys (settled 2026-11-18) | **Reclaimed in 2c**, designed with the slot and id indexes: a sweep marks every path a live owner, a relation, the history or the selection holds and frees the rest, when idle or when history is trimmed |
+| D14 | Validation from templates (settled 2026-11-18) | **Moves to phase 4**, where Unloaded owners need it; 2c validates over the Tree's copies, which are complete while every owner is loaded. Incremental paint order moves with it |
 
 ## 20. History
 

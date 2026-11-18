@@ -1511,8 +1511,7 @@ evaluator hook that resolves `Ref`s, or the dense engine stage 3a deferred. Buil
 only if stage 3's measurements show the per-copy expressions cost memory or time that
 matters. Then delete `InDocument`.
 
-**Proposed: validation from templates moves to phase 4** *(review; the user decides,
-since the spec's §17 lists it under 2c)*. While every owner is loaded the Tree answers
+**Validation from templates moves to phase 4** (the user, 2026-11-18; spec D14). While every owner is loaded the Tree answers
 all derived structure, so validating from templates buys only §16.1's more permissive
 item-path rule. It matters once owners can be Unloaded. If it stays in 2c, A3's
 fallback is written in: validate against materialised structure for the owners the
@@ -1521,8 +1520,14 @@ moves with it (paint order already reads the Tree; a subtree inserted shifts eve
 later preorder index, so per-parent invalidation needs its own design and keeps the
 full traversal as its oracle).
 
-**Open, for the user:** A10 (before stage 3); the node budget rule from 2b; moving
-validation from templates to phase 4.
+**Settled by the user (2026-11-18):** the node budget cuts per owner in id order
+(spec D12); A10's paths are reclaimed in 2c by a sweep (D13); validation from
+templates moves to phase 4 (D14). Lazy slots (stage 3) are a goal the user wants, not
+an optional step.
+
+**Progress:** step 1a done (`e2bc90b`): `Docs` and the two-document Tree, `Tree::over`
+deleted, `apart = false` (no behaviour change). Next, step 1b: `apart = true` and the
+`Copies` reference in the facade.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

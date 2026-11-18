@@ -1036,8 +1036,7 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   dev-opt webgl2 build, `smoke.txt`, `regression.txt`, `plot-view.txt`,
   `actions.txt`, `query.txt`, `fiber.txt` and `pulses.txt` pass with no page errors,
   their output as on `engine-new` but for the two sampled-in-time readings.
-  The roadmap's "Plot pan and zoom performance" row is to be closed; `roadmap.md`
-  holds another agent's uncommitted edits, so it waits for them.
+  The roadmap's "Plot pan and zoom performance" row is closed (2026-11-18).
 
 **How the engines were chosen, until the swap.** (History: stage 5 deleted all of
 this; one engine remains.)

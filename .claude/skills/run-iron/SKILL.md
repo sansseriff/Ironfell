@@ -55,7 +55,8 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `snapping.txt` | ~30 s |
 | `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
-| `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6–8 min warm, debug (6m 11s; 7m 55s after a `document.rs` change, 2026-11-16; `differential_random`'s 200 seeds are 49 s of it) |
+| ⏱ `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~2.5–3 min warm, debug (2m 38s, 2m 44s, 2026-11-18): four tests of 45–55 s each bound it; skipping them (`--skip two_hundred_random_scripts --skip every_page_builds_in_one_transaction --skip a_plot_s_new_tick_writes_nothing_outside_it --skip sibling_order_survives_many_inserts`) leaves 16 s of tests |
+| `cargo test -p iron_document --release --features differential --target aarch64-apple-darwin --test suite differential_random::ten_thousand -- --ignored` | ~4.5 min (4m 33s, 2026-11-18) |
 | ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
 | `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference`: the host reference (reactive-engine handoff §4.1, task 6) | ~50 s warm (48 s, 2026-11-16) |
 | `layout.txt` | ~35 s |
@@ -77,7 +78,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `slider.ts`, each DPR | ~18–22 s (2026-11-16; includes hover and animation pixel checks) |
 | `narrative-resize.ts` | ~5–10 s |
 | `timeline.txt` | ~30 s |
-| ⏱ `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~1–5 min (2m 28s with every test binary relinking, 2026-11-09; 5m 13s after a `document.rs` and `lib.rs` change, 2026-11-16) |
+| `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~30–50 s (31 s, 50 s, 2026-11-18). The integration tests are one binary, `suite` (plus `fonts` and `instance_cost`), so a change relinks one test executable, not ~60; filter by module, `--test suite contexts::` |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |
@@ -1436,6 +1437,7 @@ cd -
 | `peek [regex]` | like `logs`, without clearing the buffer |
 | `errors` | print uncaught page errors, then fail the run on any of them or on any `late:` line (the engine's `drawn a frame late` warning, kept since the start of the run) |
 | `panel [name]` | print a panel's rect (default the viewer) |
+| `trace start`, `trace stop [name]` | record a Chrome trace of every thread (the engine worker's tasks, GC, the GPU process) to `screenshots/<name>.trace.json` (default `trace`), for chrome://tracing or Perfetto. Time the worker from its task durations: a V8 CPU profile of the worker misses most wasm time (0.17 of a 1.2 ms frame, 2026-11-17) |
 | `sleep ms` | wait |
 | `viewport w h [steps]` | resize the window to w×h over `steps` frames, as an animated browser sidebar does; the canvas follows at most every 100 ms plus once at the end (`PanelManager.handleWindowResize`) |
 | `quit` | close the browser |
@@ -1535,8 +1537,8 @@ Plot pan and zoom (reactivity.md §13, 2026-11-14): `plot-perf.txt` places a
 700 × 420 `std:plot`, drags in it slowly and fast, and wheels in and out once a frame,
 printing a `measure` line for each; read `action` (the store's share) beside
 `changed_frame`. Build `PROFILE=wasm-bench` first. The store alone, natively:
-`cargo test --release -p iron_document --target aarch64-apple-darwin --test plot_perf
--- --ignored --nocapture` (`PLOTS=10` for a larger document).
+`cargo test --release -p iron_document --target aarch64-apple-darwin --test suite
+plot_perf:: -- --ignored --nocapture` (`PLOTS=10` for a larger document).
 
 Selection cache regression checks (run after the build, with Vite up):
 
@@ -2067,7 +2069,7 @@ applied "undo: add auto layout" (10 ops, System) -> v7
 The text positions depend on Inter's metrics. Native: `cargo test -p iron_layout
 --target aarch64-apple-darwin` (5 tests: tracks against hand calculations, a merged
 cell, wrapping, stacks, fill) and `cargo test -p iron_document --target
-aarch64-apple-darwin --test layout` (5 tests: reflow, undo and save, locking and
+aarch64-apple-darwin --test fonts layout::` (5 tests: reflow, undo and save, locking and
 absolute, a grid of rects with fill, wrapping text, Shift+A keeping the arrangement).
 
 ## Tables (2026-10-26)
@@ -2130,7 +2132,7 @@ applied "add table" (13 ops, Human) -> v10
 ```
 
 Cell positions depend on Inter's and JetBrains Mono's metrics. Native: `cargo test -p
-iron_document --target aarch64-apple-darwin --test table` (11 tests: the reference
+iron_document --target aarch64-apple-darwin --test fonts table::` (11 tests: the reference
 table, boxed lines, merges and the lines around them, a bound cell relaying, row and
 column edits, merge and split, restyling, a deleted cell disturbing only its row, the
 compact view, replace keeping ids, spreadsheet paste).
@@ -2175,10 +2177,10 @@ false
 (no page errors)
 ```
 
-Native: `cargo test -p iron_document --target aarch64-apple-darwin --test contexts`
+Native: `cargo test -p iron_document --target aarch64-apple-darwin --test suite contexts::`
 (7 tests: `std:*` prints back to itself, bad markup names the field or word, rows
 passed through to cells, locality, a document override with its provenance and undo,
-bad markup refused, the view's markup) and `--test registry_options` (every enum
+bad markup refused, the view's markup) and `--test suite registry_options::` (every enum
 field lists its values).
 
 ## View focus: palettes, keymaps, inspector sections (2026-10-27)
@@ -2236,7 +2238,7 @@ applied "model edit" (1 ops, Model) -> v6
 (no page errors)
 ```
 
-Native: `--test contexts` covers view rules (palette and keys by focus, `main`, a
+Native: `--test suite contexts::` covers view rules (palette and keys by focus, `main`, a
 container in focus, a notation named by a document context that extends a built-in
 one, view and node fields kept apart).
 
@@ -2287,7 +2289,7 @@ applied "bring to front" (1 ops, Human) -> v4
 (no page errors)
 ```
 
-Native: `--test contexts` `commands_are_context_data` (the built-in menu and keys, a
+Native: `--test suite contexts::` `commands_are_context_data` (the built-in menu and keys, a
 document's override, refusals) and `bring_to_front_and_send_to_back_restack_among_siblings`;
 `commands.rs`'s unit tests (chords, merging keymaps); `bun test tests/chords.test.ts`.
 
@@ -2339,7 +2341,7 @@ applied "undo: reorder text" (1 ops, System) -> v7
 (no page errors)
 ```
 
-Native: `--test contexts` (`a_tables_cells_navigate_as_a_grid`,
+Native: `--test suite contexts::` (`a_tables_cells_navigate_as_a_grid`,
 `a_stacks_items_navigate_as_a_list_and_alt_moves_one`).
 
 ## Reordering in sequence (2026-10-27)
@@ -2389,7 +2391,7 @@ applied "reorder text" (1 ops, Human) -> v8
 (no page errors)
 ```
 
-Native: `--test contexts`
+Native: `--test suite contexts::`
 (`a_previewed_order_lays_the_stack_out_and_floats_the_dragged_item`).
 
 ## Controls made of data (2026-10-27)
@@ -2444,7 +2446,7 @@ applied "undo: turn transform2d.rot" (1 ops, System) -> v14
 (no page errors)
 ```
 
-Native: `--test contexts`
+Native: `--test suite contexts::`
 (`a_definitions_part_declares_its_drag_for_every_instance_and_drives_through_its_binding`:
 a rule on the standard meter's pivot reaches both placed meters, and turning one
 moves its `in`).
@@ -2857,7 +2859,7 @@ lines:
 ```
 
 `bun test tests/narrative.test.ts` covers block ↔ editor conversion and the
-block diff; `cargo test … --test narrative` and `narrative::tests` the store
+block diff; `cargo test … --test suite narrative::` and `narrative::tests` the store
 side (edits as one transaction, undo, save/load, the span index and stale
 mentions, markdown both ways, the model view).
 
@@ -2975,8 +2977,8 @@ page. `vite.config.ts` now lists the two pages' entries and `bits-ui` in
 `optimizeDeps` and excludes `@lucide/svelte` (icons are deep imports, AGENTS.md),
 so a new icon no longer causes it; a new npm dependency still might. Rerun.
 
-`cargo test … --test clock` (phase 1: the clock, the axis rule), `--test time`
-(sampling keys) and `--test timeline_view` (the generator: rows, bars and diamonds
+`cargo test … --test suite clock::` (phase 1: the clock, the axis rule), `time::`
+(sampling keys) and `timeline_view::` (the generator: rows, bars and diamonds
 projecting their clips and keys, retiming and moving keys by drag, the §12.2 table of
 what a drag on an animated object writes, ‹ ◇ ›, pan/zoom/fit without history, the
 loop band, each piece's affordances and cursor from its group's context, the ruler's

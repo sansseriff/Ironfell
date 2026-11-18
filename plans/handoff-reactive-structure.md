@@ -1668,6 +1668,42 @@ an optional step.
   Not taken: Sol's point that a plan translates against settled layout while live
   apply may meet a preview. Round 1 asked for the settled layout, and a plan is
   applied later, mostly once the preview has ended.
+- **Council round 3 (2026-11-18): Sol 7/10, Opus 7/10.** Fixed:
+  - the solver's writes, normal and recorded, are noted for geometry
+    (`geometry.note_ops`);
+  - a new authored link to a copy that is not there, under a live instance, is
+    refused once expansion has run. A recorded one may meet a copy that has since
+    gone (`a_new_link_to_a_missing_copy_is_refused`);
+  - `scratch` also settles layout while a gesture is active, since it drops the
+    gesture's previews that layout may have read.
+
+  Left, all about the solver's writes to copies, which predate stage 1 (the
+  reference behaves the same):
+  - undo of deleting an instance whose copy the solver had moved brings the copy
+    back at its template position, until the next solve;
+  - redo or replay drops a recorded write whose copy is not there, after the
+    journal has committed, instead of refusing;
+  - `IRON_OWNER_CHECK`'s exemption follows current cluster membership, not the
+    solver's own writes: disabling the constraint that moved a copy makes it
+    report a false difference.
+  - **A copy keeps its solved value after its constraint goes** (Opus): deleting
+    or unlinking the constraint does not affect the copy's owner, so the value
+    stays until something re-expands the owner, and then jumps.
+    - Opus's fix: `owners.affected` counts an Unlink of a `Constrains` relation
+      to a copy, or the Delete of such a constraint, as affecting the copy's
+      owner.
+  - **Undo of a transaction that re-expanded a solved copy's instance restores
+    the template's value of that moment, not the solved one** (Opus).
+    - Example: a template edit `x` 0 → 7 while the copy is solved to −260;
+      undo leaves the copy at 7.
+    - Before `9077b32` the same undo made that wrong value an override.
+    - Opus's fix: when a live apply's expansion overwrites a copy leaf that is
+      a cluster variable, or deletes such a copy, push a Set back to the old
+      value into `tx.inverse`.
+
+  These are for when the solver's writes to copies get a home of their own (they
+  are neither authored nor derivable from the template). That home is stage 3's
+  slots, or the solver's own published values.
 
 Next: stage 2, templates.
 

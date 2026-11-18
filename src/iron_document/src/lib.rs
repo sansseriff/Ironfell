@@ -529,8 +529,9 @@ impl StoreCore {
             text_generation: self.text_generation,
         };
         // What this store published for layout is eased while a transition
-        // runs, or previewed; the scratch publishes the targets then.
-        if !self.motion.anims.is_empty() || self.layout_preview.is_some() {
+        // runs, previewed, or computed from a gesture's previews (cleared
+        // above); the scratch publishes the targets then.
+        if !self.motion.anims.is_empty() || self.layout_preview.is_some() || self.gesture.is_some() {
             scratch.resolve_layout();
         }
         scratch
@@ -3102,6 +3103,7 @@ impl StoreCore {
                 }
                 let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };
                 let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).map_err(|e| vec![e])?;
+                self.geometry.note_ops([&op]);
                 tx.derived_ops.push(op);
                 tx.inverse.extend(inverse);
                 changed.push(leaf);
@@ -3137,6 +3139,7 @@ impl StoreCore {
                 continue;
             }
             if let Ok(inverse) = op::apply_op(&mut self.docs, 0, &op, tx.version) {
+                self.geometry.note_ops([&op]);
                 changed.push(leaf);
                 tx.inverse.extend(inverse.iter().cloned());
                 full_inverse.extend(inverse);
@@ -3219,6 +3222,15 @@ impl StoreCore {
                 }
                 if let Err(e) = op::check_created(Tree::of(docs), i, op, stamp) {
                     errors.push(e);
+                }
+                // A new link to a copy needs the copy, once expansion has
+                // run; a recorded one may meet a copy that has since gone.
+                if !history
+                    && let Op::Link { rel } = op
+                    && rel.to.is_expanded()
+                    && !Tree::of(docs).is_live(rel.to)
+                {
+                    errors.push(ApplyError { op: i, kind: ErrorKind::UnknownNode, message: format!("no node {}", rel.to) });
                 }
                 if let Err(message) = expand::check_scope(Tree::of(docs), op) {
                     errors.push(ApplyError { op: i, kind: ErrorKind::OutOfScope, message });

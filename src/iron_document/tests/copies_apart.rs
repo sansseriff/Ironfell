@@ -339,3 +339,18 @@ fn a_reorder_moves_copies_and_makes_none() {
     assert!(!changes.moved.is_empty(), "{changes:?}");
     assert!(changes.moved.iter().all(|(_, was)| *was == Some(n["rows"])), "{:?}", changes.moved);
 }
+
+/// A new link to a copy that is not there is refused, though its
+/// instance is.
+#[test]
+fn a_new_link_to_a_missing_copy_is_refused() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<group id="$r" name="rows" repeat.count="2"><rect id="$row" name="row" x="0" y="{= $r.repeat.index * 10}" w="5" h="5"/></group>"#);
+    let item = store.tree().children(n["r"]).iter().copied().find(|k| k.is_expanded()).unwrap();
+    let missing = NodeId::expanded(item, store.authored().next_id().offset(30)).unwrap();
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let rel = store.authored().next_relation_ids(1)[0];
+    let fix = built.named["fix"];
+    let err = store.apply(tx("fix", built.ops.into_iter().chain([constrains(rel, fix, missing, "a")]).collect())).expect_err("no such copy");
+    assert_eq!(err[0].kind, ErrorKind::UnknownNode, "{err:?}");
+}

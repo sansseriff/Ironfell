@@ -2312,6 +2312,12 @@ the problem is built from the document as well as from `read`.
   pendulum's solves one). It fails with the skip off.
 - `posed` is in `Saved` and in `scratch`, and entries of clusters that no longer
   exist are dropped each `post_apply`.
+- **`gestures.txt` (2026-11-19):** run against this step, it exits 1, but on stale ids
+  older than this work: it still names the bar `#12`, the laser body `#1f` and the
+  dial `#1u`, which `00151fd`'s palette tokens moved (`6d2199d` fixed the same in
+  `regression.txt` by reading ids by name). The steps naming them fail (`#12 is not
+  live`, three `TypeError`s in the gesture-ownership step); the rest runs. To fix:
+  read those three by name, as `regression.txt` does.
 - **Not done in phase 5:** the rest (layout cells with containment, the network
   solve per island, clips as cells, the solver as Clusters and Solve cells with a
   solved layer and a commit step). The step above is the part that changes what is

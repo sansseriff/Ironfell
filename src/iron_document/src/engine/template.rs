@@ -39,7 +39,7 @@ use crate::definition;
 use crate::document::{RelKind, Relation};
 use crate::expand;
 use crate::expr::{Expr, Leaf};
-use crate::facet::{Facet, FacetKind, Instance, LeafPath};
+use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::order::OrderKey;
 use crate::registry::TypeId;
@@ -64,7 +64,7 @@ enum Ref {
 }
 
 /// What a template is compiled from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     /// A definition's body.
     Body(NodeId),
@@ -97,12 +97,12 @@ pub(crate) struct TNode {
     pub(crate) rels: Vec<Relation>,
     /// A body: a child of the definition (a machine's parts are not).
     pub(crate) top: bool,
-    /// A picture's `use`: the inner entity it figures, whether this
+    /// A picture's `use`: the inner entity it figures, and whether this
     /// picture expands it (a picture of one of the definition's own inner
-    /// entities) and that entity's definition.
+    /// entities). That entity's definition is read when the picture is
+    /// expanded: the entity may be outside the template's scope.
     pub(crate) figures: Option<Relation>,
     pub(crate) own: bool,
-    pub(crate) inner_def: Option<NodeId>,
 }
 
 /// A compiled template.
@@ -179,7 +179,7 @@ fn refs_of(facets: &[Facet], out: &mut Vec<NodeId>) -> bool {
 
 impl TNode {
     fn new(local: NodeId, parent: NodeId, ty: TypeId, order: OrderKey, facets: Vec<Facet>) -> TNode {
-        TNode { local, parent, ty, order, facets, rewrite: false, arg: None, target: local, rels: Vec::new(), top: false, figures: None, own: false, inner_def: None }
+        TNode { local, parent, ty, order, facets, rewrite: false, arg: None, target: local, rels: Vec::new(), top: false, figures: None, own: false }
     }
 }
 
@@ -269,10 +269,7 @@ impl Template {
             if node.ty.name() == "use" {
                 if let Some(r) = doc.relations_from(local).find(|r| r.rel == RelKind::Figures) {
                     t.own = !inside.contains(&r.to.path()[0]);
-                    t.inner_def = doc.node(r.to).and_then(|_| doc.get::<Instance>(r.to)).and_then(|i| {
-                        (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
-                    });
-                    t.figures = Some(r.clone());
+t.figures = Some(r.clone());
                 }
                 nodes.push(t);
                 continue;
@@ -299,16 +296,19 @@ impl Template {
     /// Authored repeat (or conditional) `r`'s template: its children that
     /// are not items, and their subtrees, parents first, with the
     /// relations from them. An override is the repeat's own opinion about
-    /// one item's copy, not part of what items copy.
+    /// one item's copy, not part of what items copy; a session node gets no
+    /// copy, nor anything under it, and does not order the items (writes to
+    /// it stamp no scope, `Document::touch`).
     pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
         let mut nodes = Vec::new();
         let mut rels = Vec::new();
-        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
             let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
             nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
-            stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
+            stack.extend(doc.children(n).iter().rev().copied().filter(copied));
         }
         Template::collection(r, nodes, rels).in_scope(doc, r)
     }
@@ -400,6 +400,14 @@ impl Template {
         self.follow(env, Leaf { node, path: any_leaf() }).node
     }
 
+    /// `env`'s copy of this template's node `local`.
+    fn copy_of(&self, env: &Env, local: NodeId) -> Option<NodeId> {
+        match (&self.source, &env.item) {
+            (Source::Collection(_), Some(item)) => NodeId::item(item.repeat, &item.key, local),
+            _ => NodeId::expanded(env.owner, local),
+        }
+    }
+
     /// Node `i`'s facets as `env`'s copy has them: references resolved,
     /// an `in` port reading the owner's argument, the owner's overrides
     /// applied (component-model.md §5.3).
@@ -431,15 +439,32 @@ impl Template {
                 }
             }
         }
-        apply_overrides(n, env, &mut facets);
+        apply_overrides(self, n, env, &mut facets);
         facets
     }
 }
 
 /// `env`'s overrides of node `n`'s copy: an item's outer owner's first.
-fn apply_overrides(n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
-    if let Some(Item { outer: Some((_, outer)), .. }) = &env.item {
-        apply_overrides(n, outer, facets);
+fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
+    if let Some(Item { repeat, key, outer: Some((outer_t, outer)) }) = &env.item {
+        apply_overrides(outer_t, n, outer, facets);
+        // An outer override naming a node of this template, as the outer
+        // owner copies it, names the item's copy: the old code copied the
+        // item from the outer copy and resolved its references again.
+        if outer_sets_a_node(n, outer) {
+            for f in facets.iter_mut() {
+                for field in f.field_names() {
+                    if let Some(Slot::Const(Value::Ref(to))) = f.get(field)
+                        && let Some(&x) = to.path().last()
+                        && t.nodes.iter().any(|m| m.local == x)
+                        && outer_t.copy_of(outer, x) == Some(*to)
+                        && let Some(copy) = NodeId::item(*repeat, key, x)
+                    {
+                        f.set(field, Slot::Const(Value::Ref(copy))).expect("field exists");
+                    }
+                }
+            }
+        }
     }
     for (target, leaf, value) in &env.overrides {
         if *target != n.target {
@@ -457,6 +482,13 @@ fn apply_overrides(n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
     }
 }
 
+/// Whether an override reaching `env` (or an owner it is an item of) sets
+/// node `n`'s copy to a node.
+fn outer_sets_a_node(n: &TNode, env: &Env) -> bool {
+    env.overrides.iter().any(|(target, _, v)| *target == n.target && matches!(v, Value::Ref(_)))
+        || matches!(&env.item, Some(Item { outer: Some((_, outer)), .. }) if outer_sets_a_node(n, outer))
+}
+
 /// The templates compiled so far, kept between passes: each is used while
 /// it is current ([`Template::current`]) and compiled again when not.
 #[derive(Clone, Default)]
@@ -465,13 +497,17 @@ pub(crate) struct TemplateCache {
     /// A definition without a template for a notation is cached too, with
     /// the definition's stamp.
     pictures: HashMap<(NodeId, String), (u64, Option<Arc<Template>>)>,
-    /// Each repeat's or conditional's, by the node the template names it.
-    collections: HashMap<NodeId, Arc<Template>>,
+    /// Each authored repeat's or conditional's.
+    repeats: HashMap<NodeId, Arc<Template>>,
+    /// Each sub-template, by the template it is part of and its repeat
+    /// there: an authored repeat in a definition outside a library is
+    /// drawn in place and copied into pictures, with two templates.
+    subs: HashMap<(Source, NodeId), Arc<Template>>,
 }
 
 impl std::fmt::Debug for TemplateCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TemplateCache({} bodies, {} pictures, {} collections)", self.bodies.len(), self.pictures.len(), self.collections.len())
+        write!(f, "TemplateCache({} bodies, {} pictures, {} repeats, {} sub-templates)", self.bodies.len(), self.pictures.len(), self.repeats.len(), self.subs.len())
     }
 }
 
@@ -513,24 +549,25 @@ impl<'c> Templates<'c> {
 
     /// Authored repeat `r`'s template.
     pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Arc<Template> {
-        match self.cache.collections.get(&r) {
+        match self.cache.repeats.get(&r) {
             Some(t) if t.current(doc) => t.clone(),
             _ => {
                 let t = Arc::new(Template::repeat(doc, r));
-                self.cache.collections.insert(r, t.clone());
+                self.cache.repeats.insert(r, t.clone());
                 t
             }
         }
     }
 
     /// The template of a copy of `outer`'s repeat `l`, current as `outer`
-    /// is. `l` is in one template only, so it names the sub-template.
+    /// is.
     pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Arc<Template> {
-        match self.cache.collections.get(&l) {
+        let key = (outer.source, l);
+        match self.cache.subs.get(&key) {
             Some(t) if t.scope == outer.scope && t.stamp == outer.stamp => t.clone(),
             _ => {
                 let t = Arc::new(Template::sub(outer, l));
-                self.cache.collections.insert(l, t.clone());
+                self.cache.subs.insert(key, t.clone());
                 t
             }
         }

@@ -235,6 +235,13 @@ fn linked_def_of(doc: Tree<'_>, facets: &[Facet]) -> Option<NodeId> {
     }).filter(|&d| doc.live(d).is_some_and(|n| n.ty.name() == "definition"))
 }
 
+/// The definition the definition-local entity `e` is linked to, as the
+/// document has it (overrides of the copies aside): what an own inner
+/// picture draws (`want_use`).
+fn linked_def_of_node(doc: Tree<'_>, e: NodeId) -> Option<NodeId> {
+    doc.node(e).and_then(|_| doc.get::<Instance>(e)).and_then(|i| (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten())
+}
+
 /// The items each repeat and conditional has now, by key, in order.
 pub type Items = BTreeMap<NodeId, Vec<String>>;
 
@@ -303,9 +310,12 @@ fn picture_of(doc: Tree<'_>, u: NodeId) -> Option<Picture> {
 
 /// Derived repeat `r`'s maker, read from the ids and the document alone,
 /// for an item settle, when the pass that wanted `r` is over: the template
-/// that copies it and its owner's environment. Nothing of the owner's
-/// copies is read but the owner's own node (a `use`'s facets and
-/// `figures`), so with lazy copies only that one is made.
+/// that copies it and its owner's environment. The owner is an item, or an
+/// authored `use`, whose own node is read. `None` for a derived `use`:
+/// which picture it draws depends on how it was expanded (an own inner
+/// picture draws its local entity's definition, one in an item its
+/// entity copy's), so the caller expands the whole owner. Stage 3's read
+/// path answers that from the templates.
 fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<Template>, Rc<Env>)> {
     let path = r.path();
     let owner = NodeId::from_path(&path[..path.len().checked_sub(1)?])?;
@@ -314,6 +324,9 @@ fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<
         let (t, outer) = collection_of(doc, q, None, cache)?;
         let env = Env { owner, entity: None, sized: false, item: Some(Item { repeat: q, key, outer }), overrides: cache.overrides(doc, owner) };
         return Some((t, Rc::new(env)));
+    }
+    if owner.is_expanded() {
+        return None;
     }
     let p = picture_of(doc, owner)?;
     let t = cache.picture(doc, p.def, &p.notation)?;
@@ -471,7 +484,11 @@ pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp
             if !ok {
                 return None;
             }
-            want_items(tree, r, counts.get(&r).map_or(&[][..], Vec::as_slice), &mut out, &mut cache);
+            // A repeat whose maker the ids do not give: the caller
+            // expands the owner whole.
+            if !want_items(tree, r, counts.get(&r).map_or(&[][..], Vec::as_slice), &mut out, &mut cache) {
+                return None;
+            }
         }
         want_scopes(tree, counts, &mut out, Vec::new(), &mut cache);
     }
@@ -587,7 +604,8 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
         }
         let Some(r) = repeats.pop() else { break };
         if done.insert(r) && !in_template(doc, out, r) {
-            want_items(doc, r, counts.get(&r).map_or(&[][..], Vec::as_slice), out, cache);
+            let found = want_items(doc, r, counts.get(&r).map_or(&[][..], Vec::as_slice), out, cache);
+            debug_assert!(found, "a derived repeat wanted in this pass has its maker");
         }
     }
 }
@@ -599,11 +617,11 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
 /// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
 /// which the store publishes (`Store::settle_repeats`): so an item
 /// re-evaluates when its own element changes, not when any does.
-fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) {
+fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) -> bool {
     if keys.is_empty() || !out.enter(r) {
-        return;
+        return true;
     }
-    let Some((t, outer)) = collection_of(doc, r, Some(out), cache) else { return };
+    let Some((t, outer)) = collection_of(doc, r, Some(out), cache) else { return false };
     let l = t.repeat_node().expect("a collection");
     let group = TypeId::lookup("group").expect("registered");
     let mut key = t.after.clone();
@@ -612,7 +630,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache
         let Some(scope) = NodeId::item_scope(r, k) else { continue };
         key = OrderKey::after(&key);
         if !out.push(Want { id: scope, ty: group, parent: r, order: key.clone(), facets: vec![FacetKind::Item.default_facet()], scoped: true }) {
-            return;
+            return true;
         }
         let env = Rc::new(Env { owner: scope, entity: None, sized: false, item: Some(Item { repeat: r, key: k.to_owned(), outer: outer.clone() }), overrides: cache.overrides(doc, scope) });
         for (i, n) in t.nodes.iter().enumerate() {
@@ -620,7 +638,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache
             let facets = t.materialise(i, &env);
             let repeats = facets.iter().any(|f| owns_items(f.kind()));
             if !out.push(Want { id: copy, ty: n.ty, parent: parent_copy, order: n.order.clone(), facets, scoped: false }) {
-                return;
+                return true;
             }
             if repeats {
                 out.origins.insert(copy, (t.clone(), env.clone()));
@@ -634,6 +652,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache
             out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(scope, rel.id), from, to, rel: rel.rel, data: rel.data.clone() } });
         }
     }
+    true
 }
 
 /// What entity `entity` (authored, or derived for an outer instance)
@@ -715,8 +734,8 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
         if let Some((r, inner_sized, inner_notation)) = inner {
             let inner_entity = t.follow_node(&env, r.to);
             out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(u, r.id), from: id, to: inner_entity, rel: RelKind::Figures, data: r.data.clone() } });
-            if let (Some(notation), Some(d)) = (inner_notation, n.inner_def)
-                && n.own
+            if n.own
+                && let (Some(notation), Some(d)) = (inner_notation, linked_def_of_node(doc, r.to))
             {
                 want_use(doc, id, inner_sized, Some(inner_entity), d, &notation, out, cache);
             }

@@ -435,12 +435,17 @@ fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNo
             let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
             nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).cloned());
-            stack.extend(doc.children(n).iter().rev().copied());
+            // Not a picture's own derivation (an own inner picture's).
+            stack.extend(doc.children(n).iter().rev().copied().filter(|c| c.expanded_parts().map(|(o, _)| o) != Some(n)));
         }
     } else if r.is_expanded() {
         let mut parents = BTreeSet::from([r]);
         for w in &out.nodes {
-            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" {
+            // Not a picture's own derivation: an own inner picture in the
+            // template is the picture's, and each item's copy of the `use`
+            // derives its own (the templates' identity contract).
+            let derived_by_parent = w.id.expanded_parts().is_some_and(|(o, _)| o == w.parent);
+            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" && !derived_by_parent {
                 parents.insert(w.id);
                 nodes.push((w.id, w.parent, w.ty, w.order.clone(), w.facets.clone()));
             }
@@ -448,13 +453,15 @@ fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNo
         rels.extend(out.rels.iter().filter(|x| parents.contains(&x.rel.from) && x.rel.from != r).map(|x| x.rel.clone()));
     } else {
         // An override is the repeat's own opinion about one item's copy,
-        // not part of what items copy.
-        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        // not part of what items copy. A session node gets no copy, nor
+        // anything under it.
+        let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
             let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
             nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
-            stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
+            stack.extend(doc.children(n).iter().rev().copied().filter(copied));
         }
     }
     (nodes, rels)

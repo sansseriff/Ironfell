@@ -430,3 +430,159 @@ fn a_definition_edited_without_instances_is_placed_as_edited() {
     let u = *doc.children(c).iter().find(|&&n| !n.is_expanded() && doc.is_live(n) && doc.live(n).is_some_and(|x| x.ty.name() == "use")).expect("the new picture");
     assert_eq!(number(&store, NodeId::from_path(&[u, iu, bx]).unwrap(), "size.w"), 20.0);
 }
+
+/// A template's inner `use` may figure an entity outside its definition:
+/// that entity's definition is read when the picture expands, not kept
+/// with the template, so changing it redraws the picture.
+#[test]
+fn an_inner_pictures_definition_is_read_when_it_expands() {
+    let Pair { mut store, names, u } = pair();
+    let (c, cell, ie, iu, bx) = (names["$c"], names["$cell"], names["$ie"], names["$iu"], names["$box"]);
+    let lib = store.tree().live(cell).unwrap().parent.unwrap();
+    let other = apply(&mut store, &format!(r#"<definition in="{lib}" id="$other" name="other"><template notation="free"><rect id="$otherbox" name="otherbox" w="20" h="4"/></template></definition>"#));
+    let model = *store.tree().roots().iter().find(|&&n| store.tree().live(n).unwrap().ty.name() == "model").unwrap();
+    let ext = apply(&mut store, &format!(r#"<entity in="{model}" id="$ext" name="external" instance.def="{cell}" instance.mode="linked"/>"#))["$ext"];
+    let old = store.tree().relations_from(iu).find(|r| r.rel == RelKind::Figures).unwrap().id;
+    let new = store.authored().next_relation_id();
+    assert_ne!(ext, ie);
+    assert_ne!(ext, c);
+    store.apply(tx("figure external", vec![Op::Unlink { id: old }, Op::Link { rel: Relation { id: new, from: iu, to: ext, rel: RelKind::Figures, data: BTreeMap::new() } }])).unwrap();
+    let old_box = NodeId::from_path(&[u, iu, bx]).unwrap();
+    let new_box = NodeId::from_path(&[u, iu, other["$otherbox"]]).unwrap();
+    assert_eq!(number(&store, old_box, "size.w"), 10.0);
+    store.apply(tx("change external's definition", vec![Op::Set { id: ext, path: "instance.def".parse().unwrap(), slot: Slot::Const(Value::Ref(other["$other"])) }])).unwrap();
+    assert!(store.tree().is_live(new_box));
+    assert!(!store.tree().is_live(old_box));
+}
+
+/// A `use` of one of the definition's own entities inside a repeat in the
+/// template: each item's copy of the `use` derives that entity's picture
+/// under itself, and nothing else does (the identity contract: the old
+/// code also copied the picture's prototype into each item).
+#[test]
+fn an_own_inner_picture_in_a_repeat_is_derived_once_per_item() {
+    let Pair { mut store, names, u } = pair();
+    let (iu, bx) = (names["$iu"], names["$box"]);
+    let template = store.tree().live(iu).unwrap().parent.unwrap();
+    let r = apply(&mut store, &format!(r#"<group in="{template}" id="$r" name="repeat" repeat.count="1"/>"#))["$r"];
+    store.apply(tx("repeat the inner picture", vec![Op::Reparent { id: iu, parent: Some(r), order: OrderKey::first() }])).unwrap();
+    let copied_repeat = NodeId::expanded(u, r).unwrap();
+    let copied_pic = NodeId::item(copied_repeat, "0", iu).unwrap();
+    let expected = NodeId::expanded(copied_pic, bx).unwrap();
+    assert!(store.tree().is_live(expected));
+    let flattened = NodeId::item(copied_repeat, "0", NodeId::from_path(&[u, iu, bx]).unwrap()).unwrap();
+    assert!(!store.tree().is_live(flattened), "the prototype's picture is not copied into the item");
+}
+
+/// A picture's override that sets a node of a repeat's prototype, as the
+/// picture copies it, names each item's own copy of that node.
+#[test]
+fn an_outer_override_naming_a_prototype_node_names_the_items_copy() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" name="scene" dims="2d"/><library name="library"><definition id="$d" name="ref"><template notation="free"><group id="$r" repeat.count="1"><rect id="$cell" w="5" h="5"/><let id="$saved" name="saved" value="0"/></group></template></definition></library>"#);
+    let (c, d, r, cell, saved) = (names["$c"], names["$d"], names["$r"], names["$cell"], names["$saved"]);
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let prototype = NodeId::expanded(u, cell).unwrap();
+    let (_, op) = override_of(&store, u, saved, "let.value", Value::Ref(prototype));
+    store.apply(tx("store sibling ref", vec![op])).unwrap();
+    let copied_repeat = NodeId::expanded(u, r).unwrap();
+    let item_saved = NodeId::item(copied_repeat, "0", saved).unwrap();
+    let item_cell = NodeId::item(copied_repeat, "0", cell).unwrap();
+    assert_eq!(store.tree().leaf(item_saved, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref), Some(item_cell));
+}
+
+/// An inner picture's `use` that also carries a `main` instance: its
+/// picture is the inner entity's, as whole expansion draws it, when only
+/// its repeat's items are made again.
+#[test]
+fn a_repeat_in_an_inner_picture_settles_as_its_owner_expands_it() {
+    let Pair { mut store, names, u } = pair();
+    let (cell, iu, bx) = (names["$cell"], names["$iu"], names["$box"]);
+    let lib = store.tree().live(cell).unwrap().parent.unwrap();
+    let other = apply(&mut store, &format!(r#"<definition in="{lib}" id="$other" name="other"><template notation="free"><rect name="otherbox" w="20" h="4"/></template></definition>"#))["$other"];
+    let mut main = facet::Instance::default();
+    main.def = Slot::Const(Value::Ref(other));
+    main.mode = Slot::Const(Value::Str("main".into()));
+    store.apply(tx("declare the inner use main as well", vec![Op::AddFacet { id: iu, facet: main.wrap() }])).unwrap();
+    let template = store.tree().live(bx).unwrap().parent.unwrap();
+    let r = apply(&mut store, &format!(r#"<group in="{template}" id="$r" repeat.count="1"><rect id="$part" name="part" w="5" h="4"/></group>"#));
+    let dr = NodeId::from_path(&[u, iu, r["$r"]]).unwrap();
+    assert!(store.tree().is_live(NodeId::item(dr, "0", r["$part"]).unwrap()));
+}
+
+/// A definition outside a library: its template's repeat is drawn in place
+/// and copied into a picture, from two templates that are not confused.
+#[test]
+fn a_repeat_drawn_in_place_and_copied_into_a_picture_keeps_two_templates() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" name="scene" dims="2d"/><definition id="$d" name="def"><template notation="free"><group id="$r" repeat.count="1"><rect id="$a" w="5" h="4"/><rect id="$b" w="6" h="4"/></group></template></definition>"#);
+    let (r, a, b) = (names["$r"], names["$a"], names["$b"]);
+    let id = store.authored().next_relation_id();
+    store.apply(tx("link the repeat prototype's children", vec![Op::Link { rel: Relation { id, from: a, to: b, rel: RelKind::References, data: BTreeMap::new() } }])).unwrap();
+    let c = names["$c"];
+    apply(&mut store, &format!(r#"<place def="{}" in="{c}" x="0" y="0"/>"#, names["$d"]));
+    let a0 = NodeId::item(r, "0", a).unwrap();
+    assert_eq!(store.tree().relations_from(a0).count(), 1);
+    store.preview(r, "repeat.count".parse().unwrap(), Value::Number(2.0));
+    let a1 = NodeId::item(r, "1", a).unwrap();
+    assert_eq!(store.tree().relations_from(a1).count(), 1);
+}
+
+/// A session node moved into a drawn repeat is no part of its template:
+/// it gets no copy and does not order the items.
+#[test]
+fn a_session_node_in_a_repeat_does_not_order_its_items() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<composition dims="2d"><group id="$r" repeat.count="1"><rect w="5" h="4"/></group></composition>"#);
+    let r = names["$r"];
+    let s = store.tree().next_session_ids(1)[0];
+    let a0 = NodeId::item_scope(r, "0").unwrap();
+    let late = OrderKey::after(&OrderKey::after(&OrderKey::after(&store.tree().live(a0).unwrap().order)));
+    store.apply_session(vec![Op::Create { id: s, ty: ty("group"), parent: None, order: late.clone(), facets: vec![] },
+        Op::Reparent { id: s, parent: Some(r), order: late.clone() }]).unwrap();
+    store.preview(r, "repeat.count".parse().unwrap(), Value::Number(2.0));
+    let a1 = NodeId::item_scope(r, "1").unwrap();
+    for item in [a0, a1] {
+        assert!(store.tree().live(item).unwrap().order < late, "the items order after the template's copied children only");
+    }
+}
+
+/// An override of an inner entity's definition: when only an inner
+/// picture's repeat's items are made again, they come from the picture
+/// whole expansion draws.
+#[test]
+fn an_override_of_an_inner_entitys_definition_settles_as_it_expands() {
+    let Pair { mut store, names, u } = pair();
+    let (iu, ie, bx) = (names["$iu"], names["$ie"], names["$box"]);
+    let cell = names["$cell"];
+    let lib = store.tree().live(cell).unwrap().parent.unwrap();
+    let other = apply(&mut store, &format!(r#"<definition in="{lib}" id="$other" name="other"><template notation="free"><rect name="otherbox" w="20" h="4"/></template></definition>"#))["$other"];
+    let outer = store.tree().relations_from(u).find(|rel| rel.rel == RelKind::Figures).unwrap().to;
+    let (_, op) = override_of(&store, outer, ie, "instance.def", Value::Ref(other));
+    store.apply(tx("override inner entity's definition", vec![op])).unwrap();
+    let template = store.tree().live(bx).unwrap().parent.unwrap();
+    let r = apply(&mut store, &format!(r#"<group in="{template}" id="$r" repeat.count="1"><rect id="$part" name="part" w="5" h="4"/></group>"#));
+    let dr = NodeId::from_path(&[u, iu, r["$r"]]).unwrap();
+    assert!(store.tree().is_live(NodeId::item(dr, "0", r["$part"]).unwrap()));
+}
+
+/// A deleted body node restored outside its definition: the picture that
+/// read it as the definition's body reads it as it is.
+#[test]
+fn a_body_node_restored_elsewhere_is_no_longer_the_bodys() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" name="scene" dims="2d"/><library name="library"><definition id="$d" name="ref"><let id="$body" name="body" value="7"/><template notation="free"><let id="$reader" name="reader" value="0"/></template></definition></library>"#);
+    let (c, d, body, reader) = (names["$c"], names["$d"], names["$body"], names["$reader"]);
+    store.apply(tx("hold body ref", vec![Op::Set { id: reader, path: "let.value".parse().unwrap(), slot: Slot::Const(Value::Ref(body)) }])).unwrap();
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let copy = NodeId::expanded(u, reader).unwrap();
+    let facets = store.tree().facets_of(body).cloned().collect();
+    store.apply(tx("delete body let", vec![Op::Delete { id: body }])).unwrap();
+    store.apply(tx("restore that id outside the definition", vec![
+        Op::Create { id: body, ty: ty("let"), parent: None, order: OrderKey::first(), facets },
+        Op::Reparent { id: c, parent: None, order: OrderKey::first() },
+    ])).unwrap();
+    assert_eq!(store.tree().leaf(copy, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref), Some(body));
+}

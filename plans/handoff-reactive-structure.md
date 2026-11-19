@@ -1818,9 +1818,9 @@ an optional step.
   (2026-11-18).** A repeat (or conditional) a picture copies, or another
   repeat's items copy, gets its items' template from the template that copies
   it: `Template::sub(outer, l)` is `outer`'s nodes under `l`, the definition's
-  repeat node, with the relations `outer` derives from them. It is keyed by `l`
-  alone (a definition node is in one template), so every picture of a
-  definition shares one; the copies are never read for it. An item's `Env`
+  repeat node, with the relations `outer` derives from them. It is keyed by
+  `outer`'s source and `l`, so every picture of a definition shares one; the
+  copies are never read for it. An item's `Env`
   carries an `Item { repeat, key, outer }`, where `outer` is the copying
   template and its owner's environment: a reference the sub-template does not
   claim (its own nodes, the repeat's `item`, `index`, `presence`, `leaving`)
@@ -1884,6 +1884,40 @@ an optional step.
     `RemoveFacet`), and `Env.sized` is read again. Stage 3's slot clearing must
     keep that: a picture's slots that read `Root` are cleared when its `use`'s
     `size` facet comes or goes.
+
+- **Council on the two prerequisites (2026-11-18): Claude Opus 5.5 7.5/10, GPT
+  Sol 6.2 5/10.** Fixed, each with a test that fails with the fix undone:
+  - **A sub-template and an authored repeat shared a key** (Opus): a definition
+    outside a library may draw its own repeat `l` in place, and is also copied
+    by its uses. Sub-templates now have their own map, keyed by
+    `(outer source, l)` (`a_repeat_drawn_in_place_and_copied_into_a_picture_keeps_two_templates`).
+  - **A session node in an authored repeat** (Opus): `Template::repeat` kept
+    it, so its order counted in `after`, and `touch` skips session ids, so the
+    kept template went stale. It is left out, as in pictures and bodies
+    (`a_session_node_in_a_repeat_does_not_order_its_items`).
+  - **An own inner picture read its definition from the copy** (Sol):
+    `want_use` took the inner `use`'s definition from the template's
+    `inner_def`, fixed at compile, where the old code reads the local entity's
+    `instance` at expansion. It reads it at expansion now, and `inner_def` is
+    gone (`an_inner_pictures_definition_is_read_when_it_expands`,
+    `an_override_of_an_inner_entitys_definition_settles_as_it_expands`).
+  - **An item settle under a derived `use`** (Sol): `maker_of` cannot tell
+    from the ids which picture a derived `use` draws, so it returns `None`
+    and the owner is expanded whole (`a_repeat_in_an_inner_picture_settles_as_its_owner_expands_it`).
+  - **An outer override naming a prototype node** (Sol): a reference-valued
+    override from the outer layer named the picture's copy of a node the
+    item copies; it now names the item's copy (`Template::copy_of`;
+    `an_outer_override_naming_a_prototype_node_names_the_items_copy`).
+  - **`restore_node` stamped only where the node comes back** (Sol): it now
+    stamps where the tombstone was too (`a_body_node_restored_elsewhere_is_no_longer_the_bodys`).
+  - The oracle's `template_of_repeat` copied too much, as the probes showed:
+    it descended into a node's own derivation and took a node its parent
+    derives, so an own inner picture in a repeat was derived twice per item,
+    and it kept a session node in the authored branch. Fixed in
+    `expand_oracle.rs` (`an_own_inner_picture_in_a_repeat_is_derived_once_per_item`).
+  - **Recorded, not fixed (older, Opus):** editing a definition placed outside
+    a library does not re-expand its uses: the owner check reports "owners
+    missed … Set size.w". It fails the same at `554185f`.
 
 Next: stage 3 itself, copies materialised on read. Its own prerequisites (above,
 "Stage 3"): the id → (owner, local) index without the path registry's lock,

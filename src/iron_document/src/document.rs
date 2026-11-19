@@ -879,6 +879,8 @@ impl Document {
         comps: Vec<Facet>,
     ) {
         self.edits.0 += 1;
+        // Where the tombstone was, and (below) where it comes back.
+        self.touch(id);
         for kind in FacetKind::ALL {
             if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
                 self.rec(Rec::Facet(*kind, id, Some(f)));

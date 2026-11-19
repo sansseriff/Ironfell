@@ -126,6 +126,20 @@ pub fn reach(doc: Tree<'_>, roots: &[NodeId], sources: &std::collections::BTreeS
     out
 }
 
+/// Every composition a view of `roots` draws: the roots and what their
+/// embeds show, at any depth, `on_demand` or not (a frame drawn on demand
+/// still draws current values; reactive-engine.md §8.2).
+pub fn shown(doc: Tree<'_>, roots: &[NodeId]) -> std::collections::BTreeSet<NodeId> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack: Vec<NodeId> = roots.to_vec();
+    while let Some(c) = stack.pop() {
+        if seen.insert(c) {
+            stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
+        }
+    }
+    seen
+}
+
 pub fn notation(doc: Tree<'_>, composition: NodeId) -> Option<String> {
     doc.get::<Composition>(composition)?.notation.constant()?.as_str().map(str::to_owned)
 }

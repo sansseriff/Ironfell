@@ -2425,6 +2425,41 @@ registering again after a load; the region is the whole composition until views
 report their visible rectangles (step 3). Test:
 `an_accumulator_steps_only_where_observed`.
 
+**Phase 4, step 2 done (2026-11-19): necessity in the graph.** The store decides
+which cells nothing observed needs (`Store::necessity`, `Reactive::necessity`): the
+cells of a composition no observer shows (with what its embeds show, `composition::
+shown`, at any run mode), except on nodes the store reads besides drawing them
+(`ROOTED`: state, structure, ports and equations, constraints and a cluster's nodes,
+anchors, the timeline), and except what any needed cell reads. Those cells are not
+evaluated when their inputs move; they are marked stale (`Reactive::is_stale`) and
+keep their last value (§8.9). Exactness, the builder's decision: a transaction, an
+action (`fire_at`), a session write and a scratch plan first bring every stale cell
+up to date (`exact`), as does any structure change inside the graph (`relax`), and
+the store decides necessity again at the next `advance` or observer change; so the
+saving is in frames (publishes, steppers, the playhead), which is where §17's exit
+is measured, and a transaction reads and writes what it did before. A tracked read
+(`deref`) that reaches an unneeded cell makes it and what it reads needed, and
+evaluates the stale ones before reading again. Tests:
+`an_unobserved_compositions_pictures_cost_no_evaluations` (§17's first exit: a
+publish costs the shown picture 1 evaluation where observing everything costs 6;
+showing the other composition brings it up to date at once, equal to the
+reference), `a_tracked_read_into_an_unobserved_composition_reads_it_current`,
+`a_pulse_from_an_unobserved_laser_reaches_an_observed_meter_on_time` (§17's third
+exit: frame by frame equal to the reference, the hidden fiber's light resting), and
+§8.8's property over the random scripts
+(`observing_part_of_the_time_changes_nothing_once_all_is_observed`, 40 seeds; 1,000
+ignored): a store observing the composition at random accepts the same transactions
+and, once it observes everything, reads every leaf and problem as the reference.
+The property found an existing bug, fixed: ending a gesture dropped its previews
+without deriving again (a cancelled plot pan left the tick repeat's first item at
+the previewed value) unless the playhead had moved. Open: problems of an
+unobserved composition's pictures are as of their last evaluation (§8.7's idle sweep
+is step 5); the host reads `resolved` of hidden nodes (the document panel, the
+agent's reads) as last values, which §8.9 allows; Look interests are not built.
+Verified: differential suite (461) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+app lib tests, build, 10,000 random scripts; smoke, regression (the pendulum's last
+digits only), fiber, pulses and idle scripts.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

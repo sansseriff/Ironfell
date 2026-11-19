@@ -233,6 +233,40 @@ impl Drop for Rollback {
     }
 }
 
+/// Facets whose nodes' cells the store reads besides drawing them, so they
+/// stay needed whatever is observed (reactive-engine.md §8.3): state
+/// (`let`, traces, accumulators, machines, queries, selection), structure
+/// (repeats, conditionals, items, embeds, the composition itself), the
+/// network's ports and equations, constraints, anchors, and the timeline.
+const ROOTED: &[FacetKind] = &[
+    FacetKind::Let,
+    FacetKind::Trace,
+    FacetKind::Accumulate,
+    FacetKind::Machine,
+    FacetKind::Channel,
+    FacetKind::Query,
+    FacetKind::Selection,
+    FacetKind::Write,
+    FacetKind::Repeat,
+    FacetKind::When,
+    FacetKind::Item,
+    FacetKind::Embed,
+    FacetKind::EmbedCamera,
+    FacetKind::Composition,
+    FacetKind::Port,
+    FacetKind::Equation,
+    FacetKind::Connection,
+    FacetKind::Constraint,
+    FacetKind::Constraints,
+    FacetKind::Anchor,
+    FacetKind::Attachment,
+    FacetKind::Clock,
+    FacetKind::Clip,
+    FacetKind::Key,
+    FacetKind::Timing,
+    FacetKind::Track,
+];
+
 /// What a host shows (reactive-engine.md §8.2): the store keeps running
 /// what an observer reaches, and lets the rest rest.
 #[derive(Clone, Debug, PartialEq)]
@@ -550,6 +584,8 @@ impl StoreCore {
         docs.gone.clear();
         let mut reactive = self.reactive.clone();
         reactive.clear_overlay(Tree::of(&docs));
+        // A plan reads every cell exact.
+        let relaxed = reactive.relax(Tree::of(&docs));
         let mut scratch = StoreCore {
             docs,
             owners: self.owners.clone(),
@@ -601,7 +637,9 @@ impl StoreCore {
         // What this store published for layout is eased while a transition
         // runs, previewed, or computed from a gesture's previews (cleared
         // above); the scratch publishes the targets then.
-        if !self.motion.anims.is_empty() || self.layout_preview.is_some() || self.gesture.is_some() {
+        if relaxed {
+            scratch.pipeline();
+        } else if !self.motion.anims.is_empty() || self.layout_preview.is_some() || self.gesture.is_some() {
             scratch.resolve_layout();
         }
         scratch
@@ -1268,10 +1306,7 @@ impl StoreCore {
     /// in `signal_errors`.
     pub fn publish(&mut self, producer: ProducerId, values: std::collections::BTreeMap<Leaf, Value>) {
         self.reactive.publish(Tree::of(&self.docs), producer, values);
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline();
     }
 
     /// Release everything a producer published; its leaves read as authored.
@@ -1529,13 +1564,13 @@ impl StoreCore {
     fn end_gesture(&mut self, status: GestureStatus) {
         self.drivers.clear();
         self.fingers.clear();
+        // What the previews moved is derived again from the document: a
+        // repeat's items, layout, the network.
+        let previewed = !self.reactive.overlay().is_empty();
         self.reactive.clear_overlay(Tree::of(&self.docs));
         // A previewed playhead goes back to the clock's own `t`.
-        if self.sync_clock() {
-            if !self.clusters.list.is_empty() {
-                self.resolve_clusters_live();
-            }
-            self.resolve_physics();
+        if self.sync_clock() || previewed {
+            self.pipeline();
         }
         if let Some(g) = self.gesture.take() {
             self.ended = Some((g.id, status));
@@ -1728,6 +1763,7 @@ impl StoreCore {
     /// undo never see it, and it is never saved. All or nothing: an error
     /// rolls back the ops already applied.
     pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
+        self.exact();
         let stamp = self.docs.authored.version();
         let mut undo: Vec<Op> = Vec::new();
         let mut structural = false;
@@ -2174,6 +2210,7 @@ impl StoreCore {
     /// history. `Ok(None)` when nothing listens or nothing changes the
     /// document.
     pub fn fire_at(&mut self, listens: NodeId, event: &str, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
+        self.exact();
         let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
         let mut ops: Vec<Op> = Vec::new();
         for (leaf, value) in writes {
@@ -2614,25 +2651,76 @@ impl StoreCore {
         let id = ObserverId(self.next_observer);
         self.next_observer += 1;
         self.observers.insert(id, interest);
+        self.necessity();
         id
     }
 
     /// What observer `id` shows has changed.
     pub fn reobserve(&mut self, id: ObserverId, interest: Interest) {
-        if let Some(i) = self.observers.get_mut(&id) {
+        if let Some(i) = self.observers.get_mut(&id)
+            && *i != interest
+        {
             *i = interest;
+            self.necessity();
         }
     }
 
     pub fn unobserve(&mut self, id: ObserverId) {
-        self.observers.remove(&id);
+        if self.observers.remove(&id).is_some() {
+            self.necessity();
+        }
     }
 
     /// Whether everything counts as shown, observers or not: today's
     /// behaviour, a store's default and the differential reference. A host
     /// that registers what it shows turns it off.
     pub fn set_observe_all(&mut self, all: bool) {
-        self.observe_all = all;
+        if self.observe_all != all {
+            self.observe_all = all;
+            self.necessity();
+        }
+    }
+
+    /// Decide which cells nothing observed needs (reactive-engine.md §8.2,
+    /// §8.3), and bring up to date the stale ones that are needed again.
+    /// A cell is needed when it is outside every composition no observer
+    /// shows, or on a node the store reads besides drawing it (`ROOTED`,
+    /// and a constraint cluster's nodes and what it reads and solves), or
+    /// read by a needed cell. The rest are pictures nothing shows: they are
+    /// not evaluated until shown (or a transaction needs every cell exact).
+    fn necessity(&mut self) {
+        let doc = Tree::of(&self.docs);
+        let mut unneeded = BTreeSet::new();
+        if !self.observe_all {
+            let shown = composition::shown(doc, &self.observed_compositions());
+            let hidden: BTreeSet<NodeId> = composition::compositions(doc).into_iter().filter(|c| !shown.contains(c)).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect();
+            if !hidden.is_empty() {
+                let solved: BTreeSet<NodeId> = self.clusters.list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).collect();
+                let rooted = |n: NodeId| solved.contains(&n) || doc.facets_of(n).any(|f| ROOTED.contains(&f.kind()));
+                unneeded = self.reactive.necessity(&hidden, &rooted);
+            }
+        }
+        if self.reactive.set_unneeded(doc, unneeded) {
+            self.pipeline();
+        }
+    }
+
+    /// Bring every stale cell up to date: what a transaction, an action and
+    /// a session write start from, so that what they read is exact (§8.9).
+    /// The store decides necessity again at the next `advance`.
+    fn exact(&mut self) {
+        if self.reactive.relax(Tree::of(&self.docs)) {
+            self.pipeline();
+        }
+    }
+
+    /// What follows values that moved outside a transaction, as after a
+    /// publish: live solves, then what the store derives.
+    fn pipeline(&mut self) {
+        if !self.clusters.list.is_empty() {
+            self.resolve_clusters_live();
+        }
+        self.resolve_physics();
     }
 
     pub fn observing_all(&self) -> bool {
@@ -2678,6 +2766,9 @@ impl StoreCore {
     /// again and what to redraw until then, the queries that became due,
     /// and whether anything changed.
     pub fn advance(&mut self, now: f64) -> Advanced {
+        if !self.observe_all && self.reactive.relaxed() {
+            self.necessity();
+        }
         let paused = self.paused();
         let moving = self.advance_motion(now);
         let running = self.advance_machines(now);
@@ -3512,6 +3603,7 @@ impl StoreCore {
     /// document with its journal open (reactive-engine handoff §4.3).
     /// `history`: the ops are a recorded transaction's (undo, redo, replay).
     fn run(&mut self, input: TransactionInput, history: bool) -> Result<Run, Vec<ApplyError>> {
+        self.exact();
         let mut input = input;
         // A recorded transaction's sets on copies are the solver's writes
         // and their inverses, not edits: they are not translated into

@@ -627,6 +627,64 @@ fn ten_thousand_random_scripts() {
     run(0..10_000);
 }
 
+/// Reactive-engine.md §8.8: a store that observes the composition only
+/// some of the time, once it observes everything, reads what a store that
+/// observed everything throughout reads, and accepts and refuses the same
+/// transactions on the way. Both run the same script, each step followed
+/// by an `advance`, where the one that observes decides what it needs.
+fn observed_script(seed: u64, steps: usize) -> usize {
+    let (mut all, mut some) = (build(seed), build(seed));
+    let mut coin = Rng(seed ^ 0x0b5e_47ed);
+    some.store.set_observe_all(false);
+    let c = some.names["$c"];
+    let mut watching = None;
+    let mut stale = 0;
+    for i in 0..steps {
+        step(&mut all);
+        step(&mut some);
+        assert_eq!(all.store.history().past().len(), some.store.history().past().len(), "seed {seed}, step {i}: the same transactions accepted");
+        all.store.advance(all.now);
+        some.store.advance(some.now);
+        stale += some.store.reactive().stale_count();
+        match (coin.below(3), watching) {
+            (0, Some(id)) => {
+                some.store.unobserve(id);
+                watching = None;
+            }
+            (1, None) => watching = Some(some.store.observe(Interest::Region { composition: c, rect: [0.0, 0.0, 1000.0, 1000.0], zoom: 1.0 })),
+            _ => {}
+        }
+    }
+    some.store.set_observe_all(true);
+    let (a, b) = (all.store.tree(), some.store.tree());
+    let nodes: Vec<NodeId> = a.live_nodes().map(|n| n.id).collect();
+    assert_eq!(nodes, b.live_nodes().map(|n| n.id).collect::<Vec<_>>(), "seed {seed}: the same nodes");
+    for n in nodes {
+        for f in a.facets_of(n) {
+            for field in f.field_names() {
+                let leaf = LeafPath::new(f.kind(), field).expect("declared field");
+                assert_eq!(all.store.resolved(n, leaf), some.store.resolved(n, leaf), "seed {seed}: {n} {leaf}");
+            }
+        }
+    }
+    let problems = |s: &Store| s.problems().into_iter().map(|p| format!("{} {} {}", p.node, p.kind, p.message)).collect::<BTreeSet<_>>();
+    assert_eq!(problems(&all.store), problems(&some.store), "seed {seed}: the same problems");
+    stale
+}
+
+#[test]
+fn observing_part_of_the_time_changes_nothing_once_all_is_observed() {
+    let stale: usize = (0..40).map(|seed| observed_script(seed, 30)).sum();
+    assert!(stale > 0, "no script left a cell stale");
+}
+
+#[test]
+#[ignore]
+fn observing_part_of_the_time_over_a_thousand_seeds() {
+    let stale: usize = (0..1000).map(|seed| observed_script(seed, 30)).sum();
+    println!("{stale} stale cells over the scripts' steps");
+}
+
 /// One seed, from `IRON_SEED`, with its failure in full: for reproducing
 /// what the runs above report.
 #[test]
@@ -634,4 +692,12 @@ fn ten_thousand_random_scripts() {
 fn one_seed() {
     let seed: u64 = std::env::var("IRON_SEED").expect("set IRON_SEED").parse().expect("a number");
     script(seed, 30);
+}
+
+/// `observed_script` for one seed, from `IRON_SEED`.
+#[test]
+#[ignore]
+fn one_observed_seed() {
+    let seed: u64 = std::env::var("IRON_SEED").expect("set IRON_SEED").parse().expect("a number");
+    observed_script(seed, 30);
 }

@@ -5,6 +5,7 @@
 use iron_document::document::{RelKind, Relation};
 use iron_document::facet::{Composition, Name};
 use iron_document::*;
+use iron_document::edit;
 use std::collections::BTreeMap;
 
 fn ty(n: &str) -> TypeId {
@@ -911,4 +912,142 @@ fn an_accumulator_steps_only_where_observed() {
         store.advance(t);
     }
     assert_eq!(acc(&store), held);
+}
+
+/// Two compositions, `a` and `b`, with a `let` at the root that a host
+/// producer moves, read by one rect in `a` and four in `b`.
+fn two_tabs() -> (Store, NodeId, NodeId, NodeId, Vec<NodeId>) {
+    let mut store = Store::new();
+    let src = r#"<edit>
+      <model name="model"/>
+      <let id="$t" name="t" value="0"/>
+      <composition id="$a" name="a" dims="2d">
+        <rect id="$s" name="s" x="{= $t * 2}" y="0" w="10" h="10"/>
+      </composition>
+      <composition id="$b" name="b" dims="2d">
+        <rect id="$p1" name="p1" x="{= $t + 1}" y="0" w="10" h="10"/>
+        <rect id="$p2" name="p2" x="{= $p1.transform2d.x + 1}" y="0" w="10" h="10"/>
+        <rect id="$p3" name="p3" x="{= $t + 3}" y="{= $p2.transform2d.x}" w="10" h="10"/>
+        <rect id="$p4" name="p4" x="{= $t + 4}" y="0" w="10" h="10"/>
+      </composition>
+    </edit>"#;
+    let plan = edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("tabs", plan.ops)).unwrap();
+    let a = |k: &str| plan.aliases[k];
+    (store, a("$t"), a("$a"), a("$b"), vec![a("$s"), a("$p1"), a("$p2"), a("$p3"), a("$p4")])
+}
+
+/// Phase 4's first exit (reactive-engine.md §17): a composition no
+/// observer shows costs no evaluations while what its pictures read moves;
+/// once shown, every value is what observing everything gives (§8.8).
+#[test]
+fn an_unobserved_compositions_pictures_cost_no_evaluations() {
+    let (mut all, ..) = two_tabs();
+    let (mut store, t, a, b, rects) = two_tabs();
+    let p = store.register_producer("host");
+    all.register_producer("host");
+    let at = |v: f64| BTreeMap::from([(Leaf { node: t, path: path("let.value") }, Value::Number(v))]);
+    store.set_observe_all(false);
+    let id = store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let leaves = |n: NodeId| [Leaf { node: n, path: path("transform2d.x") }, Leaf { node: n, path: path("transform2d.y") }];
+    for v in [1.0, 2.0, 3.0] {
+        let (before, before_all) = (store.reactive().evaluations, all.reactive().evaluations);
+        store.publish(p, at(v));
+        all.publish(p, at(v));
+        let (spent, spent_all) = (store.reactive().evaluations - before, all.reactive().evaluations - before_all);
+        assert_eq!(spent, 1, "only the shown rect");
+        assert_eq!(spent_all, 6, "the reference evaluates b's pictures");
+    }
+    assert_eq!(store.resolved(rects[0], path("transform2d.x")), Some(Value::Number(6.0)));
+    assert!(rects[1..].iter().any(|&r| leaves(r).iter().any(|l| store.reactive().is_stale(*l))));
+    // Shown, b is brought up to date at once.
+    store.reobserve(id, Interest::Region { composition: b, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    assert_eq!(store.reactive().stale_count(), 0);
+    for &r in &rects {
+        for l in leaves(r) {
+            assert_eq!(store.resolved(l.node, l.path), all.resolved(l.node, l.path), "{l}");
+        }
+    }
+    // Now a is hidden; a transaction makes every cell exact before it runs.
+    store.publish(p, at(4.0));
+    all.publish(p, at(4.0));
+    assert!(store.reactive().is_stale(leaves(rects[0])[0]));
+    let plan = edit::plan(&store, &format!(r#"<edit><rect in="{b}" name="q" x="1" y="1" w="1" h="1"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("q", plan.ops)).unwrap();
+    assert_eq!(store.resolved(rects[0], path("transform2d.x")), Some(Value::Number(8.0)));
+    // And the next frame leaves a resting again.
+    store.advance(0.0);
+    let before = store.reactive().evaluations;
+    store.publish(p, at(5.0));
+    assert_eq!(store.reactive().evaluations - before, 5, "b's five bound leaves only");
+}
+
+/// A tracked read (`deref`) from a shown picture that turns to an
+/// unobserved one reads it current: what it reaches is needed from then on.
+#[test]
+fn a_tracked_read_into_an_unobserved_composition_reads_it_current() {
+    let (mut store, t, a, _, rects) = two_tabs();
+    let plan = edit::plan(&store, &format!(r#"<edit><let id="$w" name="w" value="0"/><rect in="{a}" id="$d" name="d" x="{{= deref($w, 'transform2d.x', -1)}}" y="0" w="1" h="1"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("d", plan.ops)).unwrap();
+    let (w, d) = (plan.aliases["$w"], plan.aliases["$d"]);
+    let p = store.register_producer("host");
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let t_at = |v: f64| (Leaf { node: t, path: path("let.value") }, Value::Number(v));
+    let w_at = |n: NodeId| (Leaf { node: w, path: path("let.value") }, Value::Ref(n));
+    store.publish(p, BTreeMap::from([t_at(5.0), w_at(rects[0])]));
+    let x = Leaf { node: rects[4], path: path("transform2d.x") };
+    assert!(store.reactive().is_stale(x), "p4 rests unobserved");
+    store.publish(p, BTreeMap::from([t_at(5.0), w_at(rects[4])]));
+    assert_eq!(store.resolved(d, path("transform2d.x")), Some(Value::Number(9.0)), "p4 at t + 4");
+    assert!(!store.reactive().is_stale(x));
+    store.publish(p, BTreeMap::from([t_at(6.0), w_at(rects[4])]));
+    assert_eq!(store.resolved(d, path("transform2d.x")), Some(Value::Number(10.0)), "and keeps it current");
+}
+
+/// Phase 4's exit (reactive-engine.md §17): a pulse from a laser in a
+/// composition no observer shows reaches a meter in one that is shown, on
+/// time, while the hidden fiber's light is not evaluated.
+#[test]
+fn a_pulse_from_an_unobserved_laser_reaches_an_observed_meter_on_time() {
+    let build = || {
+        let (mut store, shown, _) = sheet(r#"<group name="spare"/>"#);
+        let plan = edit::plan(&store, r#"<edit><composition id="$b" name="bench" dims="2d"/></edit>"#, None).unwrap_or_else(|f| panic!("{}", f.message()));
+        store.apply(tx("bench", plan.ops)).unwrap();
+        let bench = plan.aliases["$b"];
+        let laser = store.place_standard("laser", bench, [0.0, 0.0], Actor::Human).unwrap();
+        let fiber = store.place_standard("fiber", bench, [200.0, 0.0], Actor::Human).unwrap();
+        let entity = |s: &Store, u: NodeId| expand::use_entity(s.tree(), u).unwrap();
+        let port = |s: &Store, u: NodeId, name: &str| {
+            let e = entity(s, u);
+            s.tree().children(e).iter().copied().find(|&p| s.tree().get::<Name>(p).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name)).unwrap()
+        };
+        let (le, fe) = (entity(&store, laser), entity(&store, fiber));
+        let (from, to, out) = (port(&store, laser, "out"), port(&store, fiber, "in"), port(&store, fiber, "out"));
+        let read = |l: Leaf| store.resolved(l.node, l.path);
+        let mut ops = author::connect(store.tree(), &read, from, to).unwrap();
+        let num = |v: f64| Slot::Const(Value::Number(v));
+        ops.push(Op::Set { id: fe, path: path("args.delay_s"), slot: num(1.0) });
+        ops.push(Op::Set { id: fe, path: path("args.loss_db_per_km"), slot: num(0.0) });
+        ops.push(Op::Set { id: le, path: path("args.pulse_hz"), slot: num(1.0) });
+        store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+        let plan = edit::plan(&store, &format!(r#"<edit><rect in="{shown}" id="$m" name="meter" x="{{= {out}.port.signal / 1 mW}}" y="0" w="1" h="1"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+        store.apply(tx("meter", plan.ops)).unwrap();
+        (store, shown, plan.aliases["$m"])
+    };
+    let (mut all, ..) = build();
+    let (mut store, shown, meter) = build();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: shown, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let x = |s: &Store| s.resolved(meter, path("transform2d.x")).unwrap().as_f64().unwrap();
+    let mut seen = Vec::new();
+    for k in 0..=60 {
+        let t = k as f64 * 0.05;
+        all.advance(t);
+        store.advance(t);
+        assert_eq!(x(&store), x(&all), "at {t} s");
+        seen.push(x(&store) > 0.0);
+    }
+    assert!(seen.iter().any(|on| *on) && seen.iter().any(|on| !on), "the meter sees the pulses come and go");
+    assert!(store.reactive().stale_count() > 0, "the hidden fiber's light rests");
 }

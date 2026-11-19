@@ -128,6 +128,18 @@ pub struct Reactive {
     /// was never made an edge), so `restructure` runs them again (the
     /// spec's §6.3; the rebuild ran everything).
     blocked: BTreeSet<Leaf>,
+    /// Cells nothing observed needs (reactive-engine.md §8.2, §8.3): when
+    /// what they read changes they are not evaluated but marked `stale`.
+    /// Closed downwards: whatever reads a cell outside it is outside it too,
+    /// so a needed cell never reads a stale one. The store sets it
+    /// (`set_unneeded`); empty while everything is observed.
+    unneeded: BTreeSet<Leaf>,
+    /// Unneeded cells whose inputs changed since they were last evaluated:
+    /// they hold their last value (§8.9) until needed again.
+    stale: BTreeSet<Leaf>,
+    /// Whether `unneeded` was emptied for exactness (a transaction, a
+    /// structure change) since the store last set it.
+    relaxed: bool,
 }
 
 impl Reactive {
@@ -135,6 +147,94 @@ impl Reactive {
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
         read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
+    }
+
+    /// Whether `leaf` holds a value older than its inputs: nothing observed
+    /// needed it since they changed (reactive-engine.md §8.9).
+    pub fn is_stale(&self, leaf: Leaf) -> bool {
+        self.stale.contains(&leaf)
+    }
+
+    /// How many cells hold a value older than their inputs.
+    pub fn stale_count(&self) -> usize {
+        self.stale.len()
+    }
+
+    /// The cells of `nodes` nothing needs: those of nodes not `rooted`
+    /// (state, and what the store reads besides drawing, §8.3) that no cell
+    /// outside the set reads, directly or through others.
+    pub(crate) fn necessity(&self, nodes: &BTreeSet<NodeId>, rooted: &dyn Fn(NodeId) -> bool) -> BTreeSet<Leaf> {
+        let mut candidates: BTreeSet<Leaf> = BTreeSet::new();
+        for &n in nodes {
+            if !rooted(n) {
+                candidates.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
+            }
+        }
+        let mut stack: Vec<Leaf> = candidates.iter().filter(|l| self.dependents.get(l).is_some_and(|ds| ds.iter().any(|d| !candidates.contains(d)))).copied().collect();
+        let mut needed: BTreeSet<Leaf> = BTreeSet::new();
+        while let Some(l) = stack.pop() {
+            if !needed.insert(l) {
+                continue;
+            }
+            if let Some(n) = self.nodes.get(&l) {
+                stack.extend(n.deps.iter().chain(&n.tracked).filter(|d| candidates.contains(d) && !needed.contains(d)).copied());
+            }
+        }
+        candidates.retain(|l| !needed.contains(l));
+        candidates
+    }
+
+    /// Make `unneeded` the cells nothing needs, evaluating the stale ones
+    /// that are needed again. Whether it evaluated anything.
+    pub(crate) fn set_unneeded(&mut self, doc: Tree<'_>, unneeded: BTreeSet<Leaf>) -> bool {
+        self.relaxed = false;
+        let wake: BTreeSet<Leaf> = self.stale.iter().filter(|l| !unneeded.contains(l)).copied().collect();
+        self.stale.retain(|l| unneeded.contains(l));
+        self.unneeded = unneeded;
+        if wake.is_empty() {
+            return false;
+        }
+        let dirty = self.readers(&wake);
+        self.evaluate(doc, &dirty, &wake);
+        true
+    }
+
+    /// Need every cell again, bringing the stale ones up to date: what a
+    /// transaction and a structure change start from, so that what they
+    /// read and write is exact. Whether it evaluated anything.
+    pub(crate) fn relax(&mut self, doc: Tree<'_>) -> bool {
+        if self.unneeded.is_empty() {
+            return false;
+        }
+        let evaluated = self.set_unneeded(doc, BTreeSet::new());
+        self.relaxed = true;
+        evaluated
+    }
+
+    /// Whether `relax` emptied `unneeded` since the store last set it.
+    pub(crate) fn relaxed(&self) -> bool {
+        self.relaxed
+    }
+
+    /// `from` and every cell that reads it, directly or through others,
+    /// not going on through a cell nothing needs (what reads one is
+    /// unneeded too, and is reached only if it is evaluated).
+    fn readers(&self, from: &BTreeSet<Leaf>) -> BTreeSet<Leaf> {
+        let mut dirty = from.clone();
+        let mut stack: Vec<Leaf> = from.iter().copied().collect();
+        while let Some(l) = stack.pop() {
+            if self.unneeded.contains(&l) && !from.contains(&l) {
+                continue;
+            }
+            if let Some(ds) = self.dependents.get(&l) {
+                for d in ds {
+                    if self.nodes.contains_key(d) && dirty.insert(*d) {
+                        stack.push(*d);
+                    }
+                }
+            }
+        }
+        dirty
     }
 
     /// The runtime layer as published.
@@ -272,6 +372,12 @@ impl Reactive {
     /// Rebuild the structure from the document and evaluate every binding.
     /// Called after transactions that created, deleted, or rebound anything.
     pub fn rebuild(&mut self, doc: Tree<'_>) {
+        // Everything is evaluated below.
+        if !self.unneeded.is_empty() {
+            self.unneeded.clear();
+            self.stale.clear();
+            self.relaxed = true;
+        }
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -338,8 +444,9 @@ impl Reactive {
     /// anchors derive (`port::derived_signals`, `anchor::derived`), which
     /// walk the whole document: without it they are kept as they were.
     pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool, rederive: bool) {
-        let first = *FacetKind::ALL.iter().min().expect("facet kinds");
-        let start = |n: NodeId| Leaf { node: n, path: crate::facet::LeafPath { facet: first, field: "" } };
+        // New cells may read unneeded ones: start from every cell current.
+        self.relax(doc);
+        let start = first_leaf;
         let derived: BTreeMap<Leaf, Expr> = if rederive {
             let mut derived: Vec<(Leaf, Expr)> = crate::port::derived_signals(doc);
             derived.extend(crate::anchor::derived(doc));
@@ -448,17 +555,7 @@ impl Reactive {
         if !self.raise(&made) {
             self.compute_heights();
         }
-        let mut dirty = primed.clone();
-        let mut stack: Vec<Leaf> = primed.iter().copied().collect();
-        while let Some(l) = stack.pop() {
-            if let Some(ds) = self.dependents.get(&l) {
-                for d in ds {
-                    if self.nodes.contains_key(d) && dirty.insert(*d) {
-                        stack.push(*d);
-                    }
-                }
-            }
-        }
+        let dirty = self.readers(&primed);
         self.evaluate(doc, &dirty, &primed);
     }
 
@@ -493,6 +590,8 @@ impl Reactive {
         }
         self.token_readers.remove(&leaf);
         self.blocked.remove(&leaf);
+        self.unneeded.remove(&leaf);
+        self.stale.remove(&leaf);
     }
 
     /// Raise the readers of `made` until every edge goes upward (spec
@@ -534,7 +633,9 @@ impl Reactive {
         while let Some(l) = stack.pop() {
             if let Some(ds) = self.dependents.get(&l) {
                 for d in ds {
-                    if dirty.insert(*d) {
+                    // What reads an unneeded cell is unneeded, and primed
+                    // only if that cell is evaluated.
+                    if dirty.insert(*d) && !self.unneeded.contains(d) {
                         stack.push(*d);
                     }
                 }
@@ -677,6 +778,10 @@ impl Reactive {
             if !primed.remove(&leaf) {
                 continue;
             }
+            if self.unneeded.contains(&leaf) {
+                self.stale.insert(leaf);
+                continue;
+            }
             if budget == 0 {
                 self.errors.insert(leaf, "did not settle: tracked reads keep changing each other".into());
                 self.blocked.insert(leaf);
@@ -688,7 +793,10 @@ impl Reactive {
             let tracks = self.nodes[&leaf].tracks;
             let _ctx = crate::expr::TokenScope::new(self.nodes[&leaf].ctx.clone());
             let reads: std::cell::RefCell<BTreeSet<Leaf>> = Default::default();
+            // Unneeded cells a tracked read reached: needed from now on.
+            let reached: std::cell::RefCell<BTreeSet<Leaf>> = Default::default();
             let result = {
+                let unneeded = &self.unneeded;
                 let overlay = &self.overlay;
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
@@ -699,6 +807,9 @@ impl Reactive {
                 let read = |l| {
                     if tracks {
                         reads.borrow_mut().insert(l);
+                    }
+                    if unneeded.contains(&l) {
+                        reached.borrow_mut().insert(l);
                     }
                     if errors.contains_key(&l) && !overlay.contains_key(&l) {
                         if upstream.get().is_none() {
@@ -766,6 +877,33 @@ impl Reactive {
                     }
                 }
             }
+            // A tracked read reached a cell nothing needed: it and what it
+            // reads are needed now, and the stale ones among them are
+            // evaluated before this binding is read again.
+            let reached = reached.into_inner();
+            if !reached.is_empty() {
+                let mut stack: Vec<Leaf> = reached.into_iter().collect();
+                let mut woken = false;
+                while let Some(l) = stack.pop() {
+                    if !self.unneeded.remove(&l) {
+                        continue;
+                    }
+                    if self.stale.remove(&l) {
+                        primed.insert(l);
+                        queue.insert((self.nodes[&l].height, l));
+                        woken = true;
+                    }
+                    if let Some(n) = self.nodes.get(&l) {
+                        stack.extend(n.deps.iter().chain(&n.tracked).copied());
+                    }
+                }
+                // Each is below this binding: under what it tracks.
+                if woken {
+                    primed.insert(leaf);
+                    queue.insert((self.nodes[&leaf].height, leaf));
+                    continue;
+                }
+            }
             // Readers run again when this value changes, and when it starts
             // or stops failing (a recovery to the same value still clears
             // their errors).
@@ -798,6 +936,12 @@ impl Reactive {
             }
         }
     }
+}
+
+/// The least leaf of `node`, where its cells start in leaf order.
+fn first_leaf(node: NodeId) -> Leaf {
+    let first = *FacetKind::ALL.iter().min().expect("facet kinds");
+    Leaf { node, path: crate::facet::LeafPath { facet: first, field: "" } }
 }
 
 /// Whether a binding's evaluation records what it reads: it holds a

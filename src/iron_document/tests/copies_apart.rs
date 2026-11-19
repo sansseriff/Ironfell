@@ -354,3 +354,72 @@ fn a_new_link_to_a_missing_copy_is_refused() {
     let err = store.apply(tx("fix", built.ops.into_iter().chain([constrains(rel, fix, missing, "a")]).collect())).expect_err("no such copy");
     assert_eq!(err[0].kind, ErrorKind::UnknownNode, "{err:?}");
 }
+
+/// A meter whose copy `copy` a distance constraint `d` holds 40 from a
+/// fixed ellipse: the store, the meter, the copy, `d`, and the copy's x
+/// before and after the solve.
+fn tied() -> (Store, NodeId, NodeId, NodeId, f64, f64) {
+    let (mut store, comp) = sheet();
+    let meter = store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
+    let copy = placed_copy(&store, meter);
+    let x = path("transform2d.x");
+    let was = store.resolved(copy, x).and_then(|v| v.as_f64()).unwrap();
+    let built = markup::ops(r#"<ellipse id="$p" x="-300" y="0" rx="5" ry="5"/><constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let rels = store.authored().next_relation_ids(3);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], n["fix"], n["p"], "a"), constrains(rels[1], n["d"], n["p"], "a"), constrains(rels[2], n["d"], copy, "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let moved = store.resolved(copy, x).and_then(|v| v.as_f64()).unwrap();
+    assert!((moved - was).abs() > 1.0, "the solver moved the copy: {was} → {moved}");
+    (store, meter, copy, n["d"], was, moved)
+}
+
+fn x_of(store: &Store, copy: NodeId) -> f64 {
+    store.resolved(copy, path("transform2d.x")).and_then(|v| v.as_f64()).unwrap()
+}
+
+/// A copy the solver moved goes back to its template's value when the
+/// constraint holding it goes, and undo moves it back.
+#[test]
+fn a_solved_copy_returns_to_its_template_when_its_constraint_goes() {
+    let (mut store, _, copy, d, was, moved) = tied();
+    store.apply(tx("untie", vec![Op::Delete { id: d }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), was);
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), moved);
+}
+
+/// Undoing the delete of an instance whose copy the solver moved brings the
+/// copy back where the solver had it.
+#[test]
+fn undoing_the_delete_of_a_solved_copys_instance_puts_it_back_solved() {
+    let (mut store, meter, copy, _, _, moved) = tied();
+    store.apply(tx("delete", vec![Op::Delete { id: meter }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), moved);
+}
+
+/// Undoing a definition edit that expanded a solved copy again puts the
+/// copy back where the solver had it before the edit.
+#[test]
+fn undoing_a_definition_edit_puts_a_solved_copy_back() {
+    let (mut store, _, copy, _, was, moved) = tied();
+    let local = *copy.path().last().unwrap();
+    store.apply(tx("edit the definition", vec![Op::Set { id: local, path: path("transform2d.x"), slot: num(was + 7.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), moved);
+}
+
+/// Disabling the constraint that holds a solved copy lets it go, as
+/// deleting it does, and the next transaction finds the copy as its owner
+/// wants it (the owners' check compares every copy).
+#[test]
+fn disabling_a_solved_copys_constraint_lets_it_go() {
+    let (mut store, _, copy, d, was, moved) = tied();
+    store.apply(tx("disable", vec![Op::Set { id: d, path: path("constraint.enabled"), slot: Slot::Const(Value::Bool(false)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), was);
+    store.apply(tx("anything", vec![Op::Set { id: d, path: path("constraint.value"), slot: num(50.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), was);
+    store.undo(0).unwrap().unwrap();
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), moved);
+}

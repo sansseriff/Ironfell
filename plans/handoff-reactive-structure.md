@@ -2023,6 +2023,30 @@ document and builds what pays now, each step with its own design note and counci
    copies). Pieces with problems are never skipped.
 3. **D13's sweep** of interned paths.
 
+- **2c stage 3, step 1: the solver's writes to copies (2026-11-18).** No separate
+  home was needed: the copies document keeps holding a solved value, and the two
+  places that lost it now keep it.
+  - **Expansion rewriting or removing a solved leaf** (bugs 1 and 5): `run`
+    snapshots every copy leaf a cluster holds before the ops apply. One the
+    transaction's expansion changes, or whose copy goes, gets a `Set` back to the
+    solved value in the inverse. Undo applies it with the recorded writes, after the
+    expansion it undoes, and after undoing any solver write of the same transaction
+    (`undoing_a_definition_edit_puts_a_solved_copy_back`,
+    `undoing_the_delete_of_a_solved_copys_instance_puts_it_back_solved`).
+  - **A leaf no cluster holds any more** (bugs 3 and 4): `post_apply` writes it back
+    to what its owner's expansion wants (`expand::wanted_slots`), as the solver
+    writes, so it is in `derived_ops` and undo restores the solved value. It covers
+    deleting and disabling the constraint alike, and with it the owners' check's
+    exemption by current cluster membership is exact: a copy leaf outside every
+    cluster is always its template's value
+    (`a_solved_copy_returns_to_its_template_when_its_constraint_goes`,
+    `disabling_a_solved_copys_constraint_lets_it_go`).
+  - **Not fixed, bug 2:** undo, redo and replay apply recorded copy writes after
+    committing, and drop one whose copy is missing. Linear history cannot meet a
+    missing copy that the transaction itself did not remove; only a log that does
+    not match its document can, and building one needs every other op of the
+    transaction to pass. Left as it is.
+
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).
 

@@ -217,6 +217,12 @@ impl Owners {
         &self.templates
     }
 
+    /// What each of `leaves`, leaves of copies, is as its owner's expansion
+    /// wants it now (`expand::wanted_slots`).
+    pub(crate) fn wanted_slots(&mut self, doc: Tree<'_>, counts: &Items, leaves: &[crate::Leaf]) -> Vec<(crate::Leaf, crate::Slot)> {
+        expand::wanted_slots(doc, &mut self.templates, counts, leaves)
+    }
+
     /// Every owner's problems, in the order `expand::sort_problems` gives.
     pub(crate) fn problems(&self) -> Vec<Problem> {
         let mut out: Vec<Problem> = self.problems.values().flatten().cloned().collect();

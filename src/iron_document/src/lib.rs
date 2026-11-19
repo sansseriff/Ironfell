@@ -317,6 +317,9 @@ struct Run {
     /// the transaction is accepted.
     shared: bool,
     rollback: Rollback,
+    /// The copies' leaves the solver held before the transaction: one no
+    /// cluster holds after it goes back to its template (`post_apply`).
+    held: Vec<Leaf>,
     /// A recorded transaction's writes to copies, for `apply_recorded`.
     recorded: Vec<Op>,
 }
@@ -2876,7 +2879,7 @@ impl StoreCore {
             });
         }
         let exact = input.exact;
-        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _ } = self.run(input, false)?;
+        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _, held } = self.run(input, false)?;
         // `post_apply` can refuse only a document that holds a constraint;
         // then what `after_transaction` and the pipeline change is kept to
         // put back (reactive-engine handoff §4.4, stage 1).
@@ -2886,7 +2889,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&tx, &mut expanded, &full_inverse);
-        let solver = match self.post_apply(&mut tx, exact) {
+        let solver = match self.post_apply(&mut tx, exact, &held) {
             Ok(s) => s,
             Err(e) => {
                 self.abort(rollback);
@@ -2939,7 +2942,7 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded } = self.run(input, true)?;
+        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, held: _ } = self.run(input, true)?;
         self.commit(rollback);
         if shared {
             self.machines.shared += 1;
@@ -2977,7 +2980,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, held: _ }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -3022,7 +3025,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, held: _ }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -3057,7 +3060,7 @@ impl StoreCore {
     /// as drivers. The solver's writes are applied and recorded as
     /// `derived_ops`. Runs on the committed document; the caller rolls back
     /// on `Err`.
-    fn post_apply(&mut self, tx: &mut Transaction, exact: bool) -> Result<Option<SolverSummary>, Vec<ApplyError>> {
+    fn post_apply(&mut self, tx: &mut Transaction, exact: bool, held: &[Leaf]) -> Result<Option<SolverSummary>, Vec<ApplyError>> {
         let last = tx.ops.len().saturating_sub(1);
         let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
         {
@@ -3065,6 +3068,29 @@ impl StoreCore {
             constraint::validate_all(Tree::of(&self.docs), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
         }
         let clusters = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
+        // A copy's leaf no cluster moves any more goes back to what its
+        // owner's expansion wants: the solver's value was the solver's, and
+        // nothing else rewrites it. Written as the solver writes, so undo
+        // puts the solved value back.
+        let released: Vec<Leaf> = {
+            let doc = Tree::of(&self.docs);
+            held.iter().filter(|l| doc.is_live(l.node) && !clusters.var_cluster.contains_key(l)).copied().collect()
+        };
+        if !released.is_empty() {
+            let mut changed = Vec::new();
+            for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
+                if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
+                    continue;
+                }
+                let op = Op::Set { id: leaf.node, path: leaf.path, slot };
+                let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).map_err(|e| vec![e])?;
+                self.geometry.note_ops([&op]);
+                tx.derived_ops.push(op);
+                tx.inverse.extend(inverse);
+                changed.push(leaf);
+            }
+            self.reactive.invalidate(Tree::of(&self.docs), changed);
+        }
         self.clusters = clusters.clone();
         if clusters.list.is_empty() {
             return Ok(None);
@@ -3185,6 +3211,12 @@ impl StoreCore {
         // What `attachment::validate` compares against: the points attached
         // before.
         let attached: Vec<NodeId> = Tree::of(&self.docs).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
+        // The copies' leaves the solver holds, as it left them: expansion
+        // rewrites or removes a copy without knowing the solved value.
+        let solved: Vec<(Leaf, Slot)> = {
+            let doc = Tree::of(&self.docs);
+            self.clusters.var_cluster.keys().filter(|l| l.node.is_expanded()).filter_map(|l| doc.leaf(l.node, l.path).map(|s| (*l, s.clone()))).collect()
+        };
         self.docs.begin();
         let docs = &mut self.docs;
         let stamp = docs.authored.version().next();
@@ -3271,6 +3303,17 @@ impl StoreCore {
             Op::Link { rel } => !rel.id.is_expanded(),
             Op::Unlink { id } => !id.is_expanded(),
         });
+        // A solved leaf this transaction's expansion rewrote or removed:
+        // undo writes the solved value back after the expansion it undoes
+        // (`apply_recorded`), and before any solver write of this
+        // transaction is undone, which comes first.
+        let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
+        for (leaf, was) in solved {
+            let doc = Tree::of(&self.docs);
+            if doc.live(leaf.node).and_then(|_| doc.leaf(leaf.node, leaf.path)) != Some(&was) {
+                inverse.push(Op::Set { id: leaf.node, path: leaf.path, slot: was });
+            }
+        }
         Ok(Run {
             tx: Transaction {
                 version: stamp,
@@ -3289,6 +3332,7 @@ impl StoreCore {
             shared,
             rollback,
             recorded,
+            held,
         })
     }
 

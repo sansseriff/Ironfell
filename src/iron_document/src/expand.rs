@@ -288,6 +288,30 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &
     out
 }
 
+/// The slot each of `leaves`, leaves of copies, has as its owner's
+/// expansion wants it now: what a copy goes back to when the solver lets go
+/// of it. A leaf whose copy is not wanted has none.
+pub(crate) fn wanted_slots(doc: Tree<'_>, templates: &mut TemplateCache, counts: &Items, leaves: &[Leaf]) -> Vec<(Leaf, Slot)> {
+    let mut cache = Templates::new(templates);
+    let mut by_owner: BTreeMap<NodeId, Vec<Leaf>> = BTreeMap::new();
+    for l in leaves {
+        if let Some(&owner) = l.node.path().first() {
+            by_owner.entry(owner).or_default().push(*l);
+        }
+    }
+    let mut out = Vec::new();
+    for (owner, leaves) in by_owner {
+        let w = wanted_for(doc, owner, counts, NODE_BUDGET, &mut cache);
+        for l in leaves {
+            let slot = w.get(l.node).and_then(|n| n.facets.iter().find(|f| f.kind() == l.path.facet)).and_then(|f| f.get(l.path.field));
+            if let Some(slot) = slot {
+                out.push((l, slot.clone()));
+            }
+        }
+    }
+    out
+}
+
 /// What a `use` the document holds pictures: the entity it figures (`None`
 /// in a main), its definition, its notation, and whether it is sized.
 struct Picture {

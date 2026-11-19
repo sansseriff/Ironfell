@@ -194,6 +194,9 @@ pub struct PendingLoad(pub Option<Store>);
 pub struct DocumentChanges {
     pub nodes: BTreeSet<NodeId>,
     pub structure: bool,
+    /// The nodes whose structure changed: made, gone or moved, with their
+    /// parents. Empty with `structure` set means anything may have (a load).
+    pub shaped: BTreeSet<NodeId>,
 }
 
 impl DocumentChanges {
@@ -461,10 +464,12 @@ pub(crate) fn sync_document(
     let now = time.elapsed().as_millis() as u64;
     let mut affected: BTreeSet<NodeId> = BTreeSet::new();
     let mut structure = false;
+    let mut reloaded = false;
     let version_before = synced.0;
     if let Some(loaded) = load.0.take() {
         geometry_revision.touch_all();
         structure = true;
+        reloaded = true;
         // Everything materialised belongs to the old document. Tear it all
         // down rather than diffing: ids may coincide with different types.
         for e in map.drain() {
@@ -606,6 +611,12 @@ pub(crate) fn sync_document(
     spatial.bypass_change_detection().unreconciled = false;
     let moved = inbox.take_reconcile();
     affected.extend(moved.nodes());
+    let mut shaped: BTreeSet<NodeId> = moved.created.iter().copied().collect();
+    for &(n, p) in moved.removed.iter().chain(&moved.moved) {
+        shaped.insert(n);
+        shaped.extend(p);
+    }
+    shaped.extend(moved.structure.iter().flatten().copied());
     structure |= moved.structural();
     for (leaf, err) in &store.0.reactive().errors {
         warn!("binding {leaf}: {err}");
@@ -628,7 +639,14 @@ pub(crate) fn sync_document(
         map.paint_index = paint_order(&store.0);
     }
     changes.nodes.extend(affected);
-    changes.structure |= structure;
+    // A load names no shapes: everything may have changed.
+    if reloaded || (structure && shaped.is_empty()) {
+        changes.shaped.clear();
+        changes.structure = true;
+    } else if !changes.structure || !changes.shaped.is_empty() {
+        changes.shaped.extend(shaped);
+        changes.structure |= structure;
+    }
 }
 
 /// Warn about interaction work left for the next frame: requests queued

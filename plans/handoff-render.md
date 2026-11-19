@@ -68,6 +68,22 @@ One count takes ~2.5 min; four counts ~10–12 min, so run it in the background.
 
 ## 4. What to do, in order
 
+**2026-11-19: render-cache phase 3 done, built differently** ([`specs/render-cache.md`](specs/render-cache.md)
+§10, "Phase 3"). The upload was measured first: `vello_gpu` 0.3 uploads every render's
+strips, alphas and paints, so a retained scene per live layer would save only the
+encode. Instead, nodes that change every frame are cut into chunks of their own (clipped
+groups included), and a view that redraws every frame bakes its still chunks into raster
+tiles, which stay resident in the atlas. Fourier playing: encode 1.35 → 0.28 ms, upload
+409 → 342 KB a render (the rest is `vello_gpu`'s 64 KB row padding). A home is now cut
+again only for what changed shape (`DocumentChanges.shaped`). That also fixes a master
+regression, a 70 ms encode on every idle frame of the Prussia import. The pixel
+check turned out to be comparing tiles with tiles: `__iron.raster(false)` waited for a
+frame that idle views no longer render. Fixed, and it passes. Open: a view whose
+tiles do not fit the atlas thrashes and keeps requesting frames (seen at 32 MB in the
+deep zoom, so the script now uses 64). **Next on this
+track:** item 8 (Bevy's default plugins, ~1.2 ms a paused frame), or the 90–100 ms
+single-frame bakes in the large-SVG table.
+
 **2026-11-18: the user wants render-cache phase 3 built** (vector retention for live
 layers, [`specs/render-cache.md`](specs/render-cache.md) §6), no longer only "if the
 inspector asks". It is unblocked: the reactive engine's 2b swap gives it `Changes`.

@@ -38,6 +38,73 @@ use std::sync::Arc;
 /// per layer and per command instead.
 const UNCLIPPED: kurbo::Rect = kurbo::Rect::new(-1e9, -1e9, 1e9, 1e9);
 
+/// Which chunks `nodes` changed, home by home: to record again (`dirty`),
+/// to place again (`reframe`), or, for a node no chunk holds, a home to cut
+/// again (`recut`). With `only`, just those homes, cut this frame: a node no
+/// chunk holds records the home whole.
+#[allow(clippy::too_many_arguments)]
+fn find_changed(chunks: &Chunks, store: &iron_document::Store, drawables: &super::Drawables, wanted: &BTreeSet<nest::Home>, nodes: &BTreeSet<NodeId>, only: Option<&BTreeSet<nest::Home>>, dirty: &mut BTreeMap<nest::Home, BTreeSet<usize>>, reframe: &mut BTreeMap<nest::Home, BTreeSet<usize>>, recut: &mut BTreeSet<nest::Home>) {
+    let doc = store.tree();
+    for &n in nodes {
+        // Inside a definition's template: every chunk that shows it
+        // through a reference (instance-cache.md phase D).
+        if let Some(t) = template_of(doc, n) {
+            for (home, part) in chunks.homes.iter().filter(|(h, _)| only.is_none_or(|o| o.contains(h))) {
+                if let Some(shown) = part.shows_template.get(&t) {
+                    dirty.entry(*home).or_default().extend(shown.iter().copied());
+                }
+            }
+            continue;
+        }
+        let home = nest::home(doc, n);
+        if !wanted.contains(&home) || only.is_some_and(|o| !o.contains(&home)) {
+            continue;
+        }
+        match chunks.chunk_of(home, n) {
+            // An instance moved as a whole: its runs are recorded
+            // relative to it, so only its frame changes.
+            Some(Place::Chunk(i)) if chunks.homes.get(&home).and_then(|p| p.chunks.get(i)).is_some_and(|c| !c.runs.is_empty() && c.roots[0] == n) => {
+                reframe.entry(home).or_default().insert(i);
+            }
+            Some(Place::Chunk(i)) => {
+                dirty.entry(home).or_default().insert(i);
+            }
+            // A split group changed: it draws nothing itself, so only
+            // its placement can matter, which its chunks' frames carry
+            // (instance-cache.md §2). No re-recording, no cutting again.
+            Some(Place::Split(range)) if !chunks.must_cut_again(store, drawables, n) => {
+                // A clipped group's pieces carry its clip: record them.
+                if iron_document::appearance::ClipFrame::read(store, n).is_some() {
+                    dirty.entry(home).or_default().extend(range);
+                } else {
+                    reframe.entry(home).or_default().extend(range);
+                }
+            }
+            // A split group that must now be drawn whole, or a node no
+            // chunk holds (the composition itself): cut again, or when just
+            // cut, record the home whole, as a fresh cut does.
+            _ if only.is_some() => {
+                let all = chunks.homes.get(&home).map_or(0, |p| p.chunks.len());
+                dirty.entry(home).or_default().extend(0..all);
+            }
+            _ => {
+                recut.insert(home);
+            }
+        }
+    }
+}
+
+/// A group's clip frame as a shape in its own space.
+fn clip_shape(frame: &iron_document::appearance::ClipFrame) -> crate::vector::Shape {
+    let (w, h, r) = (frame.w, frame.h, frame.radius);
+    if frame.ellipse {
+        use kurbo::Shape;
+        kurbo::Ellipse::new((w / 2.0, h / 2.0), (w / 2.0, h / 2.0), 0.0).to_path(0.1).into()
+    } else {
+        crate::vector::Shape::RoundedRect(kurbo::Rect::new(0.0, 0.0, w, h).to_rounded_rect(r))
+    }
+}
+
 /// One document layer per 2D panel, each its own [`VectorView`]: it renders
 /// into a texture the panel's size and re-renders only when its own content
 /// changed (plans/specs/view-textures.md).
@@ -271,53 +338,40 @@ pub fn render_document_layer(
         // A spatial or embedded-view change can move what any chunk draws
         // (an embed's region, a 3D texture) without naming its nodes.
         let everything = !matches!(reason, "document" | "panel layout" | "new view");
-        let mut recut: BTreeSet<nest::Home> = wanted.iter().copied().filter(|h| changed.structure || !chunks.homes.contains_key(h)).collect();
+        // A structure change cuts again only the homes it touched (a
+        // repeat re-expanding on a hidden page leaves a shown one alone);
+        // one naming nothing, or something homeless, cuts every home.
+        let shaped: Option<BTreeSet<nest::Home>> = (changed.structure && !changed.shaped.is_empty())
+            .then(|| changed.shaped.iter().filter(|&&n| doc.node(n).is_some()).map(|&n| nest::home(doc, n)).collect::<BTreeSet<_>>())
+            .filter(|h| !h.contains(&nest::Home::Unknown));
+        let mut recut: BTreeSet<nest::Home> = wanted.iter().copied().filter(|h| !chunks.homes.contains_key(h) || (changed.structure && shaped.as_ref().is_none_or(|s| s.contains(h)))).collect();
+        // What changes frame after frame gets chunks of its own (`Chunks::heat`).
+        let now = time.elapsed_secs_f64();
+        let placement = |n: NodeId| {
+            doc.facet(n, iron_document::FacetKind::Transform2d)?;
+            let read = |l: iron_document::Leaf| store.0.resolved(l.node, l.path);
+            Some(iron_document::geom::local_affine(doc, &read, n).0)
+        };
+        recut.extend(chunks.heat(doc, &drawables, now, &changed.nodes, &placement).into_iter().filter(|h| wanted.contains(h)));
         let mut dirty: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
         // Chunks whose frame may have moved, with nothing they draw changed.
         let mut reframe: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
-        for &n in &changed.nodes {
-            // Inside a definition's template: every chunk that shows it
-            // through a reference (instance-cache.md phase D).
-            if let Some(t) = template_of(doc, n) {
-                for (home, part) in &chunks.homes {
-                    if let Some(shown) = part.shows_template.get(&t) {
-                        dirty.entry(*home).or_default().extend(shown.iter().copied());
-                    }
-                }
-                continue;
-            }
-            let home = nest::home(doc, n);
-            if !wanted.contains(&home) {
-                continue;
-            }
-            match chunks.chunk_of(home, n) {
-                // An instance moved as a whole: its runs are recorded
-                // relative to it, so only its frame changes.
-                Some(Place::Chunk(i)) if chunks.homes.get(&home).and_then(|p| p.chunks.get(i)).is_some_and(|c| !c.runs.is_empty() && c.roots[0] == n) => {
-                    reframe.entry(home).or_default().insert(i);
-                }
-                Some(Place::Chunk(i)) => {
-                    dirty.entry(home).or_default().insert(i);
-                }
-                // A split group changed: it draws nothing itself, so only
-                // its placement can matter, which its chunks' frames carry
-                // (instance-cache.md §2). No re-recording, no cutting again.
-                Some(Place::Split(range)) if !Chunks::must_cut_again(&store.0, &drawables, n) => {
-                    reframe.entry(home).or_default().extend(range);
-                }
-                // A split group that must now be drawn whole, or a node no
-                // chunk holds (the composition itself): cut again.
-                _ => {
-                    recut.insert(home);
-                }
-            }
-        }
+        find_changed(&chunks, &store.0, &drawables, &wanted, &changed.nodes, None, &mut dirty, &mut reframe, &mut recut);
         for &home in &recut {
             chunks.partition(&store.0, &drawables, home);
         }
+        // A new cut keeps the recordings of chunks it did not change, which
+        // were found above by the old cut's numbering: find them by the new.
+        if !recut.is_empty() {
+            for h in &recut {
+                dirty.remove(h);
+                reframe.remove(h);
+            }
+            let mut again = BTreeSet::new();
+            find_changed(&chunks, &store.0, &drawables, &wanted, &changed.nodes, Some(&recut), &mut dirty, &mut reframe, &mut again);
+        }
         chunks.homes.retain(|h, _| wanted.contains(h));
         let Chunks { homes: chunk_homes, shared, .. } = &mut *chunks;
-        let now = time.elapsed_secs_f64();
         for (home, part) in chunk_homes.iter_mut() {
             for (i, chunk) in part.chunks.iter_mut().enumerate() {
                 let mut record = chunk.fresh() || everything || dirty.get(home).is_some_and(|d| d.contains(&i));
@@ -352,7 +406,7 @@ pub fn render_document_layer(
                     continue;
                 }
                 let into = chunk.frame.inverse();
-                let rec = Recorded::record(|b| cx.branches(b, &chunk.roots, into, UNCLIPPED, "", 0, None));
+                let rec = Recorded::record(|b| cx.chunk(b, &chunk.roots, into));
                 if chunk.recorded.as_deref() != Some(&rec) {
                     chunk.recorded = Some(Arc::new(rec));
                     chunk.recorded_at = now;
@@ -548,6 +602,35 @@ impl Draw<'_> {
         self.store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(fallback)
     }
 
+    /// Draw a chunk's roots under the clips of the groups above them: a
+    /// clipped group split around a hot node (`chunks`) clips each piece
+    /// as it clipped them together.
+    fn chunk(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine) {
+        let mut clips = Vec::new();
+        let mut at = roots.first().and_then(|&r| self.doc.live(r)).and_then(|n| n.parent);
+        while let Some(p) = at {
+            let Some(node) = self.doc.live(p) else { break };
+            if node.ty.name() == "composition" {
+                break;
+            }
+            if let Some(frame) = iron_document::appearance::ClipFrame::read(self.store, p) {
+                clips.push((p, frame));
+            }
+            at = node.parent;
+        }
+        clips.reverse();
+        self.under_clips(b, &clips, roots, base);
+    }
+
+    fn under_clips(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, clips: &[(NodeId, iron_document::appearance::ClipFrame)], roots: &[NodeId], base: kurbo::Affine) {
+        let Some(((group, frame), rest)) = clips.split_first() else {
+            self.branches(b, roots, base, UNCLIPPED, "", 0, None);
+            return;
+        };
+        let affine = base * self.world(*group);
+        b.clipped(affine, clip_shape(frame), |b| self.under_clips(b, rest, roots, base));
+    }
+
     /// Draw `roots` with their subtrees in painter order: every node, or
     /// only those in `allowed` (a view's culled set).
     fn branches(&mut self, b: &mut crate::vector::DisplayListBuilder<'_>, roots: &[NodeId], base: kurbo::Affine, clip: kurbo::Rect, key: &str, depth: u32, allowed: Option<&BTreeSet<NodeId>>) {
@@ -557,16 +640,11 @@ impl Draw<'_> {
             let frame = iron_document::appearance::ClipFrame::read(self.store, id);
             b.opacity(opacity, clip, |b| {
                 if let Some(frame) = frame {
-                    let (w, h, r) = (frame.w, frame.h, frame.radius);
-                    let rect = kurbo::Rect::new(0.0, 0.0, w, h);
-                    let shape = if frame.ellipse {
-                        use kurbo::Shape;
-                        kurbo::Ellipse::new((w/2.0, h/2.0), (w/2.0, h/2.0), 0.0).to_path(0.1).into()
-                    } else { crate::vector::Shape::RoundedRect(rect.to_rounded_rect(r)) };
+                    let rect = kurbo::Rect::new(0.0, 0.0, frame.w, frame.h);
                     let placement = self.world(id);
                     let affine = base * placement;
                     let inner_clip = clip.intersect(affine.transform_rect_bbox(rect));
-                    b.clipped(affine, shape, |b| self.content(b, id, base, inner_clip, key, depth, allowed));
+                    b.clipped(affine, clip_shape(&frame), |b| self.content(b, id, base, inner_clip, key, depth, allowed));
                 } else {
                     self.content(b, id, base, clip, key, depth, allowed);
                 }

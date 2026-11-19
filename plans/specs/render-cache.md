@@ -248,7 +248,7 @@ The result for the measured scenes:
 
 ## 6. Vector retention for live layers (phase 3)
 
-**The user wants this built (2026-11-18)**, after reactive-engine phase 2c or beside it;
+**Built 2026-11-19, differently (§10, phase 3): hot nodes cut apart, still chunks baked to tiles.** The user wanted it built (2026-11-18), after reactive-engine phase 2c or beside it;
 with it, bytes uploaded per render are measured (handoff-render.md §4).
 
 After phase 2 the live layers are the hot chunks, which change anyway. A retained Vello
@@ -465,3 +465,79 @@ Built differently from §5, with measurements behind each:
   at 64×).
 - **Another scale's tiles fill a square only within 2×** of the view's scale; past
   that the square bakes or draws live.
+
+**Phase 3 (2026-11-19), built differently from §6.** §6's retained scene per live
+layer saves encode but not upload. `vello_gpu` 0.3 keeps a `Scene` on the CPU only, and
+every render uploads its strips, coverage alphas and paints again, unchanged layers
+included. Upstream removed the Recording API that would have kept them (vello#1611:
+unused, and in the way of other work; caching is left to users). So, the user's
+choice: cut what changes every frame apart from what does not, and let a view that
+redraws every frame bake its still chunks into raster tiles. Those stay resident in
+Iron's atlas pages and draw as image quads.
+
+- **Hot nodes** (`Chunks::heat`, `chunks.rs`). A node is hot once it has changed on
+  4 frames in a row, each within 0.25 s of the last. It cools after 1 s still. A node
+  that only places others counts when its placement moved. A hot node gets a chunk of
+  its own, and consecutive hot siblings share one. A subtree that holds a hot node is
+  split around it. That includes a clipped group that draws nothing itself, has no
+  appearance and holds no embed: each of its pieces is drawn under the group's clip
+  (`Draw::chunk`), and a change to the group marks its range instead of reframing
+  it. A cut keeps the recordings of chunks whose roots did not change.
+- **A home is cut again only for what changed shape.** `DocumentChanges.shaped` holds
+  the created, removed and moved nodes and the parents whose children changed, and
+  only their homes are cut (all of them on a reload). Before this, any structure
+  change set the flag for every home, so a hidden page's repeat re-keying while time
+  ran cut every composition each frame. On master that cost the Prussia import a
+  70 ms encode every idle frame.
+- **Planner** (`raster.rs`). A view also rasters when a hot chunk is coming
+  and its cold content costs more than `ANIMATED_OK` = 256. Cost is commands, plus a
+  path's elements over 8. It stops under `ANIMATED_OFF` = 128 while still hot, and
+  under `LIVE_OFF` otherwise. A group is admitted when its cost times the views
+  sharing it reaches `MIN_GROUP`.
+- **Checks.** `a_node_changing_every_frame_is_cut_apart_from_still_ones`
+  (`host_reference.rs`) heats a cursor inside a clipped group, then checks the split,
+  the kept recordings and the cooling. The Fourier page was paused at t = 1.3 s and
+  screenshotted while hot and rastering (15 split squares), then again once cold and
+  live: 0.8% of panel pixels differ, none by more than 2 levels. `raster-pixels.txt`
+  passes. About 27,000 pixels per Prussia pair differ, nearly all by 1–2 levels; the
+  meters differ in 353 pixels, worst 1.
+- **Two problems the pixel check had been hiding.**
+  - `__iron.raster(false)` changed nothing until some frame happened to render. On
+    master every idle frame recut and redrew, so it took effect. With quiet idle frames,
+    every "live" screenshot was still drawn from tiles, and each pair matched to the
+    byte. `raster::set_enabled` now asks for a render frame.
+  - The deep zoom ran in a 32 MB atlas (128 slots). That view's tiles, plus the
+    other-scale tiles it stretches from, no longer fit: baking one square evicted
+    another's source, so a few squares stayed stretched (up to 0.09% of pixels off by
+    more than 8 levels) and the view stayed pending. Groups are now admitted by
+    cost, so runs of a few long paths become tiles where they used to draw live, and
+    that plausibly grew the working set. The script now uses 64 MB (about 1,700
+    evictions). Still open: a view whose working set is larger than the atlas keeps
+    requesting frames and never settles. The default 256 MB budget has not hit it.
+
+The Fourier page playing (`wasm-bench`, webgl2): encode 1.35 → 0.28 ms a frame,
+frame 5.9 → 4.84 ms, 161 → 185 fps. Bytes handed to the GPU per render, measured with
+a temporary counter in `vello_gpu`: p50 409 → 342 KB (alphas 192, paints 128,
+strips 21). Most of what is left is padding: alphas and paints upload in whole 64 KB
+rows (4,096 texels of 16 bytes), so even a small scene sends five rows. The tiles
+themselves upload nothing after their bake.
+
+The large-SVG bench (`bench-large-svg.txt`), master against this, changed frames in ms
+(p50 / p95 / max):
+
+| | Master | Phase 3 |
+|---|---|---|
+| Idle, fitted | 75.9 / 239 / 241 | no changed frames |
+| Pan, fitted | 73.9 / 237 / 240 | 5.09 / 8.19 / 94.5 |
+| Drag one deep shape, fitted | 18.0 / 239 / 245 | 12.1 / 95.7 / 103.9 |
+| Zoom-in gesture | 11.1 / 89 / 287 | 4.8 / 14.9 / 94.6 |
+| Pan, zoomed in | 36.0 / 198 / 200 | 4.76 / 10.7 / 90 |
+| Zoom-out gesture | 15.0 / 84 / 355 | 4.9 / 21.8 / 103 |
+
+Phase 2 measured 1.2 ms p50 for the fitted pan. These pans are 5 ms on a build with
+everything since (the gallery, the reactive engine), and the reason was not
+investigated.
+
+§6's exit is met: two live chunks that change on their own each re-record only
+themselves. The view still encodes every live chunk each frame, with the still
+content drawn from tiles.

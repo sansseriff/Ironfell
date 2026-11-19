@@ -77,8 +77,15 @@ const ZOOM_SETTLE: f64 = 0.15;
 /// this, about 4 ms of encode, and stops below [`LIVE_OFF`].
 const LIVE_OK: usize = 2000;
 const LIVE_OFF: usize = 1000;
-/// A group with fewer visible commands is cheaper drawn live.
+/// A group whose visible content costs less (in [`cost`] units) is cheaper
+/// drawn live.
 const MIN_GROUP: usize = 64;
+/// A view whose content keeps changing (a chunk changed within [`HOT`]: a
+/// clip playing, a producer) re-encodes its still content every frame, so
+/// it rasters once that content costs more than this, about 1 ms of encode
+/// a frame, and stops below [`ANIMATED_OFF`] (render-cache.md §10, phase 3).
+const ANIMATED_OK: usize = 256;
+const ANIMATED_OFF: usize = 128;
 /// Milliseconds of baking a frame may spend on work nothing waits for:
 /// prefetch, a grouping change, a stretched square's sharper tile. A tile
 /// whose estimate alone is over it bakes only in a frame where its view is
@@ -106,10 +113,12 @@ pub fn pending() -> bool {
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// Turn raster tiles on or off, and set the atlas budget (`0`: the
-/// default, [`RASTER_BUDGET`]).
+/// default, [`RASTER_BUDGET`]). Asks for a render frame (`pending`): with
+/// nothing else changing, none would run to see the switch.
 pub fn set_enabled(enabled: bool, budget_mb: u64) {
     ENABLED.store(enabled, Ordering::Relaxed);
     BUDGET.store(if budget_mb == 0 { RASTER_BUDGET } else { budget_mb << 20 }, Ordering::Relaxed);
+    PENDING.store(true, Ordering::Relaxed);
 }
 
 /// What the last frames did, for the render inspector and the benchmarks
@@ -401,6 +410,8 @@ struct ChunkState {
     list: Arc<Recorded>,
     changed_at: f64,
     bakeable: bool,
+    /// What encoding it costs, roughly in commands ([`cost`]).
+    cost: usize,
 }
 
 #[derive(Default)]
@@ -525,9 +536,10 @@ impl Raster {
                     c.list = list.clone();
                     c.changed_at = self.now;
                     c.bakeable = bakeable(list);
+                    c.cost = cost(list);
                 }
                 None => {
-                    self.chunks.insert(key, ChunkState { list: list.clone(), changed_at: self.now, bakeable: bakeable(list) });
+                    self.chunks.insert(key, ChunkState { list: list.clone(), changed_at: self.now, bakeable: bakeable(list), cost: cost(list) });
                 }
             }
         }
@@ -631,6 +643,7 @@ impl Raster {
         let visible = |it: &Item<'_>| it.list.bounds().map(|b| !it.base.transform_rect_bbox(b).intersect(viewport).is_zero_area()).unwrap_or(false);
         let mut desired: Vec<std::ops::Range<usize>> = Vec::new();
         let mut cold_cmds = 0_usize;
+        let mut cold_cost = 0_usize;
         let mut hot_soon = false;
         // How often each chunk appears: an instance run equal instances share
         // (instance-cache.md phase C) is one group drawn at each of them, so
@@ -641,7 +654,7 @@ impl Raster {
         }
         for run in runs.iter().filter(|r| !motions.get(&r.start).is_some_and(|m| m.turning)) {
             let mut start: Option<usize> = None;
-            let mut cmds = 0_usize;
+            let (mut cmds, mut weight) = (0_usize, 0_usize);
             for i in run.clone().chain(std::iter::once(run.end)) {
                 let state = (i < run.end).then(|| self.chunks.get(&items[i].cache.unwrap())).flatten();
                 if let Some(c) = state.filter(|c| c.bakeable) {
@@ -650,21 +663,25 @@ impl Raster {
                         hot_soon = true;
                     } else if visible(&items[i]) {
                         cmds += items[i].list.cmds().len();
+                        weight += c.cost;
                     }
                 } else if let Some(s) = start.take() {
                     let shared = uses.get(&items[s].cache.expect("cacheable")).copied().unwrap_or(1);
-                    if cmds * shared >= MIN_GROUP {
+                    if weight * shared >= MIN_GROUP {
                         desired.push(s..i);
                         cold_cmds += cmds;
+                        cold_cost += weight;
                     }
-                    cmds = 0;
+                    (cmds, weight) = (0, 0);
                 }
             }
         }
+        // A view whose content keeps changing pays for its still content
+        // every frame, so it rasters at a much smaller size.
         if vs.rastering {
-            vs.rastering = cold_cmds >= LIVE_OFF;
+            vs.rastering = cold_cmds >= LIVE_OFF || (hot_soon && cold_cost >= ANIMATED_OFF);
         } else {
-            vs.rastering = cold_cmds > LIVE_OK;
+            vs.rastering = cold_cmds > LIVE_OK || (hot_soon && cold_cost > ANIMATED_OK);
         }
         if !self.enabled {
             vs.rastering = false;
@@ -1255,6 +1272,19 @@ impl Raster {
         }
     }
 
+}
+
+/// What encoding `list` costs, roughly in commands: one each, and a path's
+/// outline elements in eighths, as the chunk cut counts (`chunks.rs`).
+fn cost(list: &Recorded) -> usize {
+    use crate::vector::Shape;
+    list.cmds()
+        .iter()
+        .map(|c| match c {
+            DrawCmd::Fill { shape: Shape::Path(p), .. } | DrawCmd::Stroke { shape: Shape::Path(p), .. } => 1 + p.elements().len() / 8,
+            _ => 1,
+        })
+        .sum()
 }
 
 /// Whether a list can be baked: it draws no texture (a 3D view, changing

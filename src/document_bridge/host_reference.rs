@@ -333,3 +333,69 @@ fn host_reference_follows_derived_structure() {
     }
     assert!(host.steps > 30, "{} steps", host.steps);
 }
+
+/// A node that changes frame after frame (`Chunks::heat`) is cut into a
+/// chunk of its own, even inside a clipped group, the still nodes around it
+/// keep their recordings across the cut, and once it has been still a while
+/// the group is drawn whole again.
+#[test]
+fn a_node_changing_every_frame_is_cut_apart_from_still_ones() {
+    use super::chunks::{Chunks, Place};
+    use crate::vector::Recorded;
+    use std::sync::Arc;
+    use super::nest::Home;
+    let mut host = Host::new();
+    host.apply("sheet", r#"<model name="model"/><composition id="$c" name="sheet" dims="2d"/>"#);
+    let c = host.doc_named("sheet");
+    host.apply(
+        "pieces",
+        &format!(
+            r#"<text in="{c}" name="title" x="0" y="0" content="title"/>
+            <group in="{c}" id="$a" name="area" x="20" y="40" group_clip.w="200" group_clip.h="100">
+              <rect name="back" w="200" h="100"/>
+              <path name="curve" d="M0 0 L50 50 L100 0"/>
+              <rect name="cursor" x="10" w="2" h="100"/>
+            </group>
+            <rect in="{c}" name="note" x="0" y="200" w="20" h="10"/>"#
+        ),
+    );
+    let (area, back, curve, cursor) = (host.doc_named("area"), host.doc_named("back"), host.doc_named("curve"), host.doc_named("cursor"));
+    let home = Home::Composition(c);
+    let mut chunks = Chunks::default();
+    let cut = |host: &Host, chunks: &mut Chunks| chunks.partition(&host.world.resource::<DocumentStore>().0, host.world.resource::<Drawables>(), home);
+    cut(&host, &mut chunks);
+    assert!(matches!(chunks.chunk_of(home, area), Some(Place::Chunk(_))), "cold, the small clipped group is one chunk");
+    let only = BTreeSet::from([cursor]);
+    let mut warmed = BTreeSet::new();
+    host.store().0.begin_gesture(&[cursor]);
+    for k in 1..=4 {
+        let x = 10.0 + 5.0 * k as f64;
+        host.store().0.preview(cursor, path("transform2d.x"), Value::Number(x));
+        host.frame("move the cursor");
+        let doc = host.world.resource::<DocumentStore>().0.tree();
+        warmed = chunks.heat(doc, host.world.resource::<Drawables>(), k as f64 * 0.016, &only, &|_| None);
+    }
+    assert_eq!(warmed, BTreeSet::from([home]), "the cursor's home is cut again once it is hot");
+    assert!(chunks.hot.contains(&cursor));
+    cut(&host, &mut chunks);
+    let part = &chunks.homes[&home];
+    assert!(matches!(chunks.chunk_of(home, area), Some(Place::Split(_))), "the clipped group splits round its hot child");
+    let Some(Place::Chunk(i)) = chunks.chunk_of(home, cursor) else { panic!("the cursor is in one chunk") };
+    assert_eq!(part.chunks[i].roots, vec![cursor], "the cursor has a chunk of its own");
+    let Some(Place::Chunk(j)) = chunks.chunk_of(home, back) else { panic!("back is in one chunk") };
+    assert!(matches!(chunks.chunk_of(home, curve), Some(Place::Chunk(k)) if k == j), "the still children share a chunk");
+    // Recordings carry over a cut that gives the same roots.
+    let dummy = Arc::new(Recorded::record(|_| {}));
+    for chunk in &mut chunks.homes.get_mut(&home).unwrap().chunks {
+        chunk.recorded = Some(dummy.clone());
+    }
+    cut(&host, &mut chunks);
+    assert!(chunks.homes[&home].chunks.iter().all(|c| c.recorded.as_ref().is_some_and(|r| Arc::ptr_eq(r, &dummy))), "the same cut keeps every recording");
+    // Still for a while: cold again, and the group whole.
+    let doc = host.world.resource::<DocumentStore>().0.tree();
+    let cooled = chunks.heat(doc, host.world.resource::<Drawables>(), 10.0, &BTreeSet::new(), &|_| None);
+    assert_eq!(cooled, BTreeSet::from([home]));
+    assert!(chunks.hot.is_empty());
+    cut(&host, &mut chunks);
+    assert!(matches!(chunks.chunk_of(home, area), Some(Place::Chunk(_))), "cold again, the group is whole");
+}

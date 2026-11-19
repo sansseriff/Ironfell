@@ -1581,17 +1581,18 @@ python3 raster-pixels.py screenshots 380 36 940 744
 ```
 
 `bench-large-svg.txt` prints the interaction rows; at `wasm-bench` expect changed
-frames p50 ≈ 1.2 ms for both pans, ≈ 3 ms for the deep drag and ≈ 0.5 ms for the zoom
-gestures, with single-frame maxima up to ≈ 130 ms where a dense tile bakes (the
-table is in `render-cache.md` §10). With `?gfx=webgl2` replaced by `webgpu` it runs
+frames p50 ≈ 5 ms for both pans and the zoom gestures and ≈ 12 ms for the deep drag,
+with single-frame maxima of about 90–105 ms where a dense tile bakes, and no changed
+idle frames (render-cache.md §10, phase 3; phase 2 measured 1.2 ms pans on an older
+build). With `?gfx=webgl2` replaced by `webgpu` it runs
 on the other backend. `raster-pixels.py` must print `pass` for `rp-deep`,
 `rp-dragged`, `rp-fit`, `rp-group`, `rp-in`, `rp-meters` and `rp-undone`. It bounds
 pixels off by more than 2 levels (0.2%) and by more than 8 (0.01%), not every
 difference: each chunk frame (a group's position) is a raster group composited on its
 own, so about 2–3% of pixels differ by 1–2 levels where antialiased edges overlap
-(with the Prussia file imported as references, about 21,000 differ, ~500 by more than
-2, 8 by more than 8; `rp-meters` 321, worst 1). The `eval` after the deep zoom reports
-`evicted` > 0 (it runs in a 32 MB atlas). `RASTER=0 bench-render.sh …` runs the
+(with the Prussia file imported as references, about 27,000 differ, up to ~500 by more
+than 2, up to 23 by more than 8; `rp-meters` 353, worst 1; 2026-11-19). The `eval` after the deep zoom reports
+`evicted` > 0 (it runs in a 64 MB atlas; about 1,700 evictions). `RASTER=0 bench-render.sh …` runs the
 stress benchmark with tiles off.
 
 ## Instance cache (plans/specs/instance-cache.md)

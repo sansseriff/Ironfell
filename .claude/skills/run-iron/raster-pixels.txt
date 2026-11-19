@@ -89,8 +89,10 @@ sleep 300
 key Escape
 sleep 300
 # Deep zoom in steps, each settling (and baking at its own scale), within a
-# 32 MB atlas (two pages), so tiles are evicted and baked again.
-eval __iron.raster(true, 32).then(() => 'raster, 32 MB')
+# 64 MB atlas (four pages), so tiles are evicted and baked again. At 32 MB
+# this view's tiles and the ones it stretches from no longer fit, and it
+# never settles (render-cache.md §10, phase 3).
+eval __iron.raster(true, 64).then(() => 'raster, 64 MB')
 pmove controls 470 370
 keydown Control
 pwheel controls 470 370 0 -6 10 30

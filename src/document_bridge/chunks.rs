@@ -25,6 +25,14 @@
 //! - a node that draws and has children stays whole, since it draws before
 //!   them.
 //!
+//! A node that changes on frame after frame (a playing clip, a producer, a
+//! stepper: render-cache.md §6) is *hot*, and is cut into a chunk of its own
+//! with the subtrees around it split, so what stays still is recorded once
+//! and its chunks can be baked while the hot one is drawn live. A clipped
+//! group holding a hot node splits too: each of its pieces is recorded under
+//! the group's clip, which clips the pieces as it clipped them together,
+//! apart from edge pixels where pieces overlap under the clip's soft edge.
+//!
 //! A linked component instance is a chunk of its own, drawn as one layer per
 //! *run* of its picture (instance-cache.md phase C, `iron_document::analysis`):
 //! painter-contiguous parts of one class. A static or keyed run is recorded
@@ -39,13 +47,29 @@ use super::{Drawables, Shape2d, nest::{self, Home}};
 use crate::vector::Recorded;
 use bevy::prelude::*;
 use iron_document::{FacetKind, NodeId, Store};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// Most cost one chunk holds, in commands (an anchor-heavy path counts
 /// its segments in eighths): about 8 ms of encode at the measured 4 µs a
 /// command (render-cache.md §2).
 pub const CHUNK_MAX: usize = 2_000;
+
+/// A node is hot once it has changed on this many frames in a row, each
+/// within [`HOT_GAP`] seconds of the one before.
+const HOT_FRAMES: u32 = 4;
+const HOT_GAP: f64 = 0.25;
+/// A hot node with no change for this long is cold again.
+const COOL: f64 = 1.0;
+
+/// How a node has been changing: since when without a gap, its last change,
+/// on how many frames, and for a node that only places others, where it was.
+#[derive(Debug, Clone)]
+struct Heat {
+    last: f64,
+    frames: u32,
+    placed: Option<[f64; 6]>,
+}
 
 /// The least cost, in commands, for which a reference is drawn as a layer of
 /// its own (instance-cache.md phase D).
@@ -137,6 +161,10 @@ pub struct Chunks {
     /// Render inspectors' tinted copies, by the recording they tint (its
     /// address, kept alive alongside).
     tinted: HashMap<usize, (Arc<Recorded>, Arc<Recorded>)>,
+    /// How each recently changed node has been changing, and the hot ones:
+    /// what the cut gives chunks of their own.
+    heat: HashMap<NodeId, Heat>,
+    pub hot: HashSet<NodeId>,
 }
 
 /// How much of its hue an inspector mixes into a chunk's colours.
@@ -187,13 +215,68 @@ pub fn home_roots(doc: Tree<'_>, home: Home) -> Vec<NodeId> {
 }
 
 impl Chunks {
-    /// Cut `home` into chunks again, dropping its recordings.
+    /// Note the nodes that changed this frame, at `now` (app seconds): one
+    /// that draws, or one that places others and moved (`placement`, for a
+    /// node that does not draw), heats up; one hot that has been still for
+    /// [`COOL`] is cold again. Returns the homes whose hot nodes changed,
+    /// to cut again.
+    pub fn heat(&mut self, doc: Tree<'_>, drawables: &Drawables, now: f64, changed: &BTreeSet<NodeId>, placement: &dyn Fn(NodeId) -> Option<[f64; 6]>) -> BTreeSet<Home> {
+        let mut homes = BTreeSet::new();
+        for &n in changed {
+            let draws = drawables.0.contains_key(&n);
+            let placed = if draws { None } else { placement(n) };
+            if !draws && placed.is_none() {
+                continue;
+            }
+            let h = self.heat.entry(n).or_insert(Heat { last: f64::NEG_INFINITY, frames: 0, placed });
+            // A node that only places others counts when it moved.
+            if !draws && h.frames > 0 && h.placed == placed {
+                continue;
+            }
+            h.placed = placed;
+            if h.last == now {
+                continue;
+            }
+            h.frames = if now - h.last <= HOT_GAP { h.frames + 1 } else { 1 };
+            h.last = now;
+            if h.frames >= HOT_FRAMES && self.hot.insert(n) {
+                homes.insert(nest::home(doc, n));
+            }
+        }
+        let cooled: Vec<NodeId> = self.hot.iter().copied().filter(|n| self.heat.get(n).is_none_or(|h| now - h.last > COOL)).collect();
+        for n in cooled {
+            self.hot.remove(&n);
+            homes.insert(nest::home(doc, n));
+        }
+        self.heat.retain(|n, h| now - h.last <= COOL || self.hot.contains(n));
+        homes
+    }
+
+    /// Cut `home` into chunks again. A chunk with the same roots as one
+    /// before keeps its recording, so a cut that only moves a hot node into
+    /// a chunk of its own records only the chunks around it again; whoever
+    /// cuts decides afresh which chunks changed.
     pub fn partition(&mut self, store: &Store, drawables: &Drawables, home: Home) {
         let doc = store.tree();
-        let mut cut = Cut { store, doc, drawables, cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
+        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
         let roots = home_roots(doc, home);
         cut.pack(&roots);
-        self.homes.insert(home, cut.out);
+        let mut out = cut.out;
+        if let Some(old) = self.homes.remove(&home) {
+            let mut before: HashMap<Vec<NodeId>, Chunk> = old.chunks.into_iter().map(|c| (c.roots.clone(), c)).collect();
+            for c in &mut out.chunks {
+                if let Some(o) = before.remove(&c.roots).filter(|o| o.embeds == c.embeds && o.runs.is_empty() == c.runs.is_empty()) {
+                    c.recorded = o.recorded;
+                    c.frame = o.frame;
+                    c.basis = o.basis;
+                    c.recorded_at = o.recorded_at;
+                    if !o.runs.is_empty() {
+                        c.runs = o.runs;
+                    }
+                }
+            }
+        }
+        self.homes.insert(home, out);
     }
 
     /// `rec` tinted for a render inspector: made once per recording.
@@ -221,10 +304,10 @@ impl Chunks {
     /// it now draws, holds an embed, or gained an appearance or a clip
     /// frame, so it has to be drawn whole. A move, the common change, does
     /// not.
-    pub fn must_cut_again(store: &Store, drawables: &Drawables, node: NodeId) -> bool {
+    pub fn must_cut_again(&self, store: &Store, drawables: &Drawables, node: NodeId) -> bool {
         let doc = store.tree();
-        let cut = Cut { store, doc, drawables, cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
-        cut.whole(node)
+        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
+        cut.whole(node) && !(cut.clip_splits(node) && cut.holds_hot(node))
     }
 }
 
@@ -232,6 +315,9 @@ struct Cut<'a> {
     store: &'a Store,
     doc: Tree<'a>,
     drawables: &'a Drawables,
+    hot: &'a HashSet<NodeId>,
+    /// Whether each subtree holds a hot node below its root.
+    holds: HashMap<NodeId, bool>,
     cost: HashMap<NodeId, (usize, usize)>,
     embeds: HashMap<NodeId, bool>,
     /// The templates each subtree draws through references, transitively.
@@ -298,6 +384,33 @@ impl Cut<'_> {
         e
     }
 
+    /// Whether a hot node lies below `id` (not `id` itself).
+    fn holds_hot(&mut self, id: NodeId) -> bool {
+        if self.hot.is_empty() {
+            return false;
+        }
+        if let Some(&h) = self.holds.get(&id) {
+            return h;
+        }
+        self.holds.insert(id, false);
+        let h = self.doc.children(id).to_vec().into_iter().any(|k| self.hot.contains(&k) || self.holds_hot(k));
+        self.holds.insert(id, h);
+        h
+    }
+
+    /// Whether `id` is a clipped group that may still be split: it draws
+    /// nothing itself, composites nothing (no appearance) and holds no
+    /// embed, so each piece can carry its clip.
+    fn clip_splits(&mut self, id: NodeId) -> bool {
+        let doc = self.doc;
+        !doc.children(id).is_empty()
+            && !nest::is_embed(doc, id)
+            && !self.drawables.0.contains_key(&id)
+            && doc.facet(id, FacetKind::Appearance).is_none()
+            && iron_document::appearance::ClipFrame::read(self.store, id).is_some()
+            && !self.has_embed(id)
+    }
+
     /// Whether splitting `id` into its children's chunks would change what
     /// it draws (see the module comment).
     fn whole(&self, id: NodeId) -> bool {
@@ -315,6 +428,7 @@ impl Cut<'_> {
     fn pack(&mut self, ids: &[NodeId]) {
         let mut run: Vec<NodeId> = Vec::new();
         let mut run_cost = (0, 0);
+        let mut run_hot = false;
         for &id in ids {
             // A reference is a layer of its own only when it is heavy: it
             // sits wherever its piece did, so its tiles are seldom another
@@ -332,7 +446,12 @@ impl Cut<'_> {
             let (cost, nodes) = self.subtree(id);
             let embeds = self.has_embed(id);
             let whole = self.whole(id);
-            if (cost > CHUNK_MAX || embeds) && !whole {
+            // A hot node is a chunk of its own; a subtree holding one splits
+            // around it where it can, so the still parts keep their chunks.
+            let hot = self.hot.contains(&id);
+            let holds_hot = !hot && self.holds_hot(id);
+            let splits = (cost > CHUNK_MAX || embeds || holds_hot) && !whole;
+            if splits || (holds_hot && self.clip_splits(id)) {
                 self.flush(&mut run, &mut run_cost);
                 self.out.of_node.insert(id, SPLIT);
                 let kids = self.doc.children(id).to_vec();
@@ -341,17 +460,20 @@ impl Cut<'_> {
                 self.out.split.insert(id, start..self.out.chunks.len());
                 continue;
             }
-            if embeds {
+            if embeds || holds_hot {
                 self.flush(&mut run, &mut run_cost);
                 run.push(id);
                 run_cost = (cost, nodes);
                 self.flush(&mut run, &mut run_cost);
+                run_hot = false;
                 continue;
             }
-            if !run.is_empty() && run_cost.0 + cost > CHUNK_MAX {
+            // Consecutive hot siblings share a run, apart from still ones.
+            if !run.is_empty() && (run_cost.0 + cost > CHUNK_MAX || run_hot != hot) {
                 self.flush(&mut run, &mut run_cost);
             }
             run.push(id);
+            run_hot = hot;
             run_cost = (run_cost.0 + cost, run_cost.1 + nodes);
         }
         self.flush(&mut run, &mut run_cost);

@@ -78,7 +78,7 @@ impl<T, E> Outcome for Option<Result<T, E>> {
 macro_rules! never_fails {
     ($($t:ty),* $(,)?) => { $(impl Outcome for $t {})* };
 }
-never_fails!((), bool, DragHandle, SolveReport, ProducerId, GestureId, Changes, Vec<NodeId>, Vec<(NodeId, String)>, Vec<machine::Running>, Vec<query::Request>);
+never_fails!((), bool, DragHandle, SolveReport, ProducerId, GestureId, Changes, Vec<NodeId>, Vec<(NodeId, String)>, Vec<machine::Running>, Vec<query::Request>, crate::Advanced);
 
 fn atomicity_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -309,6 +309,10 @@ impl Store {
 
     pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
         self.call("apply_session", |s| s.apply_session(ops.clone()))
+    }
+
+    pub fn advance(&mut self, now: f64, paused: &std::collections::BTreeSet<NodeId>) -> crate::Advanced {
+        self.call("advance", |s| s.advance(now, paused))
     }
 
     pub fn advance_presence(&mut self, now: f64) -> Vec<NodeId> {

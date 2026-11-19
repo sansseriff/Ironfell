@@ -233,6 +233,28 @@ impl Drop for Rollback {
     }
 }
 
+/// What `advance` asks of the host (reactive-engine.md §10.2).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Wake {
+    /// Call `advance` again by this host time: `now` while anything moves
+    /// continuously; `None` when nothing is due.
+    pub next: Option<f64>,
+    /// The compositions something moving is drawn in: they redraw.
+    pub live: BTreeSet<NodeId>,
+}
+
+/// What one `advance` did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Advanced {
+    pub wake: Wake,
+    /// The query requests that became due, for the host to carry out and
+    /// answer with `resolve_query`.
+    pub queries: Vec<query::Request>,
+    /// Whether anything moved, published or came to rest: the host
+    /// redraws.
+    pub changed: bool,
+}
+
 /// What `after_transaction`, `post_apply` and the pipeline change outside
 /// the document, kept so that a transaction the solver refuses leaves the
 /// store as it was (reactive-engine handoff §4.4, stage 1).
@@ -372,6 +394,11 @@ pub struct StoreCore {
     /// presentation state (reactivity.md §13, phase 7).
     presence: BTreeMap<NodeId, Presence>,
     presence_at: Option<f64>,
+    /// The host time of the last `advance`: the playhead player's step.
+    advanced_at: Option<f64>,
+    /// What the last `advance` found live, and the queries then waiting:
+    /// the frame something comes to rest still redraws.
+    advanced: (BTreeSet<NodeId>, Vec<NodeId>),
     /// Nodes' interaction states, as the host last reported them (session;
     /// read by rules that match `state:`).
     interaction: BTreeMap<NodeId, Vec<&'static str>>,
@@ -513,6 +540,8 @@ impl StoreCore {
             queries: self.queries.clone(),
             presence: self.presence.clone(),
             presence_at: self.presence_at,
+            advanced_at: self.advanced_at,
+            advanced: self.advanced.clone(),
             interaction: self.interaction.clone(),
             expansion_problems: self.expansion_problems.clone(),
             repeats: self.repeats.clone(),
@@ -720,6 +749,8 @@ impl StoreCore {
             queries: query::Queries::default(),
             presence: BTreeMap::new(),
             presence_at: None,
+            advanced_at: None,
+            advanced: (BTreeSet::new(), Vec::new()),
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
@@ -2473,6 +2504,72 @@ impl StoreCore {
             self.publish(ProducerId::STEPS, values);
         }
         active
+    }
+
+    /// Bring everything that runs on time to `now` (seconds, the host's
+    /// clock; reactive-engine.md §10.2): layout glides, machines, traces and
+    /// accumulators, queries, items entering and leaving, and the playhead
+    /// while the clock plays, in that order. The accumulators of a `paused`
+    /// composition (one no view shows) hold still. Returns when to call
+    /// again and what to redraw until then, the queries that became due,
+    /// and whether anything changed.
+    pub fn advance(&mut self, now: f64, paused: &BTreeSet<NodeId>) -> Advanced {
+        let moving = self.advance_motion(now);
+        let running = self.advance_machines(now);
+        let stepping = self.advance_steps(now, paused);
+        let queries = self.advance_queries(now);
+        let entering = self.advance_presence(now);
+        let playing = self.advance_playhead(now);
+        let waiting = self.pending_queries();
+        let doc = Tree::of(&self.docs);
+        let comp = |n: NodeId| composition::composition_of(doc, n);
+        let mut live: BTreeSet<NodeId> = moving.iter().chain(&stepping).chain(&waiting).chain(&entering).filter_map(|&n| comp(n)).collect();
+        // A machine is drawn where its entity is pictured.
+        for r in &running {
+            live.extend(doc.relations_to(r.entity).filter(|x| x.rel == RelKind::Figures).filter_map(|x| comp(x.from)));
+        }
+        // What the clips animate, while the playhead moves.
+        if playing {
+            live.extend(doc.relations().filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).filter_map(|r| comp(r.to)));
+        }
+        let (was_live, was_waiting) = std::mem::take(&mut self.advanced);
+        let changed = !live.is_empty() || !was_live.is_empty() || waiting != was_waiting || playing;
+        let next = (!live.is_empty()).then_some(now);
+        self.advanced = (live.clone(), waiting);
+        Advanced { wake: Wake { next, live }, queries, changed }
+    }
+
+    /// The playhead player (timeline.md §4.1): while the clock plays, move
+    /// `t` by the host time since the last advance times `rate`, wrapping
+    /// between `loop_in` and `loop_out` when they differ and stopping at the
+    /// end of the last clip otherwise. Whether it played.
+    fn advance_playhead(&mut self, now: f64) -> bool {
+        let dt = now - self.advanced_at.replace(now).unwrap_or(now);
+        let Some(clock) = self.clock() else { return false };
+        let field = |s: &Self, f: &str| s.resolved(clock, clock_path(f));
+        if field(self, "playing") != Some(Value::Bool(true)) {
+            return false;
+        }
+        let number = |s: &Self, f: &str| field(s, f).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let (rate, lo, hi) = (number(self, "rate"), number(self, "loop_in"), number(self, "loop_out"));
+        let mut t = self.time() + dt * rate;
+        let mut stop = false;
+        if hi > lo {
+            if t >= hi {
+                t = lo + (t - hi) % (hi - lo);
+            }
+        } else {
+            let end = timeline_view::clips_end(self);
+            if t >= end {
+                t = end;
+                stop = true;
+            }
+        }
+        self.set_time(t);
+        if stop {
+            let _ = self.apply_session(vec![Op::Set { id: clock, path: clock_path("playing"), slot: Slot::Const(Value::Bool(false)) }]);
+        }
+        true
     }
 
     /// Advance the transitions in flight to `now` (seconds, the host's

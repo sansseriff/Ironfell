@@ -165,3 +165,42 @@ fn the_clock_is_not_saved_or_undone() {
     assert_eq!(store.time(), 2.5);
     let _ = rect;
 }
+
+fn set_clock(store: &mut Store, fields: &[(&str, Value)]) {
+    let clock = store.ensure_clock().unwrap();
+    let ops = fields.iter().map(|(f, v)| Op::Set { id: clock, path: path(&format!("clock.{f}")), slot: Slot::Const(v.clone()) }).collect();
+    store.apply_session(ops).unwrap();
+}
+
+/// `advance` plays the playhead (reactive-engine.md §10.2): by host time
+/// times `rate`, stopping at the end of the last clip, where the clock
+/// stops playing.
+#[test]
+fn advance_plays_the_playhead_to_the_end_of_the_clips() {
+    let Scene { mut store, rect, .. } = scene();
+    let none = std::collections::BTreeSet::new();
+    store.advance(10.0, &none);
+    set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(1.0))]);
+    let a = store.advance(11.5, &none);
+    assert!(a.changed);
+    assert_eq!(store.time(), 1.5);
+    assert_eq!(x_of(&store, rect), 150.0);
+    store.advance(20.0, &none);
+    assert_eq!(store.time(), 3.0);
+    assert_eq!(store.resolved(store.clock().unwrap(), path("clock.playing")), Some(Value::Bool(false)));
+    // At rest: nothing to redraw and nothing due.
+    store.advance(21.0, &none);
+    let idle = store.advance(22.0, &none);
+    assert_eq!((idle.wake.next, idle.wake.live.is_empty(), idle.changed), (None, true, false));
+}
+
+/// Between `loop_in` and `loop_out` the playhead wraps.
+#[test]
+fn advance_loops_the_playhead() {
+    let Scene { mut store, .. } = scene();
+    let none = std::collections::BTreeSet::new();
+    store.advance(0.0, &none);
+    set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(2.0)), ("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(2.0))]);
+    store.advance(1.25, &none);
+    assert_eq!(store.time(), 0.5);
+}

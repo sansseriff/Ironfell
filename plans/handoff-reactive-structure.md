@@ -2230,6 +2230,19 @@ maps what is active to compositions and marks them live.
 - **The playhead player moves into the store** so `Wake` can say when the playhead
   next matters; the host keeps only the frame loop.
 
+**Phase 3, step 1 done (2026-11-19): one entry point.** `Store::advance(now,
+paused) -> Advanced { wake: Wake { next, live }, queries, changed }` runs the layout
+glides, machines, traces and accumulators, queries, presence and the playhead player
+in the host's old order; the player moved from `document_bridge/clock.rs` into the
+store (`advance_playhead`: host time since the last advance times `rate`, the loop,
+the stop at the last clip). It joins what each reports into the compositions to
+redraw, and `changed` includes the frame something comes to rest. The host's six
+systems are one (`motion::advance`). The per-kind methods stay public: about 120
+tests step one kind at a time. `next` is `Some(now)` while anything is live, else
+`None`: the scheduler (step 2) makes it exact. Checked: the suites, the host
+reference, `smoke.txt` and `regression.txt` unchanged, `fiber.txt` (five
+assertions), `pulses.txt` (four) and `idle.txt` (`changed 0`).
+
 ## 5. Rules, and when to stop
 
 **Rules.**

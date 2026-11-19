@@ -1074,3 +1074,126 @@ fn at_rest_stale_pictures_are_swept_up_to_date() {
     }
     assert_eq!(store.advance(1.1).changed, false, "then at rest");
 }
+
+/// Compositions `$a` and `$b` with what `body` holds (it names them), a
+/// store that observes only `$a`, and the reference that observes
+/// everything, each with a host producer.
+fn split(body: &str) -> (Store, Store, ProducerId, BTreeMap<String, NodeId>) {
+    let build = || {
+        let mut store = Store::new();
+        let plan = edit::plan(&store, &format!(r#"<edit><model name="model"/>{body}</edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+        store.apply(tx("split", plan.ops)).unwrap();
+        (store, plan.aliases)
+    };
+    let (mut all, _) = build();
+    let (mut store, n) = build();
+    let p = store.register_producer("host");
+    all.register_producer("host");
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$a"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    (store, all, p, n)
+}
+
+fn lets(pairs: &[(NodeId, Value)]) -> BTreeMap<Leaf, Value> {
+    pairs.iter().map(|(n, v)| (Leaf { node: *n, path: path("let.value") }, v.clone())).collect()
+}
+
+/// Layout reads its children's sizes outside the graph: a hidden stack
+/// whose first child grew still places the second where a shown picture
+/// reads it (reactive-engine.md §8.9).
+#[test]
+fn a_hidden_stack_places_from_current_sizes() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$t" name="t" value="1"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="{= $r2.transform2d.x}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><group id="$g" x="0" y="0" layout.mode="stack_x" layout.gap="0"><rect id="$r1" w="{= $t * 10}" h="10"/><rect id="$r2" w="10" h="10"/></group></composition>"#,
+    );
+    let x = |s: &Store| s.resolved(n["$s"], path("transform2d.x"));
+    let before = x(&all);
+    for v in [4.0, 2.0] {
+        store.publish(p, lets(&[(n["$t"], Value::Number(v))]));
+        all.publish(p, lets(&[(n["$t"], Value::Number(v))]));
+        assert_eq!(x(&store), x(&all), "t = {v}");
+    }
+    assert_ne!(x(&all), before, "the second child moved");
+}
+
+/// A tracked read reaching a stale cell does not trust that cell's old
+/// edges: the hidden rect stopped reading the shown one before it went
+/// stale, so the shown one reading it back is no cycle.
+#[test]
+fn a_tracked_read_into_a_stale_cell_finds_no_false_cycle() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$u" name="u" value="0"/><let id="$v" name="v" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="0" y="{= deref($v, 'transform2d.x', 0)}" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><rect id="$h" name="h" x="{= deref($u, 'transform2d.y', 7)}" y="0" w="1" h="1"/></composition>"#,
+    );
+    let (u, v, s, h) = (n["$u"], n["$v"], n["$s"], n["$h"]);
+    // h reads s while everything is observed, then rests.
+    store.set_observe_all(true);
+    let zero = Value::Number(0.0);
+    for (uv, vv) in [(Value::Ref(s), zero.clone()), (zero.clone(), zero.clone()), (zero.clone(), Value::Ref(h))] {
+        store.publish(p, lets(&[(u, uv.clone()), (v, vv.clone())]));
+        all.publish(p, lets(&[(u, uv), (v, vv)]));
+        store.set_observe_all(false);
+    }
+    let y = Leaf { node: s, path: path("transform2d.y") };
+    assert_eq!(store.reactive().errors.get(&y), None);
+    assert_eq!(store.resolved(s, path("transform2d.y")), Some(Value::Number(7.0)));
+    assert_eq!(store.resolved(s, path("transform2d.y")), all.resolved(s, path("transform2d.y")));
+}
+
+/// One tracked read can wake a long hidden chain: its evaluations count
+/// against no budget sized before the wake.
+#[test]
+fn a_tracked_read_wakes_a_long_hidden_chain() {
+    let chain: String = (1..1100).map(|i| format!(r#"<rect id="$c{i}" x="{{= $c{}.transform2d.x + 1}}" y="0" w="1" h="1"/>"#, i - 1)).collect();
+    let (mut store, mut all, p, n) = split(&format!(
+        r#"<let id="$t" name="t" value="0"/><let id="$w" name="w" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$d" name="d" x="{{= deref($w, 'transform2d.x', -1)}}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><rect id="$c0" x="{{= $t}}" y="0" w="1" h="1"/>{chain}</composition>"#
+    ));
+    let (t, w, d) = (n["$t"], n["$w"], n["$d"]);
+    for wv in [Value::Number(0.0), Value::Ref(n["$c1099"])] {
+        store.publish(p, lets(&[(t, Value::Number(5.0)), (w, wv.clone())]));
+        all.publish(p, lets(&[(t, Value::Number(5.0)), (w, wv)]));
+    }
+    assert_eq!(store.reactive().errors.get(&Leaf { node: d, path: path("transform2d.x") }), None);
+    assert_eq!(store.resolved(d, path("transform2d.x")), Some(Value::Number(1104.0)));
+    assert_eq!(all.resolved(d, path("transform2d.x")), Some(Value::Number(1104.0)));
+}
+
+/// A handle reads its range outside the graph: an edit through it on a
+/// hidden slider whose maximum moved holds the value to the new maximum.
+#[test]
+fn a_handle_on_a_hidden_slider_reads_its_current_range() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$t" name="t" value="10"/>
+        <composition id="$a" name="a" dims="2d"><rect name="s" x="0" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><slider id="$k" name="k" x="0" y="0" w="100" h="20" min="0" max="{= $t}" value="1"/></composition>"#,
+    );
+    let k = n["$k"];
+    for s in [&mut store, &mut all] {
+        s.publish(p, lets(&[(n["$t"], Value::Number(20.0))]));
+        s.set_through_handle(k, path("slider.value"), Value::Number(15.0), "set", Actor::Human, 1).unwrap();
+    }
+    assert_eq!(store.resolved(k, path("slider.value")), Some(Value::Number(15.0)));
+    assert_eq!(store.resolved(k, path("slider.value")), all.resolved(k, path("slider.value")));
+}
+
+/// An accumulator in a hidden composition that a shown picture reads keeps
+/// stepping: what is shown needs it (§8.8).
+#[test]
+fn a_hidden_accumulator_a_shown_picture_reads_keeps_stepping() {
+    let (mut store, mut all, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"><rect id="$m" name="m" x="{= $acc}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/></composition>"#,
+    );
+    for t in [0.0, 0.1, 0.2, 0.3] {
+        store.advance(t);
+        all.advance(t);
+    }
+    let x = |s: &Store| s.resolved(n["$m"], path("transform2d.x"));
+    assert!(x(&all).and_then(|v| v.as_f64()).is_some_and(|v| v > 0.0));
+    assert_eq!(x(&store), x(&all));
+}

@@ -137,20 +137,55 @@ pub struct Reactive {
     /// Unneeded cells whose inputs changed since they were last evaluated:
     /// they hold their last value (§8.9) until needed again.
     stale: BTreeSet<Leaf>,
-    /// Whether `unneeded` was emptied for exactness (a transaction, a
-    /// structure change) since the store last set it.
+    /// Whether necessity is out of date: `unneeded` was emptied for
+    /// exactness (a transaction, a structure change), or a tracked read
+    /// left a cell only it had made needed, since the store last set it.
     relaxed: bool,
+    /// Unneeded cells the store read from outside the graph (`read`, while
+    /// `recording`): it makes them needed (`need`) and they stay so (§8.9's
+    /// read of a stale cell brings it up to date). Layout, the network's
+    /// solver, handles and the machine player read cells the graph's edges
+    /// do not show. The host's reads are not recorded: what it draws of a
+    /// hidden composition may be stale.
+    escaped: Escaped,
+    /// Cells read from outside the graph while unneeded: needed whenever
+    /// the store decides necessity, until the next rebuild.
+    pinned: BTreeSet<Leaf>,
+    /// Cells made needed since the store last set `unneeded` (a tracked
+    /// read or `need` reached them): when a tracked read leaves one, the
+    /// store decides necessity again.
+    woken: BTreeSet<Leaf>,
+}
+
+/// The unneeded cells read from outside the graph since the store last
+/// took them, and how deep the store is in code whose reads it records.
+/// Behind a lock because `read` takes `&self` and the store is shared
+/// across threads.
+#[derive(Debug, Default)]
+struct Escaped {
+    read: std::sync::Mutex<BTreeSet<Leaf>>,
+    depth: std::sync::atomic::AtomicUsize,
+}
+
+impl Clone for Escaped {
+    fn clone(&self) -> Self {
+        Self { read: std::sync::Mutex::new(self.read.lock().expect("escaped lock").clone()), depth: std::sync::atomic::AtomicUsize::new(self.depth.load(std::sync::atomic::Ordering::Relaxed)) }
+    }
 }
 
 impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
+        if !self.unneeded.is_empty() && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0 && self.unneeded.contains(&leaf) {
+            self.escaped.read.lock().expect("escaped lock").insert(leaf);
+        }
         read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
 
-    /// Whether `leaf` holds a value older than its inputs: nothing observed
-    /// needed it since they changed (reactive-engine.md §8.9).
+    /// Whether evaluation stopped at `leaf`: its inputs changed while
+    /// nothing observed needed it (reactive-engine.md §8.9). What reads it
+    /// is unneeded too and holds its last value without being listed here.
     pub fn is_stale(&self, leaf: Leaf) -> bool {
         self.stale.contains(&leaf)
     }
@@ -170,7 +205,7 @@ impl Reactive {
                 candidates.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
             }
         }
-        let mut stack: Vec<Leaf> = candidates.iter().filter(|l| self.dependents.get(l).is_some_and(|ds| ds.iter().any(|d| !candidates.contains(d)))).copied().collect();
+        let mut stack: Vec<Leaf> = candidates.iter().filter(|l| self.pinned.contains(l) || self.dependents.get(l).is_some_and(|ds| ds.iter().any(|d| !candidates.contains(d)))).copied().collect();
         let mut needed: BTreeSet<Leaf> = BTreeSet::new();
         while let Some(l) = stack.pop() {
             if !needed.insert(l) {
@@ -188,6 +223,7 @@ impl Reactive {
     /// that are needed again. Whether it evaluated anything.
     pub(crate) fn set_unneeded(&mut self, doc: Tree<'_>, unneeded: BTreeSet<Leaf>) -> bool {
         self.relaxed = false;
+        self.woken.clear();
         let wake: BTreeSet<Leaf> = self.stale.iter().filter(|l| !unneeded.contains(l)).copied().collect();
         self.stale.retain(|l| unneeded.contains(l));
         self.unneeded = unneeded;
@@ -197,6 +233,83 @@ impl Reactive {
         let dirty = self.readers(&wake);
         self.evaluate(doc, &dirty, &wake);
         true
+    }
+
+    /// The unneeded cells read from outside the graph since the last take.
+    pub(crate) fn take_escaped(&self) -> BTreeSet<Leaf> {
+        std::mem::take(&mut *self.escaped.read.lock().expect("escaped lock"))
+    }
+
+    /// Start (`true`) or end recording reads of unneeded cells: the store's
+    /// own code that reads outside the graph runs between the two. Nests.
+    pub(crate) fn recording(&self, on: bool) {
+        if on {
+            self.escaped.depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.escaped.depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Make `leaves` and what they read needed, bringing the stale ones up
+    /// to date: something outside the graph read them (`take_escaped`).
+    /// They stay needed when the store decides necessity again (`pinned`).
+    /// Whether anything was brought up to date, so that what read them
+    /// may have read an old value.
+    pub(crate) fn need(&mut self, doc: Tree<'_>, leaves: &BTreeSet<Leaf>) -> bool {
+        self.pinned.extend(leaves.iter().filter(|l| self.unneeded.contains(l)));
+        let wake = self.wake_closure(leaves.iter().copied());
+        if wake.is_empty() {
+            return false;
+        }
+        let dirty = self.readers(&wake);
+        self.evaluate(doc, &dirty, &wake);
+        true
+    }
+
+    /// Take `from` and every unneeded cell it reads, directly or through
+    /// others, out of `unneeded`; the stale ones among them, which the
+    /// caller evaluates.
+    fn wake_closure(&mut self, from: impl IntoIterator<Item = Leaf>) -> BTreeSet<Leaf> {
+        self.wake_counted(from).0
+    }
+
+    /// `wake_closure`, and how many cells it took out of `unneeded`.
+    fn wake_counted(&mut self, from: impl IntoIterator<Item = Leaf>) -> (BTreeSet<Leaf>, usize) {
+        let mut stack: Vec<Leaf> = from.into_iter().collect();
+        let mut wake = BTreeSet::new();
+        let mut taken = 0;
+        while let Some(l) = stack.pop() {
+            if !self.unneeded.remove(&l) {
+                continue;
+            }
+            taken += 1;
+            self.woken.insert(l);
+            if self.stale.remove(&l) {
+                wake.insert(l);
+            }
+            if let Some(n) = self.nodes.get(&l) {
+                stack.extend(n.deps.iter().chain(&n.tracked).copied());
+            }
+        }
+        (wake, taken)
+    }
+
+    /// Whether a cell outside `inside` reads a leaf of `nodes`, directly
+    /// or through others.
+    pub(crate) fn feeds(&self, nodes: &BTreeSet<NodeId>, inside: &dyn Fn(NodeId) -> bool) -> bool {
+        let mut stack: Vec<Leaf> = nodes.iter().flat_map(|&n| self.dependents.range(first_leaf(n)..).take_while(move |(l, _)| l.node == n).map(|(l, _)| *l)).collect();
+        let mut seen: BTreeSet<Leaf> = stack.iter().copied().collect();
+        while let Some(l) = stack.pop() {
+            for d in self.dependents.get(&l).into_iter().flatten() {
+                if !inside(d.node) {
+                    return true;
+                }
+                if seen.insert(*d) {
+                    stack.push(*d);
+                }
+            }
+        }
+        false
     }
 
     /// Need every cell again, bringing the stale ones up to date: what a
@@ -403,6 +516,8 @@ impl Reactive {
             self.stale.clear();
             self.relaxed = true;
         }
+        self.pinned.clear();
+        self.woken.clear();
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -617,6 +732,8 @@ impl Reactive {
         self.blocked.remove(&leaf);
         self.unneeded.remove(&leaf);
         self.stale.remove(&leaf);
+        self.pinned.remove(&leaf);
+        self.woken.remove(&leaf);
     }
 
     /// Raise the readers of `made` until every edge goes upward (spec
@@ -863,6 +980,27 @@ impl Reactive {
                     (Ok(v), _) => Ok(v),
                 }
             };
+            // A tracked read reached a cell nothing needed: it and what it
+            // reads are needed now. The stale ones among them are evaluated
+            // first and this binding after them, before what it read is
+            // checked for a cycle (a stale cell's edges are what it read
+            // when it was last evaluated, not what it reads now). Whether
+            // or not their values move, this binding runs again.
+            let reached = reached.into_inner();
+            if !reached.is_empty() {
+                let top = reached.iter().filter_map(|l| self.nodes.get(l).map(|n| n.height)).max().unwrap_or(0);
+                let (wake, taken) = self.wake_counted(reached);
+                if !wake.is_empty() {
+                    budget = budget.saturating_add(taken.saturating_mul(4));
+                    for l in wake {
+                        primed.insert(l);
+                        queue.insert((self.nodes[&l].height, l));
+                    }
+                    primed.insert(leaf);
+                    queue.insert((top.max(self.nodes[&leaf].height) + 1, leaf));
+                    continue;
+                }
+            }
             // What the tracked reads read this time becomes what this
             // binding depends on, beyond its static dependencies.
             let mut result = result;
@@ -878,6 +1016,10 @@ impl Reactive {
                         for gone in old.difference(&tracked) {
                             if let Some(ds) = self.dependents.get_mut(gone) {
                                 ds.remove(&leaf);
+                            }
+                            // It may have been needed only for this read.
+                            if self.woken.contains(gone) {
+                                self.relaxed = true;
                             }
                         }
                         for new in tracked.difference(&old) {
@@ -900,33 +1042,6 @@ impl Reactive {
                             continue;
                         }
                     }
-                }
-            }
-            // A tracked read reached a cell nothing needed: it and what it
-            // reads are needed now, and the stale ones among them are
-            // evaluated before this binding is read again.
-            let reached = reached.into_inner();
-            if !reached.is_empty() {
-                let mut stack: Vec<Leaf> = reached.into_iter().collect();
-                let mut woken = false;
-                while let Some(l) = stack.pop() {
-                    if !self.unneeded.remove(&l) {
-                        continue;
-                    }
-                    if self.stale.remove(&l) {
-                        primed.insert(l);
-                        queue.insert((self.nodes[&l].height, l));
-                        woken = true;
-                    }
-                    if let Some(n) = self.nodes.get(&l) {
-                        stack.extend(n.deps.iter().chain(&n.tracked).copied());
-                    }
-                }
-                // Each is below this binding: under what it tracks.
-                if woken {
-                    primed.insert(leaf);
-                    queue.insert((self.nodes[&leaf].height, leaf));
-                    continue;
                 }
             }
             // Readers run again when this value changes, and when it starts

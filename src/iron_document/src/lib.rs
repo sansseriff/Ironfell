@@ -238,11 +238,16 @@ const IDLE_SWEEP: usize = 256;
 
 /// Facets whose nodes' cells the store reads besides drawing them, so they
 /// stay needed whatever is observed (reactive-engine.md §8.3): state
-/// (`let`, traces, accumulators, machines, queries, selection), structure
-/// (repeats, conditionals, items, embeds, the composition itself), the
-/// network's ports and equations, constraints, anchors, and the timeline.
+/// (`let`, traces, accumulators, machines and what their player reads,
+/// queries, selection), structure (repeats, conditionals, items, embeds,
+/// the composition itself), the network's ports and equations,
+/// constraints, anchors, and the timeline. What else the store reads from
+/// outside the graph is made needed when it is read (`settle_reads`).
 const ROOTED: &[FacetKind] = &[
     FacetKind::Let,
+    FacetKind::Args,
+    FacetKind::Transition,
+    FacetKind::Tween,
     FacetKind::Trace,
     FacetKind::Accumulate,
     FacetKind::Machine,
@@ -1486,10 +1491,12 @@ impl StoreCore {
     /// previewed as is; a linearly bound leaf previews its source so the
     /// binding re-evaluates to `value`. `Err` with the reason when locked.
     pub fn preview_target(&mut self, id: NodeId, path: LeafPath, value: Value) -> Result<(), String> {
+        let leaf = Leaf { node: id, path };
+        let (handle, target) = self.current(|s| (s.handle(id, path), handle::resolve_target(Tree::of(&s.docs), &s.reactive, leaf, value.clone())));
         // A view that moves its subject rigidly: both leaves by the same
         // amount, each held in range, so a slice pushed against the end of
         // its transition shortens there rather than stopping (`handle::rigid`).
-        if let (Some((with, (lo, hi))), Handle::Linear { source, a, b }) = (handle::rigid(Tree::of(&self.docs), id), self.handle(id, path))
+        if let (Some((with, (lo, hi))), Handle::Linear { source, a, b }) = (handle::rigid(Tree::of(&self.docs), id), handle)
             && let Some(y) = value.as_f64()
         {
             let authored = |l: Leaf| Tree::of(&self.docs).leaf(l.node, l.path).and_then(|s| s.constant()).and_then(Value::as_f64);
@@ -1502,7 +1509,7 @@ impl StoreCore {
                 return Ok(());
             }
         }
-        let (target, v) = handle::resolve_target(Tree::of(&self.docs), &self.reactive, Leaf { node: id, path }, value)?;
+        let (target, v) = target?;
         self.preview(target.node, target.path, v);
         Ok(())
     }
@@ -1648,7 +1655,8 @@ impl StoreCore {
     /// one-off edits (an inspector field); a running gesture is unaffected
     /// unless the edit conflicts with it. `Ok(None)` when nothing changes.
     pub fn set_through_handle(&mut self, id: NodeId, path: LeafPath, value: Value, label: impl Into<String>, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
-        let (target, v) = handle::resolve_target(Tree::of(&self.docs), &self.reactive, Leaf { node: id, path }, value)?;
+        let leaf = Leaf { node: id, path };
+        let (target, v) = self.current(|s| handle::resolve_target(Tree::of(&s.docs), &s.reactive, leaf, value.clone()))?;
         let same = match (Tree::of(&self.docs).leaf(target.node, target.path).and_then(|s| s.constant()), &v) {
             (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
             (c, v) => c == Some(v),
@@ -1766,7 +1774,11 @@ impl StoreCore {
     /// undo never see it, and it is never saved. All or nothing: an error
     /// rolls back the ops already applied.
     pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
-        self.exact();
+        // A binding checked for cycles needs every edge as it is now; a
+        // constant written (the playhead each frame) reads nothing.
+        if !ops.iter().all(|op| matches!(op, Op::Set { slot: Slot::Const(_), .. })) {
+            self.exact();
+        }
         let stamp = self.docs.authored.version();
         let mut undo: Vec<Op> = Vec::new();
         let mut structural = false;
@@ -2256,7 +2268,7 @@ impl StoreCore {
         let doc = Tree::of(&self.docs);
         shown.retain(|l, _| doc.is_live(l.node));
         self.reactive.publish(Tree::of(&self.docs), ProducerId::EVENTS, shown);
-        let Some((writes, session, label, emits)) = self.action_writes(listens, event)? else { return Ok(None) };
+        let Some((writes, session, label, emits)) = self.current(|s| s.action_writes(listens, event))? else { return Ok(None) };
         for (leaf, value) in writes {
             self.preview_target(leaf.node, leaf.path, value)?;
         }
@@ -2718,12 +2730,65 @@ impl StoreCore {
     }
 
     /// What follows values that moved outside a transaction, as after a
-    /// publish: live solves, then what the store derives.
+    /// publish: live solves, then what the store derives. Layout, the
+    /// network's solver and the rest read cells the graph's edges do not
+    /// show; if one was stale, they run again with it up to date.
     fn pipeline(&mut self) {
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
+        self.settle_reads();
+        for _ in 0..4 {
+            self.derive();
+            if !self.settle_reads() {
+                return;
+            }
         }
-        self.resolve_physics();
+        // Reads that keep reaching further: derive from an exact graph.
+        self.reactive.relax(Tree::of(&self.docs));
+        self.derive();
+    }
+
+    fn derive(&mut self) {
+        self.recorded(|s| {
+            if !s.clusters.list.is_empty() {
+                s.resolve_clusters_live();
+            }
+            s.resolve_physics();
+        });
+    }
+
+    /// Run `f` recording what it reads of cells nothing needed, for
+    /// `settle_reads`.
+    fn recorded<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.reactive.recording(true);
+        let out = f(self);
+        self.reactive.recording(false);
+        out
+    }
+
+    /// Make needed the cells read from outside the graph while nothing
+    /// needed them, bringing them up to date (reactive-engine.md §8.9): they
+    /// stay needed from now on. Whether any was stale, so that what read it
+    /// may have read an old value.
+    fn settle_reads(&mut self) -> bool {
+        let escaped = self.reactive.take_escaped();
+        !escaped.is_empty() && self.reactive.need(Tree::of(&self.docs), &escaped)
+    }
+
+    /// Run `f`, which computes from values without changing the document,
+    /// on values up to date: if it read a stale cell, it runs again once
+    /// that cell is current (a handle's target, an action's writes).
+    fn current<T>(&mut self, mut f: impl FnMut(&mut Self) -> T) -> T {
+        if self.settle_reads() {
+            self.pipeline();
+        }
+        for _ in 0..4 {
+            let out = self.recorded(&mut f);
+            if !self.settle_reads() {
+                return out;
+            }
+            self.pipeline();
+        }
+        self.exact();
+        f(self)
     }
 
     pub fn observing_all(&self) -> bool {
@@ -2757,8 +2822,24 @@ impl StoreCore {
         if holding.is_empty() {
             return holding;
         }
-        let shown = composition::reach(doc, &self.observed_compositions(), &holding).running;
-        holding.difference(&shown).copied().collect()
+        let running = composition::reach(doc, &self.observed_compositions(), &holding).running;
+        let still: BTreeSet<NodeId> = holding.difference(&running).copied().collect();
+        if still.is_empty() {
+            return still;
+        }
+        // One that feeds something shown keeps running: a meter in view
+        // reading a simulation in a hidden tab.
+        let shown = composition::shown(doc, &self.observed_compositions());
+        let comp = |n: NodeId| composition::composition_of(doc, n);
+        let inside = |n: NodeId| comp(n).is_some_and(|c| still.contains(&c) || !shown.contains(&c));
+        still
+            .iter()
+            .copied()
+            .filter(|&c| {
+                let accumulators: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && comp(n) == Some(c)).collect();
+                !self.reactive.feeds(&accumulators, &inside)
+            })
+            .collect()
     }
 
     /// Bring everything that runs on time to `now` (seconds, the host's
@@ -2773,12 +2854,13 @@ impl StoreCore {
             self.necessity();
         }
         let paused = self.paused();
-        let moving = self.advance_motion(now);
-        let running = self.advance_machines(now);
-        let stepping = self.advance_steps(now, &paused);
-        let queries = self.advance_queries(now);
-        let entering = self.advance_presence(now);
-        let playing = self.advance_playhead(now);
+        let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now, &paused), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
+        // What they read that nothing needed is needed from the next frame
+        // (what the player reads besides is rooted: `ROOTED`).
+        let read = self.settle_reads();
+        if read {
+            self.pipeline();
+        }
         let waiting = self.pending_queries();
         let doc = Tree::of(&self.docs);
         let comp = |n: NodeId| composition::composition_of(doc, n);
@@ -2802,7 +2884,7 @@ impl StoreCore {
         if swept {
             self.pipeline();
         }
-        let changed = active || swept || !was_live.is_empty() || waiting != was_waiting;
+        let changed = active || swept || read || !was_live.is_empty() || waiting != was_waiting;
         let next = (active || self.reactive.stale_count() > 0).then_some(now);
         self.advanced = (live.clone(), waiting);
         Advanced { wake: Wake { next, live }, queries, changed }

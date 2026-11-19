@@ -2500,6 +2500,44 @@ Verified: differential suite (463) with IRON_ATOMICITY and IRON_OWNER_CHECK, pla
 app lib tests, build, 10,000 random scripts; smoke, regression (unchanged), fiber,
 pulses and idle scripts.
 
+**Phase 4, steps 1–2: council fixes (2026-11-19).** Sol scored the two commits 4/10
+(Opus's review was cut short, no score): the store reads cells outside the graph's
+edges, so necessity, which follows only the edges, let a handle commit a value held
+to a stale maximum, layout and the network's solver publish from stale sizes and
+branches into a shown composition, and the machine player start a transition with a
+stale duration. Fixed:
+- **Reads outside the graph are recorded** while the store's own code runs
+  (`Store::recorded`: `derive`, the time phases of `advance`, and `current` for a
+  handle's target and an action's writes). A read of an unneeded cell makes it and
+  what it reads needed (`Reactive::need`), and it stays needed (`pinned`, until a
+  rebuild); if that brought a stale cell up to date, the computation runs again
+  (`pipeline` up to four times, then from an exact graph). The host's reads are
+  not recorded: what it draws of a hidden composition may be stale (§8.9). Checked
+  in the app: through the regression script nothing is pinned and 55–79 cells stay
+  unneeded.
+- **What the machine player reads is rooted:** `Args`, `Transition`, `Tween`. It
+  keeps state, so a second run is no answer.
+- **A tracked read's wake comes before its cycle check:** a stale cell's edges are
+  what it read when last evaluated, so the reader runs again after it (false cycle
+  otherwise). The wake adds four evaluations per cell it takes to the budget (a
+  chain of 1,100 reported "did not settle").
+- **An accumulator a shown picture reads keeps stepping** (`Reactive::feeds`).
+- **A session write of constants does not relax** (the playhead each frame did).
+- **Necessity is decided again** when a tracked read leaves a cell a wake made needed.
+- **The host observes after resolving the views**, in the same frame a tab switch
+  shows (`motion::observe` last in PreUpdate).
+- `is_stale` documented as where evaluation stopped, not every old value.
+
+Not taken: a rejected session write's wake (it only brings cells to the values the
+reference holds). Tests: `a_hidden_stack_places_from_current_sizes`,
+`a_tracked_read_into_a_stale_cell_finds_no_false_cycle`,
+`a_tracked_read_wakes_a_long_hidden_chain`,
+`a_handle_on_a_hidden_slider_reads_its_current_range`,
+`a_hidden_accumulator_a_shown_picture_reads_keeps_stepping` (each fails before).
+Verified: differential suite (468) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
+smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

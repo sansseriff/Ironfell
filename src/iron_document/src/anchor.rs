@@ -123,18 +123,35 @@ fn standing_for(doc: Tree<'_>, port: NodeId) -> Vec<NodeId> {
     out
 }
 
-/// Every derived anchor binding: positions, and followers' placements.
-pub fn derived(doc: Tree<'_>) -> Vec<(Leaf, Expr)> {
-    let anchors: Vec<NodeId> = doc.nodes_with(FacetKind::Anchor).filter(|&a| doc.is_live(a) && doc.live(a).is_some_and(|n| n.ty.name() == "empty")).collect();
+/// The anchors the graph derives from: live `empty`s with an `anchor`.
+pub fn anchors(doc: Tree<'_>) -> Vec<NodeId> {
+    doc.nodes_with(FacetKind::Anchor).filter(|&a| doc.is_live(a) && doc.live(a).is_some_and(|n| n.ty.name() == "empty")).collect()
+}
+
+/// What an anchor's position depends on: itself and its transformed
+/// ancestors, nearest first. `positions` is a function of this alone.
+pub fn chain(doc: Tree<'_>, anchor: NodeId) -> Vec<NodeId> {
+    transformed_chain(doc, anchor, true)
+}
+
+/// The leaves `positions` derives for `anchor`.
+pub fn position_leaves(anchor: NodeId) -> [Leaf; 3] {
+    ["wx", "wy", "wrot"].map(|f| Leaf { node: anchor, path: LeafPath::new(FacetKind::Anchor, f).expect("declared") })
+}
+
+/// An anchor's position in its composition and the way it faces there.
+pub fn positions(doc: Tree<'_>, a: NodeId) -> [(Leaf, Expr); 3] {
+    let (wx, wy) = outward(doc, a, true, num(0.0), num(0.0));
+    let (fx, fy) = outward(doc, a, true, num(1.0), num(0.0));
+    let facing = Expr::Call("atan2".to_owned(), vec![bin(BinOp::Sub, fy, wy.clone()), bin(BinOp::Sub, fx, wx.clone())]);
+    let [lx, ly, lr] = position_leaves(a);
+    [(lx, wx), (ly, wy), (lr, facing)]
+}
+
+/// Followers' placements: a connected `follow` anchor sits on its
+/// partner's anchor. `anchors` is `anchors(doc)`.
+pub fn followers(doc: Tree<'_>, anchors: &[NodeId]) -> Vec<(Leaf, Expr)> {
     let mut out = Vec::new();
-    for &a in &anchors {
-        let (wx, wy) = outward(doc, a, true, num(0.0), num(0.0));
-        let (fx, fy) = outward(doc, a, true, num(1.0), num(0.0));
-        let facing = Expr::Call("atan2".to_owned(), vec![bin(BinOp::Sub, fy, wy.clone()), bin(BinOp::Sub, fx, wx.clone())]);
-        out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wx").expect("declared") }, wx));
-        out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wy").expect("declared") }, wy));
-        out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Anchor, "wrot").expect("declared") }, facing));
-    }
     for &a in anchors.iter().filter(|&&a| follows(doc, a)) {
         let Some((other, connection)) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };
         let here = composition::composition_of(doc, a);

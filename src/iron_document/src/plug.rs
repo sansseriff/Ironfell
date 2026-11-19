@@ -234,7 +234,37 @@ pub fn plug_ops(doc: Tree<'_>, a: NodeId, b: NodeId, held: Option<NodeId>, id: N
 /// the bodies at the anchors, named by the connection.
 pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
     let spec = constraint::spec("mate").expect("declared kind");
-    let anchors = port_anchors(doc, read);
+    // Only an anchor whose port is connected can mate: find the connection
+    // first, before the rest of what `port_anchors` works out for each.
+    struct Plugged {
+        anchor: NodeId,
+        outer: NodeId,
+        composition: Option<NodeId>,
+        body: NodeId,
+        connection: NodeId,
+        partner: NodeId,
+    }
+    let anchors: Vec<Plugged> = doc
+        .nodes_with(FacetKind::Anchor)
+        .filter_map(|a| {
+            if !doc.live(a).is_some_and(|n| n.ty.name() == "empty") {
+                return None;
+            }
+            let facet = doc.get::<Anchor>(a)?;
+            if facet.follow.constant().and_then(|v| v.as_bool()) == Some(true) {
+                return None;
+            }
+            let port = facet.port.constant().and_then(|v| v.as_ref()).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "port"))?;
+            let outer = outer_port(doc, port);
+            if outer.is_expanded() && outer.path().len() > 2 {
+                return None;
+            }
+            let (connection, partner) = connection_of(doc, outer)?;
+            let composition = crate::composition::composition_of(doc, a);
+            composition?;
+            Some(Plugged { anchor: a, outer, composition, body: body_of(doc, a), connection, partner })
+        })
+        .collect();
     // Whether an anchor's context lets a connection hold it (`plug.mate`):
     // a schematic's wires join pins without moving parts.
     let resolver = crate::contexts::Resolver::new(doc, lib);
@@ -244,16 +274,16 @@ pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &
     };
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for a in anchors.iter().filter(|a| !a.follow && !a.sealed) {
-        let (Some(c), Some(partner)) = (a.connection, a.partner) else { continue };
+    for a in &anchors {
+        let (c, partner) = (a.connection, a.partner);
         if !seen.insert((c, a.composition)) {
             continue;
         }
-        let Some(b) = anchors.iter().find(|b| b.outer == partner && !b.follow && !b.sealed && b.composition == a.composition) else { continue };
+        let Some(b) = anchors.iter().find(|b| b.outer == partner && b.composition == a.composition) else { continue };
         if a.body == b.body || !mates(a.anchor) || !mates(b.anchor) {
             continue;
         }
-        let operand = |role: &'static str, x: &PortAnchor| -> Option<Operand> {
+        let operand = |role: &'static str, x: &Plugged| -> Option<Operand> {
             doc.facet(x.body, FacetKind::Transform2d)?;
             // The anchor's frame in its body's space.
             let m = geom::world_affine(doc, read, x.body).inverse()?.then(geom::world_affine(doc, read, x.anchor));

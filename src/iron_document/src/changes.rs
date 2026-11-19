@@ -75,6 +75,9 @@ pub struct Changes {
     /// order `sorted` puts them in, since a removed node's ancestry can
     /// change after.
     depths: std::collections::BTreeMap<NodeId, usize>,
+    /// The ids in `removed`, to find one without a scan (a subtree's delete
+    /// notes thousands).
+    removed_ids: BTreeSet<NodeId>,
 }
 
 impl Changes {
@@ -135,6 +138,7 @@ impl Changes {
         self.values.extend(later.values);
         self.created.extend(later.created);
         self.removed.extend(later.removed);
+        self.removed_ids.extend(later.removed_ids);
         self.moved.extend(later.moved);
         self.relations.extend(later.relations);
         self.slots.extend(later.slots);
@@ -218,7 +222,7 @@ impl Changes {
     }
 
     fn remove(&mut self, doc: Tree<'_>, gone: &Gone, id: NodeId, parent: Option<NodeId>) {
-        if !self.removed.iter().any(|(n, _)| *n == id) {
+        if self.removed_ids.insert(id) {
             self.removed.push((id, parent));
             self.depths.insert(id, gone.get(&id).map_or_else(|| doc.depth(id), |w| w.depth));
             self.structure.insert(parent);

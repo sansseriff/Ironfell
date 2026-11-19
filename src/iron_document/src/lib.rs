@@ -668,7 +668,7 @@ impl StoreCore {
         // What connections and anchors derive reads ports, anchors,
         // connections, the relations between them and each anchor's chain
         // of transformed ancestors (`port::derived_signals`,
-        // `anchor::derived`).
+        // `anchor::positions`, `anchor::followers`).
         let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
         // A deleted node is read as it was when it went (`Docs::gone`).
         let gone = &self.docs.gone;

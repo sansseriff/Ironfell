@@ -1,14 +1,13 @@
 # Handoff: building the new reactive engine
 
-**Date:** 2026-11-16 · **Branch:** `master` · **Status:** the design
+**Date:** 2026-11-19 · **Branch:** `master` · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
-and its decisions settled. **Phases 0, 1 and 2a are done** (2026-11-16; §2):
-baselines, the differential harness, the host reference, the read contract (`Tree`,
-`take_changes()`), and transactions applied in place with a document journal, all on
-the old engine. Nothing of the new engine is built. The current task is **phase 2b**
-(§4.4), whose task list awaits its council review. This file is for whoever builds it: what to read, the order of
-work, the phases as tasks, and the rules. Phases 0 to 2 are ready to build;
-phases 3, 4 and 5 each have design points to settle first (§4.5).
+and its decisions settled. **Phases 0 to 4 are done** as §2's table says (2b's swap
+removed the old engine; 2c, 3 and 4 each left named steps deferred, with the reasons
+recorded where each phase is). **Phase 5** is in progress: its first step (§4.8) and
+its scan measurements (§4.8, step 2) are done; its cells are not built. This file is
+for whoever builds next: what to read, the order of work, the phases as tasks, and
+the rules.
 
 ## 0. Read first, in this order
 
@@ -141,10 +140,10 @@ The spec's §17 has each phase's contents and exit. In order:
 | 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
 | 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
 | 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Done 2026-11-17** (§4.4; swap `9f4ac59`) |
-| 2c | Copies leave the document: instances as references | **Next.** Its tasks are written here first (§4.5) |
-| 3 | Time: clocks, the scheduler, steppers as cells, recorded events | |
-| 4 | Observation: Dormant, Unloaded, parking, extents | |
-| 5 | The pipeline as cells: layout, the network solve, clips, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters | |
+| 2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
+| 3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred |
+| 4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons |
+| 5 | The pipeline as cells: layout, the network solve, clips, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters | **In progress** (§4.8): a cluster solved only when something of it changed; the per-transaction scans measured and the dominant ones removed. The cells are next |
 | 6 | Value slices | |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -2354,6 +2353,51 @@ each with a test that fails with its fix undone where one could be written:
 - **Recorded:** playback started before the first `advance` after a load steps 0 on
   that frame (Sol; `advanced_at` starts empty, the old player used Bevy's delta).
   `Advanced::changed` has no reader in the host today (Opus).
+
+**Phase 5, step 2 (2026-11-19): the per-transaction scans, measured and the dominant
+ones removed** (§17: "the remaining per-transaction scans measured and, where they
+dominate, indexed"). Sampled with macOS `sample` on a native release build with line
+tables (`CARGO_PROFILE_RELEASE_DEBUG=line-tables-only`), a loop of each edit at 700
+meters (below the node budget). Found and fixed, each a whole-document pass:
+- **A structural edit copied the derived signals and anchors whole** (80 % of it):
+  `Reactive::restructure` cloned `derived` when nothing could change it, compared
+  the copy entry by entry and dropped the old one. Without `rederive` it is left as
+  it is.
+- **An edit that rederives made every anchor's position again** (most of a
+  placement): an anchor's `wx`, `wy`, `wrot` are a function of its chain of
+  transformed ancestors alone, so `Reactive::chains` keeps the chain each was made
+  from, and only an anchor whose chain changed is made again (`anchor::chain`,
+  `positions`, `followers`; `anchor::derived` is gone). Signals and followers, which
+  follow connections, are still made whole.
+- **`plug::implied_mates` worked out every port anchor** (strings, compositions,
+  reads) on every transaction, twice (`rebuild_clusters` and `post_apply`), to keep
+  the connected ones: it finds the connection first.
+- **`Changes::remove` scanned what it had already noted** for each node a delete
+  took: quadratic in a subtree's size (`removed_ids`).
+
+Measured (`instance_cost`, native release, before → after):
+
+| | 100 meters | 700 meters | 1,000 meters (past the budget) |
+|---|---|---|---|
+| place one more | 0.54 → 0.38 ms | 3.63 → **0.45** ms | 11.45 → 5.98 ms |
+| structural edit | 0.65 → 0.05 ms | 6.86 → **0.32** ms | 30.9 → 22.4 ms |
+| constant edit | 0.10 → 0.05 ms | 1.45 → 0.29 ms | 1.50 → 0.48 ms |
+| edit plan | 3.74 → 3.09 ms | 28.3 → 19.7 ms | 48.0 → 40.4 ms |
+
+Below the budget §15's meter targets are met at 700 meters (structural under 2 ms,
+placing under 1 ms). At 1,000 meters the document is past `expand::NODE_BUDGET`,
+where the rule is to expand everything on each edit so the cut never depends on
+history (`Owners::expand`): that is the budget's cost, not a scan, and lazy slots
+(D15) are what remove the budget. **The user's decision (2026-11-19): the fast path
+only below the budget is acceptable;** an incremental cut (owners in id order up to
+the budget, from the counts `Owners` keeps) is the fix if it becomes a problem, and
+is not built until then. What is left in a constant edit is two linear
+walks over ports and anchors (`port::network`, the mates' anchor walk), about 0.1 ms
+each at 700 meters. A definition edit and an edit plan are the per-copy id work 2c
+stage 3 step 2 recorded.
+Verified: differential suite (478) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+app lib tests, build, 10,000 random scripts; smoke, regression (identical), fiber,
+pulses and idle scripts.
 
 ### 4.9 Phase 4: observation (plan, 2026-11-19)
 

@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-16 for the reactive-engine spec. Update this file whenever a plan is added,
+**Updated:** 2026-11-19 for the reactive-engine phases. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -20,8 +20,10 @@ finishes, or is superseded.
      phases 0 (baselines, the harnesses), 1 (the read contract: `Tree`,
      `take_changes()`) and 2a (transactions in place, a document journal) done
      2026-11-16; 2b (owners, the graph updated in place: the plot fix) done and
-     swapped in 2026-11-17, the old engine deleted. Next: phase 2c, whose tasks the
-     handoff's §4.5 says to write and report first.
+     swapped in 2026-11-17, the old engine deleted; 2c (copies leave the document),
+     3 (time) and 4 (observation) done 2026-11-19, each with named steps deferred.
+     Now: phase 5 (the pipeline as cells), its first two steps done; the handoff's
+     §2 has the state of each phase.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as

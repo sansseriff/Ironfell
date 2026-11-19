@@ -9,7 +9,8 @@
 //! index from definitions to owners only grows: an owner it names that no
 //! longer reads the definition is expanded again for nothing.
 
-use crate::engine::template::TemplateCache;
+use crate::engine::template::{Env, Pieces, Template, TemplateCache};
+use std::sync::Arc;
 use crate::expand::{self, Items, Problem};
 use crate::facet::FacetKind;
 use crate::op::Op;
@@ -41,6 +42,19 @@ pub(crate) struct Owners {
     /// The copies a constraint cluster holds: expansion leaves the leaves
     /// the solver writes on them as they are (`solve::writes`).
     solved: BTreeSet<NodeId>,
+    /// What each piece's last accepted expansion copied: a copy it records
+    /// as current is kept as it is (2c stage 3, step 2). An entry outlives
+    /// its owner; a copy is kept only when it is there.
+    made: Made,
+}
+
+#[derive(Clone, Default)]
+struct Made(Pieces);
+
+impl std::fmt::Debug for Made {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Made({} pieces)", self.0.len())
+    }
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -51,6 +65,7 @@ pub(crate) struct Delta {
     counts: BTreeMap<NodeId, usize>,
     defs: Vec<(NodeId, NodeId)>,
     reads: Vec<(NodeId, NodeId)>,
+    pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
 }
 
 impl Delta {
@@ -59,6 +74,7 @@ impl Delta {
         self.counts.extend(d.counts);
         self.defs.extend(d.defs);
         self.reads.extend(d.reads);
+        self.pieces.extend(d.pieces);
     }
 
     /// Fold in a later delta: its owners' entries replace these.
@@ -68,6 +84,7 @@ impl Delta {
         self.counts.extend(d.counts);
         self.defs.extend(d.defs);
         self.reads.extend(d.reads);
+        self.pieces.extend(d.pieces);
     }
 
     fn has_budget_problem(&self) -> bool {
@@ -82,7 +99,7 @@ impl Owners {
         // Owners whose last expansion failed in part are tried again: what
         // failed may depend on something outside them that has changed.
         todo.extend(self.problems.iter().filter(|(_, ps)| ps.iter().any(|p| matches!(p.kind, "expansion" | "budget"))).map(|(o, _)| *o));
-        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         let mut ops = Vec::new();
         let mut done: BTreeSet<NodeId> = BTreeSet::new();
         // Each wave expands the owners whose pictures read what the last one
@@ -90,7 +107,8 @@ impl Owners {
         while !todo.is_empty() {
             let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), &self.solved);
+            let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), &self.solved, &self.made.0, &troubled);
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -137,7 +155,7 @@ impl Owners {
         // What every owner holds, kept as each one's items change, so two
         // owners never spend the same room.
         let mut held: usize = self.counts.values().sum();
-        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         let mut ops = Vec::new();
         let mut repair: BTreeSet<NodeId> = BTreeSet::new();
         for (owner, rs) in &by_owner {
@@ -146,7 +164,7 @@ impl Owners {
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
             let room = room + self.held_under(Tree::of(docs), rs);
-            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, &self.solved) else {
+            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, &self.solved, &self.made.0) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -159,6 +177,7 @@ impl Owners {
             delta.counts.insert(*owner, whole);
             delta.defs.extend(done.defs.iter().map(|&d| (d, *owner)));
             delta.reads.extend(done.reads.iter().map(|&r| (r, *owner)));
+            delta.pieces.append(&mut done.pieces);
             if !problems.is_empty() {
                 repair.insert(*owner);
             }
@@ -179,9 +198,10 @@ impl Owners {
     /// Every owner, in id order.
     fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
         let owners = expand::top_owners(Tree::of(docs));
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, &self.solved);
+        let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, &self.solved, &self.made.0, &troubled);
         let ops = std::mem::take(&mut done.ops);
-        let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
+        let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         delta.add(done);
         (ops, delta)
     }
@@ -211,6 +231,9 @@ impl Owners {
         }
         for (read, o) in d.reads {
             self.readers.entry(read).or_default().insert(o);
+        }
+        for (piece, t, env) in d.pieces {
+            self.made.0.insert(piece, (t, env));
         }
     }
 

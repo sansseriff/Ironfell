@@ -76,6 +76,7 @@ pub(crate) enum Source {
 }
 
 /// One node of a template, as the source has it.
+#[derive(PartialEq)]
 pub(crate) struct TNode {
     /// The node copied: an owner's copy is `NodeId::expanded(owner, local)`,
     /// an item's `NodeId::item(repeat, key, local)`.
@@ -124,7 +125,11 @@ pub(crate) struct Template {
     stamp: u64,
 }
 
-/// One owner, as its template's references resolve against it.
+/// One owner, as its template's references resolve against it. Two equal
+/// environments resolve every reference of a template alike: what a copy
+/// is depends on its template node and its environment alone
+/// (`Template::materialise` reads nothing else).
+#[derive(PartialEq)]
 pub(crate) struct Env {
     /// The entity, `use` or item scope.
     pub(crate) owner: NodeId,
@@ -146,7 +151,19 @@ pub(crate) struct Item {
     pub(crate) key: String,
     /// A derived repeat's: the template that copies it and the
     /// environment of that copy's owner.
-    pub(crate) outer: Option<(Arc<Template>, Rc<Env>)>,
+    pub(crate) outer: Option<(Arc<Template>, Arc<Env>)>,
+}
+
+impl PartialEq for Item {
+    fn eq(&self, other: &Item) -> bool {
+        self.repeat == other.repeat
+            && self.key == other.key
+            && match (&self.outer, &other.outer) {
+                (None, None) => true,
+                (Some((t, e)), Some((u, f))) => Arc::ptr_eq(t, u) && e == f,
+                _ => false,
+            }
+    }
 }
 
 fn any_leaf() -> LeafPath {
@@ -313,6 +330,25 @@ t.figures = Some(r.clone());
             stack.extend(doc.children(n).iter().rev().copied().filter(copied));
         }
         Template::collection(r, nodes, rels).in_scope(doc, r)
+    }
+
+    /// Which of this template's nodes are, with every reference they hold
+    /// classed alike, as `was` has them: `None` when the two copy different
+    /// sources or class a reference differently. For one environment such a
+    /// node's copy is the copy `was` made.
+    pub(crate) fn same_nodes(&self, was: &Template) -> Option<Vec<bool>> {
+        if self.source != was.source || self.refs != was.refs {
+            return None;
+        }
+        let old: HashMap<NodeId, &TNode> = was.nodes.iter().map(|n| (n.local, n)).collect();
+        Some(self.nodes.iter().map(|n| old.get(&n.local).is_some_and(|o| *o == n)).collect())
+    }
+
+    /// Whether a kept copy of node `i` must be read for what it derives: an
+    /// instance, a picture, or a repeat (`want_scopes`).
+    pub(crate) fn derives(&self, i: usize) -> bool {
+        let n = &self.nodes[i];
+        matches!(n.ty.name(), "entity" | "use") || n.facets.iter().any(|f| expand::owns_items(f.kind()))
     }
 
     /// The template of a copy of `outer`'s node `l`, a repeat or
@@ -530,14 +566,46 @@ impl std::fmt::Debug for TemplateCache {
 
 /// One pass's view of the templates: the kept ones, and each node's own
 /// overrides, read once in the pass.
+/// What each piece's last applied expansion copied, by the piece's owner (an
+/// entity's body, a picture, an item scope): the template and environment.
+pub(crate) type Pieces = HashMap<NodeId, (Arc<Template>, Arc<Env>)>;
+
 pub(crate) struct Templates<'c> {
     cache: &'c mut TemplateCache,
+    /// The pieces' records, when copies made as recorded may be kept.
+    made: Option<&'c Pieces>,
     own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
+    /// `Template::same_nodes` for each (recorded, current) pair compared
+    /// this pass, by address.
+    same: HashMap<(usize, usize), Option<Rc<[bool]>>>,
 }
 
 impl<'c> Templates<'c> {
     pub(crate) fn new(cache: &'c mut TemplateCache) -> Templates<'c> {
-        Templates { cache, own: HashMap::new() }
+        Templates { cache, made: None, own: HashMap::new(), same: HashMap::new() }
+    }
+
+    /// A pass that may keep copies their piece's record says are current.
+    pub(crate) fn recorded(cache: &'c mut TemplateCache, made: &'c Pieces) -> Templates<'c> {
+        Templates { cache, made: Some(made), own: HashMap::new(), same: HashMap::new() }
+    }
+
+    /// Which of `t`'s nodes piece `piece` copies as its last applied
+    /// expansion did: its environment is the one recorded, and the node
+    /// the same in the recorded template (`same_nodes`).
+    pub(crate) fn kept(&mut self, piece: NodeId, t: &Arc<Template>, env: &Env) -> Option<Rc<[bool]>> {
+        let (was, at) = self.made?.get(&piece)?;
+        if **at != *env {
+            return None;
+        }
+        self.same_nodes(was, t)
+    }
+
+    /// Which of `now`'s nodes make the same copy as `was` made of them, for
+    /// an equal environment (`Template::same_nodes`), compared once a pass.
+    pub(crate) fn same_nodes(&mut self, was: &Arc<Template>, now: &Arc<Template>) -> Option<Rc<[bool]>> {
+        let key = (Arc::as_ptr(was) as usize, Arc::as_ptr(now) as usize);
+        self.same.entry(key).or_insert_with(|| now.same_nodes(was).map(Rc::from)).clone()
     }
 
     pub(crate) fn body(&mut self, doc: Tree<'_>, def: NodeId) -> Arc<Template> {

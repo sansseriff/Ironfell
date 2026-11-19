@@ -2093,6 +2093,32 @@ document and builds what pays now, each step with its own design note and counci
     it hid a stale `sx` from the older outside-a-library bug): it exempts the
     solver's leaves only.
 
+- **2c stage 3, step 2: a definition edit keeps the copies it does not change
+  (2026-11-19).** Each *piece* (an entity's body, a picture, an inner picture, an
+  item) records the template and environment its last accepted expansion copied
+  (`Owners::made`, through `Delta`, so a refused transaction records nothing; `Env`
+  moved from `Rc` to `Arc` for it). When a piece is wanted again with an equal
+  environment, its template is compared with the recorded one once a pass
+  (`Template::same_nodes`: same source and reference classes, and each node equal
+  by local), and a copy whose node is unchanged and which is there is wanted as
+  *kept*: not materialised, and not compared by `apply_wanted`. `want_scopes` reads
+  a kept copy's facets from the document only where it derives something (an
+  instance, a picture, a repeat). An owner with problems keeps nothing; `parity`,
+  `wanted_slots` and the oracle keep nothing, so the owners' checks compare every
+  copy. Saying every node is unchanged fails 22 tests under the owners' check, 10
+  without it.
+  - Measured (`instance_cost`, native release, load about 6, before → after):
+    definition edit 100 meters 4.57 → 2.46 ms, **700 meters 33.5 → 19.8 ms**,
+    1,000 meters 70.8 → 43.0 ms; placement, structural and constant edits and the
+    plot's steps unchanged within noise.
+  - **Where the 700-meter edit goes now:** wanting 12 ms (interning 46,900 copy ids,
+    deciding to keep each, pushing the wants), collecting what the owners hold
+    2.5 ms, `apply_wanted` 3.6 ms (was 17). Reusing a parent's id by index did not
+    measure. The rest is the per-copy id work that phase 4's slots and their
+    lock-free id index replace (D15); not pursued in 2c.
+  - An entry outlives its owner (bounded by the pieces ever expanded); a copy is
+    kept only when it is there.
+
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).
 

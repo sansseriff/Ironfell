@@ -2326,6 +2326,35 @@ the problem is built from the document as well as from `read`.
   solved; the cells change how, and need phase 2b's graph to grow Structure cells
   for clusters.
 
+**Council on phase 3 and phase 5's first step (2026-11-19): Claude Opus 5.5 7/10,
+GPT Sol 6.2 5/10.** Opus confirmed `advance` matches the six systems (order, the
+playhead's step, loads, scratch) and that `Posed` covers what a solve reads. Fixed,
+each with a test that fails with its fix undone where one could be written:
+- **A reparent could keep the same ancestor leaves** (Sol): swapping two operands
+  between parents left the union of their ancestors' leaves equal, so the cluster
+  was skipped and a broken pair of fixed operands accepted. `Posed` records each
+  operand's ancestors (`swapping_constrained_operands_between_parents_is_solved_again`).
+- **A live solve recorded its preview as solved** (Sol): `resolve_clusters_live`
+  recorded `Posed` from the overlay, so the next commit skipped the cluster and its
+  answer never reached the document. Only `post_apply` records now; a live solve
+  compares with the last commit (`a_live_solve_is_written_by_the_next_transaction`).
+- **A channel publishing refuses was "still moving"** (Opus, Sol): a bound channel,
+  or one another producer holds, is a signal error and never shown, so every frame
+  ran all rounds and reported a false `machine` problem. Refused leaves are left out;
+  the loop also checks once after the last round, so 8 links settle
+  (`a_refused_channel_is_not_an_unsettled_machine`).
+- **`Wake.next` while time moves undrawn** (Opus, Sol): the playhead playing with
+  nothing animated, or a trace at the root driving a shape, gave `None`. `next` is
+  `now` whenever anything is active (`a_playing_clock_asks_for_the_next_frame`).
+- **The host's live set** (Sol): the gas system removes its compositions from the
+  shared `LiveSources`; `motion::advance` returned early when its own set had not
+  changed, so a composition both kept live was dropped. It re-adds every frame.
+- `Posed` reads only the operands' transform, size and radius facets, and `posed`
+  is pruned with a key set, also when the last cluster goes.
+- **Recorded:** playback started before the first `advance` after a load steps 0 on
+  that frame (Sol; `advanced_at` starts empty, the old player used Bevy's delta).
+  `Advanced::changed` has no reader in the host today (Opus).
+
 ### 4.9 Phase 4: observation (plan, 2026-11-19)
 
 Written by the builder on the user's instruction to go on and decide (§4.5's report).

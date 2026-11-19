@@ -593,3 +593,60 @@ fn a_drag_in_one_cluster_solves_no_other() {
     assert!(report.converged && report.clusters == 1, "{report:?}");
     assert_chain_holds(&p);
 }
+
+fn constrains(id: RelationId, from: NodeId, to: NodeId, role: &str) -> Op {
+    let mut data = std::collections::BTreeMap::new();
+    data.insert("role".to_owned(), Value::Str(role.into()));
+    data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+    Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
+}
+
+/// A sheet with two groups, at x 0 and x 20, and a rect `a` in the first
+/// at 20 and `b` in the second at 0, coincident in the world, both fixed.
+fn two_parents() -> (Store, BTreeMap<String, NodeId>) {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("sheet").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(r#"<group id="$g0" x="0" y="0"><rect id="$a" x="20" y="0" w="5" h="5"/></group><group id="$g1" x="20" y="0"><rect id="$b" x="0" y="0" w="5" h="5"/></group><constraint id="$c" kind="coincident" value="0"/><constraint id="$fa" kind="fix" value="0"/><constraint id="$fb" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let r = store.authored().next_relation_ids(4);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(r[0], n["c"], n["a"], "a"), constrains(r[1], n["c"], n["b"], "b"), constrains(r[2], n["fa"], n["a"], "a"), constrains(r[3], n["fb"], n["b"], "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    (store, n)
+}
+
+/// Swapping two coincident operands between their parents keeps the same
+/// ancestor leaves but breaks the constraint: the cluster is solved again,
+/// and with both operands fixed the transaction is refused.
+#[test]
+fn swapping_constrained_operands_between_parents_is_solved_again() {
+    let (mut store, n) = two_parents();
+    let swap = store.apply(tx("swap", vec![Op::Reparent { id: n["a"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["b"], parent: Some(n["g0"]), order: OrderKey::first() }]));
+    assert!(swap.is_err(), "coincident operands 40 apart, both fixed: {swap:?}");
+}
+
+/// A live solve's answer is a preview: the next transaction, even an
+/// unrelated one, still solves the cluster and writes it.
+#[test]
+fn a_live_solve_is_written_by_the_next_transaction() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("sheet").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(r#"<group id="$g" name="g" x="0" y="0"><rect id="$a" x="0" y="0" w="5" h="5"/></group><constraint id="$p" kind="pin" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let mut link = constrains(store.authored().next_relation_ids(1)[0], n["p"], n["a"], "a");
+    if let Op::Link { rel } = &mut link {
+        rel.data.insert("at".to_owned(), Value::Vec2([15.0, 0.0]));
+    }
+    store.apply(tx("pin", built.ops.into_iter().chain([link]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = path("transform2d.x");
+    assert_eq!(store.tree().leaf(n["a"], x).and_then(Slot::constant), Some(&Value::Number(15.0)));
+    let live = store.register_producer("live");
+    store.publish(live, BTreeMap::from([(Leaf { node: n["g"], path: x }, Value::Number(10.0))]));
+    assert_eq!(store.resolved(n["a"], x), Some(Value::Number(5.0)));
+    store.apply(tx("rename", vec![Op::Set { id: n["g"], path: path("name.text"), slot: Slot::Const(Value::Str("renamed".into())) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.tree().leaf(n["a"], x).and_then(Slot::constant), Some(&Value::Number(5.0)));
+}

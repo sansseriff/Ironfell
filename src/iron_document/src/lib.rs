@@ -846,15 +846,16 @@ impl StoreCore {
                     self.reactive.preview(Tree::of(&self.docs), leaf, value);
                 }
             }
-            self.pose(c);
         }
         report
     }
 
     /// Whether cluster `c` can be left as it is: no driver or finger moves
-    /// it, and everything its solve could read is as its last converged
+    /// it, and everything its solve could read is as its last committed
     /// solve left it (§9.4, A6: such a solve returns the pose it starts
-    /// from). Under the owners' check, a cluster left is solved anyway and
+    /// from). Only `post_apply`'s solves record what they left (`pose`): a
+    /// live solve's answer is a preview, which the next commit must still
+    /// write. Under the owners' check, a cluster left is solved anyway and
     /// must come out where it is.
     fn unmoved(&self, c: &solve::Cluster, drivers: &[solve::Driver]) -> bool {
         if drivers.iter().any(|d| c.vars.contains(&d.leaf)) || self.fingers.iter().any(|f| c.nodes.contains(&f.node)) {
@@ -2484,7 +2485,7 @@ impl StoreCore {
         const ROUNDS: usize = 8;
         let mut running = Vec::new();
         let mut moving = None;
-        for _ in 0..ROUNDS {
+        for round in 0..=ROUNDS {
             let (values, now_running) = {
                 let reactive = &self.reactive;
                 let doc = Tree::of(&self.docs);
@@ -2492,9 +2493,12 @@ impl StoreCore {
                 self.machines.advance(doc, &read, now, self.time())
             };
             running = now_running;
+            // A leaf publishing refuses (bound, or another producer's) is a
+            // signal error, never shown: it is not still moving.
             let shown = self.reactive.published_by(ProducerId::MACHINES);
-            moving = values.iter().find(|(l, v)| shown.get(l) != Some(v)).map(|(l, _)| l.node).or_else(|| shown.keys().find(|l| !values.contains_key(l)).map(|l| l.node));
-            if moving.is_none() {
+            let refused = self.reactive.signal_errors();
+            moving = values.iter().find(|(l, v)| shown.get(l) != Some(v) && !refused.contains_key(l)).map(|(l, _)| l.node).or_else(|| shown.keys().find(|l| !values.contains_key(l)).map(|l| l.node));
+            if moving.is_none() || round == ROUNDS {
                 break;
             }
             self.publish(ProducerId::MACHINES, values);
@@ -2605,8 +2609,12 @@ impl StoreCore {
             live.extend(doc.relations().filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).filter_map(|r| comp(r.to)));
         }
         let (was_live, was_waiting) = std::mem::take(&mut self.advanced);
-        let changed = !live.is_empty() || !was_live.is_empty() || waiting != was_waiting || playing;
-        let next = (!live.is_empty()).then_some(now);
+        // Anything moving keeps time going, whether or not it is drawn in a
+        // composition (a trace at the root driving a shape in one; the
+        // playhead with nothing animated).
+        let active = !moving.is_empty() || !running.is_empty() || !stepping.is_empty() || !waiting.is_empty() || !entering.is_empty() || playing;
+        let changed = active || !was_live.is_empty() || waiting != was_waiting;
+        let next = active.then_some(now);
         self.advanced = (live.clone(), waiting);
         Advanced { wake: Wake { next, live }, queries, changed }
     }
@@ -3272,6 +3280,8 @@ impl StoreCore {
             constraint::validate_all(Tree::of(&self.docs), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
         }
         let clusters = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
+        let keys: BTreeSet<NodeId> = clusters.list.iter().map(solve::Cluster::key).collect();
+        self.posed.retain(|k, _| keys.contains(k));
         let now = clusters.copies();
         self.release(tx, held, &now, last).map_err(|e| vec![e])?;
         self.owners.hold(now);
@@ -3291,7 +3301,6 @@ impl StoreCore {
             })
             .collect();
         let mut summary = SolverSummary::default();
-        self.posed.retain(|k, _| clusters.list.iter().any(|c| c.key() == *k));
         for c in &clusters.list {
             if self.unmoved(c, &drivers) {
                 continue;

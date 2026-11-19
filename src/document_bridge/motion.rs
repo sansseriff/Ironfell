@@ -35,10 +35,9 @@ pub fn advance(mut store: ResMut<DocumentStore>, time: Res<Time>, views: Res<sup
     if out.changed {
         store.set_changed();
     }
+    // Re-added every frame: another producer (the gas) may have taken a
+    // composition this one still keeps live out of the shared set.
     let comps = out.wake.live;
-    if comps == *marked {
-        return;
-    }
     for c in marked.difference(&comps) {
         sources.0.remove(c);
     }

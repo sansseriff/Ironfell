@@ -204,3 +204,15 @@ fn advance_loops_the_playhead() {
     store.advance(1.25, &none);
     assert_eq!(store.time(), 0.5);
 }
+
+/// The playhead moves continuously while it plays, so `advance` asks to be
+/// called again even with nothing animated to redraw.
+#[test]
+fn a_playing_clock_asks_for_the_next_frame() {
+    let mut store = Store::new();
+    let none = std::collections::BTreeSet::new();
+    store.advance(0.0, &none);
+    set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(1.0)), ("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(10.0))]);
+    let a = store.advance(0.5, &none);
+    assert_eq!(a.wake.next, Some(0.5));
+}

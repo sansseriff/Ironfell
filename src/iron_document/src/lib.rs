@@ -233,6 +233,22 @@ impl Drop for Rollback {
     }
 }
 
+/// What a host shows (reactive-engine.md §8.2): the store keeps running
+/// what an observer reaches, and lets the rest rest.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Interest {
+    /// A 2D view of a composition: what is drawn in `rect` (x, y, w, h, in
+    /// the composition's units) at `zoom`. A view reaches the compositions
+    /// its embeds show, on an open path.
+    Region { composition: NodeId, rect: [f64; 4], zoom: f64 },
+    /// Nodes named by id: an inspector, a selection, open rows.
+    Nodes(Vec<NodeId>),
+}
+
+/// An observer, as `observe` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ObserverId(pub u64);
+
 /// What `advance` asks of the host (reactive-engine.md §10.2).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Wake {
@@ -408,6 +424,11 @@ pub struct StoreCore {
     presence_at: Option<f64>,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
+    /// What the host shows (§8.2), and whether everything counts as shown
+    /// (`observe_all`: the default, and the differential reference).
+    observers: BTreeMap<ObserverId, Interest>,
+    next_observer: u64,
+    observe_all: bool,
     /// What the last `advance` found live, and the queries then waiting:
     /// the frame something comes to rest still redraws.
     advanced: (BTreeSet<NodeId>, Vec<NodeId>),
@@ -556,6 +577,9 @@ impl StoreCore {
             presence_at: self.presence_at,
             advanced_at: self.advanced_at,
             advanced: self.advanced.clone(),
+            observers: self.observers.clone(),
+            next_observer: self.next_observer,
+            observe_all: self.observe_all,
             interaction: self.interaction.clone(),
             expansion_problems: self.expansion_problems.clone(),
             repeats: self.repeats.clone(),
@@ -767,6 +791,9 @@ impl StoreCore {
             presence_at: None,
             advanced_at: None,
             advanced: (BTreeSet::new(), Vec::new()),
+            observers: BTreeMap::new(),
+            next_observer: 0,
+            observe_all: true,
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
@@ -2582,17 +2609,79 @@ impl StoreCore {
         active
     }
 
+    /// Watch what `interest` shows (§8.2). Counts once `observe_all` is off.
+    pub fn observe(&mut self, interest: Interest) -> ObserverId {
+        let id = ObserverId(self.next_observer);
+        self.next_observer += 1;
+        self.observers.insert(id, interest);
+        id
+    }
+
+    /// What observer `id` shows has changed.
+    pub fn reobserve(&mut self, id: ObserverId, interest: Interest) {
+        if let Some(i) = self.observers.get_mut(&id) {
+            *i = interest;
+        }
+    }
+
+    pub fn unobserve(&mut self, id: ObserverId) {
+        self.observers.remove(&id);
+    }
+
+    /// Whether everything counts as shown, observers or not: today's
+    /// behaviour, a store's default and the differential reference. A host
+    /// that registers what it shows turns it off.
+    pub fn set_observe_all(&mut self, all: bool) {
+        self.observe_all = all;
+    }
+
+    pub fn observing_all(&self) -> bool {
+        self.observe_all
+    }
+
+    /// The compositions the observers show directly.
+    fn observed_compositions(&self) -> Vec<NodeId> {
+        let doc = Tree::of(&self.docs);
+        let mut out = Vec::new();
+        for i in self.observers.values() {
+            match i {
+                Interest::Region { composition, .. } => out.push(*composition),
+                Interest::Nodes(nodes) => out.extend(nodes.iter().filter_map(|&n| composition::composition_of(doc, n))),
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The compositions whose accumulators hold still: those holding one
+    /// that no observer reaches on an open path (a simulation in a hidden
+    /// tab costs nothing). None while everything is observed.
+    fn paused(&self) -> BTreeSet<NodeId> {
+        if self.observe_all {
+            return BTreeSet::new();
+        }
+        let doc = Tree::of(&self.docs);
+        let holding: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).filter_map(|n| composition::composition_of(doc, n)).collect();
+        if holding.is_empty() {
+            return holding;
+        }
+        let shown = composition::reach(doc, &self.observed_compositions(), &holding).running;
+        holding.difference(&shown).copied().collect()
+    }
+
     /// Bring everything that runs on time to `now` (seconds, the host's
     /// clock; reactive-engine.md §10.2): layout glides, machines, traces and
     /// accumulators, queries, items entering and leaving, and the playhead
-    /// while the clock plays, in that order. The accumulators of a `paused`
-    /// composition (one no view shows) hold still. Returns when to call
+    /// while the clock plays, in that order. The accumulators of a
+    /// composition no observer reaches hold still. Returns when to call
     /// again and what to redraw until then, the queries that became due,
     /// and whether anything changed.
-    pub fn advance(&mut self, now: f64, paused: &BTreeSet<NodeId>) -> Advanced {
+    pub fn advance(&mut self, now: f64) -> Advanced {
+        let paused = self.paused();
         let moving = self.advance_motion(now);
         let running = self.advance_machines(now);
-        let stepping = self.advance_steps(now, paused);
+        let stepping = self.advance_steps(now, &paused);
         let queries = self.advance_queries(now);
         let entering = self.advance_presence(now);
         let playing = self.advance_playhead(now);

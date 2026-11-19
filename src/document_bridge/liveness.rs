@@ -39,24 +39,11 @@ impl Liveness {
 
 /// The compositions a panel shows directly: its composition, and for the
 /// viewer the compositions its loose embeds show.
-fn panel_compositions(doc: Tree<'_>, view: &super::PanelView) -> Vec<NodeId> {
+pub(super) fn panel_compositions(doc: Tree<'_>, view: &super::PanelView) -> Vec<NodeId> {
     let mut out: Vec<NodeId> = view.composition.into_iter().collect();
     if view.loose {
         let loose: Vec<NodeId> = super::nest::panel_roots(doc, view).into_iter().filter(|&r| composition::composition_of(doc, r).is_none()).collect();
         out.extend(super::nest::preorder(doc, &loose).into_iter().filter_map(|n| composition::embedded(doc, n)));
-    }
-    out
-}
-
-/// Which of `candidates` (compositions) some panel or open embed view
-/// reaches on an open path: the ones on screen, through any embeds.
-pub fn reached(doc: Tree<'_>, views: &PanelViews, embeds: &EmbedViews, candidates: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
-    let mut out = BTreeSet::new();
-    for view in &views.0 {
-        out.extend(composition::reach(doc, &panel_compositions(doc, view), candidates).running);
-    }
-    for e in embeds.0.iter().filter(|e| e.open) {
-        out.extend(composition::reach(doc, &[e.source], candidates).running);
     }
     out
 }

@@ -178,19 +178,18 @@ fn set_clock(store: &mut Store, fields: &[(&str, Value)]) {
 #[test]
 fn advance_plays_the_playhead_to_the_end_of_the_clips() {
     let Scene { mut store, rect, .. } = scene();
-    let none = std::collections::BTreeSet::new();
-    store.advance(10.0, &none);
+    store.advance(10.0);
     set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(1.0))]);
-    let a = store.advance(11.5, &none);
+    let a = store.advance(11.5);
     assert!(a.changed);
     assert_eq!(store.time(), 1.5);
     assert_eq!(x_of(&store, rect), 150.0);
-    store.advance(20.0, &none);
+    store.advance(20.0);
     assert_eq!(store.time(), 3.0);
     assert_eq!(store.resolved(store.clock().unwrap(), path("clock.playing")), Some(Value::Bool(false)));
     // At rest: nothing to redraw and nothing due.
-    store.advance(21.0, &none);
-    let idle = store.advance(22.0, &none);
+    store.advance(21.0);
+    let idle = store.advance(22.0);
     assert_eq!((idle.wake.next, idle.wake.live.is_empty(), idle.changed), (None, true, false));
 }
 
@@ -198,10 +197,9 @@ fn advance_plays_the_playhead_to_the_end_of_the_clips() {
 #[test]
 fn advance_loops_the_playhead() {
     let Scene { mut store, .. } = scene();
-    let none = std::collections::BTreeSet::new();
-    store.advance(0.0, &none);
+    store.advance(0.0);
     set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(2.0)), ("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(2.0))]);
-    store.advance(1.25, &none);
+    store.advance(1.25);
     assert_eq!(store.time(), 0.5);
 }
 
@@ -210,9 +208,8 @@ fn advance_loops_the_playhead() {
 #[test]
 fn a_playing_clock_asks_for_the_next_frame() {
     let mut store = Store::new();
-    let none = std::collections::BTreeSet::new();
-    store.advance(0.0, &none);
+    store.advance(0.0);
     set_clock(&mut store, &[("playing", Value::Bool(true)), ("rate", Value::Number(1.0)), ("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(10.0))]);
-    let a = store.advance(0.5, &none);
+    let a = store.advance(0.5);
     assert_eq!(a.wake.next, Some(0.5));
 }

@@ -443,13 +443,12 @@ fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_doc
 #[test]
 fn a_refused_channel_is_not_an_unsettled_machine() {
     let Card { mut store, entity, fade, .. } = card();
-    let none = std::collections::BTreeSet::new();
     store.apply(tx("bind", vec![Op::Set { id: fade, path: path("channel.value"), slot: Slot::Bound(Expr::parse("1").unwrap()) }])).unwrap();
-    store.advance(0.0, &none);
-    store.advance(0.1, &none);
+    store.advance(0.0);
+    store.advance(0.1);
     assert!(!store.problems().iter().any(|p| p.kind == "machine"), "{:?}", store.problems());
     set_vis(&mut store, entity, "hidden");
-    store.advance(0.2, &none);
-    store.advance(0.3, &none);
+    store.advance(0.2);
+    store.advance(0.3);
     assert!(!store.problems().iter().any(|p| p.kind == "machine"), "{:?}", store.problems());
 }

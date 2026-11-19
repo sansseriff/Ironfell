@@ -2412,6 +2412,19 @@ behaviour, the reference mode, §8.2):
 owner state, because it gives §17's first exit on its own; pictures only, never
 bodies or stateful owners, change state in this phase.
 
+**Phase 4, step 1 done (2026-11-19): observers in the store.** `observe(Interest)
+-> ObserverId`, `reobserve`, `unobserve`, with `Interest::{Region { composition,
+rect, zoom }, Nodes}` (Look, Pin and Volume when something needs them).
+`observe_all` is a store's default (today's behaviour, and the differential
+reference); a host that registers what it shows turns it off. What it changes now:
+`advance` no longer takes `paused` from the host; the store works it out from the
+observers (accumulators in a composition no observer reaches on an open path hold
+still, as the host's `liveness::reached` decided, now deleted). The host's
+`motion::observe` keeps one region per composition each panel and open embed shows,
+registering again after a load; the region is the whole composition until views
+report their visible rectangles (step 3). Test:
+`an_accumulator_steps_only_where_observed`.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

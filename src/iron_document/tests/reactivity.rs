@@ -872,19 +872,43 @@ fn a_trace_and_an_accumulator_at_rest_schedule_no_wake() {
         <trace id="$tr" name="tr" of="{= $lit}" delay="1"/>
         <accumulate id="$acc" name="acc" initial="10" next="{= $acc}"/>"##,
     );
-    let none = std::collections::BTreeSet::new();
     for t in [0.0, 0.1, 0.2] {
-        store.advance(t, &none);
+        store.advance(t);
     }
-    let idle = store.advance(0.3, &none);
+    let idle = store.advance(0.3);
     assert_eq!((idle.wake.next, idle.wake.live.len(), idle.changed), (None, 0, false));
     store.apply(tx("on", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
-    let busy = store.advance(0.4, &none);
+    let busy = store.advance(0.4);
     assert_eq!(busy.wake.next, Some(0.4));
     assert!(!busy.wake.live.is_empty());
     for t in [1.0, 1.5, 2.0, 2.1] {
-        store.advance(t, &none);
+        store.advance(t);
     }
-    let rest = store.advance(2.2, &none);
+    let rest = store.advance(2.2);
     assert_eq!((rest.wake.next, rest.wake.live.len(), rest.changed), (None, 0, false));
+}
+
+/// Observers (reactive-engine.md §8.2, phase 4 step 1): with everything no
+/// longer counted as shown, an accumulator in a composition no observer
+/// reaches holds still; observing its composition sets it going.
+#[test]
+fn an_accumulator_steps_only_where_observed() {
+    let (mut store, comp, n) = sheet(r##"<accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/>"##);
+    let acc = |s: &Store| s.resolved(n["acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
+    store.set_observe_all(false);
+    for t in [0.0, 0.1, 0.2] {
+        store.advance(t);
+    }
+    assert_eq!(acc(&store), 0.0, "unobserved: holds still");
+    let id = store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    for t in [0.3, 0.4, 0.5] {
+        store.advance(t);
+    }
+    assert!(acc(&store) > 0.0, "observed: steps");
+    store.unobserve(id);
+    let held = acc(&store);
+    for t in [0.6, 0.7] {
+        store.advance(t);
+    }
+    assert_eq!(acc(&store), held);
 }

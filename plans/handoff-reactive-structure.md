@@ -1846,8 +1846,49 @@ an optional step.
     10 plots 0.26 / 0.34 → 0.33 / 0.40 ms; values-only steps unchanged
     (0.07 / 0.13 ms). Templates kept between passes take the compile away.
 
-Next: stage 3's second prerequisite, templates kept between passes with a version
-covering what each compiler reads; then slot clearing on a `use`'s `size`.
+- **Stage 3, second prerequisite: templates kept between passes (2026-11-18).**
+  `TemplateCache` lives in `Owners`; a pass reads it through `Templates`, which
+  also memoises each node's own overrides for the pass. Each template records
+  its **scope** and that scope's stamp when compiled: a body's and a picture's
+  scope is the definition, an authored repeat's the repeat, a sub-template's its
+  outer template's. It is used while `Document::scope_stamp(scope)` is unchanged.
+  - **The version:** every write at the authored document's choke points
+    (`insert_node`, `restore_node`, `tombstone`, `remove_node`, `set_parent`
+    before and after, `set_order`, `insert_facet`, `remove_facet`, `facet_mut`,
+    a relation linked or unlinked, by its `from`) gives a new stamp to every
+    definition, repeat and conditional enclosing the written node. Stamps come
+    from one process-wide counter, so none is ever given twice (a rollback, a
+    clone going its own way, another document); a scope never written is at the
+    document's own base stamp. A rollback stamps the scopes of everything it puts
+    back, before and after, so what a refused transaction compiled never matches
+    again: the cache needs no transaction bookkeeping. Derived and session ids
+    are skipped.
+  - **What it covers:** everything the compilers read is inside the scope: a
+    picture's `Body` classes (`is_body`, the definition's children), each inner
+    `use`'s `inner_def` (the inner entity's `instance`, in the body), the
+    `figures` relations from template nodes; a body's `inputs_of`.
+  - `expand::parity` runs on a clone of the kept cache, so the owner check now
+    also checks that a stale template is never used.
+  - Tests: `a_refused_definition_edit_leaves_no_template_behind` (fails without
+    the rollback's stamps) and `a_definition_edited_without_instances_is_placed_as_edited`
+    (fails, with one other, without `facet_mut`'s).
+  - Measured (native release, load 2–10, the three builds the same quarter hour),
+    a tick-count step, pan / zoom: 1 plot 0.18 / 0.20 ms before the sub-template,
+    0.19 / 0.24 with it compiled per pass, **0.13 / 0.19** kept; 10 plots 0.25 /
+    0.33, 0.31 / 0.40, **0.26 / 0.33**. Meters unchanged: definition edit at 700
+    32.7 ms, placement 3.5 ms, constant edit 1.22 ms.
+  - Not done: entries for a definition that is gone stay until the cache is
+    dropped (bounded by the definitions ever compiled).
+  - **The third prerequisite has nothing to build before slots exist:** today a
+    `use` gaining or losing `size` re-expands its owner (`affected`, `AddFacet`/
+    `RemoveFacet`), and `Env.sized` is read again. Stage 3's slot clearing must
+    keep that: a picture's slots that read `Root` are cleared when its `use`'s
+    `size` facet comes or goes.
+
+Next: stage 3 itself, copies materialised on read. Its own prerequisites (above,
+"Stage 3"): the id → (owner, local) index without the path registry's lock,
+per-template indexes for the enumerations, `Changes` for copies created and
+removed, a graph read path that does not fill slots, and A4's threading.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

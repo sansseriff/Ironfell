@@ -385,3 +385,48 @@ fn a_definition_edit_removes_a_facet_and_changes_a_field_in_every_copy() {
     let changes = store.take_changes();
     assert!(changes.created.is_empty() && changes.removed.is_empty(), "{changes:?}");
 }
+
+/// Templates are kept between passes. A transaction refused after its
+/// expansion ran compiled a template from what it would have made; once
+/// it is rolled back, the next owner to expand reads the definition as it
+/// is, not that template.
+#[test]
+fn a_refused_definition_edit_leaves_no_template_behind() {
+    let Pair { mut store, names, u } = pair();
+    let (c, iu, bx) = (names["$c"], names["$iu"], names["$box"]);
+    let copy = NodeId::from_path(&[u, iu, bx]).unwrap();
+    assert_eq!(number(&store, copy, "size.w"), 10.0);
+    // A link to a copy that does not exist is refused after expansion.
+    let rel = store.authored().next_relation_id();
+    let bogus = NodeId::expanded(u, c).unwrap();
+    let refused = store.apply(tx(
+        "wider, refused",
+        vec![
+            Op::Set { id: bx, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(99.0)) },
+            Op::Link { rel: Relation { id: rel, from: c, to: bogus, rel: RelKind::References, data: BTreeMap::new() } },
+        ],
+    ));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(number(&store, copy, "size.w"), 10.0);
+    // The picture expands again for something else.
+    let (_, op) = override_of(&store, u, iu, "transform2d.x", Value::Number(7.0));
+    store.apply(tx("moved", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(number(&store, NodeId::from_path(&[u, iu]).unwrap(), "transform2d.x"), 7.0);
+    assert_eq!(number(&store, copy, "size.w"), 10.0);
+}
+
+/// A definition edited while nothing instantiates it, then placed: its
+/// copies come from the definition as edited.
+#[test]
+fn a_definition_edited_without_instances_is_placed_as_edited() {
+    let Pair { mut store, names, u } = pair();
+    let (c, pair_def, iu, bx) = (names["$c"], names["$pair"], names["$iu"], names["$box"]);
+    let doc = store.tree();
+    let entity = doc.relations_from(u).find(|r| r.rel == RelKind::Figures).unwrap().to;
+    store.apply(tx("remove", vec![Op::Delete { id: u }, Op::Delete { id: entity }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("wider", vec![Op::Set { id: bx, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(20.0)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    apply(&mut store, &format!(r#"<place def="{pair_def}" in="{c}" x="0" y="0"/>"#));
+    let doc = store.tree();
+    let u = *doc.children(c).iter().find(|&&n| !n.is_expanded() && doc.is_live(n) && doc.live(n).is_some_and(|x| x.ty.name() == "use")).expect("the new picture");
+    assert_eq!(number(&store, NodeId::from_path(&[u, iu, bx]).unwrap(), "size.w"), 20.0);
+}

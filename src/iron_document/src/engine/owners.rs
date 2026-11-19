@@ -9,6 +9,7 @@
 //! index from definitions to owners only grows: an owner it names that no
 //! longer reads the definition is expanded again for nothing.
 
+use crate::engine::template::TemplateCache;
 use crate::expand::{self, Items, Problem};
 use crate::facet::FacetKind;
 use crate::op::Op;
@@ -34,6 +35,9 @@ pub(crate) struct Owners {
     /// Owner -> owners whose pictures figure its derived entities. Only
     /// grows.
     readers: BTreeMap<NodeId, BTreeSet<NodeId>>,
+    /// The templates compiled so far. Each knows whether it is current, so
+    /// a refused transaction leaves none to put back.
+    templates: TemplateCache,
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -70,7 +74,7 @@ impl Delta {
 
 impl Owners {
     /// Expand `which` again in `doc`: the ops applied, and what to record.
-    pub(crate) fn expand(&self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
+    pub(crate) fn expand(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
         let Which::Some(mut todo) = which else { return self.expand_all(docs, stamp, counts) };
         // Owners whose last expansion failed in part are tried again: what
         // failed may depend on something outside them that has changed.
@@ -83,7 +87,7 @@ impl Owners {
         while !todo.is_empty() {
             let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(docs, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -107,7 +111,7 @@ impl Owners {
     /// recorded, an owner another owner's pictures read, or what the items
     /// want meets the budget or a nesting limit. An op that fails to apply
     /// is repaired by expanding its owner whole, in the same call.
-    pub(crate) fn expand_items(&self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+    pub(crate) fn expand_items(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
         // The whole-document rules (`expand`): any owner's failed or cut
         // expansion is tried again on every update, and past the budget
         // everything expands in id order. Neither is this path's.
@@ -138,7 +142,8 @@ impl Owners {
             // Wanting is tried before anything applies, so a `None` from
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
-            let Some((done, problems)) = expand::expand_items(docs, stamp, counts, *owner, rs, room + self.held_under(Tree::of(docs), rs)) else {
+            let room = room + self.held_under(Tree::of(docs), rs);
+            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -169,9 +174,9 @@ impl Owners {
     }
 
     /// Every owner, in id order.
-    fn expand_all(&self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
+    fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
         let owners = expand::top_owners(Tree::of(docs));
-        let mut done = expand::expand_owners(docs, stamp, counts, &owners, expand::NODE_BUDGET);
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET);
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
         delta.add(done);
@@ -204,6 +209,12 @@ impl Owners {
         for (read, o) in d.reads {
             self.readers.entry(read).or_default().insert(o);
         }
+    }
+
+    /// The templates compiled so far.
+    #[cfg(feature = "differential")]
+    pub(crate) fn templates(&self) -> &TemplateCache {
+        &self.templates
     }
 
     /// Every owner's problems, in the order `expand::sort_problems` gives.

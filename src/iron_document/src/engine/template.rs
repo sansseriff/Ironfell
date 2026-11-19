@@ -26,9 +26,14 @@
 //! instance alike: the spec's (definition, notation, sized, main) key is
 //! (definition, notation) here, with sized and main in the environment.
 //!
-//! A template lives for one pass: nothing is edited while a pass wants its
-//! copies, and the next pass compiles again from the document. Stage 3's
-//! slots will need templates kept between passes, with a version.
+//! Templates are kept between passes ([`TemplateCache`], in `Owners`),
+//! each with the stamp its scope had when it was compiled: a body's and a
+//! picture's scope is the definition, an authored repeat's the repeat, a
+//! sub-template's its outer template's. A template is current while its
+//! scope's stamp is unchanged (`Document::scope_stamp`): every write under
+//! a definition or repeat stamps it again, a rollback included, and nothing
+//! a compiler reads is outside its scope. So a refused transaction needs
+//! nothing put back here: what it compiled no longer matches.
 
 use crate::definition;
 use crate::document::{RelKind, Relation};
@@ -42,6 +47,7 @@ use crate::value::{Slot, Value};
 use crate::Tree;
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// How a node a template refers to is read from one owner's copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +116,10 @@ pub(crate) struct Template {
     refs: HashMap<NodeId, Ref>,
     /// A collection's items are ordered after this key.
     pub(crate) after: OrderKey,
+    /// What the template is compiled from (a definition, or an authored
+    /// repeat), and its stamp then.
+    scope: NodeId,
+    stamp: u64,
 }
 
 /// One owner, as its template's references resolve against it.
@@ -134,7 +144,7 @@ pub(crate) struct Item {
     pub(crate) key: String,
     /// A derived repeat's: the template that copies it and the
     /// environment of that copy's owner.
-    pub(crate) outer: Option<(Rc<Template>, Rc<Env>)>,
+    pub(crate) outer: Option<(Arc<Template>, Rc<Env>)>,
 }
 
 fn any_leaf() -> LeafPath {
@@ -191,7 +201,7 @@ impl Template {
                 e.insert(c);
             }
         }
-        Template { source, nodes, rels, refs, after }
+        Template { source, nodes, rels, refs, after, scope: NodeId::from_raw(0), stamp: 0 }
     }
 
     /// Definition `def`'s body (`expand::want_entity`'s copies).
@@ -228,7 +238,18 @@ impl Template {
                 stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
             }
         }
-        Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside))
+        Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside)).in_scope(doc, def)
+    }
+
+    fn in_scope(mut self, doc: Tree<'_>, scope: NodeId) -> Template {
+        self.scope = scope;
+        self.stamp = doc.scope_stamp(scope);
+        self
+    }
+
+    /// Whether the document is as it was when this was compiled.
+    fn current(&self, doc: Tree<'_>) -> bool {
+        doc.scope_stamp(self.scope) == self.stamp
     }
 
     /// Definition `def`'s picture from its template node `template`
@@ -272,6 +293,7 @@ impl Template {
                 None
             }
         })
+        .in_scope(doc, def)
     }
 
     /// Authored repeat (or conditional) `r`'s template: its children that
@@ -288,7 +310,7 @@ impl Template {
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
             stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
         }
-        Template::collection(r, nodes, rels)
+        Template::collection(r, nodes, rels).in_scope(doc, r)
     }
 
     /// The template of a copy of `outer`'s node `l`, a repeat or
@@ -307,7 +329,7 @@ impl Template {
             nodes.push(TNode::new(n.local, n.parent, n.ty, n.order.clone(), n.facets.clone()));
         }
         rels.extend(outer.rels.iter().filter(|x| x.from != l && under.contains(&x.from)).cloned());
-        Template::collection(l, nodes, rels)
+        Template { scope: outer.scope, stamp: outer.stamp, ..Template::collection(l, nodes, rels) }
     }
 
     fn collection(r: NodeId, nodes: Vec<TNode>, rels: Vec<Relation>) -> Template {
@@ -435,41 +457,83 @@ fn apply_overrides(n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
     }
 }
 
-/// The templates and overrides one pass has read, shared by its owners.
-#[derive(Default)]
-pub(crate) struct Templates {
-    bodies: HashMap<NodeId, Rc<Template>>,
-    pictures: HashMap<(NodeId, String), Option<Rc<Template>>>,
+/// The templates compiled so far, kept between passes: each is used while
+/// it is current ([`Template::current`]) and compiled again when not.
+#[derive(Clone, Default)]
+pub(crate) struct TemplateCache {
+    bodies: HashMap<NodeId, Arc<Template>>,
+    /// A definition without a template for a notation is cached too, with
+    /// the definition's stamp.
+    pictures: HashMap<(NodeId, String), (u64, Option<Arc<Template>>)>,
     /// Each repeat's or conditional's, by the node the template names it.
-    collections: HashMap<NodeId, Rc<Template>>,
-    /// Each node's own overrides (`expand::own_overrides`).
+    collections: HashMap<NodeId, Arc<Template>>,
+}
+
+impl std::fmt::Debug for TemplateCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TemplateCache({} bodies, {} pictures, {} collections)", self.bodies.len(), self.pictures.len(), self.collections.len())
+    }
+}
+
+/// One pass's view of the templates: the kept ones, and each node's own
+/// overrides, read once in the pass.
+pub(crate) struct Templates<'c> {
+    cache: &'c mut TemplateCache,
     own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
 }
 
-impl Templates {
-    pub(crate) fn body(&mut self, doc: Tree<'_>, def: NodeId) -> Rc<Template> {
-        self.bodies.entry(def).or_insert_with(|| Rc::new(Template::body(doc, def))).clone()
+impl<'c> Templates<'c> {
+    pub(crate) fn new(cache: &'c mut TemplateCache) -> Templates<'c> {
+        Templates { cache, own: HashMap::new() }
     }
 
-    pub(crate) fn picture(&mut self, doc: Tree<'_>, def: NodeId, notation: &str) -> Option<Rc<Template>> {
+    pub(crate) fn body(&mut self, doc: Tree<'_>, def: NodeId) -> Arc<Template> {
+        match self.cache.bodies.get(&def) {
+            Some(t) if t.current(doc) => t.clone(),
+            _ => {
+                let t = Arc::new(Template::body(doc, def));
+                self.cache.bodies.insert(def, t.clone());
+                t
+            }
+        }
+    }
+
+    pub(crate) fn picture(&mut self, doc: Tree<'_>, def: NodeId, notation: &str) -> Option<Arc<Template>> {
         let key = (def, notation.to_owned());
-        if let Some(t) = self.pictures.get(&key) {
+        let stamp = doc.scope_stamp(def);
+        if let Some((at, t)) = self.cache.pictures.get(&key)
+            && *at == stamp
+        {
             return t.clone();
         }
-        let t = definition::template_of(doc, def, notation).map(|template| Rc::new(Template::picture(doc, def, template)));
-        self.pictures.insert(key, t.clone());
+        let t = definition::template_of(doc, def, notation).map(|template| Arc::new(Template::picture(doc, def, template)));
+        self.cache.pictures.insert(key, (stamp, t.clone()));
         t
     }
 
     /// Authored repeat `r`'s template.
-    pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Rc<Template> {
-        self.collections.entry(r).or_insert_with(|| Rc::new(Template::repeat(doc, r))).clone()
+    pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Arc<Template> {
+        match self.cache.collections.get(&r) {
+            Some(t) if t.current(doc) => t.clone(),
+            _ => {
+                let t = Arc::new(Template::repeat(doc, r));
+                self.cache.collections.insert(r, t.clone());
+                t
+            }
+        }
     }
 
-    /// The template of a copy of `outer`'s repeat `l`. `l` is in one
-    /// template only, so it names the sub-template.
-    pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Rc<Template> {
-        self.collections.entry(l).or_insert_with(|| Rc::new(Template::sub(outer, l))).clone()
+    /// The template of a copy of `outer`'s repeat `l`, current as `outer`
+    /// is. `l` is in one template only, so it names the sub-template.
+    pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Arc<Template> {
+        match self.cache.collections.get(&l) {
+            Some(t) if t.scope == outer.scope && t.stamp == outer.stamp => t.clone(),
+            _ => {
+                let t = Arc::new(Template::sub(outer, l));
+                self.cache.collections.insert(l, t.clone());
+                t
+            }
+        }
     }
 
     /// The overrides that reach `owner`'s copies, as (target, leaf, value),

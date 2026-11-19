@@ -36,9 +36,10 @@ use crate::op::{self, Op};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
-use crate::engine::template::{Env, Item, Template, Templates};
+use crate::engine::template::{Env, Item, Template, TemplateCache, Templates};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 #[cfg(feature = "differential")]
 #[path = "expand_oracle.rs"]
@@ -166,7 +167,7 @@ struct Wanted {
     /// Each derived repeat or conditional wanted: the template that copies
     /// it and its owner's environment, which its items' template is part
     /// of (`Template::sub`).
-    origins: HashMap<NodeId, (Rc<Template>, Rc<Env>)>,
+    origins: HashMap<NodeId, (Arc<Template>, Rc<Env>)>,
 }
 
 impl Wanted {
@@ -254,7 +255,7 @@ pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
 /// in them. `wanted` is these for every owner; each is computed the same
 /// way, so an owner expanded alone gets exactly the copies the whole
 /// document would give it.
-fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &mut Templates) -> Wanted {
+fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &mut Templates<'_>) -> Wanted {
     let mut out = Wanted::new(cap);
     out.root = Some(owner);
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
@@ -305,7 +306,7 @@ fn picture_of(doc: Tree<'_>, u: NodeId) -> Option<Picture> {
 /// that copies it and its owner's environment. Nothing of the owner's
 /// copies is read but the owner's own node (a `use`'s facets and
 /// `figures`), so with lazy copies only that one is made.
-fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates) -> Option<(Rc<Template>, Rc<Env>)> {
+fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<Template>, Rc<Env>)> {
     let path = r.path();
     let owner = NodeId::from_path(&path[..path.len().checked_sub(1)?])?;
     if owner.is_item_scope() {
@@ -322,7 +323,7 @@ fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates) -> Option<(Rc<Templ
 
 /// Repeat (or conditional) `r`'s template, and for a derived one its
 /// maker: from `out` when this pass wanted `r`, from the ids otherwise.
-fn collection_of(doc: Tree<'_>, r: NodeId, out: Option<&Wanted>, cache: &mut Templates) -> Option<(Rc<Template>, Option<(Rc<Template>, Rc<Env>)>)> {
+fn collection_of(doc: Tree<'_>, r: NodeId, out: Option<&Wanted>, cache: &mut Templates<'_>) -> Option<(Arc<Template>, Option<(Arc<Template>, Rc<Env>)>)> {
     if !r.is_expanded() {
         return Some((cache.repeat(doc, r), None));
     }
@@ -368,12 +369,12 @@ pub(crate) struct OwnersExpanded {
 /// nothing else (reactive-engine handoff §4.4, stage 2). `room` is how many
 /// nodes they may derive together, taken in id order: the budget less what
 /// other owners hold.
-pub(crate) fn expand_owners(docs: &mut Docs, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
+pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
     let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
-    let mut cache = Templates::default();
+    let mut cache = Templates::new(templates);
     for &owner in owners {
         let w = wanted_for(Tree::of(docs), owner, counts, room, &mut cache);
         room = room.saturating_sub(w.nodes.len());
@@ -412,9 +413,9 @@ pub(crate) fn expand_owners(docs: &mut Docs, stamp: Version, counts: &Items, own
 /// same order with the same facets, the same relations and the same
 /// problems. The owners' check runs it after every update.
 #[cfg(feature = "differential")]
-pub(crate) fn parity(doc: Tree<'_>, counts: &Items) -> Result<(), String> {
+pub(crate) fn parity(doc: Tree<'_>, templates: &mut TemplateCache, counts: &Items) -> Result<(), String> {
     let old = oracle::wanted(doc, counts);
-    let mut cache = Templates::default();
+    let mut cache = Templates::new(templates);
     let (mut nodes, mut rels, mut problems) = (Vec::new(), Vec::new(), Vec::new());
     let mut room = NODE_BUDGET;
     for owner in top_owners(doc) {
@@ -456,11 +457,11 @@ pub(crate) struct ItemsExpanded {
 /// meets a problem (the budget, nesting): the caller expands `owner` whole.
 /// `Some` with `ops` applied otherwise; an op that fails to apply is
 /// reported as a problem, and the caller expands `owner` whole to repair it.
-pub(crate) fn expand_items(docs: &mut Docs, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
+pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
     let mut out = Wanted::new(room);
     out.root = Some(owner);
     {
-        let mut cache = Templates::default();
+        let mut cache = Templates::new(templates);
         let tree = Tree::of(docs);
         for &r in repeats {
             let ok = r.path().first() == Some(&owner)
@@ -544,7 +545,7 @@ fn in_template(doc: Tree<'_>, out: &Wanted, id: NodeId) -> bool {
 /// ports of an instance and the picture of a `use`. So a component in a
 /// repeat's template, a repeat in a component's, and repeats in repeats
 /// all expand, each scope under the one that made it.
-fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec<NodeId>, cache: &mut Templates) {
+fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec<NodeId>, cache: &mut Templates<'_>) {
     let mut done = BTreeSet::new();
     let mut seen = 0;
     loop {
@@ -598,7 +599,7 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
 /// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
 /// which the store publishes (`Store::settle_repeats`): so an item
 /// re-evaluates when its own element changes, not when any does.
-fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache: &mut Templates) {
+fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) {
     if keys.is_empty() || !out.enter(r) {
         return;
     }
@@ -640,7 +641,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache
 /// connections, each inner entity in turn deriving its own; then its
 /// machines' states, transitions and tweens (machines.md §9 Q12), whose
 /// timing may read the instance's inputs and which it may override.
-fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted, cache: &mut Templates) {
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted, cache: &mut Templates<'_>) {
     out.defs.insert(def);
     if !out.enter(entity) {
         return;
@@ -672,7 +673,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted, cac
 /// copy figures that entity's copy and derives that entity's picture. A
 /// main has no entity: references to the definition's body stay on it.
 #[allow(clippy::too_many_arguments)]
-fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted, cache: &mut Templates) {
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted, cache: &mut Templates<'_>) {
     out.defs.insert(def);
     // A picture of another owner's derived entity reads that owner's copy.
     if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())

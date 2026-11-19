@@ -128,6 +128,12 @@ impl<'a> Tree<'a> {
         Tree { doc: &docs.authored, copies: docs.apart.then_some(&docs.copies) }
     }
 
+    /// When anything under definition or repeat `id` was last written
+    /// (`Document::scope_stamp`).
+    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
+        self.doc.scope_stamp(id)
+    }
+
     /// The tree over a document that holds no copies apart from it: a
     /// scratch document cloned for planning, a fragment, a document being
     /// loaded. A derived node it does not hold is not there.

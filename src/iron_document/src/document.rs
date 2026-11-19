@@ -165,6 +165,36 @@ pub struct Document {
     /// Bumped by every write of structure or facets: a cache of something
     /// derived from them is current while this is unchanged. Not content.
     edits: Edits,
+    /// Each definition's and repeat's (or conditional's) last write under
+    /// it ([`Document::scope_stamp`]). Not content.
+    scopes: Scopes,
+}
+
+/// When each scope was last written under: a stamp from one counter for
+/// the process, so no stamp is ever given twice, whether by a rollback, a
+/// clone going its own way, or another document. A scope never written is
+/// at the document's `base`. Equal to any other.
+#[derive(Clone, Debug)]
+struct Scopes {
+    base: u64,
+    last: std::collections::HashMap<NodeId, u64>,
+}
+
+fn next_stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for Scopes {
+    fn default() -> Scopes {
+        Scopes { base: next_stamp(), last: Default::default() }
+    }
+}
+
+impl PartialEq for Scopes {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// A count of writes, equal to any other: a `Document`'s equality is about
@@ -529,6 +559,35 @@ impl Document {
         self.edits.0
     }
 
+    /// When anything under definition, repeat or conditional `id` was last
+    /// written: what is compiled from its content (`engine::template`) is
+    /// current while this is unchanged. Written means a node in it made,
+    /// removed, moved, reordered, its facets changed, or a relation from it
+    /// linked or unlinked; a rollback writes again what it puts back.
+    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
+        self.scopes.last.get(&id).copied().unwrap_or(self.scopes.base)
+    }
+
+    /// A write at `id`: a new stamp for every definition, repeat and
+    /// conditional it is in, itself included. Derived and session nodes
+    /// are in no template.
+    fn touch(&mut self, id: NodeId) {
+        if id.is_expanded() || id.is_session() {
+            return;
+        }
+        let mut stamp = None;
+        let mut at = Some(id);
+        while let Some(n) = at {
+            let Some(node) = self.nodes.get(&n) else { break };
+            let scope = node.ty.name() == "definition" || [FacetKind::Repeat, FacetKind::When].iter().any(|k| self.facets.get(k).is_some_and(|m| m.contains_key(&n)));
+            if scope {
+                let s = *stamp.get_or_insert_with(next_stamp);
+                self.scopes.last.insert(n, s);
+            }
+            at = node.parent;
+        }
+    }
+
     pub fn relation(&self, id: RelationId) -> Option<&Relation> {
         self.relations.get(&id)
     }
@@ -579,8 +638,29 @@ impl Document {
     pub(crate) fn rollback(&mut self) {
         self.edits.0 += 1;
         let journal = self.journal.0.take().expect("no journal to roll back");
+        // What is put back is written again: the scopes it is in now, and
+        // those it is back in after.
+        let mut touched = BTreeSet::new();
+        for r in &journal.recs {
+            match r {
+                Rec::Node(id, _) | Rec::Facet(_, id, _) => {
+                    touched.insert(*id);
+                }
+                Rec::Relation(id, before) => {
+                    touched.extend(self.relations.get(id).map(|x| x.from));
+                    touched.extend(before.as_ref().map(|x| x.from));
+                }
+                _ => {}
+            }
+        }
+        for &id in &touched {
+            self.touch(id);
+        }
         for r in journal.recs.into_iter().rev() {
             self.undo(r);
+        }
+        for &id in &touched {
+            self.touch(id);
         }
         // Invariants are checked over both documents together, by
         // `Docs::rollback`: a copy's parent is in the other one.
@@ -785,6 +865,7 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
+        self.touch(id);
     }
 
     /// Bring a tombstoned node back, replacing its placement and facets
@@ -815,12 +896,14 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
+        self.touch(id);
     }
 
     /// Tombstone one node. The caller tombstones descendants separately so
     /// each gets its own inverse op.
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
         self.edits.0 += 1;
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.tombstoned = Some(at));
         let ty = self.nodes[&id].ty;
@@ -836,6 +919,7 @@ impl Document {
     /// children go first; relations to it are the caller's.
     pub(crate) fn remove_node(&mut self, id: NodeId) {
         self.edits.0 += 1;
+        self.touch(id);
         debug_assert!(self.is_live(id), "only a live node is removed");
         self.unplace(id);
         let ty = self.nodes[&id].ty;
@@ -856,16 +940,19 @@ impl Document {
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         self.edits.0 += 1;
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| {
             n.parent = parent;
             n.order = order;
         });
         self.place(id);
+        self.touch(id);
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
         self.edits.0 += 1;
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.order = order);
         self.place(id);
@@ -873,6 +960,7 @@ impl Document {
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         self.edits.0 += 1;
+        self.touch(id);
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
         let before = self.facets.entry(kind).or_default().insert(id, c);
@@ -893,6 +981,7 @@ impl Document {
         kind: FacetKind,
     ) -> Option<Facet> {
         self.edits.0 += 1;
+        self.touch(id);
         let c = self.facets.get_mut(&kind)?.remove(&id)?;
         if self.recording() {
             self.rec(Rec::Facet(kind, id, Some(c.clone())));
@@ -909,6 +998,7 @@ impl Document {
         kind: FacetKind,
     ) -> Option<&mut Facet> {
         self.edits.0 += 1;
+        self.touch(id);
         if self.recording() {
             let before = self.facets.get(&kind)?.get(&id)?.clone();
             self.rec(Rec::Facet(kind, id, Some(before)));
@@ -918,6 +1008,7 @@ impl Document {
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
         self.edits.0 += 1;
+        self.touch(r.from);
         let (id, from, to) = (r.id, r.from, r.to);
         let created = !self.by_source.contains_key(&from);
         let inserted = self.by_source.entry(from).or_default().insert(id);
@@ -944,6 +1035,7 @@ impl Document {
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
         self.edits.0 += 1;
         let r = self.relations.remove(&id)?;
+        self.touch(r.from);
         if self.recording() {
             self.rec(Rec::Relation(id, Some(r.clone())));
         }

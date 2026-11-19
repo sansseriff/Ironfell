@@ -2,3 +2,4 @@
 //! §4.4): which authored nodes derive what, expanded per owner.
 
 pub(crate) mod owners;
+pub(crate) mod template;

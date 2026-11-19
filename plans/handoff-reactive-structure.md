@@ -1705,7 +1705,75 @@ an optional step.
   are neither authored nor derivable from the template). That home is stage 3's
   slots, or the solver's own published values.
 
-Next: stage 2, templates.
+- **Stage 2, templates (2026-11-18).** `src/engine/template.rs`: a `Template` is
+  compiled once per expansion pass per definition body, per (definition, notation)
+  picture and per collection, and shared by every owner the pass expands.
+  `Template::materialise(node, env)` makes one owner's copy of one template node:
+  the facets cloned, each reference resolved by a class fixed at compile time
+  (`Inside`, `Body`, `Root`; anything else is outside and read as it is), an `in`
+  port given its argument, the owner's overrides applied. `want_entity`,
+  `want_use` and `want_items` are now loops over a template, and `rewritten` and
+  `apply_overrides` are gone from the production path. The overrides reaching an
+  owner are worked out once per owner (with each node's own overrides read once
+  per pass), where the old code worked them out again for every copied node.
+  - **The old code is the oracle.** The whole-document expansion and the
+    functions it calls (`wanted`, `want_scopes`, `want_items`, `want_entity`,
+    `want_use`, `rewritten`, `apply_overrides`) moved unchanged to
+    `expand_oracle.rs`, built only with `differential`. `IRON_OWNER_CHECK` runs
+    it after every owner update, so every differential test compares the
+    templates' copies with the old code's. It goes when 2c deletes `InDocument`.
+  - **Departures from this section and the spec's §5.4:**
+    - The key is (definition, notation), not (definition, notation, sized,
+      main). Sized and main change only how `Root` and `Body` references resolve,
+      so they are the owner's environment (`Env`), and one template serves both.
+    - Templates live for one pass. Nothing is edited while a pass wants its
+      copies, so nothing needs invalidating or rolling back. Stage 3's slots need
+      templates kept between passes, with a version.
+    - A collection's template is still compiled from its prototype (the
+      authored children; a derived repeat's copies as this pass wants them, or
+      as its owner's last expansion wrote them), not as a sub-template of the
+      enclosing one. The prototype carries the picture's overrides by
+      construction, as before.
+  - `apply_wanted` compares a copy's facets where they are instead of cloning
+    them into a map first.
+  - Parity tests, `tests/templates.rs`: nested overrides apply innermost first
+    and the outermost wins (and may add a facet); an override of an inner
+    picture's notation changes which template its copy is made from; a repeat in
+    a template carries its picture's overrides into its items; references
+    follow to each owner's copies, in bindings, in `list(…)` and from a picture
+    to its entity's port. Reversing the override order or dropping the `Body`
+    resolution fails two of them.
+  - Measured, native release (`instance_cost`, which gains a **definition edit**
+    column: one tick's width in the meter's template, so every meter's body and
+    picture expand again). Load about 2:
+
+    | | before | after |
+    |---|---|---|
+    | definition edit, 100 meters | 11.3 ms | 4.1–4.4 ms |
+    | definition edit, 700 meters | 82–84 ms | 32–35 ms |
+    | placement, 700 meters | 3.4–4.1 ms | 3.4–3.5 ms |
+    | structural edit, 700 meters (expands nothing) | 6.0–7.4 ms | 6.0–6.5 ms |
+    | definition edit, 1,000 meters (past the budget) | 171–174 ms | 70–74 ms |
+    | placement, 1,000 meters | 27–28 ms | 14.6–15.0 ms |
+    | structural edit, 1,000 meters | 96–97 ms | 44–47 ms |
+
+    Placement and a structural edit at 700 meters expand two owners and none,
+    so templates do not change them. Past the budget every update expands every
+    owner, so there the whole pass's saving shows.
+  - **Where a definition edit at 700 meters goes now** (1,401 owners, 46,900
+    copies): wanting the copies 11 ms (was 58), collecting what the owners hold
+    2.6 ms, the diff 17 ms (19–20 before), of which applying the 700 changed
+    `Set`s is 0.8 ms. The rest is materialising and comparing every copy whose
+    template did not change: about 0.5 µs a copy, mostly the boxed facets'
+    allocation and comparison. The spec's fix is a definition edit that
+    recompiles its templates and applies only the difference to each owner,
+    which needs templates kept between passes (stage 3).
+  - Tried and not kept: a per-node index of facet kinds in `Document`, so
+    `facets_of` reads only the tables a node is in (the diff 15.5 → 13.4 ms, for
+    an entry per node); reusing a parent copy's id instead of interning it again
+    (no change).
+
+Next: stage 3, copies materialised on read.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

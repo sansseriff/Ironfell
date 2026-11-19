@@ -115,11 +115,26 @@ fn expanded_instances_cost() {
         let clone = store.authored().clone();
         let clone_ms = t.elapsed().as_secs_f64() * 1000.0;
         drop(clone);
+        // A definition edit: one tick's width, so every meter's picture is
+        // expanded again.
+        let tick = {
+            let doc = store.tree();
+            let def = standard::find(doc, "meter").unwrap();
+            let template = definition::template_of(doc, def, "free").unwrap();
+            *doc.children(template).iter().filter(|c| !c.is_expanded()).last().unwrap()
+        };
+        let mut def_times = Vec::new();
+        for i in 0..3 {
+            let t = Instant::now();
+            store.apply(tx("tick", vec![Op::Set { id: tick, path: "size.w".parse().unwrap(), slot: n(7.0 + i as f64) }])).unwrap();
+            def_times.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        def_times.sort_by(f64::total_cmp);
         // An edit planned (a rect added): planning runs on a scratch store.
         let t = Instant::now();
         iron_document::edit::plan(&store, &format!(r#"<edit><rect in="{comp}" w="5" h="5"/></edit>"#), None).unwrap();
         let plan_ms = t.elapsed().as_secs_f64() * 1000.0;
-        println!("{count} meters: {nodes} live nodes ({expanded} expanded); place {place_ms:.2} ms each; structural edit p50 {:.2} ms; constant edit {set_ms:.2} ms; clone {clone_ms:.2} ms; edit plan {plan_ms:.2} ms", times[2]);
+        println!("{count} meters: {nodes} live nodes ({expanded} expanded); place {place_ms:.2} ms each; structural edit p50 {:.2} ms; constant edit {set_ms:.2} ms; clone {clone_ms:.2} ms; edit plan {plan_ms:.2} ms; definition edit p50 {:.2} ms", times[2], def_times[1]);
     }
 }
 

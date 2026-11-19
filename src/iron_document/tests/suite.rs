@@ -63,6 +63,7 @@ mod spine;
 mod standard;
 mod time;
 mod timeline_view;
+mod templates;
 mod tokens;
 mod types;
 mod values;

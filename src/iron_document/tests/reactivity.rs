@@ -1067,6 +1067,9 @@ fn at_rest_stale_pictures_are_swept_up_to_date() {
     all.publish(p, at);
     assert!(store.reactive().stale_count() > 0);
     let out = store.advance(1.0);
+    assert_eq!(out.wake.next, Some(1.0), "published since the last frame: not at rest, called again");
+    assert!(store.reactive().stale_count() > 0);
+    let out = store.advance(1.05);
     assert_eq!(out.wake.next, None, "swept in one frame, nothing left to call back for");
     assert_eq!(store.reactive().stale_count(), 0);
     for &r in &rects {
@@ -1196,4 +1199,189 @@ fn a_hidden_accumulator_a_shown_picture_reads_keeps_stepping() {
     let x = |s: &Store| s.resolved(n["$m"], path("transform2d.x"));
     assert!(x(&all).and_then(|v| v.as_f64()).is_some_and(|v| v > 0.0));
     assert_eq!(x(&store), x(&all));
+}
+
+/// A preview's layout reads outside the graph too: a handle on a shown
+/// slider whose maximum is where a hidden stack places its second child
+/// holds an edit to the maximum the preview made.
+#[test]
+fn a_preview_lays_out_a_hidden_stack_from_current_sizes() {
+    let (mut store, mut all, _, n) = split(
+        r#"<let id="$t" name="t" value="10"/>
+        <composition id="$b" name="b" dims="2d"><group x="0" y="0" layout.mode="stack_x" layout.gap="0"><rect id="$r1" w="{= $t}" h="10"/><rect id="$r2" w="10" h="10"/></group></composition>
+        <composition id="$a" name="a" dims="2d"><slider id="$m" name="m" x="0" y="0" w="100" h="20" min="0" max="{= $r2.transform2d.x}" value="1"/></composition>"#,
+    );
+    for s in [&mut store, &mut all] {
+        s.preview(n["$t"], path("let.value"), Value::Number(100.0));
+        s.set_through_handle(n["$m"], path("slider.value"), Value::Number(50.0), "set", Actor::Human, 1).unwrap();
+    }
+    assert_eq!(all.resolved(n["$m"], path("slider.value")), Some(Value::Number(50.0)));
+    assert_eq!(store.resolved(n["$m"], path("slider.value")), all.resolved(n["$m"], path("slider.value")));
+}
+
+/// A tracked read waking a stale cell whose own wake reaches further down
+/// a hidden chain waits for that cell before checking for a cycle.
+#[test]
+fn a_nested_tracked_wake_finds_no_false_cycle() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$u" name="u" value="0"/><let id="$v" name="v" value="0"/><let id="$t" name="t" value="1"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="0" y="{= deref($v, 'transform2d.x', 0)}" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d">
+          <rect id="$h" name="h" x="{= deref($u, 'transform2d.y', 7)}" y="0" w="1" h="1"/>
+          <rect id="$b0" x="{= $t}" y="{= $b0.transform2d.x}" w="1" h="1"/>
+          <rect id="$b1" x="{= $b0.transform2d.y}" y="{= $b1.transform2d.x}" w="1" h="1"/>
+          <rect id="$b2" x="{= $b1.transform2d.y}" y="{= $b2.transform2d.x}" w="1" h="1"/>
+        </composition>"#,
+    );
+    let (u, v, t) = (n["$u"], n["$v"], n["$t"]);
+    store.set_observe_all(true);
+    let zero = Value::Number(0.0);
+    for (uv, vv, tv) in [(Value::Ref(n["$s"]), zero.clone(), 1.0), (Value::Ref(n["$b2"]), zero.clone(), 23.0), (Value::Ref(n["$b2"]), Value::Ref(n["$h"]), 23.0)] {
+        let values = lets(&[(u, uv), (v, vv), (t, Value::Number(tv))]);
+        store.publish(p, values.clone());
+        all.publish(p, values);
+        store.set_observe_all(false);
+    }
+    let y = Leaf { node: n["$s"], path: path("transform2d.y") };
+    assert_eq!(store.reactive().errors.get(&y), None);
+    assert_eq!(store.resolved(y.node, y.path), Some(Value::Number(23.0)));
+    assert_eq!(store.resolved(y.node, y.path), all.resolved(y.node, y.path));
+}
+
+/// What a trace follows reaches its output outside the graph: a shown
+/// picture reading a hidden trace of a hidden accumulator keeps it
+/// stepping.
+#[test]
+fn a_hidden_accumulator_read_through_a_trace_keeps_stepping() {
+    let (mut store, mut all, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"><rect id="$m" name="m" x="{= $delay.trace.out}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/><trace id="$delay" of="{= $acc}" delay="0.1"/></composition>"#,
+    );
+    for t in [0.0, 0.1, 0.2, 0.3, 0.4] {
+        store.advance(t);
+        all.advance(t);
+    }
+    let x = |s: &Store| s.resolved(n["$m"], path("transform2d.x"));
+    assert!(x(&all).and_then(|v| v.as_f64()).is_some_and(|v| v > 0.0));
+    assert_eq!(x(&store), x(&all));
+}
+
+/// A hidden cell a shown tracked read woke rests again once that read
+/// moves away, though the observers were refreshed in between.
+#[test]
+fn a_hidden_cell_rests_once_the_tracked_read_that_woke_it_leaves() {
+    let (mut store, _, p, n) = split(
+        r#"<let id="$t" name="t" value="0"/><let id="$w" name="w" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="{= deref($w, 'transform2d.x', 0)}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><rect id="$h" name="h" x="{= $t}" y="0" w="1" h="1"/></composition>"#,
+    );
+    let (t, w, h) = (n["$t"], n["$w"], n["$h"]);
+    store.publish(p, lets(&[(w, Value::Ref(h)), (t, Value::Number(1.0))]));
+    let id = store.observe(Interest::Region { composition: n["$a"], rect: [1.0, 1.0, 100.0, 100.0], zoom: 1.0 });
+    store.unobserve(id);
+    store.publish(p, lets(&[(w, Value::Number(0.0)), (t, Value::Number(1.0))]));
+    store.advance(0.0);
+    store.publish(p, lets(&[(w, Value::Number(0.0)), (t, Value::Number(2.0))]));
+    assert_eq!(store.resolved(h, path("transform2d.x")), Some(Value::Number(1.0)), "rests at its last value");
+    assert!(store.reactive().is_stale(Leaf { node: h, path: path("transform2d.x") }));
+}
+
+/// The idle sweep keeps necessity closed: a cell it brought up to date
+/// that a woken reader now reads stays needed, so a shown read of that
+/// reader later is current.
+#[test]
+fn the_idle_sweep_keeps_what_a_woken_cell_reads_needed() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$t" name="t" value="0"/><let id="$w" name="w" value="0"/><let id="$v" name="v" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="{= deref($v, 'transform2d.x', -1)}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d">
+          <rect id="$h0" x="{= $t}" y="0" w="1" h="1"/>
+          <rect id="$h1" x="{= $h0.transform2d.x + 1}" y="0" w="1" h="1"/>
+          <rect id="$d" x="{= deref($w, 'transform2d.x', -1)}" y="0" w="1" h="1"/>
+        </composition>"#,
+    );
+    let tail = Value::Ref(n["$h1"]);
+    for s in [&mut store, &mut all] {
+        s.publish(p, lets(&[(n["$t"], Value::Number(5.0)), (n["$w"], tail.clone())]));
+        s.advance(0.0);
+        s.publish(p, lets(&[(n["$t"], Value::Number(6.0)), (n["$w"], tail.clone()), (n["$v"], tail.clone())]));
+    }
+    assert_eq!(store.resolved(n["$s"], path("transform2d.x")), Some(Value::Number(7.0)));
+    assert_eq!(store.resolved(n["$s"], path("transform2d.x")), all.resolved(n["$s"], path("transform2d.x")));
+}
+
+/// The network's solver reads a hidden rect through a branch its own
+/// solution opens (`Q = P > 0.5 V ? deref(w).x × 1 V : 0 V`, `P = t × 1 V`):
+/// a shown meter of `Q` reaches what observing everything gives.
+#[test]
+fn the_network_reads_a_hidden_rect_through_the_branch_its_solution_opens() {
+    use iron_document::facet::{Args, Equation, Instance, Port, Size, Transform2d};
+    let net = || {
+        let mut store = Store::new();
+        let plan = edit::plan(
+            &store,
+            r#"<edit><model id="$model" name="model"/><library><definition id="$def" name="test"/></library>
+            <let id="$t" name="t" value="0"/><let id="$w" name="w" value="0"/>
+            <composition id="$a" name="a" dims="2d"/>
+            <composition id="$b" name="b" dims="2d"><rect id="$h" name="h" x="{= $t * 10}" y="0" w="1" h="1"/></composition></edit>"#,
+            None,
+        )
+        .unwrap_or_else(|f| panic!("{}", f.message()));
+        store.apply(tx("tabs", plan.ops)).unwrap();
+        let n = plan.aliases;
+        let ids = store.authored().next_ids(6);
+        let [entity, p, q, eq_p, eq_q, meter] = ids[..] else { unreachable!() };
+        let create = |id, t: &str, parent, facets| Op::Create { id, ty: ty(t), parent: Some(parent), order: OrderKey::first(), facets };
+        let port = |name: &str| vec![Port { kind: Slot::Const(Value::Str("electrical".into())), ..Default::default() }.wrap(), Name { text: Slot::Const(Value::Str(name.into())) }.wrap()];
+        let bound = |s: String| Slot::Bound(Expr::parse(&s).unwrap());
+        let equation = |l: String, r: String| vec![Equation { lhs: bound(l), rhs: bound(r) }.wrap()];
+        let mut at = Transform2d::default();
+        at.x = bound(format!("{q}.port.across / (1 V)"));
+        let ops = vec![
+            create(entity, "entity", n["$model"], vec![Instance { def: Slot::Const(Value::Ref(n["$def"])), ..Default::default() }.wrap(), Args::default().wrap()]),
+            create(p, "port", entity, port("p")),
+            create(q, "port", entity, port("q")),
+            create(eq_p, "equation", entity, equation(format!("{p}.port.across"), format!("{}.let.value * (1 V)", n["$t"]))),
+            create(eq_q, "equation", entity, equation(format!("{q}.port.across"), format!("{p}.port.across > 0.5 V ? deref({}.let.value, 'transform2d.x', 0) * (1 V) : 0 V", n["$w"]))),
+            create(meter, "rect", n["$a"], vec![at.wrap(), Size::default().wrap()]),
+        ];
+        store.apply(tx("network", ops)).unwrap();
+        (store, n, meter)
+    };
+    let (mut store, n, meter) = net();
+    let (mut all, _, _) = net();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$a"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    for s in [&mut store, &mut all] {
+        let p = s.register_producer("host");
+        s.publish(p, lets(&[(n["$t"], Value::Number(1.0)), (n["$w"], Value::Ref(n["$h"]))]));
+    }
+    let read = |s: &Store| s.resolved(meter, path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    assert!((read(&all) - 10.0).abs() < 1e-5, "{}", read(&all));
+    assert!((read(&store) - 10.0).abs() < 1e-5, "{}", read(&store));
+}
+
+/// A host producer that publishes every frame keeps the store from resting:
+/// the idle sweep waits, so hidden pictures cost nothing meanwhile (not one
+/// frame later). Once swept, they rest unneeded again.
+#[test]
+fn a_publish_every_frame_leaves_hidden_pictures_resting() {
+    let (mut store, t, a, _, _) = two_tabs();
+    let p = store.register_producer("host");
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let at = |v: f64| BTreeMap::from([(Leaf { node: t, path: path("let.value") }, Value::Number(v))]);
+    store.advance(0.0);
+    let before = store.reactive().evaluations;
+    for i in 1..=10 {
+        store.publish(p, at(f64::from(i)));
+        store.advance(f64::from(i) / 60.0);
+    }
+    assert_eq!(store.reactive().evaluations - before, 10, "the shown rect, once a frame");
+    // At rest: swept, then a publish costs the shown rect only again.
+    store.advance(1.0);
+    assert_eq!(store.reactive().stale_count(), 0);
+    let before = store.reactive().evaluations;
+    store.publish(p, at(11.0));
+    assert_eq!(store.reactive().evaluations - before, 1, "the sweep left nothing needed");
 }

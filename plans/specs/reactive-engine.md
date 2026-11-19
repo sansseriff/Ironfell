@@ -675,6 +675,10 @@ throughout would have given.** Outside the property, by design:
 - presentation state in pictures, which snaps (§8.3);
 - a stepper an author set to `pause` or `coarse`, or one outside a simulation range
   (§8.3);
+- an `accumulate` in a composition no observer reaches on an open path, unless what
+  it feeds (through cells, traces and other accumulators) is read outside the hidden
+  compositions: it holds still, so that a simulation in a hidden tab costs nothing
+  (demo.md, built before this spec; `Store::paused`);
 - answers from outside (a `query`'s request times and replies);
 - the network solve where more than one solution exists, since it starts from its last
   answer (`lib.rs:2146`); §9.1 keeps its inputs and warm start per island.

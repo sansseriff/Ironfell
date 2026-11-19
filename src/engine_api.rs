@@ -314,10 +314,13 @@ pub fn scope_log(app: &mut WorkerApp, since: u64) -> Result<String, String> {
 pub fn document_view(app: &mut WorkerApp, query_json: String) -> Result<String, String> {
     let query: iron_document::ViewQuery =
         serde_json::from_str(&query_json).map_err(|e| String::from(&e.to_string()))?;
-    let store = app
-        .world()
-        .get_resource::<crate::document_bridge::DocumentStore>()
+    let mut store = app
+        .world_mut()
+        .get_resource_mut::<crate::document_bridge::DocumentStore>()
         .ok_or_else(|| String::from("document bridge not installed"))?;
+    // The agent reads to write back: what it sees of a hidden composition
+    // is current (reactive-engine.md §8.9).
+    store.0.exact();
     store.0.view(&query).map_err(|e| String::from(&e.to_string()))
 }
 
@@ -1801,6 +1804,8 @@ pub fn document_inspect_patch(app: &mut WorkerApp, node: String, patch: String) 
         let patch: serde_json::Value = serde_json::from_str(&patch).map_err(|e| e.to_string())?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("no store")?;
         let ids = inspector_targets(&node, &patch)?;
+        // An unbind keeps the value shown: current, not stale (§8.9).
+        store.0.exact();
         let mut added = Vec::new();
         for id in ids {
             for op in inspector_patch_ops(&store.0, id, &patch)? {
@@ -2313,6 +2318,8 @@ pub fn document_inspect_bind(app: &mut WorkerApp, node: String, leaf: String, ex
     let Ok(path) = leaf.parse::<LeafPath>() else { return fail(format!("no leaf {leaf:?}")) };
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let slot = if expr.trim().is_empty() {
+        // The value it keeps is current, not stale (§8.9).
+        store.0.exact();
         match store.0.resolved(id, path) {
             Some(v) => Slot::Const(v),
             None => return fail(format!("{id} has no {leaf}")),

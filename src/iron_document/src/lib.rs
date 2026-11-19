@@ -466,6 +466,10 @@ pub struct StoreCore {
     presence_at: Option<f64>,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
+    /// The graph's evaluation count as the last `advance` ended: when it
+    /// has not moved since, nothing published or changed in between, and
+    /// the store is at rest for the idle sweep.
+    evaluated_at: u64,
     /// What the host shows (§8.2), and whether everything counts as shown
     /// (`observe_all`: the default, and the differential reference).
     observers: BTreeMap<ObserverId, Interest>,
@@ -620,6 +624,7 @@ impl StoreCore {
             presence: self.presence.clone(),
             presence_at: self.presence_at,
             advanced_at: self.advanced_at,
+            evaluated_at: self.evaluated_at,
             advanced: self.advanced.clone(),
             observers: self.observers.clone(),
             next_observer: self.next_observer,
@@ -836,6 +841,7 @@ impl StoreCore {
             presence: BTreeMap::new(),
             presence_at: None,
             advanced_at: None,
+            evaluated_at: 0,
             advanced: (BTreeSet::new(), Vec::new()),
             observers: BTreeMap::new(),
             next_observer: 0,
@@ -1215,10 +1221,7 @@ impl StoreCore {
             let _ = self.apply_session(vec![Op::Set { id: c, path: clock_path("t"), slot: Slot::Const(Value::Number(t)) }]);
         }
         self.resample();
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline();
     }
 
     /// Clips that could not be sampled at the current time, by clip node.
@@ -1450,7 +1453,7 @@ impl StoreCore {
             self.reactive.mark(leaf, value);
         }
         // New faces measure differently: layouts holding text reflow.
-        self.resolve_layout();
+        self.relayout();
         !ids.is_empty()
     }
 
@@ -1463,10 +1466,7 @@ impl StoreCore {
         self.drivers.insert(leaf);
         self.reactive.preview(Tree::of(&self.docs), leaf, value);
         self.sync_clock();
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline();
     }
 
     /// Withdraw one leaf's preview (it reads as the document again).
@@ -1474,10 +1474,8 @@ impl StoreCore {
         let leaf = Leaf { node: id, path };
         self.drivers.remove(&leaf);
         self.reactive.unpreview(Tree::of(&self.docs), leaf);
-        if self.sync_clock() && !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        let clocked = self.sync_clock();
+        self.pipeline_from(clocked);
     }
 
     /// How a gesture on this leaf would be realised right now: directly, by
@@ -1608,10 +1606,7 @@ impl StoreCore {
                 self.reactive.preview(Tree::of(&self.docs), leaf, v);
             }
         }
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline();
     }
 
     /// Take back transaction `version` if it is the latest: undo it and drop
@@ -1839,10 +1834,7 @@ impl StoreCore {
         }
         self.session_version += 1;
         if self.sync_clock() {
-            if !self.clusters.list.is_empty() {
-                self.resolve_clusters_live();
-            }
-            self.resolve_physics();
+            self.pipeline();
         }
         Ok(())
     }
@@ -2083,7 +2075,7 @@ impl StoreCore {
         if gone {
             // The structure changes: settle again, without the ones gone.
             self.repeat_inputs = None;
-            self.resolve_physics();
+            self.pipeline_from(false);
         }
         self.publish_presence();
         active
@@ -2143,10 +2135,7 @@ impl StoreCore {
             self.session_state.insert(leaf, value);
         }
         self.publish_state();
-        if !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline();
         Ok(())
     }
 
@@ -2705,16 +2694,15 @@ impl StoreCore {
     /// not evaluated until shown (or a transaction needs every cell exact).
     fn necessity(&mut self) {
         let doc = Tree::of(&self.docs);
-        let mut unneeded = BTreeSet::new();
-        if !self.observe_all {
+        let hidden: BTreeSet<NodeId> = if self.observe_all {
+            BTreeSet::new()
+        } else {
             let shown = composition::shown(doc, &self.observed_compositions());
-            let hidden: BTreeSet<NodeId> = composition::compositions(doc).into_iter().filter(|c| !shown.contains(c)).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect();
-            if !hidden.is_empty() {
-                let solved: BTreeSet<NodeId> = self.clusters.list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).collect();
-                let rooted = |n: NodeId| solved.contains(&n) || doc.facets_of(n).any(|f| ROOTED.contains(&f.kind()));
-                unneeded = self.reactive.necessity(&hidden, &rooted);
-            }
-        }
+            composition::compositions(doc).into_iter().filter(|c| !shown.contains(c)).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect()
+        };
+        let solved: BTreeSet<NodeId> = self.clusters.list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).collect();
+        let rooted = |n: NodeId| solved.contains(&n) || doc.facets_of(n).any(|f| ROOTED.contains(&f.kind()));
+        let unneeded = self.reactive.necessity(&hidden, &rooted);
         if self.reactive.set_unneeded(doc, unneeded) {
             self.pipeline();
         }
@@ -2722,8 +2710,11 @@ impl StoreCore {
 
     /// Bring every stale cell up to date: what a transaction, an action and
     /// a session write start from, so that what they read is exact (§8.9).
-    /// The store decides necessity again at the next `advance`.
-    fn exact(&mut self) {
+    /// A host that writes what it reads (an inspector's unbind keeping the
+    /// value shown) or answers a reader that may write back (the agent's
+    /// view) calls it first. The store decides necessity again at the next
+    /// `advance`.
+    pub fn exact(&mut self) {
         if self.reactive.relax(Tree::of(&self.docs)) {
             self.pipeline();
         }
@@ -2734,25 +2725,42 @@ impl StoreCore {
     /// network's solver and the rest read cells the graph's edges do not
     /// show; if one was stale, they run again with it up to date.
     fn pipeline(&mut self) {
+        self.pipeline_from(true);
+    }
+
+    /// `pipeline`, solving the constraint clusters first only if
+    /// `clusters`. Every derivation outside a transaction comes here (or
+    /// to `relayout`), so that what it reads outside the graph is recorded.
+    fn pipeline_from(&mut self, clusters: bool) {
         self.settle_reads();
         for _ in 0..4 {
-            self.derive();
+            self.derive(clusters);
             if !self.settle_reads() {
                 return;
             }
         }
         // Reads that keep reaching further: derive from an exact graph.
         self.reactive.relax(Tree::of(&self.docs));
-        self.derive();
+        self.derive(clusters);
     }
 
-    fn derive(&mut self) {
+    fn derive(&mut self, clusters: bool) {
         self.recorded(|s| {
-            if !s.clusters.list.is_empty() {
+            if clusters && !s.clusters.list.is_empty() {
                 s.resolve_clusters_live();
             }
             s.resolve_physics();
         });
+    }
+
+    /// Lay out again (a theme, a font, a gap previewed), recording what
+    /// layout reads outside the graph like `pipeline`.
+    fn relayout(&mut self) {
+        self.settle_reads();
+        self.recorded(|s| s.resolve_layout());
+        if self.settle_reads() {
+            self.pipeline();
+        }
     }
 
     /// Run `f` recording what it reads of cells nothing needed, for
@@ -2766,11 +2774,16 @@ impl StoreCore {
 
     /// Make needed the cells read from outside the graph while nothing
     /// needed them, bringing them up to date (reactive-engine.md §8.9): they
-    /// stay needed from now on. Whether any was stale, so that what read it
-    /// may have read an old value.
+    /// stay needed from now on. Whether there were any, so that what read
+    /// them may have read an old value: whether one was stale is not known
+    /// here (a tracked read inside the graph may have woken it since).
     fn settle_reads(&mut self) -> bool {
         let escaped = self.reactive.take_escaped();
-        !escaped.is_empty() && self.reactive.need(Tree::of(&self.docs), &escaped)
+        if escaped.is_empty() {
+            return false;
+        }
+        self.reactive.need(Tree::of(&self.docs), &escaped);
+        true
     }
 
     /// Run `f`, which computes from values without changing the document,
@@ -2837,7 +2850,7 @@ impl StoreCore {
             .copied()
             .filter(|&c| {
                 let accumulators: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && comp(n) == Some(c)).collect();
-                !self.reactive.feeds(&accumulators, &inside)
+                !self.reactive.feeds(&accumulators, &inside, &|n| doc.facets_of(n).any(|f| matches!(f.kind(), FacetKind::Trace | FacetKind::Accumulate)))
             })
             .collect()
     }
@@ -2879,14 +2892,19 @@ impl StoreCore {
         // playhead with nothing animated).
         let active = !moving.is_empty() || !running.is_empty() || !stepping.is_empty() || !waiting.is_empty() || !entering.is_empty() || playing;
         // At rest, cells nothing observed needs are brought up to date a
-        // few at a time (§8.7), calling again until none is stale.
-        let swept = !active && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
+        // few at a time (§8.7), calling again until none is stale. Not on a
+        // frame something was published or written since the last: a host
+        // producer moving every frame would make the sweep evaluate each
+        // frame what necessity saved.
+        let rest = !active && !read && self.reactive.evaluations == self.evaluated_at;
+        let swept = rest && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
         if swept {
             self.pipeline();
         }
         let changed = active || swept || read || !was_live.is_empty() || waiting != was_waiting;
         let next = (active || self.reactive.stale_count() > 0).then_some(now);
         self.advanced = (live.clone(), waiting);
+        self.evaluated_at = self.reactive.evaluations;
         Advanced { wake: Wake { next, live }, queries, changed }
     }
 
@@ -2973,7 +2991,7 @@ impl StoreCore {
         if self.dark != dark {
             self.dark = dark;
             self.resolve_theme();
-            self.resolve_layout();
+            self.relayout();
         }
     }
 
@@ -2995,7 +3013,7 @@ impl StoreCore {
     pub fn set_layout_preview(&mut self, preview: Option<layout::Preview>) {
         if self.layout_preview != preview {
             self.layout_preview = preview;
-            self.resolve_layout();
+            self.relayout();
         }
     }
 
@@ -3185,10 +3203,7 @@ impl StoreCore {
         self.apply_session(ops)?;
         // Bindings that read the selection follow it.
         if Tree::of(&self.docs).nodes_with(facet::FacetKind::Selection).next().is_some() {
-            if !self.clusters.list.is_empty() {
-                self.resolve_clusters_live();
-            }
-            self.resolve_physics();
+            self.pipeline();
         }
         Ok(())
     }
@@ -3247,10 +3262,7 @@ impl StoreCore {
         let copies = self.settle_repeats();
         expanded.extend(copies);
         self.rebuild_clusters();
-        if live && !self.clusters.list.is_empty() {
-            self.resolve_clusters_live();
-        }
-        self.resolve_physics();
+        self.pipeline_from(live);
     }
 
     /// The authored document: what is saved, and what mints ids. It holds

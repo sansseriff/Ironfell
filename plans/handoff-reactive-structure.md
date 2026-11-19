@@ -2538,6 +2538,58 @@ Verified: differential suite (468) with IRON_ATOMICITY and IRON_OWNER_CHECK, pla
 app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
 smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
 
+**Phase 4: council round 2 fixes (2026-11-19).** Opus 5/10, Sol 5/10 on the four
+commits. Fixed:
+- **Every derivation outside a transaction is recorded.** `preview`, `unpreview`,
+  `set_time`, `set_state`, `resume_gesture`, the session write's clock sync, the
+  selection follow, presence's resettle, the rebuild's live pass went to
+  `resolve_physics` directly; they go through `pipeline_from` now, and a theme, a
+  font or a layout preview through `relayout`.
+- **Any recorded read reruns the derivation,** not only one that was stale when
+  settled: a tracked read inside the graph can wake the same cell first (the
+  network's `Q = P > 0.5 V ? deref(w).x × 1 V : 0 V` published 0 V).
+- **A cycle check waits for a reader still queued in the pass** (a nested wake beneath
+  it), and a woken reader requeues after everything waiting.
+- **A trace carries necessity** for `Store::paused` (`feeds` follows a trace's or an
+  accumulator's input to its outputs).
+- **The idle sweep:** runs only when nothing was evaluated since the last `advance` (a
+  host producer publishing every frame made it evaluate each frame what necessity
+  saved); a round returns all it took out of `unneeded` (a swept cell's reads and a
+  tracked wake in it left cells needed until the next decision) and wakes only what a
+  needed cell reads; `budget` counts evaluations, checked between rounds (one
+  tracked wake in a round may overrun it once).
+- **Necessity re-decided when a tracked read leaves a candidate cell** (`candidates`,
+  the hidden unrooted cells as last decided, in place of `woken`, which a refresh
+  cleared).
+- **`Store::exact` is public:** the inspector's unbind and empty bind (they keep the
+  value shown) and the agent's `view` (it reads to write back) call it first.
+- **Spec §8.8:** an accumulator in a composition no observer reaches holds still
+  (demo.md's rule, older than this spec) unless what it feeds is read outside the
+  hidden compositions; listed outside the property beside `pause`.
+
+Not taken: picking in the frame of a panel switch uses the previous spatial scene
+(the picker runs before the scene is rebuilt, observed or not: older than phase 4).
+
+Known, next: layout lays out every group, so a hidden layout's children's sizes
+bound to something moving are recorded and pinned at the first pipeline (none in the
+demo: nothing pinned through the regression script). Skipping a hidden composition's
+layouts unless a needed cell reads their placements is the fix when a document needs
+it. The observation property test (`differential_random::observed_script`) has one
+composition and compares the end state; a version with several compositions, values
+shown along the way and committed transactions compared would have caught most of
+both rounds' findings.
+
+Tests: `a_preview_lays_out_a_hidden_stack_from_current_sizes`,
+`a_nested_tracked_wake_finds_no_false_cycle`,
+`a_hidden_accumulator_read_through_a_trace_keeps_stepping`,
+`a_hidden_cell_rests_once_the_tracked_read_that_woke_it_leaves`,
+`the_idle_sweep_keeps_what_a_woken_cell_reads_needed`,
+`the_network_reads_a_hidden_rect_through_the_branch_its_solution_opens`,
+`a_publish_every_frame_leaves_hidden_pictures_resting` (each fails before).
+Verified: differential suite (475) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
+smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

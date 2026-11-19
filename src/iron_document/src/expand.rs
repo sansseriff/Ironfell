@@ -406,7 +406,7 @@ pub(crate) struct OwnersExpanded {
 /// nothing else (reactive-engine handoff §4.4, stage 2). `room` is how many
 /// nodes they may derive together, taken in id order: the budget less what
 /// other owners hold.
-pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize) -> OwnersExpanded {
+pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize, solved: &BTreeSet<NodeId>) -> OwnersExpanded {
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
@@ -431,7 +431,7 @@ pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stam
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
-    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems);
+    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, solved);
     for o in owners {
         out.problems.insert(*o, Vec::new());
     }
@@ -494,7 +494,8 @@ pub(crate) struct ItemsExpanded {
 /// meets a problem (the budget, nesting): the caller expands `owner` whole.
 /// `Some` with `ops` applied otherwise; an op that fails to apply is
 /// reported as a problem, and the caller expands `owner` whole to repair it.
-pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize) -> Option<(ItemsExpanded, Vec<Problem>)> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize, solved: &BTreeSet<NodeId>) -> Option<(ItemsExpanded, Vec<Problem>)> {
     let mut out = Wanted::new(room);
     out.root = Some(owner);
     {
@@ -526,7 +527,7 @@ pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
     let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect() };
     let mut problems = Vec::new();
-    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
+    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, solved);
     Some((ItemsExpanded { ops, ..done }, problems))
 }
 
@@ -862,7 +863,10 @@ pub fn stale_overrides(doc: Tree<'_>) -> Vec<(NodeId, String)> {
 /// `want` and `want_rels`: stale nodes deleted deepest first, wanted ones
 /// created or brought up to date one field at a time, relations unlinked
 /// and linked. An op that fails is a problem on its node, not an error.
-fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>) -> Vec<Op> {
+/// `solved` are the copies a constraint cluster holds: the leaves the
+/// solver writes on them stay as the solver left them.
+#[allow(clippy::too_many_arguments)]
+fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>, solved: &BTreeSet<NodeId>) -> Vec<Op> {
     let wanted_ids: std::collections::HashSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
     // An op can fail on something wanted later in the pass (a copy's
@@ -912,6 +916,9 @@ fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec
                                         let slot = f.get(field).expect("own field");
                                         if old.get(field) != Some(slot) {
                                             let path = LeafPath::new(f.kind(), field).expect("declared field");
+                                            if solved.contains(&w.id) && crate::solve::writes(path) {
+                                                continue;
+                                            }
                                             plan.push(Op::Set { id: w.id, path, slot: slot.clone() });
                                         }
                                     }

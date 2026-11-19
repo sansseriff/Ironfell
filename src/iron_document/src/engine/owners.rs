@@ -38,6 +38,9 @@ pub(crate) struct Owners {
     /// The templates compiled so far. Each knows whether it is current, so
     /// a refused transaction leaves none to put back.
     templates: TemplateCache,
+    /// The copies a constraint cluster holds: expansion leaves the leaves
+    /// the solver writes on them as they are (`solve::writes`).
+    solved: BTreeSet<NodeId>,
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -87,7 +90,7 @@ impl Owners {
         while !todo.is_empty() {
             let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), &self.solved);
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -143,7 +146,7 @@ impl Owners {
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
             let room = room + self.held_under(Tree::of(docs), rs);
-            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room) else {
+            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, &self.solved) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -176,7 +179,7 @@ impl Owners {
     /// Every owner, in id order.
     fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
         let owners = expand::top_owners(Tree::of(docs));
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET);
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, &self.solved);
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new() };
         delta.add(done);
@@ -221,6 +224,16 @@ impl Owners {
     /// wants it now (`expand::wanted_slots`).
     pub(crate) fn wanted_slots(&mut self, doc: Tree<'_>, counts: &Items, leaves: &[crate::Leaf]) -> Vec<(crate::Leaf, crate::Slot)> {
         expand::wanted_slots(doc, &mut self.templates, counts, leaves)
+    }
+
+    /// The copies a constraint cluster holds now (`solve::Clusters::copies`).
+    pub(crate) fn hold(&mut self, solved: BTreeSet<NodeId>) {
+        self.solved = solved;
+    }
+
+    /// The copies a constraint cluster held when last told.
+    pub(crate) fn held(&self) -> &BTreeSet<NodeId> {
+        &self.solved
     }
 
     /// Every owner's problems, in the order `expand::sort_problems` gives.

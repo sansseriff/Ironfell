@@ -47,6 +47,18 @@ impl Clusters {
     pub fn containing(&self, node: NodeId) -> Option<&Cluster> {
         self.list.iter().find(|c| c.nodes.contains(&node))
     }
+
+    /// The copies some cluster holds: their transform is the solver's,
+    /// as a variable or as a fixed or driven input, until no cluster
+    /// holds them.
+    pub(crate) fn copies(&self) -> std::collections::BTreeSet<NodeId> {
+        self.list.iter().flat_map(|c| c.nodes.iter().copied()).filter(|n| n.is_expanded()).collect()
+    }
+}
+
+/// Whether the solver writes leaf `path` of a node it holds.
+pub(crate) fn writes(path: crate::LeafPath) -> bool {
+    path.facet == FacetKind::Transform2d && TRANSFORM_LEAVES.contains(&path.field)
 }
 
 /// A leaf a transaction asked for by name: pulled toward `requested` at

@@ -504,3 +504,71 @@ fn a_solved_copy_a_publish_removed_is_not_kept() {
     store.publish(live, BTreeMap::new());
     store.undo(0).unwrap().unwrap();
 }
+
+/// A `fix` constraint on `copy`.
+fn fix(store: &mut Store, comp: NodeId, copy: NodeId) -> NodeId {
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let fix = built.named["fix"];
+    let link = constrains(store.authored().next_relation_ids(1)[0], fix, copy, "a");
+    store.apply(tx("fix", built.ops.into_iter().chain([link]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    fix
+}
+
+/// A pinned copy, fixed where the pin put it, goes back to its template
+/// when the last of its constraints goes, in one transaction or two.
+#[test]
+fn a_fixed_solved_copy_is_let_go_with_its_last_constraint() {
+    for together in [true, false] {
+        let (mut store, comp) = sheet();
+        let (_, copy) = row_copy(&mut store, comp, 1, "0");
+        let p = pin(&mut store, comp, copy, [-40.0, 0.0]);
+        let f = fix(&mut store, comp, copy);
+        if together {
+            store.apply(tx("unpin, unfix", vec![Op::Delete { id: p }, Op::Delete { id: f }])).unwrap_or_else(|e| panic!("{e:?}"));
+        } else {
+            store.apply(tx("unpin", vec![Op::Delete { id: p }])).unwrap_or_else(|e| panic!("{e:?}"));
+            assert_eq!(x_of(&store, copy), -40.0);
+            store.apply(tx("unfix", vec![Op::Delete { id: f }])).unwrap_or_else(|e| panic!("{e:?}"));
+        }
+        assert_eq!(x_of(&store, copy), 0.0);
+        store.apply(tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str("again".into())) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    }
+}
+
+/// Undo after a redo puts a solved copy back as the first undo did: redo
+/// records the same restores as the transaction it redoes.
+#[test]
+fn undo_after_redo_puts_a_solved_copy_back() {
+    let (mut store, _, copy, _, was, moved) = tied();
+    let local = *copy.path().last().unwrap();
+    store.apply(tx("edit the definition", vec![Op::Set { id: local, path: path("transform2d.x"), slot: num(was + 7.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    for _ in 0..2 {
+        store.undo(0).unwrap().unwrap();
+        assert_eq!(x_of(&store, copy), moved);
+        store.redo(0).unwrap().unwrap();
+    }
+    let (mut store, comp) = sheet();
+    let (r, copy) = row_copy(&mut store, comp, 2, "1");
+    pin(&mut store, comp, copy, [-260.0, 0.0]);
+    store.apply(tx("one row", vec![Op::Set { id: r, path: path("repeat.count"), slot: num(1.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    for _ in 0..2 {
+        store.undo(0).unwrap().unwrap();
+        assert_eq!(x_of(&store, copy), -260.0);
+        store.redo(0).unwrap().unwrap();
+    }
+}
+
+/// An edit of a fixed copy's template that leaves its position alone
+/// leaves the solved position alone: expansion does not write the leaves
+/// the solver holds.
+#[test]
+fn a_template_edit_keeps_a_fixed_copys_solved_position() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    pin(&mut store, comp, copy, [-40.0, 0.0]);
+    fix(&mut store, comp, copy);
+    store.apply(tx("wider", vec![Op::Set { id: n["row"], path: path("size.w"), slot: num(9.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), -40.0);
+    assert_eq!(store.resolved(copy, path("size.w")), Some(Value::Number(9.0)));
+}

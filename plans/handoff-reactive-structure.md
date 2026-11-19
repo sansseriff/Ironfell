@@ -2071,6 +2071,28 @@ document and builds what pays now, each step with its own design note and counci
       so a conditional that reads the released copy keeps its item until the next
       settle (Sol).
 
+- **Council round 2 on step 1 (2026-11-19): Claude Opus 5.5 6/10, GPT Sol 6.2
+  6/10.** Both found round 1's "held means in a cluster" applied in one place of
+  three, and Sol a case that changed the rule. **The rule now:** a copy some cluster
+  holds (`Clusters::copies`, kept in `Owners` as the clusters change) has the
+  leaves the solver writes (`solve::writes`: `x`, `y`, `rot`) as the solver left
+  them. Expansion does not rewrite them (`apply_wanted`), the owners' check exempts
+  exactly those, `run` snapshots them, and `post_apply` lets go of a copy when it
+  leaves every cluster. Fixed, each with a test that fails with its fix undone:
+  - **An edit of a fixed copy's template was refused** (Sol): re-expansion reset its
+    `x` under the fix. Expansion now leaves a held copy's solver leaves
+    (`a_template_edit_keeps_a_fixed_copys_solved_position`). With it, undoing a
+    definition edit has nothing to restore; the restores are for copies that go
+    (an instance deleted, a repeat shrunk).
+  - **A fixed copy was never let go** (both): the snapshot read only the solver's
+    variables (`a_fixed_solved_copy_is_let_go_with_its_last_constraint`).
+  - **Redo and replay dropped the restores,** so an undo after a redo lost the
+    solved value (both): they call `keep_solved` too
+    (`undo_after_redo_puts_a_solved_copy_back`).
+  - **The owners' check exempted every transform leaf of a clustered copy** (Sol;
+    it hid a stale `sx` from the older outside-a-library bug): it exempts the
+    solver's leaves only.
+
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).
 

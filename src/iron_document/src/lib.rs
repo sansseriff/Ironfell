@@ -640,11 +640,10 @@ impl StoreCore {
         let mut whole = self.docs.clone();
         let stamp = whole.authored.version();
         let (mut ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
-        // A copy's leaf a solver cluster holds keeps the solved value, which
-        // expansion cannot know: the solver's, not the owner's. Held as a
-        // variable, or as an input once fixed or driven (`post_apply`
-        // lets go of a copy only when it leaves every cluster).
-        ops.retain(|op| !matches!(op, Op::Set { id, path, .. } if self.clusters.var_cluster.contains_key(&Leaf { node: *id, path: *path }) || (path.facet == FacetKind::Transform2d && self.clusters.containing(*id).is_some())));
+        // A leaf the solver writes on a copy a cluster holds keeps the
+        // solved value, which expansion cannot know (`apply_wanted` leaves
+        // it; `post_apply` lets go of a copy when it leaves every cluster).
+        ops.retain(|op| !matches!(op, Op::Set { id, path, .. } if solve::writes(*path) && self.owners.held().contains(id)));
         assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
     }
 
@@ -763,6 +762,7 @@ impl StoreCore {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
         if let Ok(c) = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()) {
+            self.owners.hold(c.copies());
             self.clusters = c;
         }
     }
@@ -2945,7 +2945,7 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved: _ } = self.run(input, true)?;
+        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved } = self.run(input, true)?;
         self.commit(rollback);
         if shared {
             self.machines.shared += 1;
@@ -2955,6 +2955,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
+        self.keep_solved(&mut applied, solved);
         self.apply_recorded(&mut applied, recorded, &mut full_inverse);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
@@ -3028,7 +3029,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved: _ }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -3039,6 +3040,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
+                self.keep_solved(&mut applied, solved);
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
@@ -3111,6 +3113,7 @@ impl StoreCore {
             }
             self.reactive.invalidate(Tree::of(&self.docs), changed);
         }
+        self.owners.hold(clusters.copies());
         self.clusters = clusters.clone();
         if clusters.list.is_empty() {
             return Ok(None);
@@ -3231,11 +3234,18 @@ impl StoreCore {
         // What `attachment::validate` compares against: the points attached
         // before.
         let attached: Vec<NodeId> = Tree::of(&self.docs).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
-        // The copies' leaves the solver holds, as it left them: expansion
-        // rewrites or removes a copy without knowing the solved value.
+        // The leaves the solver writes on the copies a cluster holds, as it
+        // left them: expansion and repeat settling remove a copy without
+        // knowing the solved value (`keep_solved`).
         let solved: Vec<(Leaf, Slot)> = {
             let doc = Tree::of(&self.docs);
-            self.clusters.var_cluster.keys().filter(|l| l.node.is_expanded()).filter_map(|l| doc.live(l.node).and_then(|_| doc.leaf(l.node, l.path)).map(|s| (*l, s.clone()))).collect()
+            self.owners
+                .held()
+                .iter()
+                .filter(|&&n| doc.is_live(n))
+                .flat_map(|&n| ["x", "y", "rot"].map(|f| Leaf { node: n, path: LeafPath::new(FacetKind::Transform2d, f).expect("declared leaf") }))
+                .filter_map(|l| doc.leaf(l.node, l.path).map(|s| (l, s.clone())))
+                .collect()
         };
         self.docs.begin();
         let docs = &mut self.docs;

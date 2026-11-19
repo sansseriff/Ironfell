@@ -2042,10 +2042,34 @@ document and builds what pays now, each step with its own design note and counci
     (`a_solved_copy_returns_to_its_template_when_its_constraint_goes`,
     `disabling_a_solved_copys_constraint_lets_it_go`).
   - **Not fixed, bug 2:** undo, redo and replay apply recorded copy writes after
-    committing, and drop one whose copy is missing. Linear history cannot meet a
-    missing copy that the transaction itself did not remove; only a log that does
-    not match its document can, and building one needs every other op of the
-    transaction to pass. Left as it is.
+    committing, and drop one whose copy is missing. Undo and replay can meet one:
+    repeat settling makes and removes copies outside history (a publish, a
+    preview, the clock), so a copy a recorded write names may not be there. Then
+    dropping the write is right, and refusing would block undo (council, below).
+- **Council on step 1 (2026-11-18): Claude Opus 5.5 6.5/10, GPT Sol 6.2 5/10.**
+  Fixed, each with a test that fails with the fix undone:
+  - **Held means in a cluster, not a variable** (both): a copy under `fix`, or one
+    a producer drives, leaves `var_cluster` but stays in its cluster as an input.
+    The release took that for letting go, so fixing a pinned copy was refused or
+    moved it to its template. `post_apply` lets go of a copy only when no cluster
+    contains it, and the owners' check exempts a clustered copy's transform the
+    same way (`fixing_a_solved_copy_keeps_its_pose`,
+    `a_driven_solved_copy_is_not_let_go`).
+  - **The snapshot read removed copies** (Opus): a copy a publish removed outside
+    history is gone in the subject and a readable tombstone in the reference, so
+    only the reference kept a value. The snapshot takes live copies only
+    (`a_solved_copy_a_publish_removed_is_not_kept`).
+  - **Repeat settling removed solved copies after the inverse was built** (Sol):
+    the restores are now made in `apply` after `after_transaction`
+    (`StoreCore::keep_solved`; `undoing_a_repeat_shrink_puts_a_solved_item_back`).
+  - **Recorded, not fixed, both older than step 1:**
+    - a solver write over a copy's bound slot is undone as a constant: undoing a
+      template edit from `{= -40}` to `0` on a pinned copy leaves `Const(0)` where
+      expansion had restored the expression (Sol; fails the same at the parent
+      commit);
+    - a release, like any solver write, changes values after repeat settling ran,
+      so a conditional that reads the released copy keeps its item until the next
+      settle (Sol).
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

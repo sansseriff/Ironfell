@@ -423,3 +423,84 @@ fn disabling_a_solved_copys_constraint_lets_it_go() {
     store.undo(0).unwrap().unwrap();
     assert_eq!(x_of(&store, copy), moved);
 }
+
+/// A `pin` constraint holding `copy` at `at`.
+fn pin(store: &mut Store, comp: NodeId, copy: NodeId, at: [f64; 2]) -> NodeId {
+    let built = markup::ops(r#"<constraint id="$pin" kind="pin" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let pin = built.named["pin"];
+    let mut link = constrains(store.authored().next_relation_ids(1)[0], pin, copy, "a");
+    if let Op::Link { rel } = &mut link {
+        rel.data.insert("at".to_owned(), Value::Vec2(at));
+    }
+    store.apply(tx("pin", built.ops.into_iter().chain([link]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    pin
+}
+
+/// A repeat of one rect, and the copy in its item `key`.
+fn row_copy(store: &mut Store, comp: NodeId, count: usize, key: &str) -> (NodeId, NodeId) {
+    let n = draw(store, comp, &format!(r#"<group id="$r" repeat.count="{count}"><rect x="0" y="0" w="5" h="5"/></group>"#));
+    let copy = store.tree().children(NodeId::item_scope(n["r"], key).unwrap())[0];
+    (n["r"], copy)
+}
+
+/// Fixing a pinned copy keeps it where the solver had it: a fixed copy is
+/// still in its cluster, as an input, and is not let go.
+#[test]
+fn fixing_a_solved_copy_keeps_its_pose() {
+    let (mut store, comp) = sheet();
+    let (_, copy) = row_copy(&mut store, comp, 1, "0");
+    pin(&mut store, comp, copy, [-40.0, 0.0]);
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let link = constrains(store.authored().next_relation_ids(1)[0], built.named["fix"], copy, "a");
+    store.apply(tx("fix", built.ops.into_iter().chain([link]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), -40.0);
+}
+
+/// Undoing a repeat's shrink brings a removed item's solved copy back
+/// where the solver had it: repeat settling removed it after expansion.
+#[test]
+fn undoing_a_repeat_shrink_puts_a_solved_item_back() {
+    let (mut store, comp) = sheet();
+    let (r, copy) = row_copy(&mut store, comp, 2, "1");
+    pin(&mut store, comp, copy, [-260.0, 0.0]);
+    store.apply(tx("one row", vec![Op::Set { id: r, path: path("repeat.count"), slot: num(1.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(!store.tree().is_live(copy));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), -260.0);
+}
+
+/// A pinned copy a producer drives stays in its cluster, as a driven input:
+/// nothing lets it go, and the owners' check finds it as the solver left
+/// it after undo.
+#[test]
+fn a_driven_solved_copy_is_not_let_go() {
+    let (mut store, comp) = sheet();
+    let (_, copy) = row_copy(&mut store, comp, 1, "0");
+    pin(&mut store, comp, copy, [-40.0, 0.0]);
+    let x = path("transform2d.x");
+    let live = store.register_producer("live");
+    store.publish(live, BTreeMap::from([(Leaf { node: copy, path: x }, Value::Number(-40.0))]));
+    let rename = |name: &str| tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str(name.into())) }]);
+    store.apply(rename("new")).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+    store.undo(0).unwrap().unwrap();
+    store.apply(rename("newer")).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+}
+
+/// A solved copy a publish removed, outside history, has no solved value
+/// to keep: the next transaction and its undo find the same in both stores.
+#[test]
+fn a_solved_copy_a_publish_removed_is_not_kept() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<let id="$data" value="1 2 3"/><group id="$h" repeat.each="{= $data}"><rect name="cell" x="0" y="0" w="5" h="5"/></group><rect id="$other" x="500" y="0" w="5" h="5"/>"#);
+    let items: Vec<NodeId> = store.tree().children(n["h"]).iter().copied().filter(|k| k.is_expanded()).collect();
+    let copy = store.tree().children(items[2])[0];
+    pin(&mut store, comp, copy, [-260.0, 0.0]);
+    let live = store.register_producer("live");
+    store.publish(live, BTreeMap::from([(Leaf { node: n["data"], path: path("let.value") }, Value::series(vec![1.0, 2.0], iron_document::Dim::NONE))]));
+    assert!(!store.tree().is_live(copy));
+    store.apply(tx("unrelated", vec![Op::Set { id: n["other"], path: path("transform2d.x"), slot: num(510.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.publish(live, BTreeMap::new());
+    store.undo(0).unwrap().unwrap();
+}

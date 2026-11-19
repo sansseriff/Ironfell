@@ -702,3 +702,24 @@ fn a_reference_into_a_picture_in_an_authored_repeat_names_the_items_copy() {
     let item_reader = NodeId::item(r, "0", reader).unwrap();
     assert_eq!(store.tree().leaf(item_reader, value).and_then(Slot::constant).and_then(Value::as_ref), Some(item_part));
 }
+
+/// A node in a pictured repeat binding the index of the picture's copy of
+/// the repeat (here, a main drawing its own definition) reads its own
+/// item's index, as it reads the definition's repeat.
+#[test]
+fn a_binding_to_a_pictures_copy_of_its_repeat_reads_the_items_index() {
+    let mut store = Store::new();
+    let mut names = apply(&mut store, r#"<definition id="$d" name="ref"><template notation="free"><group id="$r" repeat.count="2"><let id="$read" name="reader" value="0"/></group></template><template id="$alt" notation="alt"/></definition>"#);
+    let (d, alt, r, reader) = (names["$d"], names["$alt"], names["$r"], names["$read"]);
+    names.extend(apply(&mut store, &format!(r#"<use id="$u" in="{alt}" notation="free" instance.def="{d}" instance.mode="main"/>"#)));
+    let u = names["$u"];
+    let repeat = NodeId::expanded(u, r).unwrap();
+    assert!(store.tree().is_live(repeat));
+    let item_reader = NodeId::item(repeat, "1", reader).unwrap();
+    store.apply(tx("read the pictured repeat's index", vec![Op::Set {
+        id: reader,
+        path: "let.value".parse().unwrap(),
+        slot: Slot::Bound(Expr::Ref(Leaf { node: repeat, path: "repeat.index".parse().unwrap() })),
+    }, Op::Set { id: u, path: "use.notation".parse().unwrap(), slot: Slot::Const(Value::Str("free".into())) }])).unwrap();
+    assert_eq!(number(&store, item_reader, "let.value"), 1.0);
+}

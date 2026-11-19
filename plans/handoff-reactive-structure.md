@@ -1954,6 +1954,18 @@ an optional step.
       an authored write does (Opus). And such a duplicate name makes
       `validate_entity` refuse authored writes to the instances.
 
+- **Council round 3 (2026-11-18): Claude Opus 5.5 8.5/10, GPT Sol 6.2 7/10.**
+  Opus found nothing (probe batteries of references and overrides across
+  nested repeats, in place and pictured, all at parity). Sol found two, fixed:
+  - **A binding naming the picture's copy of the repeat** (`#u/r.repeat.index`)
+    read the prototype's index: `follow` matched only the definition's repeat.
+    It matches the item's own repeat id too. Reachable from a main drawing its
+    own definition; it held at `554185f`, so the first prerequisite broke it
+    (`a_binding_to_a_pictures_copy_of_its_repeat_reads_the_items_index`).
+  - **`into_item` scanned the template's nodes** for each reference resolving
+    to under the outer owner (a `let` beside the repeat that every node
+    reads): quadratic in the template. A template keeps a set of its locals.
+
 Next: stage 3 itself, copies materialised on read. Its own prerequisites (above,
 "Stage 3"): the id → (owner, local) index without the path registry's lock,
 per-template indexes for the enumerations, `Changes` for copies created and

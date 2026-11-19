@@ -45,7 +45,7 @@ use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::{Slot, Value};
 use crate::Tree;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -114,6 +114,8 @@ pub(crate) struct Template {
     /// after all its nodes.
     pub(crate) rels: Vec<Relation>,
     refs: HashMap<NodeId, Ref>,
+    /// Each node's `local`, for asking whether a node is the template's.
+    locals: HashSet<NodeId>,
     /// A collection's items are ordered after this key.
     pub(crate) after: OrderKey,
     /// What the template is compiled from (a definition, or an authored
@@ -201,7 +203,8 @@ impl Template {
                 e.insert(c);
             }
         }
-        Template { source, nodes, rels, refs, after, scope: NodeId::from_raw(0), stamp: 0 }
+        let locals = nodes.iter().map(|n| n.local).collect();
+        Template { source, nodes, rels, refs, locals, after, scope: NodeId::from_raw(0), stamp: 0 }
     }
 
     /// Definition `def`'s body (`expand::want_entity`'s copies).
@@ -361,7 +364,9 @@ t.figures = Some(r.clone());
     pub(crate) fn follow(&self, env: &Env, leaf: Leaf) -> Leaf {
         if let Source::Collection(r) = self.source {
             let item = env.item.as_ref().expect("an item's environment");
-            if leaf.node == r {
+            // The repeat as the template names it, or as the item's
+            // owner has it (a node naming a picture's copy of it).
+            if leaf.node == r || leaf.node == item.repeat {
                 let item = |f: &str| Leaf { node: env.owner, path: LeafPath::new(FacetKind::Item, f).expect("declared leaf") };
                 if leaf.path == LeafPath::new(FacetKind::Repeat, "item").expect("declared leaf") {
                     return item("value");
@@ -412,7 +417,7 @@ t.figures = Some(r.clone());
     /// for an item alike.
     fn into_item(&self, item: &Item, outer: &Env, node: NodeId) -> NodeId {
         let (o, p) = (outer.owner.path(), node.path());
-        if p.len() <= o.len() || p[..o.len()] != o[..] || !self.nodes.iter().any(|m| m.local == p[o.len()]) {
+        if p.len() <= o.len() || p[..o.len()] != o[..] || !self.locals.contains(&p[o.len()]) {
             return node;
         }
         let Some(scope) = NodeId::item_scope(item.repeat, &item.key) else { return node };

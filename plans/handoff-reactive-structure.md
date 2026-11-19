@@ -1716,12 +1716,19 @@ an optional step.
   `apply_overrides` are gone from the production path. The overrides reaching an
   owner are worked out once per owner (with each node's own overrides read once
   per pass), where the old code worked them out again for every copied node.
-  - **The old code is the oracle.** The whole-document expansion and the
-    functions it calls (`wanted`, `want_scopes`, `want_items`, `want_entity`,
-    `want_use`, `rewritten`, `apply_overrides`) moved unchanged to
-    `expand_oracle.rs`, built only with `differential`. `IRON_OWNER_CHECK` runs
-    it after every owner update, so every differential test compares the
-    templates' copies with the old code's. It goes when 2c deletes `InDocument`.
+  - **The old code is the oracle.** The functions that made each owner's
+    copies (`want_scopes`, `want_items`, `want_entity`, `want_use`, `rewritten`,
+    `apply_overrides`) moved unchanged to `expand_oracle.rs`, built only with
+    `differential`. Its driver takes the owners as they expand, one at a time
+    in id order (D12), so the budget's cut falls in the same place.
+    `IRON_OWNER_CHECK` runs two checks after every owner update:
+    - `expand::parity`: what every owner wants from templates equals what the
+      old functions want: the same nodes in the same order with the same facets,
+      the same relations and the same problems;
+    - as before, applying the old functions' wants to the document finds
+      nothing to change.
+
+    It goes when 2c deletes `InDocument`.
   - **Departures from this section and the spec's §5.4:**
     - The key is (definition, notation), not (definition, notation, sized,
       main). Sized and main change only how `Root` and `Body` references resolve,
@@ -1772,6 +1779,41 @@ an optional step.
     `facets_of` reads only the tables a node is in (the diff 15.5 → 13.4 ms, for
     an entry per node); reusing a parent copy's id instead of interning it again
     (no change).
+
+- **Council on stage 2 (2026-11-18): Claude Opus 5.5 8.5/10, GPT Sol 6.2 8/10.**
+  Fixed:
+  - **A session node in a picture template** (Sol): the old code gives it no
+    copy and skips its subtree; the compiled template kept the subtree, and its
+    copies were wanted under a parent with none, as an `expansion` problem. The
+    compiler now leaves out a session node and everything under it, in a
+    picture and in a body's machines
+    (`nothing_under_a_session_node_in_a_template_is_copied`).
+  - **The owner check could not see problems, and cut the budget in another
+    order** (Sol): hence `expand::parity` and the D12 driver above. With the
+    session fix undone, `parity` names the first node that differs.
+  - **The override matching was written twice** (Opus): `expand::overrides_by`
+    is the one copy, read with a memo by `Templates` and without by
+    `overrides_of`.
+  - **Tests for what the oracle will stop covering** (Opus): a sized and an
+    unsized `use` of one template in the same pass; a main's read of the body
+    staying on the definition; a definition edit removing a facet and changing
+    a field in every copy, with nothing made or removed.
+
+  **Before stage 3**, from both reviews:
+  - **A repeat in a picture must first become a sub-template of the picture's
+    template,** with the picture's overrides layered in through `Env`. Today
+    it is compiled from that picture's copies (wanted this pass, or as last
+    written), which do not exist with lazy slots, and once per picture, not
+    shared. The plot's tick labels are this case. Deriving the effective
+    prototype must not fill the picture's slots during an item settle.
+  - **A template kept between passes needs a version covering everything its
+    compiler reads.** A picture's depends on the definition's body (which
+    references are `Body`; each inner `use`'s `inner_def`, through the inner
+    entity's `instance.def`), not only the template's subtree. A body's
+    depends on `inputs_of`.
+  - **Clearing a slot** (the spec's §5.4) must also follow a `use` gaining or
+    losing `size`, since one template serves both and `Root` reads resolve by
+    `Env`.
 
 Next: stage 3, copies materialised on read.
 

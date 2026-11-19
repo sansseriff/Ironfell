@@ -631,6 +631,9 @@ impl StoreCore {
         if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) {
             return;
         }
+        if let Err(e) = expand::parity(Tree::of(&self.docs), &self.repeats) {
+            panic!("templates and the old expansion differ after {after}: {e}");
+        }
         let mut whole = self.docs.clone();
         let stamp = whole.authored.version();
         let (mut ops, _) = expand::expand(&mut whole, stamp, &self.repeats);

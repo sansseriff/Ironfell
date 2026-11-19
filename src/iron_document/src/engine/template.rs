@@ -182,7 +182,8 @@ impl Template {
         let port = TypeId::lookup("port").expect("registered");
         let mut nodes = Vec::new();
         for &child in doc.children(def).iter() {
-            let Some(node) = doc.live(child) else { continue };
+            // A session node gets no copy (`NodeId::expanded`).
+            let Some(node) = doc.live(child).filter(|_| !child.is_session()) else { continue };
             let ty = match node.ty.name() {
                 "port_spec" => port,
                 "equation" | "entity" | "connection" | "channel" | "machine" | "let" | "trace" | "accumulate" | "query" => node.ty,
@@ -198,13 +199,15 @@ impl Template {
         }
         // A machine's states, transitions and tweens (machines.md §9 Q12),
         // after the ports they read.
-        for &machine in doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
-            let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        // A session node gets no copy, so nothing under it does either.
+        let copied = |n: NodeId| !n.is_expanded() && !n.is_session();
+        for &machine in doc.children(def).iter().filter(|&&c| !c.is_session() && doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
+            let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|&c| copied(c)).collect();
             while let Some(local) = stack.pop() {
                 let Some(n) = doc.live(local) else { continue };
                 let Some(parent) = n.parent else { continue };
                 nodes.push(TNode::new(local, parent, n.ty, n.order.clone(), doc.facets_of(local).cloned().collect()));
-                stack.extend(doc.children(local).iter().rev().copied().filter(|c| !c.is_expanded()));
+                stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
             }
         }
         Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside))
@@ -213,10 +216,11 @@ impl Template {
     /// Definition `def`'s picture from its template node `template`
     /// (`expand::want_use`'s copies): preorder, each `use` without its
     /// subtree. A template's own derived children and its overrides are
-    /// not copied.
+    /// not copied, nor a session node or anything under it (it gets no
+    /// copy, `NodeId::expanded`).
     pub(crate) fn picture(doc: Tree<'_>, def: NodeId, template: NodeId) -> Template {
         let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-        let copied = |n: NodeId| !n.is_expanded() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
+        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
         let mut nodes = Vec::new();
         let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
         while let Some(local) = stack.pop() {
@@ -307,7 +311,8 @@ impl Template {
         expand::relocate(to, leaf.node).map_or(leaf, |node| Leaf { node, path: leaf.path })
     }
 
-    /// Where relation `rel`'s far end is for `env`'s copy.
+    /// Where a node the template names (a relation's far end, a node held
+    /// as a constant) is for `env`'s copy.
     pub(crate) fn follow_node(&self, env: &Env<'_>, node: NodeId) -> NodeId {
         self.follow(env, Leaf { node, path: any_leaf() }).node
     }
@@ -367,7 +372,7 @@ pub(crate) struct Templates {
     bodies: HashMap<NodeId, Rc<Template>>,
     pictures: HashMap<(NodeId, String), Option<Rc<Template>>>,
     /// Each node's own overrides (`expand::own_overrides`).
-    own: HashMap<NodeId, Rc<Vec<(NodeId, NodeId, LeafPath, Value)>>>,
+    own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
 }
 
 impl Templates {
@@ -376,29 +381,19 @@ impl Templates {
     }
 
     pub(crate) fn picture(&mut self, doc: Tree<'_>, def: NodeId, notation: &str) -> Option<Rc<Template>> {
-        if let Some(t) = self.pictures.get(&(def, notation.to_owned())) {
+        let key = (def, notation.to_owned());
+        if let Some(t) = self.pictures.get(&key) {
             return t.clone();
         }
         let t = definition::template_of(doc, def, notation).map(|template| Rc::new(Template::picture(doc, def, template)));
-        self.pictures.insert((def, notation.to_owned()), t.clone());
+        self.pictures.insert(key, t.clone());
         t
     }
 
     /// The overrides that reach `owner`'s copies, as (target, leaf, value),
-    /// weakest first (`expand::overrides`).
+    /// weakest first (`expand::overrides_by`), each node's own read once.
     pub(crate) fn overrides(&mut self, doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
-        let path = owner.path();
-        let mut out = Vec::new();
-        for j in (0..path.len()).rev() {
-            let rest = &path[j + 1..];
-            let own = self.own.entry(path[j]).or_insert_with(|| Rc::new(expand::own_overrides(doc, path[j]))).clone();
-            for (_, target, leaf, value) in own.iter() {
-                let steps = target.path();
-                if steps.len() == rest.len() + 1 && steps[..rest.len()] == *rest {
-                    out.push((steps[rest.len()], *leaf, value.clone()));
-                }
-            }
-        }
-        out
+        let own = &mut self.own;
+        expand::overrides_by(owner, |n| own.entry(n).or_insert_with(|| expand::own_overrides(doc, n).into()).clone()).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
     }
 }

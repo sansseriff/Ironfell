@@ -46,6 +46,7 @@ mod oracle;
 pub(crate) use oracle::expand;
 
 /// One node an instance should have.
+#[derive(Debug, PartialEq)]
 struct Want {
     id: NodeId,
     ty: TypeId,
@@ -138,6 +139,7 @@ pub fn use_entity(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
 
 /// One relation an instance should have: a derived connection's ends, a
 /// derived picture's `figures`.
+#[derive(Debug, PartialEq)]
 struct RelWant {
     rel: Relation,
 }
@@ -350,6 +352,36 @@ pub(crate) fn expand_owners(docs: &mut Docs, stamp: Version, counts: &Items, own
         sort_problems(v);
     }
     out
+}
+
+/// Whether what every owner wants, from templates, equals what the code
+/// templates replaced wants (`expand_oracle.rs`): the same nodes in the
+/// same order with the same facets, the same relations and the same
+/// problems. The owners' check runs it after every update.
+#[cfg(feature = "differential")]
+pub(crate) fn parity(doc: Tree<'_>, counts: &Items) -> Result<(), String> {
+    let old = oracle::wanted(doc, counts);
+    let mut cache = Templates::default();
+    let (mut nodes, mut rels, mut problems) = (Vec::new(), Vec::new(), Vec::new());
+    let mut room = NODE_BUDGET;
+    for owner in top_owners(doc) {
+        let w = wanted_for(doc, owner, counts, room, &mut cache);
+        room = room.saturating_sub(w.nodes.len());
+        nodes.extend(w.nodes);
+        rels.extend(w.rels);
+        problems.extend(w.problems);
+    }
+    sort_problems(&mut problems);
+    if let Some(i) = (0..nodes.len().max(old.nodes.len())).find(|&i| nodes.get(i) != old.nodes.get(i)) {
+        return Err(format!("wanted node {i} differs:\n templates: {:?}\n old:       {:?}", nodes.get(i), old.nodes.get(i)));
+    }
+    if rels != old.rels {
+        return Err(format!("wanted relations differ:\n templates: {rels:?}\n old:       {:?}", old.rels));
+    }
+    if problems != old.problems {
+        return Err(format!("problems differ:\n templates: {problems:?}\n old:       {:?}", old.problems));
+    }
+    Ok(())
 }
 
 /// What reconciling some repeats' items did (`expand_items`).
@@ -673,6 +705,9 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     }
 }
 
+/// An override node, as (node, target, leaf, value).
+pub(crate) type OwnOverride = (NodeId, NodeId, LeafPath, Value);
+
 /// The overrides that reach `owner`'s copies, as (node, target, leaf, value)
 /// with `target` the definition-local node copied, weakest first
 /// (§5.3, "Nested targets"). `owner`'s path runs from an authored node
@@ -680,15 +715,21 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
 /// step's own overrides apply when their target path is the rest of the
 /// way down. So the innermost definition's opinion comes first and the
 /// outermost instance's last, and the last applied wins.
-fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
+fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
+    overrides_by(owner, |n| own_overrides(doc, n))
+}
+
+/// `overrides`, with each step's own overrides read by `own` (expansion
+/// reads each once per pass, `Templates::overrides`).
+pub(crate) fn overrides_by<O: std::ops::Deref<Target = [OwnOverride]>>(owner: NodeId, mut own: impl FnMut(NodeId) -> O) -> Vec<OwnOverride> {
     let path = owner.path();
     let mut out = Vec::new();
     for j in (0..path.len()).rev() {
         let rest = &path[j + 1..];
-        for (o, target, leaf, value) in own_overrides(doc, path[j]) {
+        for (o, target, leaf, value) in own(path[j]).iter() {
             let steps = target.path();
             if steps.len() == rest.len() + 1 && steps[..rest.len()] == *rest {
-                out.push((o, steps[rest.len()], leaf, value));
+                out.push((*o, steps[rest.len()], *leaf, value.clone()));
             }
         }
     }
@@ -701,7 +742,7 @@ pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Valu
     overrides(doc, owner).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
 }
 
-pub(crate) fn own_overrides(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, NodeId, LeafPath, Value)> {
+pub(crate) fn own_overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
     doc.children(owner)
         .iter()
         .copied()

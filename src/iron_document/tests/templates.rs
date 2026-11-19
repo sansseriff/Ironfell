@@ -9,7 +9,7 @@
 //! find nothing to change.
 
 use iron_document::edit;
-use iron_document::facet::{Name, Override};
+use iron_document::facet::{self, Name, Override};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -212,4 +212,126 @@ fn references_follow_to_each_owners_copies() {
         assert!(list.contains(&ca.to_string()) && list.contains(&cb.to_string()), "{list}");
         assert_eq!(number(&store, cb, "transform2d.x"), k * 10.0 + 1.0);
     }
+}
+
+/// One picture template serves a sized and an unsized `use` in the same
+/// pass: in the sized one, a read of the template's own `size` is the
+/// `use`'s; in the other it stays on the template.
+#[test]
+fn a_sized_and_an_unsized_picture_share_a_template() {
+    let mut store = Store::new();
+    let names = apply(
+        &mut store,
+        r#"<model name="model"/>
+        <composition id="$c" name="scene" dims="2d"/>
+        <library name="library">
+          <definition id="$d" name="bar">
+            <template id="$t" notation="free" w="100" h="40"><rect id="$half" name="half" w="{= $t.size.w / 2}" h="4"/></template>
+          </definition>
+        </library>"#,
+    );
+    let (c, d, t, half) = (names["$c"], names["$d"], names["$t"], names["$half"]);
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/><place def="{d}" in="{c}" x="0" y="50" w="300" h="40"/>"#));
+    let doc = store.tree();
+    let uses: Vec<NodeId> = doc.children(c).iter().copied().filter(|&x| !x.is_expanded() && doc.live(x).is_some_and(|y| y.ty.name() == "use")).collect();
+    // `place` sizes every picture; the first is made unsized.
+    store.apply(tx("unsized", vec![Op::RemoveFacet { id: uses[0], kind: FacetKind::Size }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let widths = |store: &Store| -> Vec<(bool, f64)> { uses.iter().map(|&u| (store.tree().facet(u, FacetKind::Size).is_some(), number(store, NodeId::from_path(&[u, half]).unwrap(), "size.w"))).collect() };
+    assert_eq!(widths(&store), vec![(false, 50.0), (true, 150.0)]);
+    // A definition edit expands both again, from one template.
+    store.apply(tx("narrower", vec![Op::Set { id: t, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(80.0)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(widths(&store), vec![(false, 40.0), (true, 150.0)]);
+}
+
+/// A main pictures its definition with no entity: a read of the
+/// definition's body stays on the definition's own node.
+#[test]
+fn a_mains_reads_of_the_body_stay_on_the_definition() {
+    let mut store = Store::new();
+    let names = apply(
+        &mut store,
+        r#"<model name="model"/>
+        <composition id="$c" name="scene" dims="2d"/>
+        <library name="library">
+          <definition id="$d" name="tag">
+            <port_spec id="$n" name="n" kind="value" dir="in" signal="2" datatype="number"/>
+            <template notation="free"><rect id="$a" name="a" w="{= $n.port.signal * 10}" h="4"/></template>
+          </definition>
+        </library>"#,
+    );
+    let (c, d, n, a) = (names["$c"], names["$d"], names["$n"], names["$a"]);
+    let u = store.authored().next_id();
+    let mut usef = facet::Use::default();
+    usef.notation = Slot::Const(Value::Str("free".into()));
+    let mut main = facet::Instance::default();
+    main.def = Slot::Const(Value::Ref(d));
+    main.mode = Slot::Const(Value::Str("main".into()));
+    store.apply(tx("main", vec![Op::Create { id: u, ty: ty("use"), parent: Some(c), order: OrderKey::first(), facets: vec![usef.wrap(), main.wrap(), facet::Transform2d::default().wrap()] }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let copy = NodeId::from_path(&[u, a]).unwrap();
+    let deps: Vec<NodeId> = store.tree().leaf(copy, "size.w".parse().unwrap()).and_then(Slot::expr).unwrap().deps().into_iter().map(|l| l.node).collect();
+    assert_eq!(deps, vec![n]);
+    assert_eq!(number(&store, copy, "size.w"), 20.0);
+}
+
+/// A session node in a picture template gets no copy, and nothing under it
+/// does: no copy is wanted under a parent that has none, so no problem is
+/// reported (the council, round 1).
+#[test]
+fn nothing_under_a_session_node_in_a_template_is_copied() {
+    let mut store = Store::new();
+    let names = apply(
+        &mut store,
+        r#"<model name="model"/>
+        <composition id="$c" name="scene" dims="2d"/>
+        <library name="library">
+          <definition id="$d" name="box">
+            <template id="$t" notation="free"><rect name="frame" w="10" h="10"/><group id="$g" name="g"><rect id="$inner" name="inner" w="2" h="2"/></group></template>
+          </definition>
+        </library>"#,
+    );
+    let (c, d, t, g, inner) = (names["$c"], names["$d"], names["$t"], names["$g"], names["$inner"]);
+    let s = store.tree().next_session_ids(1)[0];
+    store.apply_session(vec![Op::Create { id: s, ty: ty("group"), parent: None, order: OrderKey::first(), facets: vec![] }]).unwrap();
+    store.apply_session(vec![Op::Reparent { id: s, parent: Some(t), order: OrderKey::first() }]).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("into the session group", vec![Op::Reparent { id: g, parent: Some(s), order: OrderKey::first() }])).unwrap_or_else(|e| panic!("{e:?}"));
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let doc = store.tree();
+    let u = *doc.children(c).iter().find(|&&x| !x.is_expanded() && doc.live(x).is_some_and(|y| y.ty.name() == "use")).unwrap();
+    assert_eq!(copies(&store, u, "frame").len(), 1);
+    assert!(NodeId::from_path(&[u, g]).is_none_or(|x| !doc.is_live(x)) && NodeId::from_path(&[u, inner]).is_none_or(|x| !doc.is_live(x)));
+    let problems: Vec<String> = store.problems().into_iter().map(|p| format!("{}: {}", p.node, p.message)).collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// A definition edit reaches every copy through the diff: a facet removed
+/// from a template node leaves each copy, and a changed field changes in
+/// each, with the rest of the copy as it was.
+#[test]
+fn a_definition_edit_removes_a_facet_and_changes_a_field_in_every_copy() {
+    let mut store = Store::new();
+    let names = apply(
+        &mut store,
+        r#"<model name="model"/>
+        <composition id="$c" name="scene" dims="2d"/>
+        <library name="library">
+          <definition id="$d" name="box">
+            <template notation="free"><rect id="$r" name="r" w="10" h="5" stroke.width="2"/></template>
+          </definition>
+        </library>"#,
+    );
+    let (c, d, r) = (names["$c"], names["$d"], names["$r"]);
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/><place def="{d}" in="{c}" x="0" y="50"/>"#));
+    let doc = store.tree();
+    let rects: Vec<NodeId> = doc.children(c).iter().copied().filter(|&x| !x.is_expanded() && doc.live(x).is_some_and(|y| y.ty.name() == "use")).map(|u| NodeId::from_path(&[u, r]).unwrap()).collect();
+    assert!(rects.iter().all(|&x| store.tree().facet(x, FacetKind::Stroke).is_some()));
+    store.take_changes();
+    store
+        .apply(tx("edit", vec![Op::RemoveFacet { id: r, kind: FacetKind::Stroke }, Op::Set { id: r, path: "size.h".parse().unwrap(), slot: Slot::Const(Value::Number(7.0)) }]))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    for &x in &rects {
+        assert!(store.tree().facet(x, FacetKind::Stroke).is_none(), "{x} kept its stroke");
+        assert_eq!((number(&store, x, "size.w"), number(&store, x, "size.h")), (10.0, 7.0));
+    }
+    let changes = store.take_changes();
+    assert!(changes.created.is_empty() && changes.removed.is_empty(), "{changes:?}");
 }

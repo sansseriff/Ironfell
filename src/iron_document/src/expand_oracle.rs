@@ -1,36 +1,71 @@
 //! The whole-document expansion as phase 2b built it (reactive-engine
-//! handoff §4.6, stage 2): the owners' check (`IRON_OWNER_CHECK=1`). It is
-//! the code templates replaced, kept unchanged, so the check compares the
-//! templates' copies with what the old code makes.
+//! handoff §4.6, stage 2): the owners' check (`IRON_OWNER_CHECK=1`). The
+//! functions that make each owner's copies are the code templates
+//! replaced, kept unchanged; the driver takes the owners in the order they
+//! expand (D12), so past the budget the cut falls where theirs does. The
+//! check compares what the templates want with what these want, problems
+//! included (`expand::parity`), and the document's copies with these
+//! (`expand`).
 
 use super::*;
 
-/// Every expanded node and relation a document should have, with
-/// `counts[r]` the items of each repeat and conditional `r`: the
-/// whole-document expansion, kept as the owners' check (`expand`).
-pub(super) fn wanted(doc: Tree<'_>, counts: &Items) -> Wanted {
-    let mut out = Wanted::new(NODE_BUDGET);
-    let entity_ty = TypeId::lookup("entity").expect("registered");
-    for entity in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e) && !e.is_expanded()).collect::<Vec<_>>() {
-        if let Some(def) = linked_definition(doc, entity) {
-            want_entity(doc, entity, def, &mut out);
-        }
+/// What every owner wants, in the order the owners expand: one owner at a
+/// time, in id order, each taking what is left of the budget (the spec's
+/// D12). This is `expand_owners`' driver; what each owner wants comes from
+/// the old functions below.
+pub(super) struct Whole {
+    pub(super) nodes: Vec<Want>,
+    pub(super) rels: Vec<RelWant>,
+    pub(super) problems: Vec<Problem>,
+}
+
+pub(super) fn wanted(doc: Tree<'_>, counts: &Items) -> Whole {
+    let mut out = Whole { nodes: Vec::new(), rels: Vec::new(), problems: Vec::new() };
+    let mut room = NODE_BUDGET;
+    for owner in top_owners(doc) {
+        let w = wanted_for(doc, owner, counts, room);
+        room = room.saturating_sub(w.nodes.len());
+        out.nodes.extend(w.nodes);
+        out.rels.extend(w.rels);
+        out.problems.extend(w.problems);
     }
-    let use_ty = TypeId::lookup("use").expect("registered");
-    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && !u.is_expanded()).collect::<Vec<_>>() {
-        if let Some(def) = main_definition(doc, u) {
-            if let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) {
-                want_use(doc, u, doc.facet(u, FacetKind::Size).is_some(), None, def, &notation, &mut out);
+    sort_problems(&mut out.problems);
+    out
+}
+
+/// What one top-level owner derives, from the old functions.
+fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wanted {
+    let mut out = Wanted::new(cap);
+    out.root = Some(owner);
+    let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
+    match node.ty.name() {
+        "entity" => {
+            if let Some(def) = linked_definition(doc, owner) {
+                want_entity(doc, owner, def, &mut out);
             }
-            continue;
         }
-        let Some(entity) = use_entity(doc, u) else { continue };
-        let Some(def) = linked_definition(doc, entity) else { continue };
-        let Some(notation) = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { continue };
-        want_use(doc, u, doc.facet(u, FacetKind::Size).is_some(), Some(entity), def, &notation, &mut out);
+        "use" => {
+            let notation = doc.get::<Use>(owner).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+            let sized = doc.facet(owner, FacetKind::Size).is_some();
+            if let Some(def) = main_definition(doc, owner) {
+                if let Some(notation) = notation {
+                    want_use(doc, owner, sized, None, def, &notation, &mut out);
+                }
+            } else if let Some(entity) = use_entity(doc, owner)
+                && let Some(def) = linked_definition(doc, entity)
+                && let Some(notation) = notation
+            {
+                want_use(doc, owner, sized, Some(entity), def, &notation, &mut out);
+            }
+        }
+        "group" => {
+            if is_item_owner(doc, owner) && draws_repeat(doc, owner, &doc.facets_of(owner).cloned().collect::<Vec<_>>()) && !in_repeat_template(doc, owner) {
+                want_items(doc, owner, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out);
+            }
+        }
+        _ => {}
     }
-    let repeats = drawn_repeats(doc).into_iter().filter(|g| !g.is_expanded()).collect();
-    want_scopes(doc, counts, &mut out, repeats);
+    want_scopes(doc, counts, &mut out, Vec::new());
     out
 }
 
@@ -373,7 +408,7 @@ fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<
 /// differential harness's owner check runs it (`IRON_OWNER_CHECK=1`): the
 /// owners' copies must leave it nothing to do.
 pub(crate) fn expand(docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Vec<Problem>) {
-    let Wanted { nodes: want, rels: want_rels, mut problems, .. } = wanted(Tree::of(docs), counts);
+    let Whole { nodes: want, rels: want_rels, mut problems } = wanted(Tree::of(docs), counts);
     let have: Vec<NodeId> = Tree::of(docs).expanded_ids().filter(|id| Tree::of(docs).is_live(*id)).collect();
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.is_expanded()).cloned().collect();
     let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems);

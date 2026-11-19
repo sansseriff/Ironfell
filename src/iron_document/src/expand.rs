@@ -880,7 +880,8 @@ fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec
                             None => plan.push(Op::AddFacet { id: w.id, facet: f }),
                             Some(old) if *old != f => {
                                 if f.kind().is_dynamic() {
-                                    plan.push(Op::RemoveFacet { id: w.id, kind: f.kind() });
+                                    // Replaced whole (`op::add_comp`): removing
+                                    // it first fails where it is required.
                                     plan.push(Op::AddFacet { id: w.id, facet: f });
                                 } else {
                                     for field in f.field_names() {

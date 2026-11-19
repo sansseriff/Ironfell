@@ -1490,7 +1490,9 @@ that produces an eager copy from it in place of `want_entity`, `want_use`,
   picture's overrides.
 - Exit: green; the meters' structural edit and placement measured.
 
-**Stage 3. Copies materialised on read** (spec §5.4, A4). Per loaded owner, one
+**Stage 3. Copies materialised on read** (spec §5.4, A4). *Moved to phase 4 with
+validation from templates (D15, 2026-11-18); 2c's stage 3 is the narrower list at the
+end of this section.* Per loaded owner, one
 write-once slot per template node, filled on first read, replacing the copies
 document. Needed first *(review)*:
 - an id → (owner, local) index that does not take the path registry's lock
@@ -1526,7 +1528,7 @@ full traversal as its oracle).
 **Settled by the user (2026-11-18):** the node budget cuts per owner in id order
 (spec D12); A10's paths are reclaimed in 2c by a sweep (D13); validation from
 templates moves to phase 4 (D14). Lazy slots (stage 3) are a goal the user wants, not
-an optional step.
+an optional step; they move to phase 4 with validation from templates (D15, below).
 
 **Progress:**
 - **Step 1a** (`e2bc90b`): `Docs` and the two-document Tree, `Tree::over` deleted,
@@ -1966,88 +1968,60 @@ an optional step.
     to under the outer owner (a `let` beside the repeat that every node
     reads): quadratic in the template. A template keeps a set of its locals.
 
-**Stage 3 design (draft for council, 2026-11-18).** Copies materialised on read:
-the copies document goes, and each owner's copies are answered from its templates.
-What this must keep, and how:
+**Stage 3 design (draft, 2026-11-18, `8767136`; superseded).** Copies as per-owner
+pieces `(template, env)`, structure installed eagerly, facets filled in slots on
+first read, derived ops checked without being written. Its review follows.
 
-- **What an owner holds becomes its pieces, not its copies.** An expansion pass
-  already finds, for each copy it wants, the template and environment that make it
-  (stage 2's `Wanted::origins`, `want_use`, `want_items`). It records instead, per
-  authored owner, a list of **pieces**: `(Arc<Template>, Arc<Env>)`, one per picture,
-  body and item, nested pieces after their parents. `Env` moves from `Rc` to `Arc`,
-  since `Store` is a Bevy `Resource` and must be `Send + Sync`.
-- **The structure is computed when a piece is installed; the facets are filled
-  when first read.** A piece's ids, parents, order and types come from the
-  template, and so do children lists merged with authored children at the owner.
-  They are kept as plain `Node`s, so `Tree::node`, `children`, `depth` and the walks
-  keep returning `&Node` and `Cow<[NodeId]>`. Each node's facets sit in a
-  `OnceLock<Vec<Facet>>`, filled by `Template::materialise`.
-  - **A4:** materialising reads the authored document, the template and the
-    environment, never another slot, so filling one slot cannot wait on itself.
-    Two Bevy systems reading at once on native can only wait for one fill to
-    finish.
-- **The id index:** `Copies::at: HashMap<NodeId, (owner, piece, local index)>`, keyed
-  by the copy's `u64`. Reading a copy takes no registry lock and allocates nothing.
-  It is filled when a piece is installed; the ids are interned then, as now.
-- **The change language stays ops.** `regraph`, `geometry.note_ops`, `Changes`, a
-  transaction's `derived_ops` and gestures all read the ops expansion returns.
-  `apply_wanted` keeps producing them by diffing an owner's old pieces against its
-  new ones, with one difference: **a piece whose template is the same `Arc` and
-  whose environment is equal is skipped without materialising it.** That is the
-  definition edit's saving: today it materialises and compares all 46,900 copies at
-  700 meters, about 17 ms. A changed piece is diffed node by node, as now.
-- **Validation of derived ops stays (D14 keeps template validation for phase 4).**
-  `op::apply_op` on a derived op becomes check only. The new pieces are installed
-  first, so a check reads the state it follows, as a write-then-check does today.
-  - **A failed derived op** (a problem today, and the copy keeps its old value or
-    is not made) is recorded in the owner's **exceptions**: a leaf kept at its old
-    slot, or a node withheld. Materialising applies them last.
-  - **The retry loop stays,** since a later op can make an earlier one pass.
-- **The solver's writes to copies** go into the same per-copy layer, as values, not
-  exceptions: they outlive a re-expansion that does not change that leaf's
-  template value, and they are dropped when the copy goes or its constraint does.
-  That is where the five deferred bugs (stage 1's council rounds 2 and 3) are fixed;
-  each gets a test first.
-- **Rollback:** `Copies` keeps its own journal (owner → its previous `Arc` of
-  pieces, exceptions and solver values), in `Docs::begin`, `commit` and `rollback`
-  where the copies document's journal is now. `Saved` is unchanged.
-- **Enumerations** (`nodes_of_type`, `nodes_with`, `bound_slots`, `relations`,
-  `relations_to`, `nodes`, `live_nodes`, `expanded_ids`):
-  - each template keeps an index of its nodes by type, by facet kind and by bound
-    field;
-  - an override that adds a facet, and an exception, are kept beside the index, so
-    a node they touch is checked rather than skipped;
-  - relations come from `Template::rels` and `figures`, relocated per piece.
-  - Order: every derived id sorts after every authored one, as now. Within the
-    copies, the order is the id order of today's `BTreeMap`, kept by sorting each
-    enumeration's ids, or by one `BTreeSet` of live copy ids if that measures
-    cheaper.
-- **Not built in 2c:** a graph read path that evaluates without filling slots. The
-  graph, drawing and the snapshot read every copy, so every slot fills while all
-  owners are loaded ("Memory may not fall"); evaluating from templates is stage 4's.
-  Clearing a slot on an override, argument or boundary-relation change is not needed
-  either: those re-expand the owner, which installs new pieces.
+**Council on the stage 3 design (2026-11-18): Claude Opus 5.5 5/10, GPT Sol 6.2
+5/10.** Both agree the storage boundary (structure eager, facets in slots) and
+deferring the graph's template read path are right, and that the draft is not
+buildable as written:
+- **Derived ops cannot be checked against the final pieces.** Today op *k* is
+  checked against the old state plus the ops before it that succeeded; `Create`,
+  `Link` and `Reparent` also check the state before the op, and the retry loop
+  depends on the state advancing. Checking must keep that order: a tentative view
+  that advances op by op, which is the interpreter as it is.
+- **Exceptions must be the effective state,** not a list of failures: a failed
+  `AddFacet` leaves a whole facet absent, a failed `Reparent` the old parent and
+  order, a relation unlinked and not relinked. Opus's probe: editing an inner
+  entity's `args` left the new value *and* a problem (fixed below).
+- **The solver's writes to copies must move in the same step as the Tree,** or the
+  first constrained-copy script breaks; `post_apply` and `apply_recorded` write
+  through `apply_op` and must keep writing.
+- **A4 does not hold as drafted:** materialising relocates references with
+  `path()` and `from_path`, which take the registry's lock (the write lock the
+  first time a path is seen). Resolve a piece's relocations when it is installed.
+- **Nothing would be lazy in 2c.** Wanting a copy materialises it (`want_*`), and
+  so does validating it, which D14 keeps on concrete copies; every new copy's
+  `Create` carries its facets, which `regraph` reads. So in 2c a slot fills when the
+  copies document would be written. Laziness pays only once validation reads
+  templates (phase 4).
+- Also: `derived_ops` holds only the solver's writes, not expansion's (`Run::expanded`);
+  children must keep merging on read; `facets_of` must keep kind order; the network
+  cache keys on `Docs::edits`; the budget's cut falls inside a piece; item scope
+  groups are not template nodes; D13's sweep belongs in the same work; the owner
+  check must compare wanted pieces with the old generator *and* the effective
+  copies with the old interpreter.
 
-Steps, each green on the differential suite before the next:
-1. **Pieces beside the copies document.** Expansion records each owner's pieces.
-   Under `differential`, a check materialises every piece and compares it with the
-   copies document. Nothing reads them yet.
-2. **`Copies` answers the Tree.** It holds the id index, nodes, slots, exceptions
-   and solver values. Derived ops are checked, not written. The copies document
-   remains only as a shadow under `differential`, compared with `Copies` after
-   every call.
-3. **The solver's writes and the five deferred bugs,** each with a test first.
-4. **The copies document is deleted,** and the enumerations are indexed.
-5. **Unchanged pieces are skipped,** then measured: the meters' definition edit,
-   placement and structural edit, the plot's steps, memory per meter against phase
-   0 (92.4 KiB; 110.5 KiB now), and the demo's load.
+Fixed now: **a dynamic facet is replaced whole** (`apply_wanted` emitted
+`RemoveFacet` then `AddFacet`; the removal fails where the facet is required, so an
+inner entity's argument edit left an `expansion` problem, which re-expands the owner
+on every update and stops item settling document-wide)
+(`an_inner_entitys_argument_edit_reaches_its_copies_without_a_problem`).
 
-Questions for the council:
-- Is the line between pieces (installed eagerly) and facets (filled lazily) right?
-- Can derived ops really be checked without being written?
-- Are the exceptions enough to reproduce what a failed op leaves today?
-- Does keeping ops as the change language hide a cost that steps 2 and 5 should
-  remove?
+**Decided by the user (2026-11-18, spec D15): lazy slots move to phase 4,** with
+validation from templates, where a slot can stay unfilled. 2c keeps the copies
+document and builds what pays now, each step with its own design note and council:
+1. **A home for the solver's writes to copies,** fixing the five deferred bugs (stage
+   1's council rounds 2 and 3), each with a failing test first, and the owner check's
+   exemption by cluster membership with them. A behaviour that differs from the
+   reference is fixed in both stores or recorded in `intended.rs`.
+2. **A definition edit applies only what changed:** the template compiled again is
+   compared node by node with the one it replaces, and a copy whose template node,
+   reference classes and environment are unchanged is neither wanted nor diffed
+   (about 28 ms of the 32.7 ms at 700 meters is wanting and diffing unchanged
+   copies). Pieces with problems are never skipped.
+3. **D13's sweep** of interned paths.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

@@ -1517,6 +1517,7 @@ blocking does not change it; that is a stop-and-report (handoff §5).
 | D12 | Which owners the node budget cuts (settled 2026-11-18) | **Per owner in id order**, oldest first, with a full expansion in id order past the budget so the cut never depends on edit history (2b as built). Revisited in phase 4, when the budget counts loaded owners and observed ones should win |
 | D13 | A10: interned id paths under churned value keys (settled 2026-11-18) | **Reclaimed in 2c**, designed with the slot and id indexes: a sweep marks every path a live owner, a relation, the history or the selection holds and frees the rest, when idle or when history is trimmed |
 | D14 | Validation from templates (settled 2026-11-18) | **Moves to phase 4**, where Unloaded owners need it; 2c validates over the Tree's copies, which are complete while every owner is loaded. Incremental paint order moves with it |
+| D15 | Lazy slots (settled 2026-11-18) | **Move to phase 4 with validation from templates** (D14): while 2c validates concrete copies and the graph reads every new copy's facets, a slot would fill exactly when the copies document is written, so nothing is lazy. 2c keeps the copies document and builds what pays now: unchanged template nodes skipped on a definition edit, a home for the solver's writes to copies, and D13's sweep (handoff §4.6, stage 3) |
 
 ## 20. History
 

@@ -723,3 +723,24 @@ fn a_binding_to_a_pictures_copy_of_its_repeat_reads_the_items_index() {
     }, Op::Set { id: u, path: "use.notation".parse().unwrap(), slot: Slot::Const(Value::Str("free".into())) }])).unwrap();
     assert_eq!(number(&store, item_reader, "let.value"), 1.0);
 }
+
+/// Editing an argument of an entity in a definition's body changes it in
+/// every copy, with no problem: a dynamic facet is replaced whole, never
+/// removed first (an entity requires `args`).
+#[test]
+fn an_inner_entitys_argument_edit_reaches_its_copies_without_a_problem() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" name="scene" dims="2d"/><library name="library"><definition id="$cell" name="cell"><port_spec name="g" kind="value" dir="in" signal="1" datatype="number"/></definition></library>"#);
+    let (c, cell) = (names["$c"], names["$cell"]);
+    let library = store.tree().live(cell).unwrap().parent.unwrap();
+    let pair = apply(&mut store, &format!(r#"<definition in="{library}" id="$pair" name="pair"><entity id="$ie" name="inner" instance.def="{cell}" instance.mode="linked" args.g="2"/><template notation="free"><rect w="1" h="1"/></template></definition>"#));
+    let (pair, ie) = (pair["$pair"], pair["$ie"]);
+    apply(&mut store, &format!(r#"<place def="{pair}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let entity = store.tree().relations_from(u).find(|r| r.rel == RelKind::Figures).unwrap().to;
+    let copy = NodeId::expanded(entity, ie).unwrap();
+    assert_eq!(number(&store, copy, "args.g"), 2.0);
+    store.apply(tx("g five", vec![Op::Set { id: ie, path: "args.g".parse().unwrap(), slot: Slot::Const(Value::Number(5.0)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(number(&store, copy, "args.g"), 5.0);
+    assert!(store.expansion_problems().is_empty(), "{:?}", store.expansion_problems());
+}

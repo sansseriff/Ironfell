@@ -568,3 +568,28 @@ fn a_live_solve_leaves_nothing_behind_once_a_transaction_applies() {
     assert!(dist(pos(&p.store, ball), before) < 1e-3, "{:?} vs {before:?}", pos(&p.store, ball));
     p.store.undo(0);
 }
+
+/// Phase 5's first step (reactive-engine.md §9.4, A6): a cluster nothing of
+/// which changed is not solved again, so a drag in one cluster solves no
+/// other. (Under the owners' check, each cluster left is solved anyway and
+/// must come out where it is.)
+#[test]
+fn a_drag_in_one_cluster_solves_no_other() {
+    let mut p = pendulum();
+    let parent = p.store.tree().live(p.group).unwrap().parent;
+    let built = markup::ops(r#"<ellipse id="$a" x="0" y="400" rx="5" ry="5"/><ellipse id="$b" x="60" y="400" rx="5" ry="5"/><constraint id="$f" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#, parent, OrderKey::after(&OrderKey::first()), p.store.authored().next_id()).unwrap();
+    let n = built.named;
+    let rels = p.store.authored().next_relation_ids(3);
+    let link = |id: RelationId, from: NodeId, to: NodeId, role: &str| {
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str(role.into()));
+        data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+        Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
+    };
+    p.store.apply(tx("second cluster", built.ops.into_iter().chain([link(rels[0], n["f"], n["a"], "a"), link(rels[1], n["d"], n["a"], "a"), link(rels[2], n["d"], n["b"], "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(p.store.clusters().list.len(), 2);
+    let h = p.store.begin_drag(p.ball, [0.0, 0.0]);
+    let report = p.store.drag_to(&h, [420.0, 300.0]);
+    assert!(report.converged && report.clusters == 1, "{report:?}");
+    assert_chain_holds(&p);
+}

@@ -261,6 +261,9 @@ pub struct Advanced {
 struct Saved {
     reactive: graph::Reactive,
     clusters: solve::Clusters,
+    /// What each cluster's last converged solve could read, by its key: a
+    /// cluster that would read the same is not solved again (§9.4, A6).
+    posed: BTreeMap<NodeId, solve::Posed>,
     geometry: geom::Revisions,
     repeats: expand::Items,
     item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
@@ -285,6 +288,7 @@ impl Saved {
         Saved {
             reactive: s.reactive.clone(),
             clusters: s.clusters.clone(),
+            posed: s.posed.clone(),
             geometry: s.geometry.clone(),
             repeats: s.repeats.clone(),
             item_memo: s.item_memo.clone(),
@@ -308,6 +312,7 @@ impl Saved {
     fn restore(self, s: &mut StoreCore) {
         s.reactive = self.reactive;
         s.clusters = self.clusters;
+        s.posed = self.posed;
         s.geometry = self.geometry;
         s.repeats = self.repeats;
         s.item_memo = self.item_memo;
@@ -362,6 +367,9 @@ pub struct StoreCore {
     time_errors: std::collections::BTreeMap<NodeId, String>,
     /// Constraint clusters, rebuilt after every transaction.
     clusters: solve::Clusters,
+    /// What each cluster's last converged solve could read, by its key: a
+    /// cluster that would read the same is not solved again (§9.4, A6).
+    posed: BTreeMap<NodeId, solve::Posed>,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -530,6 +538,7 @@ impl StoreCore {
             time: self.time,
             time_errors: self.time_errors.clone(),
             clusters: self.clusters.clone(),
+            posed: self.posed.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
@@ -740,6 +749,7 @@ impl StoreCore {
             time: 0.0,
             time_errors: Default::default(),
             clusters: Default::default(),
+            posed: BTreeMap::new(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -814,6 +824,9 @@ impl StoreCore {
         }
         let clusters = self.clusters.list.clone();
         for c in &clusters {
+            if self.unmoved(c, &[]) {
+                continue;
+            }
             let result = {
                 let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
                 solve::solve_cluster(Tree::of(&self.docs), &read, c, &[], &self.fingers)
@@ -833,8 +846,53 @@ impl StoreCore {
                     self.reactive.preview(Tree::of(&self.docs), leaf, value);
                 }
             }
+            self.pose(c);
         }
         report
+    }
+
+    /// Whether cluster `c` can be left as it is: no driver or finger moves
+    /// it, and everything its solve could read is as its last converged
+    /// solve left it (§9.4, A6: such a solve returns the pose it starts
+    /// from). Under the owners' check, a cluster left is solved anyway and
+    /// must come out where it is.
+    fn unmoved(&self, c: &solve::Cluster, drivers: &[solve::Driver]) -> bool {
+        if drivers.iter().any(|d| c.vars.contains(&d.leaf)) || self.fingers.iter().any(|f| c.nodes.contains(&f.node)) {
+            return false;
+        }
+        let Some(was) = self.posed.get(&c.key()) else { return false };
+        let doc = Tree::of(&self.docs);
+        let read = |l: Leaf| self.reactive.read(doc, l);
+        if *was != c.posed(doc, &read) {
+            return false;
+        }
+        #[cfg(feature = "differential")]
+        self.check_unmoved(c);
+        true
+    }
+
+    /// Record what cluster `c`'s converged solve left for its next one to
+    /// compare with (`unmoved`).
+    fn pose(&mut self, c: &solve::Cluster) {
+        let doc = Tree::of(&self.docs);
+        let read = |l: Leaf| self.reactive.read(doc, l);
+        self.posed.insert(c.key(), c.posed(doc, &read));
+    }
+
+    /// Under the owners' check: a cluster left unsolved solves to where it is.
+    #[cfg(feature = "differential")]
+    fn check_unmoved(&self, c: &solve::Cluster) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let read = |l: Leaf| self.reactive.read(doc, l);
+        let result = solve::solve_cluster(doc, &read, c, &[], &self.fingers);
+        for (leaf, v) in result.values {
+            let now = read(leaf).and_then(|x| x.as_f64());
+            assert!(now.is_some_and(|n| (n - v).abs() < 1e-6), "cluster {} was left unsolved, but solving it moves {leaf} from {now:?} to {v}", c.id);
+        }
     }
 
     /// Start dragging `id` by `anchor` (local coordinates). Decides the
@@ -3233,7 +3291,11 @@ impl StoreCore {
             })
             .collect();
         let mut summary = SolverSummary::default();
+        self.posed.retain(|k, _| clusters.list.iter().any(|c| c.key() == *k));
         for c in &clusters.list {
+            if self.unmoved(c, &drivers) {
+                continue;
+            }
             let result = {
                 let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
                 solve::solve_cluster(Tree::of(&self.docs), &read, c, &drivers, &self.fingers)
@@ -3270,6 +3332,7 @@ impl StoreCore {
                 summary.clusters.push(c.id);
             }
             self.reactive.invalidate(Tree::of(&self.docs), changed);
+            self.pose(c);
             summary.unmet.extend(result.unmet);
         }
         if exact && !summary.unmet.is_empty() {

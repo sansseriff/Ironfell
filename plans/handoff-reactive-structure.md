@@ -2292,6 +2292,32 @@ assertions), `pulses.txt` (four) and `idle.txt` (`changed 0`).
   engine first), ahead of phase 4: phase 5 does not depend on 3 or 4 (§17), and phase
   4 now also carries lazy slots, validation from templates and D13.
 
+### 4.8 Phase 5, first step: a cluster is solved only when something of it changed (2026-11-19)
+
+Built in the old engine, as §17 asks, before any of phase 5's cells. Each cluster's
+last converged solve records what a solve of it could read (`solve::Posed`: the
+cluster as grouped, with its constraints' values, operands, anchors and roles; every
+leaf of every operand node as it reads; its other inputs), keyed by its lowest
+constraint (`Cluster::key`; today's `Cluster::id`, the parent, can be shared). A
+cluster with no driver and no finger on it whose `Posed` is unchanged is not solved
+again, in `post_apply` and in `resolve_clusters_live` alike (`StoreCore::unmoved`).
+It rests on A6: from a converged pose, with unchanged inputs and nothing pulling, a
+solve returns that pose. `Posed` is a superset of what `build_problem` reads, since
+the problem is built from the document as well as from `read`.
+- **Checked:** under `IRON_OWNER_CHECK` a cluster left unsolved is solved anyway and
+  must come out within 1e-6 of where it is (`check_unmoved`); the differential suite
+  passes with it. A6 holds there. Not covered: the random scripts build no
+  constraints.
+- **Test:** `a_drag_in_one_cluster_solves_no_other` (two clusters; a drag in the
+  pendulum's solves one). It fails with the skip off.
+- `posed` is in `Saved` and in `scratch`, and entries of clusters that no longer
+  exist are dropped each `post_apply`.
+- **Not done in phase 5:** the rest (layout cells with containment, the network
+  solve per island, clips as cells, the solver as Clusters and Solve cells with a
+  solved layer and a commit step). The step above is the part that changes what is
+  solved; the cells change how, and need phase 2b's graph to grow Structure cells
+  for clusters.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

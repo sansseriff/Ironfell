@@ -56,6 +56,42 @@ impl Clusters {
     }
 }
 
+/// What a cluster's solve could read, for telling whether solving it again
+/// could move anything (reactive-engine.md §9.4, A6): the cluster as grouped
+/// (its constraints, their values, operands and anchors, its roles), every
+/// leaf of every operand node as it reads, and its other inputs. A superset
+/// of what `build_problem` reads; equal before and after means a solve from
+/// the converged pose, with no driver and no finger, returns that pose.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Posed {
+    cluster: Cluster,
+    leaves: Vec<(Leaf, Option<Value>)>,
+}
+
+impl Cluster {
+    /// The cluster's key: its lowest constraint, which no other cluster has
+    /// (`id`, its parent, can be shared).
+    pub(crate) fn key(&self) -> NodeId {
+        self.constraints.iter().map(|c| c.id).min().unwrap_or(self.id)
+    }
+
+    /// What its solve could read now (`Posed`).
+    pub(crate) fn posed(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>) -> Posed {
+        let mut leaves = Vec::new();
+        for &n in &self.nodes {
+            for f in doc.facets_of(n) {
+                for field in f.field_names() {
+                    let Ok(path) = crate::LeafPath::new(f.kind(), field) else { continue };
+                    let leaf = Leaf { node: n, path };
+                    leaves.push((leaf, read(leaf)));
+                }
+            }
+        }
+        leaves.extend(self.inputs.iter().map(|&l| (l, read(l))));
+        Posed { cluster: self.clone(), leaves }
+    }
+}
+
 /// Whether the solver writes leaf `path` of a node it holds.
 pub(crate) fn writes(path: crate::LeafPath) -> bool {
     path.facet == FacetKind::Transform2d && TRANSFORM_LEAVES.contains(&path.field)

@@ -233,6 +233,9 @@ impl Drop for Rollback {
     }
 }
 
+/// Stale cells an idle `advance` brings up to date (§8.7).
+const IDLE_SWEEP: usize = 256;
+
 /// Facets whose nodes' cells the store reads besides drawing them, so they
 /// stay needed whatever is observed (reactive-engine.md §8.3): state
 /// (`let`, traces, accumulators, machines, queries, selection), structure
@@ -2793,8 +2796,14 @@ impl StoreCore {
         // composition (a trace at the root driving a shape in one; the
         // playhead with nothing animated).
         let active = !moving.is_empty() || !running.is_empty() || !stepping.is_empty() || !waiting.is_empty() || !entering.is_empty() || playing;
-        let changed = active || !was_live.is_empty() || waiting != was_waiting;
-        let next = active.then_some(now);
+        // At rest, cells nothing observed needs are brought up to date a
+        // few at a time (§8.7), calling again until none is stale.
+        let swept = !active && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
+        if swept {
+            self.pipeline();
+        }
+        let changed = active || swept || !was_live.is_empty() || waiting != was_waiting;
+        let next = (active || self.reactive.stale_count() > 0).then_some(now);
         self.advanced = (live.clone(), waiting);
         Advanced { wake: Wake { next, live }, queries, changed }
     }

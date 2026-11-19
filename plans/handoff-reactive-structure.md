@@ -2460,6 +2460,46 @@ Verified: differential suite (461) with IRON_ATOMICITY and IRON_OWNER_CHECK, pla
 app lib tests, build, 10,000 random scripts; smoke, regression (the pendulum's last
 digits only), fiber, pulses and idle scripts.
 
+**Phase 4, step 3 deferred (2026-11-19, the builder's decision): Dormant by view
+rectangle.** Bounds must stay right (§8.5), so a picture outside the view still
+needs every leaf its extent reads (`geom::effect_of` other than `None`: placement,
+size, geometry, handles, stroke, text, trim). Counted over five lasers, fibers,
+meters and readouts and a plot: of the pictures' bound leaves, 176 feed the extent
+and 56 do not (fill 31, appearance 23, group clip 2; anchors, lets, repeats and
+writes are kept for other reasons). What moves in a frame (a needle's rotation, a
+fiber's light, a plot's paths) is extent, so step 3 would save little for the host
+work it needs (each view's rectangle in composition space, margins, and noticing a
+bound that moves into view). §8.5's way out is what makes it pay: an owner that
+clips to a declared size has that size as its extent and nothing inside needed.
+Step 3 is built when standard components clip; until then a shown composition is
+observed whole, which satisfies §17's "something moving into the view appears".
+
+**Phase 4, step 4 deferred (2026-11-19, the builder's decision): Unloaded owners and
+lazy slots.** This plan's own rule (above) unloads only pure pictures, never a
+stateful owner until A13's property test exists. Among the standard components only
+the readout's and the slider's pictures are pure: the laser's, fiber's and meter's
+hold port anchors that connections follow (needed whatever is observed), and the
+plot's holds lets, nine repeats and, per §8.3, its `vis` machine. So step 4 as
+planned would free the copies of readouts and sliders in hidden tabs, for the
+largest change left in the engine (per-owner pieces in place of the copies document,
+validation from templates, an id index without the registry's lock: the design the
+2c stage 3 council scored 5/10). What would make it pay is parking stateful owners
+(§8.3, A13), so that a plot in a hidden tab keeps its state and frees its 281 copies.
+That is the next design to write, with D13's sweep and validation from templates in
+it, and memory measured on a document of several tabs first. D15 (lazy slots, the
+user's goal) stands; this records why it is not built yet.
+
+**Phase 4, step 5 in part (2026-11-19): the idle sweep** (§8.7). An `advance` with
+nothing active brings up to 256 stale cells up to date (`Reactive::sweep`, lowest
+first, following what turns stale behind them), runs the pipeline after them, and
+asks to be called again while any are left; so an unobserved composition's values and
+problems are current soon after things come to rest. Test:
+`at_rest_stale_pictures_are_swept_up_to_date`. The wake budget and reads that never
+load concern Dormant and Unloaded owners, which are not built (steps 3 and 4).
+Verified: differential suite (463) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+app lib tests, build, 10,000 random scripts; smoke, regression (unchanged), fiber,
+pulses and idle scripts.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

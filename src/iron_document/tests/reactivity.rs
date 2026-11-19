@@ -1051,3 +1051,26 @@ fn a_pulse_from_an_unobserved_laser_reaches_an_observed_meter_on_time() {
     assert!(seen.iter().any(|on| *on) && seen.iter().any(|on| !on), "the meter sees the pulses come and go");
     assert!(store.reactive().stale_count() > 0, "the hidden fiber's light rests");
 }
+
+/// §8.7's idle sweep: at rest, an unobserved composition's stale pictures
+/// are brought up to date a few at a time, and then nothing is woken.
+#[test]
+fn at_rest_stale_pictures_are_swept_up_to_date() {
+    let (mut all, ..) = two_tabs();
+    let (mut store, t, a, _, rects) = two_tabs();
+    let p = store.register_producer("host");
+    all.register_producer("host");
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let at = BTreeMap::from([(Leaf { node: t, path: path("let.value") }, Value::Number(7.0))]);
+    store.publish(p, at.clone());
+    all.publish(p, at);
+    assert!(store.reactive().stale_count() > 0);
+    let out = store.advance(1.0);
+    assert_eq!(out.wake.next, None, "swept in one frame, nothing left to call back for");
+    assert_eq!(store.reactive().stale_count(), 0);
+    for &r in &rects {
+        assert_eq!(store.resolved(r, path("transform2d.x")), all.resolved(r, path("transform2d.x")));
+    }
+    assert_eq!(store.advance(1.1).changed, false, "then at rest");
+}

@@ -211,6 +211,31 @@ impl Reactive {
         evaluated
     }
 
+    /// Bring up to `budget` stale cells up to date, lowest first, though
+    /// nothing needs them (reactive-engine.md §8.7's idle sweep), so their
+    /// problems and values do not stay old indefinitely. What reads them is
+    /// unneeded too and turns stale if they changed: a later sweep takes
+    /// it. Whether any were evaluated.
+    pub(crate) fn sweep(&mut self, doc: Tree<'_>, budget: usize) -> bool {
+        let mut left = budget;
+        let swept = !self.stale.is_empty();
+        while left > 0 && !self.stale.is_empty() {
+            let mut by: Vec<(u32, Leaf)> = self.stale.iter().map(|l| (self.nodes[l].height, *l)).collect();
+            by.sort();
+            by.truncate(left);
+            left -= by.len();
+            let picked: BTreeSet<Leaf> = by.into_iter().map(|(_, l)| l).collect();
+            for l in &picked {
+                self.stale.remove(l);
+                self.unneeded.remove(l);
+            }
+            let dirty = self.readers(&picked);
+            self.evaluate(doc, &dirty, &picked);
+            self.unneeded.extend(picked);
+        }
+        swept
+    }
+
     /// Whether `relax` emptied `unneeded` since the store last set it.
     pub(crate) fn relaxed(&self) -> bool {
         self.relaxed

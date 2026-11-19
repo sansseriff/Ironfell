@@ -2171,6 +2171,65 @@ phase 3, 4 or 5, write that phase's tasks here, check each open point for that p
 against the code as it then is, and report to the user what you would build; do not
 start the phase on the rule as written without that.
 
+### 4.7 Phase 3: time (plan, 2026-11-19)
+
+Written by the builder while the user was away, on the user's instruction to go on
+through the plan and decide (§4.5 asks for a report before a later phase starts; this
+section is that report, reviewed by the council, and the build follows it).
+
+**Where phase 2c ends.** 2c's exit holds as far as 2c now reaches: the Tree equals
+the copies-in-document reference on every script (the differential suite and the
+10,000 random scripts, green throughout), and memory per meter is **110.9 KiB**
+against phase 0's 92.4 (2c stage 1: 110.5; the difference since phase 0 is 2b's
+graph and owners, not the copies). Lazy slots, validation from templates and D13's
+sweep moved to phase 4 (D14, D15, D13); stage 4 (cells from templates) is not
+justified by any measurement, so it is not built. **`InDocument` stays** as the
+differential reference until phase 4 changes how copies are held again.
+
+**What phase 3 replaces.** Six host systems, each with its own liveness bookkeeping:
+`motion::advance` (layout glides, presence's presentation), `advance_machines`,
+`advance_steps` (traces, accumulators), `advance_queries`, `advance_presence`, and
+`clock::advance` (the playhead player: rate, loop, stop at the last clip). Each calls
+a store method that steps one kind of thing and publishes under its producer, then
+maps what is active to compositions and marks them live.
+
+**Steps** (each green on the differential suite and the smoke before the next):
+1. **One entry point.** `Store::advance(now, paused) -> Advance { wake: Wake,
+   queries }` runs today's six in today's order (the player included, moved into the
+   store) and returns `Wake { next, live }`: `live` the compositions to redraw
+   (today's six sets, joined), `next` `Some(now)` while anything continuous is
+   active, else the earliest timed entry. The host's six systems become one. No
+   behaviour change; the host reference and the smoke are the check.
+2. **The scheduler.** Each stepper reports when it next changes (§10.3's table):
+   a trace at its next arrival (continuous only while a dash or age is drawn), a
+   query at its debounce or timeout, a machine continuously while a transition runs,
+   presence and glides while they move, an accumulator while `next` differs from its
+   value, an animated leaf while the playhead plays over its keys. `Wake.next` is the
+   earliest; nothing due is `None`. A clock that jumps (`set_time`, a loop, a rate
+   change) asks again. Exit test: an idle document with a trace and an accumulator at
+   rest schedules no wake.
+3. **Record, then stabilise again** (the open point). Today a machine driven by
+   another's channel is brought level by a fixed 4 rounds (`advance_machines`), and a
+   trace with no delay passes its change through in the same frame because the
+   stepper polls after publishing. The rule as written: alternate until nothing is
+   recorded, at most 8 rounds, then a problem on the logger still recording. Built as
+   a loop around the steppers in `advance`; the 4-round loop goes.
+4. **`now()` and `clock()`** in formulas, and the `clock` facet as a clock provider
+   (offset, rate, paused, loop) resolved along the model's tree for a body and the
+   picture's for a picture (§10.1).
+5. **Exit:** `fiber.txt` and `pulses.txt` pass; the idle test; a machine's
+   transition, interrupted transitions included, matches the old player's.
+
+**Decisions (the builder's):**
+- **Steppers stay producers** publishing Input cells, with the scheduler beside
+  them, rather than becoming cells of the graph. What the cell form buys is
+  necessity (an unobserved stepper skipped), which is phase 4's observation; the
+  values and their timing are the same either way. Revisit with phase 4.
+- **`paused` stays the host's** (an accumulator in a composition no view shows holds
+  still) until phase 4's observers can answer it in the store.
+- **The playhead player moves into the store** so `Wake` can say when the playhead
+  next matters; the host keeps only the frame loop.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

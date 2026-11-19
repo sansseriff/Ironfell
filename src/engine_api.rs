@@ -552,6 +552,8 @@ pub fn document_make_component(app: &mut WorkerApp, ids: String, name: String) -
         let ids: Vec<String> = serde_json::from_str(&ids).map_err(|e| e.to_string())?;
         let ids = ids.iter().map(|s| s.parse::<iron_document::NodeId>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        // A command authors from values: current ones, not stale (§8.9).
+        store.0.exact();
         let name = if name.trim().is_empty() { "component".to_owned() } else { name };
         let (made, mut input) = store.0.make_component(&ids, &name, iron_document::Actor::Human)?;
         input.ts = crate::host_services::unix_millis();
@@ -586,6 +588,8 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         let num = |k: &str| a.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
         let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.lone_point()).map(|p| p.to_string());
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        // A command authors from values: current ones, not stale (§8.9).
+        store.0.exact();
         let doc = store.0.tree();
         if verb == "attachment_info" {
             let target = id("target")?;
@@ -882,6 +886,8 @@ pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
         let tx = |label: &str, ops| TransactionInput { label: label.into(), actor, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false };
         let err = |es: Vec<iron_document::op::ApplyError>| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        // A command authors from values: current ones, not stale (§8.9).
+        store.0.exact();
         if let Some(t) = id_of("id")? {
             let mut ops = table::replace_ops(&store.0, t, &rows)?;
             if let Some(h) = v.get("header").and_then(|h| h.as_u64()) {
@@ -933,6 +939,8 @@ pub fn document_table_edit(app: &mut WorkerApp, table: String, verb: String, cel
         let cells: Vec<String> = serde_json::from_str(&cells).map_err(|e| e.to_string())?;
         let cells = cells.iter().map(|s| s.parse::<iron_document::NodeId>().map_err(|e| e.to_string())).collect::<Result<Vec<_>, _>>()?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        // A command authors from values: current ones, not stale (§8.9).
+        store.0.exact();
         let (ops, label) = iron_document::table::edit_ops(&store.0, table, &verb, &cells)?;
         let applied = store.0
             .apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
@@ -1142,6 +1150,8 @@ pub fn document_detach(app: &mut WorkerApp, entity: String) -> String {
     let mut run = || -> Result<serde_json::Value, String> {
         let id = entity.parse::<iron_document::NodeId>().map_err(|e| e.to_string())?;
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
+        // A command authors from values: current ones, not stale (§8.9).
+        store.0.exact();
         let ops = iron_document::definition::detach_ops(store.0.tree(), id)?;
         let applied = store.0
             .apply(iron_document::TransactionInput { label: "detach instance".into(), actor: iron_document::Actor::Human, ts: crate::host_services::unix_millis(), idempotency_key: None, ops, exact: false })
@@ -1173,6 +1183,8 @@ pub fn document_link(app: &mut WorkerApp, a: String, b: String, keep: String, ac
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
     };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let result = match store.0.link(a, b, keep, actor) {
         Err(LinkError::Question(q)) => serde_json::json!({"ok": false, "question": q}),
         Err(e @ LinkError::AlreadyLinked(entity)) => serde_json::json!({"ok": false, "error": e.to_string(), "entity": entity.to_string()}),
@@ -1219,9 +1231,11 @@ pub fn document_to_path(app: &mut WorkerApp, node: String, force: bool) -> Strin
     let Ok(id) = node.parse::<iron_document::NodeId>() else {
         return serde_json::json!({"ok": false, "error": format!("bad id {node:?}")}).to_string();
     };
-    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
+    // Readers of its size keep their current value: current, not stale.
+    store.0.exact();
     let ty = store.0.tree().live(id).map(|n| n.ty.name()).unwrap_or("");
     let conversion = match iron_document::shape::to_path(&store.0, id) {
         Ok(c) => c,
@@ -1242,9 +1256,11 @@ pub fn document_to_path(app: &mut WorkerApp, node: String, force: bool) -> Strin
 
 pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
     use iron_document::composition;
-    let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
+    // A file handed to the user: a hidden composition's values current.
+    store.0.exact();
     let doc = store.0.tree();
     let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let scope = if scope == "selection" {
@@ -1597,6 +1613,8 @@ pub fn document_component(app: &mut WorkerApp, node: String, kind: String, add: 
     let op = if add { iron_document::Op::AddFacet { id, facet: k.default_facet() } } else { iron_document::Op::RemoveFacet { id, kind: k } };
     let label = format!("{} {kind}", if add { "add" } else { "remove" });
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let result = store.0.apply(iron_document::TransactionInput { label, actor: iron_document::Actor::Human, ts: 0, idempotency_key: None, ops: vec![op], exact: false });
     if let Some(mut active_info) = app.world_mut().get_resource_mut::<ActivityControl>() {
         active_info.remaining_frames = 10;
@@ -1953,6 +1971,8 @@ pub fn document_inspect_set(app: &mut WorkerApp, node: String, leaf: String, tex
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return fail(format!("bad id {node:?}")) };
     let Ok(path) = leaf.parse::<iron_document::LeafPath>() else { return fail(format!("no leaf {leaf:?}")) };
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let Some(current) = store.0.resolved(id, path) else { return fail(format!("{id} has no {leaf}")) };
     let value = match inspector_value(&current, &text) { Ok(v) => v, Err(e) => return fail(e) };
     // One transaction through the leaf's handle, outside the gesture
@@ -2118,6 +2138,8 @@ pub fn document_set_run_mode(app: &mut WorkerApp, source: String, mode: String) 
         active.remaining_frames = 10;
     }
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let Some(c) = find_composition(store.0.tree(), &source) else { return fail(format!("no composition {source:?}")) };
     let op = Op::Set { id: c, path: "composition.run".parse().expect("declared leaf"), slot: Slot::Const(Value::Enum(mode)) };
     if c.is_session() {
@@ -2370,6 +2392,8 @@ pub fn document_text_style(app: &mut WorkerApp, node: String, patch: String) -> 
         return serde_json::json!({"ok": true, "range": true}).to_string();
     }
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let mut ops = Vec::new();
     for id in ids {
         if store.0.tree().live(id).is_none_or(|n| n.ty.name() != "text") {
@@ -2873,6 +2897,8 @@ pub fn document_latency(app: &mut WorkerApp, panel: String, fields: String) -> S
     let dpr = app.world().get_resource::<crate::Dpr>().map_or(1.0, |d| d.0);
     let view = app.world().get_resource::<crate::document_bridge::PanelViews>().and_then(|v| v.get(&panel).cloned());
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
+    // A command authors from values: current ones, not stale (§8.9).
+    store.0.exact();
     let doc = store.0.tree();
     let Some(comp) = find_composition(doc, iron_document::standard::LATENCY).filter(|c| c.is_session()) else {
         return serde_json::json!({"ok": true, "ready": false}).to_string();

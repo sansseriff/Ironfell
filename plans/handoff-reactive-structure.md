@@ -2576,6 +2576,14 @@ demo: nothing pinned through the regression script). Skipping a hidden compositi
 layouts unless a needed cell reads their placements is the fix when a document needs
 it.
 
+Tests: `a_preview_lays_out_a_hidden_stack_from_current_sizes`,
+`a_nested_tracked_wake_finds_no_false_cycle`,
+`a_hidden_accumulator_read_through_a_trace_keeps_stepping`,
+`a_hidden_cell_rests_once_the_tracked_read_that_woke_it_leaves`,
+`the_idle_sweep_keeps_what_a_woken_cell_reads_needed`,
+`the_network_reads_a_hidden_rect_through_the_branch_its_solution_opens`,
+`a_publish_every_frame_leaves_hidden_pictures_resting` (each fails before).
+
 **The observation property test strengthened (2026-11-19).**
 `differential_random::observed_script` adds a second composition whose pictures read
 the sheet's through a reference a producer moves or a preview moves, one of them laid
@@ -2591,14 +2599,30 @@ default, ~8 min in the gates' debug build with both checks) and 1,000 pass. Spec
 (each run moves it a step, observed or not): the test's reference never points the
 viewer at its own pictures.
 
-Tests: `a_preview_lays_out_a_hidden_stack_from_current_sizes`,
-`a_nested_tracked_wake_finds_no_false_cycle`,
-`a_hidden_accumulator_read_through_a_trace_keeps_stepping`,
-`a_hidden_cell_rests_once_the_tracked_read_that_woke_it_leaves`,
-`the_idle_sweep_keeps_what_a_woken_cell_reads_needed`,
-`the_network_reads_a_hidden_rect_through_the_branch_its_solution_opens`,
-`a_publish_every_frame_leaves_hidden_pictures_resting` (each fails before).
-Verified: differential suite (475) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
+**Phase 4: council round 3 fixes (2026-11-19).** Opus 7/10, Sol 6/10. Fixed:
+- **A derivation reruns only after reading an old value:** a recorded read notes
+  whether a stale cell was it or upstream of it (`Reactive::behind`); one that was
+  current costs no second run (an extra run moves what reads a later stage, a repeat
+  counting a placement: Sol's case, not reproduced here).
+- **A cycle check waits once for everything still queued in the pass,** not only what
+  it reads directly (a hidden `K` two hops down still to switch its tracked read).
+- **Pausing is decided per composition:** a hidden composition read from one that
+  runs, or from outside every composition, runs too, to a fixpoint (`read_by` in place
+  of `feeds`): a trace, a stack's placements or another hidden tab in between.
+- **The idle sweep waits for a still frame by propagations, not evaluations**
+  (`Reactive::propagations`): a publish only hidden pictures read evaluates nothing
+  but kept the sweep running every frame.
+- **Host commands that author from values make the store exact first:** Make
+  Component, Author, Link, Detach, Component, the table and text-style commands, run
+  mode, the timeline's axis, the inspector's set, convert to path when forced, and SVG
+  export (a file handed to the user). The select tool's convert commits only when
+  nothing reads the shape (no value baked), so it needs none.
+
+Tests: `a_tracked_wake_two_hops_down_finds_no_false_cycle`,
+`a_hidden_accumulator_read_through_layout_keeps_stepping`,
+`a_publish_only_hidden_pictures_read_leaves_them_resting` (each fails before).
+
+Verified: differential suite (478) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
 app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
 smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
 

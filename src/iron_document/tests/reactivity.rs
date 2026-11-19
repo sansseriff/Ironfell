@@ -1385,3 +1385,74 @@ fn a_publish_every_frame_leaves_hidden_pictures_resting() {
     store.publish(p, at(11.0));
     assert_eq!(store.reactive().evaluations - before, 1, "the sweep left nothing needed");
 }
+
+/// A cycle check waits for the whole pass, not only what it reads
+/// directly: the hidden `K` that `H` reads is still to switch its tracked
+/// read away from the shown `S`.
+#[test]
+fn a_tracked_wake_two_hops_down_finds_no_false_cycle() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$u" name="u" value="0"/><let id="$v" name="v" value="0"/><let id="$t" name="t" value="1"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$s" name="s" x="0" y="{= deref($v, 'transform2d.x', 0)}" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d">
+          <rect id="$h" name="h" x="{= $k.transform2d.x + 1}" y="0" w="1" h="1"/>
+          <rect id="$k" name="k" x="{= deref($u, 'transform2d.y', 7)}" y="0" w="1" h="1"/>
+          <rect id="$b0" x="{= $t}" y="{= $b0.transform2d.x}" w="1" h="1"/>
+          <rect id="$b1" x="{= $b0.transform2d.y}" y="{= $b1.transform2d.x}" w="1" h="1"/>
+          <rect id="$b2" x="{= $b1.transform2d.y}" y="{= $b2.transform2d.x}" w="1" h="1"/>
+        </composition>"#,
+    );
+    let (u, v, t) = (n["$u"], n["$v"], n["$t"]);
+    store.set_observe_all(true);
+    let zero = Value::Number(0.0);
+    for (uv, vv, tv) in [(Value::Ref(n["$s"]), zero.clone(), 1.0), (Value::Ref(n["$b2"]), zero.clone(), 23.0), (Value::Ref(n["$b2"]), Value::Ref(n["$h"]), 23.0)] {
+        let values = lets(&[(u, uv), (v, vv), (t, Value::Number(tv))]);
+        store.publish(p, values.clone());
+        all.publish(p, values);
+        store.set_observe_all(false);
+    }
+    let y = Leaf { node: n["$s"], path: path("transform2d.y") };
+    assert_eq!(store.reactive().errors.get(&y), None);
+    assert_eq!(store.resolved(y.node, y.path), Some(Value::Number(24.0)));
+    assert_eq!(store.resolved(y.node, y.path), all.resolved(y.node, y.path));
+}
+
+/// A hidden accumulator that reaches a shown picture through a stack's
+/// placements keeps stepping: its composition is read from outside.
+#[test]
+fn a_hidden_accumulator_read_through_layout_keeps_stepping() {
+    let (mut store, mut all, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"><rect id="$m" name="m" x="{= $r2.transform2d.x}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 100}"/>
+          <group x="0" y="0" layout.mode="stack_x" layout.gap="0"><rect id="$r1" w="{= $acc}" h="1"/><rect id="$r2" w="1" h="1"/></group></composition>"#,
+    );
+    for t in [0.0, 0.1, 0.2, 0.3] {
+        store.advance(t);
+        all.advance(t);
+    }
+    let x = |s: &Store| s.resolved(n["$m"], path("transform2d.x"));
+    assert!(x(&all).and_then(|v| v.as_f64()).is_some_and(|v| v > 0.0));
+    assert_eq!(x(&store), x(&all));
+}
+
+/// A publish read only by hidden pictures evaluates nothing, yet keeps the
+/// store from resting: the idle sweep does not evaluate them each frame.
+#[test]
+fn a_publish_only_hidden_pictures_read_leaves_them_resting() {
+    let (mut store, _, p, n) = split(
+        r#"<let id="$h" name="h" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect name="s" x="0" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d">
+          <rect id="$p1" x="{= $h + 1}" y="0" w="1" h="1"/>
+          <rect id="$p2" x="{= $p1.transform2d.x + 1}" y="0" w="1" h="1"/>
+          <rect id="$p3" x="{= $h + 3}" y="{= $p2.transform2d.x}" w="1" h="1"/>
+        </composition>"#,
+    );
+    store.advance(0.0);
+    let before = store.reactive().evaluations;
+    for i in 1..=10 {
+        store.publish(p, lets(&[(n["$h"], Value::Number(f64::from(i)))]));
+        store.advance(f64::from(i) / 60.0);
+    }
+    assert_eq!(store.reactive().evaluations - before, 0, "nothing shown reads h");
+}

@@ -118,6 +118,10 @@ pub struct Reactive {
     /// Expressions evaluated since construction. Tests use it to check that
     /// the schedule is glitch-free and the cutoff works.
     pub evaluations: u64,
+    /// How many times a change was propagated (`evaluate`), whether or
+    /// not anything ran: a publish that only turns unneeded cells stale
+    /// counts. The store's idle sweep waits for a frame where it is still.
+    pub(crate) propagations: u64,
     /// The signals connections and anchors derive, as last computed: what
     /// `restructure` compares against.
     derived: BTreeMap<Leaf, Expr>,
@@ -163,7 +167,9 @@ pub struct Reactive {
 /// across threads.
 #[derive(Debug, Default)]
 struct Escaped {
-    read: std::sync::Mutex<BTreeSet<Leaf>>,
+    /// Each with whether its value was old when read: a stale cell is
+    /// upstream of it.
+    read: std::sync::Mutex<BTreeMap<Leaf, bool>>,
     depth: std::sync::atomic::AtomicUsize,
 }
 
@@ -178,7 +184,8 @@ impl Reactive {
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
         if !self.unneeded.is_empty() && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0 && self.unneeded.contains(&leaf) {
-            self.escaped.read.lock().expect("escaped lock").insert(leaf);
+            let old = self.behind(leaf);
+            *self.escaped.read.lock().expect("escaped lock").entry(leaf).or_default() |= old;
         }
         read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
@@ -236,8 +243,31 @@ impl Reactive {
     }
 
     /// The unneeded cells read from outside the graph since the last take.
-    pub(crate) fn take_escaped(&self) -> BTreeSet<Leaf> {
+    pub(crate) fn take_escaped(&self) -> BTreeMap<Leaf, bool> {
         std::mem::take(&mut *self.escaped.read.lock().expect("escaped lock"))
+    }
+
+    /// Whether an unneeded cell's value is older than its inputs: a stale
+    /// cell is it or upstream of it, among the unneeded (a needed cell is
+    /// current).
+    fn behind(&self, leaf: Leaf) -> bool {
+        if self.stale.is_empty() {
+            return false;
+        }
+        let mut stack = vec![leaf];
+        let mut seen = BTreeSet::new();
+        while let Some(l) = stack.pop() {
+            if !self.unneeded.contains(&l) || !seen.insert(l) {
+                continue;
+            }
+            if self.stale.contains(&l) {
+                return true;
+            }
+            if let Some(n) = self.nodes.get(&l) {
+                stack.extend(n.deps.iter().chain(&n.tracked).copied());
+            }
+        }
+        false
     }
 
     /// Start (`true`) or end recording reads of unneeded cells: the store's
@@ -293,29 +323,9 @@ impl Reactive {
         (wake, taken)
     }
 
-    /// Whether a cell outside `inside` reads a leaf of `nodes`, directly
-    /// or through others.
-    /// `through` names nodes whose every leaf follows what any of them
-    /// reads (a trace publishes what its `of` read, outside the graph).
-    pub(crate) fn feeds(&self, nodes: &BTreeSet<NodeId>, inside: &dyn Fn(NodeId) -> bool, through: &dyn Fn(NodeId) -> bool) -> bool {
-        let leaves_of = |n: NodeId| self.dependents.range(first_leaf(n)..).take_while(move |(l, _)| l.node == n).map(|(l, _)| *l);
-        let mut stack: Vec<Leaf> = nodes.iter().flat_map(|&n| leaves_of(n)).collect();
-        let mut seen: BTreeSet<Leaf> = stack.iter().copied().collect();
-        let mut expanded: BTreeSet<NodeId> = nodes.clone();
-        while let Some(l) = stack.pop() {
-            for d in self.dependents.get(&l).into_iter().flatten() {
-                if !inside(d.node) {
-                    return true;
-                }
-                if seen.insert(*d) {
-                    stack.push(*d);
-                }
-                if through(d.node) && expanded.insert(d.node) {
-                    stack.extend(leaves_of(d.node).filter(|o| seen.insert(*o)));
-                }
-            }
-        }
-        false
+    /// Whether a cell on a node `by` names reads a leaf of `nodes`.
+    pub(crate) fn read_by(&self, nodes: impl IntoIterator<Item = NodeId>, by: &dyn Fn(NodeId) -> bool) -> bool {
+        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(|d| by(d.node))))
     }
 
     /// Need every cell again, bringing the stale ones up to date: what a
@@ -933,11 +943,14 @@ impl Reactive {
     /// it depends on a leaf evaluated after it; when that leaf changes, the
     /// binding is queued again.
     fn evaluate(&mut self, doc: Tree<'_>, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
+        self.propagations += 1;
         let mut primed = primed.clone();
         let mut queue: BTreeSet<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
         // Static dependencies never queue a node twice; tracked ones may, a
         // bounded number of times in an acyclic graph. The limit is a guard.
         let mut budget = dirty.len().saturating_mul(4) + 1024;
+        // Bindings whose cycle check waited once for the rest of the pass.
+        let mut deferred: BTreeSet<Leaf> = BTreeSet::new();
         while let Some((_, leaf)) = queue.pop_first() {
             if !primed.remove(&leaf) {
                 continue;
@@ -1034,10 +1047,11 @@ impl Reactive {
                 if tracked != node.tracked {
                     let old = node.tracked.clone();
                     if let Some(own) = tracked.iter().find(|t| **t == leaf || self.reaches(**t, leaf)) {
-                        // What it reads may still be waiting in this pass
-                        // (a wake beneath it): its edges are those of its
-                        // last evaluation until it runs. Read it after.
-                        if tracked.iter().any(|t| *t != leaf && primed.contains(t) && self.nodes.contains_key(t)) {
+                        // What it reads, or what that reads, may still be
+                        // waiting in this pass (a wake beneath it): its edges
+                        // are those of its last evaluation until it runs.
+                        // Read this once more after everything waiting.
+                        if primed.iter().any(|t| *t != leaf && self.nodes.contains_key(t)) && deferred.insert(leaf) {
                             primed.insert(leaf);
                             let last = queue.last().map_or(0, |(h, _)| *h);
                             queue.insert((last.max(self.nodes[&leaf].height) + 1, leaf));

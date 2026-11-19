@@ -466,7 +466,7 @@ pub struct StoreCore {
     presence_at: Option<f64>,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
-    /// The graph's evaluation count as the last `advance` ended: when it
+    /// The graph's propagation count as the last `advance` ended: when it
     /// has not moved since, nothing published or changed in between, and
     /// the store is at rest for the idle sweep.
     evaluated_at: u64,
@@ -2774,16 +2774,19 @@ impl StoreCore {
 
     /// Make needed the cells read from outside the graph while nothing
     /// needed them, bringing them up to date (reactive-engine.md §8.9): they
-    /// stay needed from now on. Whether there were any, so that what read
-    /// them may have read an old value: whether one was stale is not known
-    /// here (a tracked read inside the graph may have woken it since).
+    /// stay needed from now on. Whether one held an old value when it was
+    /// read (a tracked read inside the graph may have woken it since), so
+    /// that what read it runs again; one that was current costs no second
+    /// run (a run more than the reference would make moves what reads a
+    /// later stage of the derivation, a repeat counting a placement).
     fn settle_reads(&mut self) -> bool {
         let escaped = self.reactive.take_escaped();
         if escaped.is_empty() {
             return false;
         }
-        self.reactive.need(Tree::of(&self.docs), &escaped);
-        true
+        let old = escaped.values().any(|&old| old);
+        self.reactive.need(Tree::of(&self.docs), &escaped.into_keys().collect());
+        old
     }
 
     /// Run `f`, which computes from values without changing the document,
@@ -2840,19 +2843,23 @@ impl StoreCore {
         if still.is_empty() {
             return still;
         }
-        // One that feeds something shown keeps running: a meter in view
-        // reading a simulation in a hidden tab.
+        // A composition read from one that runs, or from outside every
+        // composition, runs too, accumulators and all: a meter in view
+        // reading a simulation in a hidden tab, directly, through a trace or
+        // through a stack's placements. Decided per composition, until no
+        // more join (one hidden tab read through another).
         let shown = composition::shown(doc, &self.observed_compositions());
-        let comp = |n: NodeId| composition::composition_of(doc, n);
-        let inside = |n: NodeId| comp(n).is_some_and(|c| still.contains(&c) || !shown.contains(&c));
-        still
-            .iter()
-            .copied()
-            .filter(|&c| {
-                let accumulators: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && comp(n) == Some(c)).collect();
-                !self.reactive.feeds(&accumulators, &inside, &|n| doc.facets_of(n).any(|f| matches!(f.kind(), FacetKind::Trace | FacetKind::Accumulate)))
-            })
-            .collect()
+        let mut live: BTreeSet<NodeId> = shown.difference(&still).copied().collect();
+        let hidden: Vec<NodeId> = composition::compositions(doc).into_iter().filter(|c| !live.contains(c)).collect();
+        loop {
+            let reads = |n: NodeId| composition::composition_of(doc, n).is_none_or(|c| live.contains(&c));
+            let joined: Vec<NodeId> = hidden.iter().copied().filter(|c| !live.contains(c) && self.reactive.read_by(std::iter::once(*c).chain(doc.descendants(*c)), &reads)).collect();
+            if joined.is_empty() {
+                break;
+            }
+            live.extend(joined);
+        }
+        still.difference(&live).copied().collect()
     }
 
     /// Bring everything that runs on time to `now` (seconds, the host's
@@ -2896,7 +2903,7 @@ impl StoreCore {
         // frame something was published or written since the last: a host
         // producer moving every frame would make the sweep evaluate each
         // frame what necessity saved.
-        let rest = !active && !read && self.reactive.evaluations == self.evaluated_at;
+        let rest = !active && !read && self.reactive.propagations == self.evaluated_at;
         let swept = rest && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
         if swept {
             self.pipeline();
@@ -2904,7 +2911,7 @@ impl StoreCore {
         let changed = active || swept || read || !was_live.is_empty() || waiting != was_waiting;
         let next = (active || self.reactive.stale_count() > 0).then_some(now);
         self.advanced = (live.clone(), waiting);
-        self.evaluated_at = self.reactive.evaluations;
+        self.evaluated_at = self.reactive.propagations;
         Advanced { wake: Wake { next, live }, queries, changed }
     }
 

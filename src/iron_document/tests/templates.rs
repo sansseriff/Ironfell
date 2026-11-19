@@ -176,6 +176,56 @@ fn a_repeat_in_a_template_carries_its_pictures_overrides_into_its_items() {
     assert_eq!(cells(&store, b), vec![(0.0, 6.0), (10.0, 6.0), (20.0, 6.0)]);
 }
 
+/// A repeat in a repeat in a picture: when the instance's input changes
+/// how many items the inner repeat has, only those items are made again,
+/// from the definition's template (not the picture's copies), with the
+/// picture's override and each level's index.
+#[test]
+fn items_of_a_repeat_in_a_repeat_in_a_picture_come_from_the_definition() {
+    let mut store = Store::new();
+    let names = apply(
+        &mut store,
+        r#"<model name="model"/>
+        <composition id="$c" name="scene" dims="2d"/>
+        <library name="library">
+          <definition id="$d" name="grid">
+            <port_spec id="$n" name="n" kind="value" dir="in" signal="2" datatype="number"/>
+            <template notation="free">
+              <group id="$rows" name="rows" repeat.count="2">
+                <group id="$cols" name="cols" repeat.count="{= $n.port.signal}">
+                  <rect id="$cell" name="cell" x="{= $cols.repeat.index * 10}" y="{= $rows.repeat.index * 10}" w="5" h="5"/>
+                </group>
+              </group>
+            </template>
+          </definition>
+        </library>"#,
+    );
+    let (c, d, rows, cols, cell) = (names["$c"], names["$d"], names["$rows"], names["$cols"], names["$cell"]);
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0" n="2"/>"#));
+    let doc = store.tree();
+    let u = *doc.children(c).iter().find(|&&x| !x.is_expanded() && doc.live(x).is_some_and(|y| y.ty.name() == "use")).unwrap();
+    let entity = doc.relations_from(u).find(|r| r.rel == RelKind::Figures).unwrap().to;
+    let (_, op) = override_of(&store, u, cell, "size.w", Value::Number(9.0));
+    store.apply(tx("wider", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let cells = |store: &Store| -> Vec<(f64, f64, f64)> {
+        let outer = NodeId::from_path(&[u, rows]).unwrap();
+        let mut out = Vec::new();
+        for k in ["0", "1"] {
+            let inner = NodeId::item(outer, k, cols).unwrap();
+            for j in ["0", "1", "2", "3"] {
+                let n = NodeId::item(inner, j, cell).unwrap();
+                if store.tree().is_live(n) {
+                    out.push((number(store, n, "transform2d.x"), number(store, n, "transform2d.y"), number(store, n, "size.w")));
+                }
+            }
+        }
+        out
+    };
+    assert_eq!(cells(&store), vec![(0.0, 0.0, 9.0), (10.0, 0.0, 9.0), (0.0, 10.0, 9.0), (10.0, 10.0, 9.0)]);
+    store.apply(tx("three", vec![Op::Set { id: entity, path: "args.n".parse().unwrap(), slot: Slot::Const(Value::Number(3.0)) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(cells(&store), vec![(0.0, 0.0, 9.0), (10.0, 0.0, 9.0), (20.0, 0.0, 9.0), (0.0, 10.0, 9.0), (10.0, 10.0, 9.0), (20.0, 10.0, 9.0)]);
+}
+
 /// References in a template follow to each owner's own copies: in a
 /// binding, as a node named in a formula (`list(…)`), and to a port of the
 /// definition's body, which reads the figured entity's port.

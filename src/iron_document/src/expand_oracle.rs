@@ -416,3 +416,47 @@ pub(crate) fn expand(docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op
     (ops, problems)
 }
 
+
+/// One node of a repeat's template: id, parent, type, order, facets.
+type TemplateNode = (NodeId, NodeId, TypeId, OrderKey, Vec<Facet>);
+
+/// Repeat `r`'s template: its children that are not its items, and their
+/// subtrees, parents first, with the relations from them. A derived
+/// repeat's come from what is wanted, an authored one's from the document.
+fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNode>, Vec<Relation>) {
+    let mut nodes = Vec::new();
+    let mut rels = Vec::new();
+    if r.is_expanded() && out.get(r).is_none() {
+        // A derived repeat this pass did not want: its items alone are
+        // being brought up to date (`expand_items`), and its template is
+        // the copies its owner's last expansion wrote.
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| c.item_of(r).is_none()).collect();
+        while let Some(n) = stack.pop() {
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
+            rels.extend(doc.relations_from(n).cloned());
+            stack.extend(doc.children(n).iter().rev().copied());
+        }
+    } else if r.is_expanded() {
+        let mut parents = BTreeSet::from([r]);
+        for w in &out.nodes {
+            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" {
+                parents.insert(w.id);
+                nodes.push((w.id, w.parent, w.ty, w.order.clone(), w.facets.clone()));
+            }
+        }
+        rels.extend(out.rels.iter().filter(|x| parents.contains(&x.rel.from) && x.rel.from != r).map(|x| x.rel.clone()));
+    } else {
+        // An override is the repeat's own opinion about one item's copy,
+        // not part of what items copy.
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        while let Some(n) = stack.pop() {
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
+            rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
+            stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
+        }
+    }
+    (nodes, rels)
+}
+

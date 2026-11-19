@@ -1736,11 +1736,10 @@ an optional step.
     - Templates live for one pass. Nothing is edited while a pass wants its
       copies, so nothing needs invalidating or rolling back. Stage 3's slots need
       templates kept between passes, with a version.
-    - A collection's template is still compiled from its prototype (the
+    - A collection's template was still compiled from its prototype (the
       authored children; a derived repeat's copies as this pass wants them, or
       as its owner's last expansion wrote them), not as a sub-template of the
-      enclosing one. The prototype carries the picture's overrides by
-      construction, as before.
+      enclosing one. Stage 3's first prerequisite replaced this (below).
   - `apply_wanted` compares a copy's facets where they are instead of cloning
     them into a map first.
   - Parity tests, `tests/templates.rs`: nested overrides apply innermost first
@@ -1815,7 +1814,40 @@ an optional step.
     losing `size`, since one template serves both and `Root` reads resolve by
     `Env`.
 
-Next: stage 3, copies materialised on read.
+- **Stage 3, first prerequisite: a derived repeat's items from a sub-template
+  (2026-11-18).** A repeat (or conditional) a picture copies, or another
+  repeat's items copy, gets its items' template from the template that copies
+  it: `Template::sub(outer, l)` is `outer`'s nodes under `l`, the definition's
+  repeat node, with the relations `outer` derives from them. It is keyed by `l`
+  alone (a definition node is in one template), so every picture of a
+  definition shares one; the copies are never read for it. An item's `Env`
+  carries an `Item { repeat, key, outer }`, where `outer` is the copying
+  template and its owner's environment: a reference the sub-template does not
+  claim (its own nodes, the repeat's `item`, `index`, `presence`, `leaving`)
+  resolves through `outer`, and `outer`'s overrides apply before the item's.
+  That is the two passes the old code made (the picture's copy, then the item's
+  copy of that), in one.
+  - Where the outer is found: during a pass, `Wanted::origins`, recorded as
+    `want_use` and `want_items` push a node that owns items; at an item settle,
+    when the pass is over, `expand::maker_of` from the ids, reading only the
+    copying owner's own node (a `use`'s facets and `figures`), or for an item
+    of a derived repeat, recursively its maker.
+  - `template_of_repeat` (prototypes from copies) moved to the oracle;
+    `Template::repeat` compiles an authored repeat from the document.
+  - Parity holds on the differential suite unchanged; the new test
+    `items_of_a_repeat_in_a_repeat_in_a_picture_come_from_the_definition`
+    settles a derived repeat inside another's items (both `maker_of` branches)
+    and fails with the outer layer's overrides skipped.
+  - **Cost, left for the version prerequisite:** templates still live for one
+    pass, so an item settle compiles the whole picture template to take the
+    repeat's sub-template from it, where it used to read the repeat's few
+    copies. `plot_perf` (load about 20, both sides the same hour): a step that
+    changes the tick count, pan / zoom, 1 plot 0.19 / 0.20 → 0.25 / 0.25 ms,
+    10 plots 0.26 / 0.34 → 0.33 / 0.40 ms; values-only steps unchanged
+    (0.07 / 0.13 ms). Templates kept between passes take the compile away.
+
+Next: stage 3's second prerequisite, templates kept between passes with a version
+covering what each compiler reads; then slot clearing on a `use`'s `size`.
 
 **Stop and report** as §5 says, and also if the Tree's join (stage 1) cannot be made
 exact, or a template cannot reproduce a copy (stage 2).

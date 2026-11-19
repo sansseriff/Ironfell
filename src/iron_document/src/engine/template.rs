@@ -10,12 +10,18 @@
 //! - a **picture**, per (definition, notation): the template's subtree,
 //!   down to and including each `use` (an inner picture is its own owner);
 //! - a **collection**, per repeat or conditional: its children that are
-//!   not items, with their subtrees.
+//!   not items, with their subtrees. An authored repeat's is compiled from
+//!   the document; a derived one's (a repeat in a picture, or in another
+//!   repeat's items) is a sub-template of the template that copies it
+//!   ([`Template::sub`]), shared by every copy, never read from copies.
 //!
 //! Every node a template's facets or relations refer to is classified once
 //! ([`Ref`]); an owner resolves each class against its own environment
 //! ([`Env`]): its id, the entity a picture figures, whether a picture is
-//! sized, an item's key, and the overrides that reach it. So a picture
+//! sized, an item's key, and the overrides that reach it. An item of a
+//! derived repeat carries the environment of the owner that copies the
+//! repeat ([`Item::outer`]): what its own template does not resolve, that
+//! owner's does, and that owner's overrides apply before the item's. So a picture
 //! template serves a sized and an unsized `use`, a main and a placed
 //! instance alike: the spec's (definition, notation, sized, main) key is
 //! (definition, notation) here, with sized and main in the environment.
@@ -58,7 +64,8 @@ pub(crate) enum Source {
     Body(NodeId),
     /// A definition's template node for one notation.
     Picture(NodeId),
-    /// A repeat or conditional.
+    /// A repeat or conditional, as the source has it: an authored one, or
+    /// the definition-local node a derived one copies.
     Collection(NodeId),
 }
 
@@ -106,17 +113,28 @@ pub(crate) struct Template {
 }
 
 /// One owner, as its template's references resolve against it.
-pub(crate) struct Env<'a> {
+pub(crate) struct Env {
     /// The entity, `use` or item scope.
     pub(crate) owner: NodeId,
     /// The entity a picture figures; `None` in a main.
     pub(crate) entity: Option<NodeId>,
     pub(crate) sized: bool,
-    /// A collection item's key.
-    pub(crate) key: &'a str,
+    /// A collection item.
+    pub(crate) item: Option<Item>,
     /// The overrides reaching the owner's copies: (target, leaf, value),
     /// weakest first.
     pub(crate) overrides: Vec<(NodeId, LeafPath, Value)>,
+}
+
+/// A collection item's part of its environment.
+pub(crate) struct Item {
+    /// The repeat whose item this is: a derived one is a copy of the
+    /// template's [`Source::Collection`] node.
+    pub(crate) repeat: NodeId,
+    pub(crate) key: String,
+    /// A derived repeat's: the template that copies it and the
+    /// environment of that copy's owner.
+    pub(crate) outer: Option<(Rc<Template>, Rc<Env>)>,
 }
 
 fn any_leaf() -> LeafPath {
@@ -256,28 +274,70 @@ impl Template {
         })
     }
 
-    /// Repeat (or conditional) `r`'s template, from its prototype `nodes`
-    /// (id, parent, type, order, facets; parents first) and their
-    /// relations (`expand::template_of_repeat`).
-    pub(crate) fn collection(r: NodeId, nodes: Vec<expand::TemplateNode>, rels: Vec<Relation>) -> Template {
-        let after = nodes.iter().filter(|t| t.1 == r).map(|t| t.3.clone()).max().unwrap_or_else(OrderKey::first);
-        let inside: BTreeSet<NodeId> = nodes.iter().map(|t| t.0).collect();
-        let out: Vec<TNode> = nodes
+    /// Authored repeat (or conditional) `r`'s template: its children that
+    /// are not items, and their subtrees, parents first, with the
+    /// relations from them. An override is the repeat's own opinion about
+    /// one item's copy, not part of what items copy.
+    pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
+        let mut nodes = Vec::new();
+        let mut rels = Vec::new();
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+        while let Some(n) = stack.pop() {
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
+            rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
+            stack.extend(doc.children(n).iter().rev().copied().filter(|c| !c.is_expanded()));
+        }
+        Template::collection(r, nodes, rels)
+    }
+
+    /// The template of a copy of `outer`'s node `l`, a repeat or
+    /// conditional: `outer`'s nodes under `l`, and the relations from
+    /// them `outer` derives (a picture's `figures`; all of a collection's).
+    pub(crate) fn sub(outer: &Template, l: NodeId) -> Template {
+        let mut under = BTreeSet::from([l]);
+        let mut nodes = Vec::new();
+        let mut rels = Vec::new();
+        for n in &outer.nodes {
+            if !under.contains(&n.parent) {
+                continue;
+            }
+            under.insert(n.local);
+            rels.extend(n.figures.clone());
+            nodes.push(TNode::new(n.local, n.parent, n.ty, n.order.clone(), n.facets.clone()));
+        }
+        rels.extend(outer.rels.iter().filter(|x| x.from != l && under.contains(&x.from)).cloned());
+        Template::collection(l, nodes, rels)
+    }
+
+    fn collection(r: NodeId, nodes: Vec<TNode>, rels: Vec<Relation>) -> Template {
+        let after = nodes.iter().filter(|t| t.parent == r).map(|t| t.order.clone()).max().unwrap_or_else(OrderKey::first);
+        let inside: BTreeSet<NodeId> = nodes.iter().map(|t| t.local).collect();
+        let nodes = nodes
             .into_iter()
-            .map(|(id, parent, ty, order, facets)| {
-                let mut t = TNode::new(id, parent, ty, order, facets);
+            .map(|mut t| {
                 // An override of an item's copy names the authored node
                 // the template node copies.
-                t.target = id.path().last().copied().unwrap_or(id);
+                t.target = t.local.path().last().copied().unwrap_or(t.local);
                 t
             })
             .collect();
-        Template::classify(Source::Collection(r), out, rels, after, |id| inside.contains(&id).then_some(Ref::Inside))
+        Template::classify(Source::Collection(r), nodes, rels, after, |id| inside.contains(&id).then_some(Ref::Inside))
+    }
+
+    /// The repeat or conditional a collection's items are of, as the
+    /// source has it.
+    pub(crate) fn repeat_node(&self) -> Option<NodeId> {
+        match self.source {
+            Source::Collection(r) => Some(r),
+            _ => None,
+        }
     }
 
     /// How `leaf`, as the template has it, reads from `env`'s copy.
-    pub(crate) fn follow(&self, env: &Env<'_>, leaf: Leaf) -> Leaf {
+    pub(crate) fn follow(&self, env: &Env, leaf: Leaf) -> Leaf {
         if let Source::Collection(r) = self.source {
+            let item = env.item.as_ref().expect("an item's environment");
             if leaf.node == r {
                 let item = |f: &str| Leaf { node: env.owner, path: LeafPath::new(FacetKind::Item, f).expect("declared leaf") };
                 if leaf.path == LeafPath::new(FacetKind::Repeat, "item").expect("declared leaf") {
@@ -292,9 +352,10 @@ impl Template {
                     return item(leaf.path.field);
                 }
             }
-            return match self.refs.get(&leaf.node) {
-                Some(Ref::Inside) => NodeId::item(r, env.key, leaf.node).map_or(leaf, |node| Leaf { node, path: leaf.path }),
-                _ => leaf,
+            return match (self.refs.get(&leaf.node), &item.outer) {
+                (Some(Ref::Inside), _) => NodeId::item(item.repeat, &item.key, leaf.node).map_or(leaf, |node| Leaf { node, path: leaf.path }),
+                (_, Some((t, outer))) => t.follow(outer, leaf),
+                (_, None) => leaf,
             };
         }
         let to = match self.refs.get(&leaf.node) {
@@ -313,14 +374,14 @@ impl Template {
 
     /// Where a node the template names (a relation's far end, a node held
     /// as a constant) is for `env`'s copy.
-    pub(crate) fn follow_node(&self, env: &Env<'_>, node: NodeId) -> NodeId {
+    pub(crate) fn follow_node(&self, env: &Env, node: NodeId) -> NodeId {
         self.follow(env, Leaf { node, path: any_leaf() }).node
     }
 
     /// Node `i`'s facets as `env`'s copy has them: references resolved,
     /// an `in` port reading the owner's argument, the owner's overrides
     /// applied (component-model.md §5.3).
-    pub(crate) fn materialise(&self, i: usize, env: &Env<'_>) -> Vec<Facet> {
+    pub(crate) fn materialise(&self, i: usize, env: &Env) -> Vec<Facet> {
         let n = &self.nodes[i];
         let mut facets = n.facets.clone();
         if n.rewrite {
@@ -348,21 +409,29 @@ impl Template {
                 }
             }
         }
-        for (target, leaf, value) in &env.overrides {
-            if *target != n.target {
+        apply_overrides(n, env, &mut facets);
+        facets
+    }
+}
+
+/// `env`'s overrides of node `n`'s copy: an item's outer owner's first.
+fn apply_overrides(n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
+    if let Some(Item { outer: Some((_, outer)), .. }) = &env.item {
+        apply_overrides(n, outer, facets);
+    }
+    for (target, leaf, value) in &env.overrides {
+        if *target != n.target {
+            continue;
+        }
+        if !facets.iter().any(|f| f.kind() == leaf.facet) {
+            if !n.ty.spec().allows(leaf.facet) {
                 continue;
             }
-            if !facets.iter().any(|f| f.kind() == leaf.facet) {
-                if !n.ty.spec().allows(leaf.facet) {
-                    continue;
-                }
-                facets.push(leaf.facet.default_facet());
-            }
-            if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
-                let _ = f.set(leaf.field, Slot::Const(value.clone()));
-            }
+            facets.push(leaf.facet.default_facet());
         }
-        facets
+        if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
+            let _ = f.set(leaf.field, Slot::Const(value.clone()));
+        }
     }
 }
 
@@ -371,6 +440,8 @@ impl Template {
 pub(crate) struct Templates {
     bodies: HashMap<NodeId, Rc<Template>>,
     pictures: HashMap<(NodeId, String), Option<Rc<Template>>>,
+    /// Each repeat's or conditional's, by the node the template names it.
+    collections: HashMap<NodeId, Rc<Template>>,
     /// Each node's own overrides (`expand::own_overrides`).
     own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
 }
@@ -388,6 +459,17 @@ impl Templates {
         let t = definition::template_of(doc, def, notation).map(|template| Rc::new(Template::picture(doc, def, template)));
         self.pictures.insert(key, t.clone());
         t
+    }
+
+    /// Authored repeat `r`'s template.
+    pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Rc<Template> {
+        self.collections.entry(r).or_insert_with(|| Rc::new(Template::repeat(doc, r))).clone()
+    }
+
+    /// The template of a copy of `outer`'s repeat `l`. `l` is in one
+    /// template only, so it names the sub-template.
+    pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Rc<Template> {
+        self.collections.entry(l).or_insert_with(|| Rc::new(Template::sub(outer, l))).clone()
     }
 
     /// The overrides that reach `owner`'s copies, as (target, leaf, value),

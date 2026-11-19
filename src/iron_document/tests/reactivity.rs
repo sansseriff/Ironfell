@@ -861,3 +861,30 @@ fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_doc
     let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
     Ok((plan.ops, plan.summary.join("\n")))
 }
+
+/// Phase 3's exit (reactive-engine.md §17): a document with a trace and an
+/// accumulator, both at rest, asks `advance` for nothing: no wake, nothing
+/// to redraw. A click wakes it until the pulse has passed.
+#[test]
+fn a_trace_and_an_accumulator_at_rest_schedule_no_wake() {
+    let (mut store, _, n) = sheet(
+        r##"<let id="$lit" name="lit" value="false"/>
+        <trace id="$tr" name="tr" of="{= $lit}" delay="1"/>
+        <accumulate id="$acc" name="acc" initial="10" next="{= $acc}"/>"##,
+    );
+    let none = std::collections::BTreeSet::new();
+    for t in [0.0, 0.1, 0.2] {
+        store.advance(t, &none);
+    }
+    let idle = store.advance(0.3, &none);
+    assert_eq!((idle.wake.next, idle.wake.live.len(), idle.changed), (None, 0, false));
+    store.apply(tx("on", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
+    let busy = store.advance(0.4, &none);
+    assert_eq!(busy.wake.next, Some(0.4));
+    assert!(!busy.wake.live.is_empty());
+    for t in [1.0, 1.5, 2.0, 2.1] {
+        store.advance(t, &none);
+    }
+    let rest = store.advance(2.2, &none);
+    assert_eq!((rest.wake.next, rest.wake.live.len(), rest.changed), (None, 0, false));
+}

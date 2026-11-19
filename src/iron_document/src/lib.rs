@@ -276,6 +276,7 @@ struct Saved {
     layout_preview: Option<layout::Preview>,
     time_errors: BTreeMap<NodeId, String>,
     physics_error: Option<String>,
+    machines_unsettled: Option<expand::Problem>,
     pending: Changes,
 }
 
@@ -299,6 +300,7 @@ impl Saved {
             layout_preview: s.layout_preview.clone(),
             time_errors: s.time_errors.clone(),
             physics_error: s.physics_error.clone(),
+            machines_unsettled: s.machines_unsettled.clone(),
             pending: s.pending.clone(),
         }
     }
@@ -321,6 +323,7 @@ impl Saved {
         s.layout_preview = self.layout_preview;
         s.time_errors = self.time_errors;
         s.physics_error = self.physics_error;
+        s.machines_unsettled = self.machines_unsettled;
         s.pending = self.pending;
     }
 }
@@ -368,6 +371,7 @@ pub struct StoreCore {
     /// the document's version alone.
     session_version: u64,
     physics_error: Option<String>,
+    machines_unsettled: Option<expand::Problem>,
     /// Each table's grid from the last layout (`layout.rs`, `table.rs`).
     tables: std::collections::BTreeMap<NodeId, table::Grid>,
     /// The built-in contexts with this document's `context` nodes over
@@ -530,6 +534,7 @@ impl StoreCore {
             fingers: Vec::new(),
             session_version: self.session_version,
             physics_error: self.physics_error.clone(),
+            machines_unsettled: self.machines_unsettled.clone(),
             tables: self.tables.clone(),
             contexts: self.contexts.clone(),
             layout_preview: None,
@@ -739,6 +744,7 @@ impl StoreCore {
             fingers: Vec::new(),
             session_version: 0,
             physics_error: None,
+            machines_unsettled: None,
             tables: Default::default(),
             contexts: None,
             layout_preview: None,
@@ -2264,6 +2270,7 @@ impl StoreCore {
         let mut out = self.expansion_problems.clone();
         out.extend(self.truncated.iter().cloned());
         out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
+        out.extend(self.machines_unsettled.iter().cloned());
         out
     }
 
@@ -2412,10 +2419,14 @@ impl StoreCore {
             self.machines.pinned = None;
         }
         // A machine driven by another's channel (`machine.at`) reads what
-        // that one publishes: go round again, at the same time, until
-        // nothing more moves, so a child is never a frame behind its parent.
+        // that one publishes: record and evaluate again, at the same time,
+        // until nothing more moves, so a child is never a frame behind its
+        // parent (reactive-engine.md §10.4: a round per link of the chain,
+        // at most `ROUNDS`; one still moving then is a problem).
+        const ROUNDS: usize = 8;
         let mut running = Vec::new();
-        for _ in 0..4 {
+        let mut moving = None;
+        for _ in 0..ROUNDS {
             let (values, now_running) = {
                 let reactive = &self.reactive;
                 let doc = Tree::of(&self.docs);
@@ -2423,11 +2434,14 @@ impl StoreCore {
                 self.machines.advance(doc, &read, now, self.time())
             };
             running = now_running;
-            if values == self.reactive.published_by(ProducerId::MACHINES) {
+            let shown = self.reactive.published_by(ProducerId::MACHINES);
+            moving = values.iter().find(|(l, v)| shown.get(l) != Some(v)).map(|(l, _)| l.node).or_else(|| shown.keys().find(|l| !values.contains_key(l)).map(|l| l.node));
+            if moving.is_none() {
                 break;
             }
             self.publish(ProducerId::MACHINES, values);
         }
+        self.machines_unsettled = moving.map(|node| expand::Problem { node, kind: "machine", message: format!("machines driving one another still change after {ROUNDS} rounds at one time") });
         running
     }
 

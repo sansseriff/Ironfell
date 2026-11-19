@@ -2264,6 +2264,34 @@ tests step one kind at a time. `next` is `Some(now)` while anything is live, els
 reference, `smoke.txt` and `regression.txt` unchanged, `fiber.txt` (five
 assertions), `pulses.txt` (four) and `idle.txt` (`changed 0`).
 
+**Phase 3, the rest (2026-11-19), and its exit.**
+- **Step 2, the scheduler: not built further, by decision.** Every time-dependent
+  thing in the store today reports itself while it moves (a trace while a change is
+  in flight, an accumulator while restless, a query while waiting, a machine while
+  running, presence and glides while they move, the playhead while it plays), so
+  `Wake { next: Some(now) }` while anything is live and `None` at rest is already
+  exact for the host, whose frame loop runs every frame. Times further ahead (a
+  trace's arrival with nothing drawn meanwhile, a query's debounce) would only let a
+  host sleep between frames; they wait for a host that does, and for phase 4, where
+  what is drawn decides what must run. The exit test passes:
+  `a_trace_and_an_accumulator_at_rest_schedule_no_wake`.
+- **Step 3, record then stabilise:** the machines' fixed 4 rounds are now up to 8
+  rounds at one time; a chain still moving after 8 is a `machine` problem on a node
+  still changing (`StoreCore::machines_unsettled`, in `problems()`). A trace with no
+  delay already passes its change through in the step that sees it (`step.rs`).
+- **Step 4, `now()`, `clock()` and clock providers: deferred.** They add a time
+  input that the graph tracks as a dependency and a clock-provider facet, which is
+  formula and authoring work (timeline.md §11's gap) that phase 3's exit does not
+  need. Left for its own change.
+- **Exit (§17):** `fiber.txt` (five assertions) and `pulses.txt` (four) pass; the
+  idle test passes, and `idle.txt` draws nothing at rest; machine transitions,
+  interrupted ones included, are the old player's (the machine suites unchanged:
+  the player itself did not change, only who calls it).
+- **Phase 3 is done** as far as its exit; what it leaves is above. **Next: phase 5's
+  first step** (a cluster solved only when something of it changed, in the old
+  engine first), ahead of phase 4: phase 5 does not depend on 3 or 4 (§17), and phase
+  4 now also carries lazy slots, validation from templates and D13.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

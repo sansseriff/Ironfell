@@ -2131,6 +2131,27 @@ document and builds what pays now, each step with its own design note and counci
     loads at its template until the next transaction solves (Sol). Saving solved
     copy poses belongs with phase 5's "the pose is state".
 
+- **Council round 4 on step 1 (2026-11-19): Claude Opus 5.5 7/10, GPT Sol 6.2
+  6/10.** Round 3 held; three narrower cases fixed, each with a test that fails with
+  its fix undone:
+  - **A transaction's own edit of a held copy's solver leaf is always written**
+    (Opus): moving a copy to its template's value, or to the override it already
+    had, left the wanted value as before, so the edit was dropped. `run` gives
+    `Owners::edit` the leaves its ops set, cleared once its expansion is done
+    (`moving_a_held_copy_to_the_value_already_wanted_moves_it`).
+  - **An edit landing on the solved pose is undone to it** (Sol): when what is
+    wanted for a held leaf changes, or the transaction edits it, expansion writes it
+    even unchanged, so `keep_solved` records the solved value for undo
+    (`undoing_an_edit_onto_a_fixed_copys_pose`).
+  - **An owner left with problems records no pieces** (Sol): a binding a failed
+    expansion could not install was recorded as wanted, and the retry kept the old
+    constant (`a_failed_expansion_does_not_record_what_it_wanted`).
+  - **Recorded, not fixed:** past the node budget, the full expansion's retry
+    recreates a held copy the incremental pass cut, at its template's value (Sol).
+    It needs the budget to cut a held copy; left with the budget path's other
+    costs (stage 1's exit notes).
+  - Step 1's council stops here: four rounds, the findings narrowing to these.
+
 - **2c stage 3, step 2: a definition edit keeps the copies it does not change
   (2026-11-19).** Each *piece* (an entity's body, a picture, an inner picture, an
   item) records the template and environment its last accepted expansion copied

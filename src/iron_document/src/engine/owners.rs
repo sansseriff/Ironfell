@@ -42,6 +42,9 @@ pub(crate) struct Owners {
     /// The copies a constraint cluster holds: expansion leaves the leaves
     /// the solver writes on them as they are (`solve::writes`).
     solved: BTreeSet<NodeId>,
+    /// The solver leaves of copies the current transaction's own ops set:
+    /// always written, whatever was wanted before (`Owners::edit`).
+    edited: BTreeSet<crate::Leaf>,
     /// What each piece's last accepted expansion copied: a copy it records
     /// as current is kept as it is (2c stage 3, step 2). An entry outlives
     /// its owner; a copy is kept only when it is there.
@@ -108,7 +111,7 @@ impl Owners {
             let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
             let held = held.min(expand::NODE_BUDGET);
             let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), &self.solved, &self.made.0, &troubled);
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.made.0, &troubled);
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -164,7 +167,7 @@ impl Owners {
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
             let room = room + self.held_under(Tree::of(docs), rs);
-            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, &self.solved, &self.made.0) else {
+            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, (&self.solved, &self.edited), &self.made.0) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -199,7 +202,7 @@ impl Owners {
     fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
         let owners = expand::top_owners(Tree::of(docs));
         let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, &self.solved, &self.made.0, &troubled);
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, (&self.solved, &self.edited), &self.made.0, &troubled);
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         delta.add(done);
@@ -232,7 +235,12 @@ impl Owners {
         for (read, o) in d.reads {
             self.readers.entry(read).or_default().insert(o);
         }
+        // A piece of an owner left with problems is not recorded: what it
+        // wanted may not be what its copies hold (a failed op).
         for (piece, t, env) in d.pieces {
+            if piece.path().first().is_some_and(|o| self.problems.contains_key(o)) {
+                continue;
+            }
             self.made.0.insert(piece, (t, env));
         }
     }
@@ -252,6 +260,14 @@ impl Owners {
     /// The copies a constraint cluster holds now (`solve::Clusters::copies`).
     pub(crate) fn hold(&mut self, solved: BTreeSet<NodeId>) {
         self.solved = solved;
+    }
+
+    /// The solver leaves of copies the transaction being applied sets
+    /// itself: an edit of a held copy reaches it even when what is wanted
+    /// for the leaf comes out as before (its template's value, or the
+    /// override it already had).
+    pub(crate) fn edit(&mut self, leaves: BTreeSet<crate::Leaf>) {
+        self.edited = leaves;
     }
 
     /// The copies a constraint cluster held when last told.

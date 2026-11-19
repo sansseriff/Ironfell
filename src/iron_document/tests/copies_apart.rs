@@ -671,3 +671,64 @@ fn a_fixed_copys_binding_replaced_by_a_constant() {
     store.apply(tx("constant, and move the sibling", vec![Op::Set { id: n["row"], path: x, slot: num(15.0) }, Op::Set { id: n["s"], path: x, slot: num(80.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(x_of(&store, copy), 15.0);
 }
+
+/// A held copy moved to its template's value, or to the override it
+/// already has, gets there: the transaction's own edit is written even
+/// though what is wanted for the leaf comes out as before.
+#[test]
+fn moving_a_held_copy_to_the_value_already_wanted_moves_it() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<ellipse id="$p" x="-300" y="0" rx="5" ry="5"/><group id="$r" repeat.count="1"><rect x="0" y="0" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let c = built.named;
+    let rels = store.authored().next_relation_ids(3);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], c["fix"], n["p"], "a"), constrains(rels[1], c["d"], n["p"], "a"), constrains(rels[2], c["d"], copy, "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let y = path("transform2d.y");
+    store.apply(tx("up", vec![Op::Set { id: copy, path: y, slot: num(30.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let before = x_of(&store, copy);
+    store.apply(tx("to the template's x", vec![Op::Set { id: copy, path: path("transform2d.x"), slot: num(0.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!((x_of(&store, copy) - before).abs() > 1.0, "the copy did not move: {before} → {}", x_of(&store, copy));
+}
+
+/// A fixed copy whose template edit lands on its solved pose: undo puts it
+/// back on that pose, not at the template's old value.
+#[test]
+fn undoing_an_edit_onto_a_fixed_copys_pose() {
+    for on_copy in [false, true] {
+        let (mut store, comp) = sheet();
+        let n = draw(&mut store, comp, r#"<group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+        let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+        let p = pin(&mut store, comp, copy, [-40.0, 0.0]);
+        fix(&mut store, comp, copy);
+        store.apply(tx("unpin", vec![Op::Delete { id: p }])).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(x_of(&store, copy), -40.0);
+        let target = if on_copy { copy } else { n["row"] };
+        store.apply(tx("edit onto the pose", vec![Op::Set { id: target, path: path("transform2d.x"), slot: num(-40.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+        store.undo(0).unwrap().unwrap();
+        assert_eq!(x_of(&store, copy), -40.0, "on the copy: {on_copy}");
+    }
+}
+
+/// An expansion that failed records nothing: once its cause is gone, the
+/// binding it could not install reaches the held copy.
+#[test]
+fn a_failed_expansion_does_not_record_what_it_wanted() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<let id="$k" value="15"/><group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    let p = pin(&mut store, comp, copy, [-40.0, 0.0]);
+    fix(&mut store, comp, copy);
+    store.apply(tx("unpin", vec![Op::Delete { id: p }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = path("transform2d.x");
+    let k = n["k"];
+    let facets: Vec<_> = store.tree().facets_of(k).cloned().collect();
+    let parent = store.tree().live(k).unwrap().parent;
+    let order = store.tree().live(k).unwrap().order.clone();
+    let bound = store.apply(tx("bind, and delete what it reads", vec![Op::Set { id: n["row"], path: x, slot: Slot::Bound(Expr::parse(&format!("{k}.let.value")).unwrap()) }, Op::Delete { id: k }]));
+    if bound.is_err() {
+        return;
+    }
+    store.apply(tx("put it back", vec![Op::Create { id: k, ty: ty("let"), parent, order, facets }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(store.tree().leaf(copy, x).and_then(Slot::expr).is_some(), "{:?}", store.tree().leaf(copy, x));
+}

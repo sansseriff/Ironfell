@@ -2988,7 +2988,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&tx, &mut expanded, &full_inverse);
-        let held = self.keep_solved(&mut tx, solved);
+        let held = self.keep_solved(&mut tx, solved, &expanded);
         let solver = match self.post_apply(&mut tx, exact, &held) {
             Ok(s) => s,
             Err(e) => {
@@ -3052,7 +3052,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
-        let held = self.keep_solved(&mut applied, solved);
+        let held = self.keep_solved(&mut applied, solved, &expanded);
         self.apply_recorded(&mut applied, recorded, &mut full_inverse);
         let now = self.clusters.copies();
         let _ = self.release(&mut applied, &held, &now, 0);
@@ -3143,7 +3143,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                let held = self.keep_solved(&mut applied, solved);
+                let held = self.keep_solved(&mut applied, solved, &expanded);
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
                 let now = self.clusters.copies();
                 let _ = self.release(&mut applied, &held, &now, 0);
@@ -3169,11 +3169,17 @@ impl StoreCore {
     /// solved value back after the expansion it undoes (`apply_recorded`),
     /// and after undoing any solver write of the same transaction, which
     /// comes later in the inverse. Returns the leaves held.
-    fn keep_solved(&mut self, tx: &mut Transaction, solved: Vec<(Leaf, Slot)>) -> Vec<Leaf> {
+    fn keep_solved(&mut self, tx: &mut Transaction, solved: Vec<(Leaf, Slot)>, expanded: &[Op]) -> Vec<Leaf> {
         let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
+        // A leaf expansion wrote, even to the value it had: undo's
+        // expansion writes it again, so the restore is needed.
+        let written: BTreeSet<Leaf> = expanded.iter().filter_map(|op| match op {
+            Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }),
+            _ => None,
+        }).collect();
         let doc = Tree::of(&self.docs);
         for (leaf, was) in solved {
-            if doc.live(leaf.node).and_then(|_| doc.leaf(leaf.node, leaf.path)) != Some(&was) {
+            if written.contains(&leaf) || doc.live(leaf.node).and_then(|_| doc.leaf(leaf.node, leaf.path)) != Some(&was) {
                 tx.inverse.push(Op::Set { id: leaf.node, path: leaf.path, slot: was });
             }
         }
@@ -3342,6 +3348,12 @@ impl StoreCore {
         } else {
             Vec::new()
         };
+        // A solver leaf of a copy this transaction sets itself is written
+        // even where what is wanted for it comes out as before.
+        self.owners.edit(input.ops.iter().filter_map(|op| match op {
+            Op::Set { id, path, .. } if id.is_expanded() && solve::writes(*path) => Some(Leaf { node: *id, path: *path }),
+            _ => None,
+        }).collect());
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
         input.ops = expand::translate(Tree::of(&self.docs), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
@@ -3396,6 +3408,8 @@ impl StoreCore {
                 problems = Some(delta);
             }
         }
+        // Only this transaction's own expansion writes its edits.
+        self.owners.edit(BTreeSet::new());
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
             // transaction holds.

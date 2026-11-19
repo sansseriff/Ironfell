@@ -2955,8 +2955,10 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         self.after_transaction(&applied, &mut expanded, &full_inverse);
-        self.keep_solved(&mut applied, solved);
+        let held = self.keep_solved(&mut applied, solved);
         self.apply_recorded(&mut applied, recorded, &mut full_inverse);
+        let now = self.clusters.copies();
+        let _ = self.release(&mut applied, &held, &now, 0);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -2984,7 +2986,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved: _ }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -2996,6 +2998,10 @@ impl StoreCore {
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
+                // Undo has no solve: a copy it leaves in no cluster is let go.
+                let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
+                let now = self.clusters.copies();
+                let _ = self.release(&mut applied, &held, &now, 0);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -3040,8 +3046,10 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.keep_solved(&mut applied, solved);
+                let held = self.keep_solved(&mut applied, solved);
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
+                let now = self.clusters.copies();
+                let _ = self.release(&mut applied, &held, &now, 0);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
@@ -3089,31 +3097,9 @@ impl StoreCore {
             constraint::validate_all(Tree::of(&self.docs), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
         }
         let clusters = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
-        // A copy the solver held that no cluster holds any more goes back
-        // to what its owner's expansion wants: the solver's value was the
-        // solver's, and nothing else rewrites it. Written as the solver
-        // writes, so undo puts the solved value back. A copy still in a
-        // cluster keeps it, as a variable or as a fixed or driven input.
-        let released: Vec<Leaf> = {
-            let doc = Tree::of(&self.docs);
-            held.iter().filter(|l| doc.is_live(l.node) && clusters.containing(l.node).is_none()).copied().collect()
-        };
-        if !released.is_empty() {
-            let mut changed = Vec::new();
-            for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
-                if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
-                    continue;
-                }
-                let op = Op::Set { id: leaf.node, path: leaf.path, slot };
-                let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).map_err(|e| vec![e])?;
-                self.geometry.note_ops([&op]);
-                tx.derived_ops.push(op);
-                tx.inverse.extend(inverse);
-                changed.push(leaf);
-            }
-            self.reactive.invalidate(Tree::of(&self.docs), changed);
-        }
-        self.owners.hold(clusters.copies());
+        let now = clusters.copies();
+        self.release(tx, held, &now, last).map_err(|e| vec![e])?;
+        self.owners.hold(now);
         self.clusters = clusters.clone();
         if clusters.list.is_empty() {
             return Ok(None);
@@ -3184,6 +3170,7 @@ impl StoreCore {
     /// overrides. A copy the transaction left gone takes none.
     fn apply_recorded(&mut self, tx: &mut Transaction, recorded: Vec<Op>, full_inverse: &mut Vec<Op>) {
         let mut changed = Vec::new();
+        let mut applied = Vec::new();
         for op in recorded {
             let Op::Set { id, path, .. } = &op else { continue };
             let leaf = Leaf { node: *id, path: *path };
@@ -3195,12 +3182,50 @@ impl StoreCore {
                 changed.push(leaf);
                 tx.inverse.extend(inverse.iter().cloned());
                 full_inverse.extend(inverse);
-                tx.derived_ops.push(op);
+                applied.push(op);
             }
         }
         if !changed.is_empty() {
+            // A recorded write can put a binding back: the graph reads it.
+            self.regraph(applied.iter());
             self.reactive.invalidate(Tree::of(&self.docs), changed);
         }
+        tx.derived_ops.extend(applied);
+    }
+
+    /// Let go of the copies whose solver leaves `held` were held before the
+    /// transaction and that no cluster holds `now`: each such leaf goes back
+    /// to what its owner's expansion wants, written as the solver writes,
+    /// so undo puts the solved value back. A copy still in a cluster keeps
+    /// it, as a variable or as a fixed or driven input.
+    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], now: &BTreeSet<NodeId>, at: usize) -> Result<(), ApplyError> {
+        let released: Vec<Leaf> = {
+            let doc = Tree::of(&self.docs);
+            held.iter().filter(|l| doc.is_live(l.node) && !now.contains(&l.node)).copied().collect()
+        };
+        if released.is_empty() {
+            return Ok(());
+        }
+        let mut changed = Vec::new();
+        let mut ops = Vec::new();
+        for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
+            if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
+                continue;
+            }
+            let op = Op::Set { id: leaf.node, path: leaf.path, slot };
+            let inverse = op::apply_op(&mut self.docs, at, &op, tx.version)?;
+            self.geometry.note_ops([&op]);
+            tx.inverse.extend(inverse);
+            changed.push(leaf);
+            ops.push(op);
+        }
+        if !ops.is_empty() {
+            // The template's value may be a binding: the graph reads it.
+            self.regraph(ops.iter());
+            self.reactive.invalidate(Tree::of(&self.docs), changed);
+        }
+        tx.derived_ops.extend(ops);
+        Ok(())
     }
 
     /// Apply the ops, expand, and check; on success the document holds the
@@ -3243,7 +3268,7 @@ impl StoreCore {
                 .held()
                 .iter()
                 .filter(|&&n| doc.is_live(n))
-                .flat_map(|&n| ["x", "y", "rot"].map(|f| Leaf { node: n, path: LeafPath::new(FacetKind::Transform2d, f).expect("declared leaf") }))
+                .flat_map(|&n| solve::TRANSFORM_LEAVES.map(|f| Leaf { node: n, path: LeafPath::new(FacetKind::Transform2d, f).expect("declared leaf") }))
                 .filter_map(|l| doc.leaf(l.node, l.path).map(|s| (l, s.clone())))
                 .collect()
         };

@@ -119,7 +119,7 @@ pub struct ClusterResult {
     pub culprits: Vec<NodeId>,
 }
 
-const TRANSFORM_LEAVES: [&str; 3] = ["x", "y", "rot"];
+pub(crate) const TRANSFORM_LEAVES: [&str; 3] = ["x", "y", "rot"];
 
 fn t2(field: &str) -> LeafPath {
     LeafPath::new(FacetKind::Transform2d, field).expect("declared")

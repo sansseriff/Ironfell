@@ -572,3 +572,102 @@ fn a_template_edit_keeps_a_fixed_copys_solved_position() {
     assert_eq!(x_of(&store, copy), -40.0);
     assert_eq!(store.resolved(copy, path("size.w")), Some(Value::Number(9.0)));
 }
+
+/// Moving a held copy moves it: the edit becomes an override, which
+/// changes what is wanted for the leaf, so it reaches the copy.
+#[test]
+fn moving_a_held_copy_moves_it() {
+    let (mut store, _, copy, _, _, moved) = tied();
+    store.apply(tx("move the copy", vec![Op::Set { id: copy, path: path("transform2d.x"), slot: num(moved - 80.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!((x_of(&store, copy) - moved).abs() > 1.0, "the copy did not move: {}", x_of(&store, copy));
+}
+
+/// A template edit of a leaf reaches a held copy: rotation, which a
+/// distance constraint never moves, and a new binding of a bound leaf.
+#[test]
+fn a_template_edit_of_a_held_leaf_reaches_the_copy() {
+    let (mut store, _, copy, _, _, _) = tied();
+    let local = *copy.path().last().unwrap();
+    let rot = path("transform2d.rot");
+    store.apply(tx("turn the definition", vec![Op::Set { id: local, path: rot, slot: num(30.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.resolved(copy, rot), Some(Value::Number(30.0)));
+
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<ellipse id="$p" x="-300" y="0" rx="5" ry="5"/><group id="$r" repeat.count="1"><rect id="$row" x="{= 10}" y="5" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="400"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let c = built.named;
+    let rels = store.authored().next_relation_ids(3);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], c["fix"], n["p"], "a"), constrains(rels[1], c["d"], n["p"], "a"), constrains(rels[2], c["d"], copy, "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = path("transform2d.x");
+    store.apply(tx("rebind", vec![Op::Set { id: n["row"], path: x, slot: Slot::Bound(Expr::parse("20").unwrap()) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.resolved(copy, x), Some(Value::Number(20.0)));
+}
+
+/// A held copy let go in the transaction that binds its template: the
+/// binding reaches it, and the graph reads it from then on, through undo
+/// and redo.
+#[test]
+fn a_released_copy_reads_its_templates_binding() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<let id="$k" value="70"/><group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    let p = pin(&mut store, comp, copy, [-40.0, 0.0]);
+    let x = path("transform2d.x");
+    store.apply(tx("bind, unpin", vec![Op::Set { id: n["row"], path: x, slot: Slot::Bound(Expr::parse(&format!("{}.let.value", n["k"])).unwrap()) }, Op::Delete { id: p }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.resolved(copy, x), Some(Value::Number(70.0)));
+    store.undo(0).unwrap().unwrap();
+    store.redo(0).unwrap().unwrap();
+    store.apply(tx("k", vec![Op::Set { id: n["k"], path: path("let.value"), slot: num(90.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(store.resolved(copy, x), Some(Value::Number(90.0)));
+}
+
+/// Undoing a transaction that constrained a copy and edited its template
+/// puts the copy back at its template's value: undo lets it go.
+#[test]
+fn undoing_constraining_a_copy_and_editing_its_template() {
+    for first in ["pin", "fix"] {
+        let (mut store, comp) = sheet();
+        let n = draw(&mut store, comp, r#"<group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+        let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+        let built = markup::ops(&format!(r#"<constraint id="$c" kind="{first}" value="0"/>"#), Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+        let mut link = constrains(store.authored().next_relation_ids(1)[0], built.named["c"], copy, "a");
+        if let Op::Link { rel } = &mut link
+            && first == "pin"
+        {
+            rel.data.insert("at".to_owned(), Value::Vec2([-40.0, 0.0]));
+        }
+        let ops: Vec<Op> = built.ops.into_iter().chain([link, Op::Set { id: n["row"], path: path("transform2d.x"), slot: num(25.0) }]).collect();
+        store.apply(tx("constrain and move the template", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+        store.undo(0).unwrap().unwrap();
+        assert_eq!(x_of(&store, copy), 0.0, "{first}");
+        store.apply(tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str("x".into())) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    }
+}
+
+/// Undoing a template edit of a pinned copy puts it back where the solver
+/// had it, not at the edit's value.
+#[test]
+fn undoing_a_template_edit_of_a_pinned_copy() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<group id="$r" repeat.count="1"><rect id="$row" x="0" y="0" w="5" h="5"/></group>"#);
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    pin(&mut store, comp, copy, [-40.0, 0.0]);
+    store.apply(tx("move the template", vec![Op::Set { id: n["row"], path: path("transform2d.x"), slot: num(15.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(x_of(&store, copy), -40.0);
+}
+
+/// A fixed copy whose template binding is replaced by a constant takes the
+/// constant: what is wanted for the leaf changed.
+#[test]
+fn a_fixed_copys_binding_replaced_by_a_constant() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<rect id="$s" x="15" y="0" w="5" h="5"/><group id="$r" repeat.count="1"><rect id="$row" y="0" w="5" h="5"/></group>"#);
+    let x = path("transform2d.x");
+    store.apply(tx("bind", vec![Op::Set { id: n["row"], path: x, slot: Slot::Bound(Expr::parse(&format!("{}.transform2d.x", n["s"])).unwrap()) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let copy = store.tree().children(NodeId::item_scope(n["r"], "0").unwrap())[0];
+    fix(&mut store, comp, copy);
+    store.apply(tx("constant, and move the sibling", vec![Op::Set { id: n["row"], path: x, slot: num(15.0) }, Op::Set { id: n["s"], path: x, slot: num(80.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(x_of(&store, copy), 15.0);
+}

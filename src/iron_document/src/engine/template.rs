@@ -344,6 +344,12 @@ t.figures = Some(r.clone());
         Some(self.nodes.iter().map(|n| old.get(&n.local).is_some_and(|o| *o == n)).collect())
     }
 
+    /// Node `local`'s copy for `env`, if this template has the node.
+    pub(crate) fn materialise_local(&self, local: NodeId, env: &Env) -> Option<Vec<Facet>> {
+        let i = self.nodes.iter().position(|n| n.local == local)?;
+        Some(self.materialise(i, env))
+    }
+
     /// Whether a kept copy of node `i` must be read for what it derives: an
     /// instance, a picture, or a repeat (`want_scopes`).
     pub(crate) fn derives(&self, i: usize) -> bool {
@@ -574,6 +580,8 @@ pub(crate) struct Templates<'c> {
     cache: &'c mut TemplateCache,
     /// The pieces' records, when copies made as recorded may be kept.
     made: Option<&'c Pieces>,
+    /// The copies a constraint cluster holds (`Owners::held`).
+    held: Option<&'c std::collections::BTreeSet<NodeId>>,
     own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
     /// `Template::same_nodes` for each (recorded, current) pair compared
     /// this pass, by address.
@@ -582,12 +590,22 @@ pub(crate) struct Templates<'c> {
 
 impl<'c> Templates<'c> {
     pub(crate) fn new(cache: &'c mut TemplateCache) -> Templates<'c> {
-        Templates { cache, made: None, own: HashMap::new(), same: HashMap::new() }
+        Templates { cache, made: None, held: None, own: HashMap::new(), same: HashMap::new() }
     }
 
     /// A pass that may keep copies their piece's record says are current.
-    pub(crate) fn recorded(cache: &'c mut TemplateCache, made: &'c Pieces) -> Templates<'c> {
-        Templates { cache, made: Some(made), own: HashMap::new(), same: HashMap::new() }
+    pub(crate) fn recorded(cache: &'c mut TemplateCache, made: &'c Pieces, held: &'c std::collections::BTreeSet<NodeId>) -> Templates<'c> {
+        Templates { cache, made: Some(made), held: Some(held), own: HashMap::new(), same: HashMap::new() }
+    }
+
+    /// What piece `piece`'s last accepted expansion copied.
+    pub(crate) fn record(&self, piece: NodeId) -> Option<&'c (Arc<Template>, Arc<Env>)> {
+        self.made?.get(&piece)
+    }
+
+    /// Whether a constraint cluster holds copy `id`.
+    pub(crate) fn held(&self, id: NodeId) -> bool {
+        self.held.is_some_and(|h| h.contains(&id))
     }
 
     /// Which of `t`'s nodes piece `piece` copies as its last applied

@@ -419,7 +419,7 @@ pub(crate) fn expand(docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op
     let Whole { nodes: want, rels: want_rels, mut problems } = wanted(Tree::of(docs), counts);
     let have: Vec<NodeId> = Tree::of(docs).expanded_ids().filter(|id| Tree::of(docs).is_live(*id)).collect();
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.is_expanded()).cloned().collect();
-    let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems, &BTreeSet::new(), &std::collections::HashSet::new());
+    let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems, &BTreeSet::new(), &std::collections::HashSet::new(), &HashMap::new());
     sort_problems(&mut problems);
     (ops, problems)
 }

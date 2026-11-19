@@ -46,6 +46,13 @@ mod oracle;
 #[cfg(feature = "differential")]
 pub(crate) use oracle::expand;
 
+/// One piece being wanted: which of its template's nodes it may keep, and
+/// what its last accepted expansion copied.
+struct Piece {
+    same: Option<std::rc::Rc<[bool]>>,
+    record: Option<(Arc<Template>, Arc<Env>)>,
+}
+
 /// One node an instance should have.
 #[derive(Debug, PartialEq)]
 struct Want {
@@ -176,11 +183,15 @@ struct Wanted {
     /// Each piece wanted: its owner, template and environment, recorded
     /// once the expansion is accepted (`Owners::apply`).
     pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
+    /// A held copy made again: its facets as its piece's last accepted
+    /// expansion made them. A leaf the solver writes keeps the solver's
+    /// value unless what is wanted for it changed since (`apply_wanted`).
+    was: HashMap<NodeId, Vec<Facet>>,
 }
 
 impl Wanted {
     fn new(cap: usize) -> Wanted {
-        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new(), root: None, reads: BTreeSet::new(), origins: HashMap::new(), keep: false, kept: HashSet::new(), pieces: Vec::new() }
+        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new(), root: None, reads: BTreeSet::new(), origins: HashMap::new(), keep: false, kept: HashSet::new(), pieces: Vec::new(), was: HashMap::new() }
     }
 
     /// Want a node, within the document's budget of derived nodes.
@@ -199,18 +210,25 @@ impl Wanted {
 
     /// Piece `owner` copies `t` in `env`: recorded, and which of `t`'s
     /// nodes it may keep as they are (`Templates::kept`).
-    fn piece(&mut self, cache: &mut Templates<'_>, owner: NodeId, t: &Arc<Template>, env: &Arc<Env>) -> Option<std::rc::Rc<[bool]>> {
+    fn piece(&mut self, cache: &mut Templates<'_>, owner: NodeId, t: &Arc<Template>, env: &Arc<Env>) -> Piece {
         self.pieces.push((owner, t.clone(), env.clone()));
-        if self.keep { cache.kept(owner, t, env) } else { None }
+        Piece { same: if self.keep { cache.kept(owner, t, env) } else { None }, record: cache.record(owner).cloned() }
     }
 
     /// The facets of copy `id` of `t`'s node `i`: kept as it is when `same`
     /// says it may be and it is there (read from the document only where
     /// what it derives is needed), made otherwise.
-    fn copy(&mut self, doc: Tree<'_>, same: &Option<std::rc::Rc<[bool]>>, t: &Template, i: usize, id: NodeId, env: &Env) -> Vec<Facet> {
-        if same.as_ref().is_some_and(|s| s[i]) && doc.is_live(id) {
+    #[allow(clippy::too_many_arguments)]
+    fn copy(&mut self, doc: Tree<'_>, cache: &Templates<'_>, piece: &Piece, t: &Template, i: usize, id: NodeId, env: &Env) -> Vec<Facet> {
+        if piece.same.as_ref().is_some_and(|s| s[i]) && doc.is_live(id) {
             self.kept.insert(id);
             return if t.derives(i) { doc.facets_of(id).cloned().collect() } else { Vec::new() };
+        }
+        if cache.held(id)
+            && let Some((was_t, was_env)) = &piece.record
+            && let Some(was) = was_t.materialise_local(t.nodes[i].local, was_env)
+        {
+            self.was.insert(id, was);
         }
         t.materialise(i, env)
     }
@@ -444,10 +462,12 @@ pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stam
     let mut problems: Vec<Problem> = Vec::new();
     let mut kept: HashSet<NodeId> = HashSet::new();
     let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
-    let mut cache = Templates::recorded(templates, made);
+    let mut was: HashMap<NodeId, Vec<Facet>> = HashMap::new();
+    let mut cache = Templates::recorded(templates, made, solved);
     for &owner in owners {
         let mut w = wanted_for(Tree::of(docs), owner, counts, room, &mut cache, !troubled.contains(&owner));
         kept.extend(std::mem::take(&mut w.kept));
+        was.extend(std::mem::take(&mut w.was));
         out.pieces.append(&mut w.pieces);
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
@@ -466,7 +486,7 @@ pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stam
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
-    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, solved, &kept);
+    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, solved, &kept, &was);
     for o in owners {
         out.problems.insert(*o, Vec::new());
     }
@@ -536,7 +556,7 @@ pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp
     out.root = Some(owner);
     out.keep = true;
     {
-        let mut cache = Templates::recorded(templates, made);
+        let mut cache = Templates::recorded(templates, made, solved);
         let tree = Tree::of(docs);
         for &r in repeats {
             let ok = r.path().first() == Some(&owner)
@@ -564,7 +584,7 @@ pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
     let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect(), pieces: std::mem::take(&mut out.pieces) };
     let mut problems = Vec::new();
-    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, solved, &out.kept);
+    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, solved, &out.kept, &out.was);
     Some((ItemsExpanded { ops, ..done }, problems))
 }
 
@@ -698,7 +718,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache
         let same = out.piece(cache, scope, &t, &env);
         for (i, n) in t.nodes.iter().enumerate() {
             let (Some(copy), Some(parent_copy)) = (NodeId::item(r, k, n.local), if n.parent == l { Some(scope) } else { NodeId::item(r, k, n.parent) }) else { continue };
-            let facets = out.copy(doc, &same, &t, i, copy, &env);
+            let facets = out.copy(doc, cache, &same, &t, i, copy, &env);
             let repeats = facets.iter().any(|f| owns_items(f.kind()));
             if !out.push(Want { id: copy, ty: n.ty, parent: parent_copy, order: n.order.clone(), facets, scoped: false }) {
                 return true;
@@ -734,7 +754,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted, cac
     for (i, n) in t.nodes.iter().enumerate() {
         let parent = if n.parent == def { Some(entity) } else { NodeId::expanded(entity, n.parent) };
         let (Some(id), Some(parent)) = (NodeId::expanded(entity, n.local), parent) else { continue };
-        let facets = out.copy(doc, &same, &t, i, id, &env);
+        let facets = out.copy(doc, cache, &same, &t, i, id, &env);
         let inner_def = (n.top && n.ty.name() == "entity").then(|| linked_def_of(doc, &facets)).flatten();
         if !out.push(Want { id, ty: n.ty, parent, order: n.order.clone(), facets, scoped: true }) {
             return;
@@ -777,7 +797,7 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     for (i, n) in t.nodes.iter().enumerate() {
         let parent = if n.parent == template { Some(u) } else { NodeId::expanded(u, n.parent) };
         let (Some(id), Some(parent)) = (NodeId::expanded(u, n.local), parent) else { continue };
-        let facets = out.copy(doc, &same, &t, i, id, &env);
+        let facets = out.copy(doc, cache, &same, &t, i, id, &env);
         // An entity in a template (a repeat's item instance) and a picture
         // of one are scopes the scope pass expands; a picture of one of
         // the definition's own inner entities is expanded here.
@@ -906,8 +926,12 @@ pub fn stale_overrides(doc: Tree<'_>) -> Vec<(NodeId, String)> {
 /// `solved` are the copies a constraint cluster holds: the leaves the
 /// solver writes on them stay as the solver left them.
 #[allow(clippy::too_many_arguments)]
-/// A `kept` copy is wanted as it is: nothing about it is compared.
-fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>, solved: &BTreeSet<NodeId>, kept: &HashSet<NodeId>) -> Vec<Op> {
+/// A `kept` copy is wanted as it is: nothing about it is compared. A leaf
+/// the solver writes on a `solved` copy keeps the solver's value unless
+/// what is wanted for it changed since the copy was last made (`was`): a
+/// template or override edit of that leaf still reaches it.
+#[allow(clippy::too_many_arguments)]
+fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>, solved: &BTreeSet<NodeId>, kept: &HashSet<NodeId>, was: &HashMap<NodeId, Vec<Facet>>) -> Vec<Op> {
     let wanted_ids: std::collections::HashSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
     // An op can fail on something wanted later in the pass (a copy's
@@ -960,7 +984,10 @@ fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec
                                         let slot = f.get(field).expect("own field");
                                         if old.get(field) != Some(slot) {
                                             let path = LeafPath::new(f.kind(), field).expect("declared field");
-                                            if solved.contains(&w.id) && crate::solve::writes(path) {
+                                            if solved.contains(&w.id)
+                                                && crate::solve::writes(path)
+                                                && was.get(&w.id).and_then(|fs| fs.iter().find(|x| x.kind() == f.kind())).and_then(|x| x.get(field)) == Some(slot)
+                                            {
                                                 continue;
                                             }
                                             plan.push(Op::Set { id: w.id, path, slot: slot.clone() });

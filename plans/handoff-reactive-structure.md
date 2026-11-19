@@ -2021,7 +2021,13 @@ document and builds what pays now, each step with its own design note and counci
    reference classes and environment are unchanged is neither wanted nor diffed
    (about 28 ms of the 32.7 ms at 700 meters is wanting and diffing unchanged
    copies). Pieces with problems are never skipped.
-3. **D13's sweep** of interned paths.
+3. **D13's sweep** of interned paths. *Moved to phase 4 (2026-11-19, the builder's
+   decision while the user was away):* the path registry is process-wide and shared
+   by every store in the process (scratch stores, the differential pair, parallel
+   tests), so one store's sweep cannot know which paths the others hold, and freeing
+   one they use breaks their live ids. A safe sweep needs each store to know its own
+   slots, which is the per-store id index phase 4's slots build (D15). A10's measured
+   growth (about 530 bytes per value-keyed item made) stands until then.
 
 - **2c stage 3, step 1: the solver's writes to copies (2026-11-18).** No separate
   home was needed: the copies document keeps holding a solved value, and the two
@@ -2092,6 +2098,38 @@ document and builds what pays now, each step with its own design note and counci
   - **The owners' check exempted every transform leaf of a clustered copy** (Sol;
     it hid a stale `sx` from the older outside-a-library bug): it exempts the
     solver's leaves only.
+
+- **Council round 3 on step 1 (2026-11-19): Claude Opus 5.5 5/10, GPT Sol 6.2
+  5/10.** Round 2's rule ("expansion never rewrites a held copy's solver leaves")
+  dropped real edits: moving a held copy (the override reached nothing), a template
+  edit of its `rot` (which a distance never moves), a new binding of a bound leaf,
+  a fixed copy's binding replaced by a constant. **The rule now:** a held copy
+  keeps the solver's value of a leaf unless *what is wanted for that leaf changed*
+  since the copy was last made. Step 2's piece records give the last wanted facets
+  (`Wanted::was`, from the recorded template and environment), and `apply_wanted`
+  skips a solver leaf only when the wanted slot equals that. An edit of the leaf,
+  by template or override, reaches the copy and the solver works from it; an edit
+  of anything else leaves the solved pose. Also fixed:
+  - **Undo, redo and replay let go** of a copy they leave in no cluster
+    (`StoreCore::release`, shared with `post_apply`): undoing a transaction that
+    constrained a copy and edited its template left the copy at the edit's value,
+    and the owners' check failed on the next transaction (Opus; older than step 1).
+  - **A release or a recorded write that puts a binding back regraphs,** so the
+    graph reads it.
+  - The release finds held copies in a set, not by scanning clusters per copy.
+  - Tests: `moving_a_held_copy_moves_it`,
+    `a_template_edit_of_a_held_leaf_reaches_the_copy`,
+    `a_released_copy_reads_its_templates_binding`,
+    `undoing_constraining_a_copy_and_editing_its_template`,
+    `undoing_a_template_edit_of_a_pinned_copy`,
+    `a_fixed_copys_binding_replaced_by_a_constant`.
+  - **Recorded, not fixed (older):** repeat settling at run time (a preview, a
+    publish) does not rebuild cluster membership, so a removed pinned row stays a
+    cluster member until the next transaction, and one brought back by an
+    unpublish comes back at its template (Sol). And a solved copy's pose is not
+    saved: load derives copies from templates and does not solve, so a pinned copy
+    loads at its template until the next transaction solves (Sol). Saving solved
+    copy poses belongs with phase 5's "the pose is state".
 
 - **2c stage 3, step 2: a definition edit keeps the copies it does not change
   (2026-11-19).** Each *piece* (an entity's body, a picture, an inner picture, an

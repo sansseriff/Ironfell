@@ -569,10 +569,11 @@ impl Document {
     }
 
     /// A write at `id`: a new stamp for every definition, repeat and
-    /// conditional it is in, itself included. Derived and session nodes
-    /// are in no template.
+    /// conditional it is in, itself included. Derived nodes are in no
+    /// template. A session node is copied by none, but a compiler can
+    /// still see it (a picture's classes, a body's inputs), so it stamps.
     fn touch(&mut self, id: NodeId) {
-        if id.is_expanded() || id.is_session() {
+        if id.is_expanded() {
             return;
         }
         let mut stamp = None;

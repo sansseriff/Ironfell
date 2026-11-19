@@ -586,3 +586,119 @@ fn a_body_node_restored_elsewhere_is_no_longer_the_bodys() {
     ])).unwrap();
     assert_eq!(store.tree().leaf(copy, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref), Some(body));
 }
+
+/// A node in a pictured repeat holding the picture's copy of another
+/// node there holds the item's copy, as the old code had it (it copied the
+/// item from the picture's copies).
+#[test]
+fn a_repeat_node_naming_the_pictures_copy_of_another_names_the_items() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" dims="2d"/><library name="library"><definition id="$d" name="ref"><template notation="free"><group id="$r" repeat.count="1"><rect id="$part" w="10" h="4"/><let id="$read" name="reader" value="0"/></group></template></definition></library>"#);
+    let (c,d,r,part,reader) = (names["$c"], names["$d"], names["$r"], names["$part"], names["$read"]);
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&x| store.tree().live(x).unwrap().ty.name() == "use").unwrap();
+    let outer_part = NodeId::expanded(u, part).unwrap();
+    let repeat = NodeId::expanded(u, r).unwrap();
+    let item_part = NodeId::item(repeat, "0", part).unwrap();
+    let item_reader = NodeId::item(repeat, "0", reader).unwrap();
+    let value = "let.value".parse().unwrap();
+    store.apply(tx("hold reference to picture prototype", vec![Op::Set { id: reader, path: value, slot: Slot::Const(Value::Ref(outer_part)) }])).unwrap();
+    assert_eq!(store.tree().leaf(item_reader, value).unwrap().constant().unwrap().as_ref(), Some(item_part));
+}
+
+/// A binding in a repeat to a part of an inner picture the repeat holds
+/// reads that part of the item's copy of the picture.
+#[test]
+fn a_binding_into_an_inner_picture_in_a_repeat_reads_the_items_copy() {
+    let Pair { mut store, names, u } = pair();
+    let (iu, bx) = (names["$iu"], names["$box"]);
+    let template = store.tree().live(iu).unwrap().parent.unwrap();
+    let probe = apply(&mut store, &format!(r#"<group in="{template}" id="$r" repeat.count="1"><rect id="$reader" w="1" h="1"/></group>"#));
+    let (r, reader) = (probe["$r"], probe["$reader"]);
+    store.apply(tx("repeat the inner picture", vec![Op::Reparent { id: iu, parent: Some(r), order: OrderKey::first() }])).unwrap();
+    let w = "size.w".parse().unwrap();
+    let authored_picture_box = NodeId::expanded(iu, bx).unwrap();
+    store.apply(tx("bind repeat rect to the inner picture box", vec![Op::Set { id: reader, path: w, slot: Slot::Bound(Expr::Ref(Leaf { node: authored_picture_box, path: w })) }])).unwrap();
+    let repeat = NodeId::expanded(u, r).unwrap();
+    let prototype_box = NodeId::from_path(&[u, iu, bx]).unwrap();
+    let item_scope = NodeId::item_scope(repeat, "0").unwrap();
+    let item_pic = NodeId::item(repeat, "0", iu).unwrap();
+    let item_box = NodeId::expanded(item_pic, bx).unwrap();
+    let item_reader = NodeId::item(repeat, "0", reader).unwrap();
+    let target = NodeId::from_path(&[*item_scope.path().last().unwrap(), iu, bx]).unwrap();
+    let (_, op) = override_of(&store, r, target, "size.w", Value::Number(29.0));
+    store.apply(tx("make the first item's inner box wider", vec![op])).unwrap();
+    assert_eq!(number(&store, prototype_box, "size.w"), 10.0);
+    assert_eq!(number(&store, item_box, "size.w"), 29.0);
+    assert_eq!(number(&store, item_reader, "size.w"), 29.0);
+}
+
+/// A session template is a definition's notation while it is in the
+/// definition; moving it out (a session op) is a write to the definition.
+#[test]
+fn a_session_template_moved_out_of_a_definition_is_no_longer_drawn() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model/><composition id="$c" dims="2d"/><library name="library"><definition id="$d" name="ref"><template notation="alt"><rect id="$a" w="10" h="4"/></template></definition></library>"#);
+    let (c,d,a) = (names["$c"], names["$d"], names["$a"]);
+    let s = store.tree().next_session_ids(1)[0];
+    let mut template = facet::Template::default();
+    template.notation = Slot::Const(Value::Str("free".into()));
+    store.apply_session(vec![
+        Op::Create { id: s, ty: ty("template"), parent: None, order: OrderKey::first(), facets: vec![template.wrap()] },
+        Op::Reparent { id: s, parent: Some(d), order: OrderKey::first() },
+    ]).unwrap();
+    store.apply(tx("put authored rect in session template", vec![Op::Reparent { id: a, parent: Some(s), order: OrderKey::first() }])).unwrap();
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&x| store.tree().live(x).unwrap().ty.name() == "use").unwrap();
+    assert!(store.tree().is_live(NodeId::expanded(u, a).unwrap()));
+    store.apply_session(vec![Op::Reparent { id: s, parent: None, order: OrderKey::first() }]).unwrap();
+    assert_eq!(iron_document::definition::template_of(store.tree(), d, "free"), None);
+    store.apply(tx("force picture expansion", vec![Op::Set { id: u, path: "use.notation".parse().unwrap(), slot: Slot::Const(Value::Str("free".into())) }])).unwrap();
+    assert!(!store.tree().is_live(NodeId::expanded(u, a).unwrap()));
+}
+
+/// A session group in a picture's template: moving it out, a session op,
+/// takes the authored nodes under it out of the template.
+#[test]
+fn a_session_group_moved_out_of_a_template_takes_its_nodes_out() {
+    let mut store = Store::new();
+    let names = apply(&mut store, r#"<model name="model"/><composition id="$c" name="scene" dims="2d"/><library name="library"><definition id="$d" name="ref"><template notation="free"><let id="$reader" name="reader" value="0"/></template></definition></library>"#);
+    let (c, d, reader) = (names["$c"], names["$d"], names["$reader"]);
+    let t = store.tree().live(reader).unwrap().parent.unwrap();
+    let s = store.tree().next_session_ids(1)[0];
+    let late = OrderKey::after(&store.tree().live(reader).unwrap().order);
+    store.apply_session(vec![Op::Create { id: s, ty: ty("group"), parent: None, order: late.clone(), facets: vec![] },
+        Op::Reparent { id: s, parent: Some(t), order: late.clone() }]).unwrap();
+    let x = apply(&mut store, &format!(r#"<let in="{s}" id="$x" name="x" value="1"/>"#))["$x"];
+    store.apply(tx("reader holds x", vec![Op::Set { id: reader, path: "let.value".parse().unwrap(), slot: Slot::Const(Value::Ref(x)) }])).unwrap();
+    apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
+    let u = *store.tree().children(c).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let copy = NodeId::expanded(u, reader).unwrap();
+    assert_eq!(store.tree().leaf(copy, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref), NodeId::expanded(u, x));
+    // Move the session group out of the template: a session op.
+    store.apply_session(vec![Op::Reparent { id: s, parent: None, order: OrderKey::first() }]).unwrap();
+    // Anything that re-expands u, and runs the owner check.
+    let (_, op) = override_of(&store, u, reader, "name.text", Value::Str("renamed".into()));
+    store.apply(tx("re-expand u", vec![op])).unwrap();
+    let after = store.tree().leaf(copy, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref);
+    assert_eq!(after, Some(x), "the oracle leaves a reference to a node outside the template as it is");
+}
+
+/// A node in an authored repeat holding a part of a picture the repeat
+/// holds holds that part of the item's copy of the picture.
+#[test]
+fn a_reference_into_a_picture_in_an_authored_repeat_names_the_items_copy() {
+    let Pair { mut store, names, u } = pair();
+    let (c, iu, bx) = (names["$c"], names["$iu"], names["$box"]);
+    let probe = apply(&mut store, &format!(r#"<group in="{c}" id="$r" repeat.count="1"><let id="$reader" name="reader" value="0"/></group>"#));
+    let (r, reader) = (probe["$r"], probe["$reader"]);
+    store.apply(tx("repeat the picture", vec![Op::Reparent { id: u, parent: Some(r), order: OrderKey::first() }])).unwrap();
+    let value: LeafPath = "let.value".parse().unwrap();
+    let part = NodeId::from_path(&[u, iu, bx]).unwrap();
+    store.apply(tx("hold the picture's box", vec![Op::Set { id: reader, path: value, slot: Slot::Const(Value::Ref(part)) }])).unwrap();
+    let item_u = NodeId::item(r, "0", u).unwrap();
+    let item_part = NodeId::from_path(&[item_u.path(), vec![iu, bx]].concat()).unwrap();
+    assert!(store.tree().is_live(item_part));
+    let item_reader = NodeId::item(r, "0", reader).unwrap();
+    assert_eq!(store.tree().leaf(item_reader, value).and_then(Slot::constant).and_then(Value::as_ref), Some(item_part));
+}

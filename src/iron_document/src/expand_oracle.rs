@@ -158,8 +158,16 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
             if leaf.node == r && owns_items(leaf.path.facet) && matches!(leaf.path.field, "presence" | "leaving") {
                 return Leaf { node: scope, path: item_path(leaf.path.field) };
             }
-            match inside.contains(&leaf.node).then(|| NodeId::item(r, k, leaf.node)).flatten() {
-                Some(node) => Leaf { node, path: leaf.path },
+            // A template node's copy, or a node under one (an inner
+            // picture's parts): under the item's copy.
+            let p = leaf.node.path();
+            let under = (1..=p.len()).rev().find_map(|i| NodeId::from_path(&p[..i]).filter(|n| inside.contains(n)).map(|n| (n, i)));
+            match under.and_then(|(n, i)| NodeId::item(r, k, n).map(|c| (c, i))) {
+                Some((copy, i)) => {
+                    let mut q = copy.path();
+                    q.extend_from_slice(&p[i..]);
+                    NodeId::from_path(&q).map_or(leaf, |node| Leaf { node, path: leaf.path })
+                }
                 None => leaf,
             }
         };

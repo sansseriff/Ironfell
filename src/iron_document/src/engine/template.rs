@@ -297,8 +297,7 @@ t.figures = Some(r.clone());
     /// are not items, and their subtrees, parents first, with the
     /// relations from them. An override is the repeat's own opinion about
     /// one item's copy, not part of what items copy; a session node gets no
-    /// copy, nor anything under it, and does not order the items (writes to
-    /// it stamp no scope, `Document::touch`).
+    /// copy, nor anything under it, and does not order the items.
     pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
         let mut nodes = Vec::new();
         let mut rels = Vec::new();
@@ -344,7 +343,9 @@ t.figures = Some(r.clone());
                 t
             })
             .collect();
-        Template::classify(Source::Collection(r), nodes, rels, after, |id| inside.contains(&id).then_some(Ref::Inside))
+        // As a picture's: a node's own derivation (an inner picture's
+        // parts) is inside with it.
+        Template::classify(Source::Collection(r), nodes, rels, after, |id| inside.contains(&id.path()[0]).then_some(Ref::Inside))
     }
 
     /// The repeat or conditional a collection's items are of, as the
@@ -375,8 +376,11 @@ t.figures = Some(r.clone());
                 }
             }
             return match (self.refs.get(&leaf.node), &item.outer) {
-                (Some(Ref::Inside), _) => NodeId::item(item.repeat, &item.key, leaf.node).map_or(leaf, |node| Leaf { node, path: leaf.path }),
-                (_, Some((t, outer))) => t.follow(outer, leaf),
+                (Some(Ref::Inside), _) => NodeId::item_scope(item.repeat, &item.key).and_then(|scope| expand::relocate(scope, leaf.node)).map_or(leaf, |node| Leaf { node, path: leaf.path }),
+                (_, Some((t, outer))) => {
+                    let to = t.follow(outer, leaf);
+                    Leaf { node: self.into_item(item, outer, to.node), path: to.path }
+                }
                 (_, None) => leaf,
             };
         }
@@ -400,12 +404,21 @@ t.figures = Some(r.clone());
         self.follow(env, Leaf { node, path: any_leaf() }).node
     }
 
-    /// `env`'s copy of this template's node `local`.
-    fn copy_of(&self, env: &Env, local: NodeId) -> Option<NodeId> {
-        match (&self.source, &env.item) {
-            (Source::Collection(_), Some(item)) => NodeId::item(item.repeat, &item.key, local),
-            _ => NodeId::expanded(env.owner, local),
+    /// `node`, as `item`'s outer owner `outer` names it, as the item names
+    /// it: what is under `outer`'s copy of one of this template's nodes is
+    /// under the item's copy (the old code copied an item from the outer
+    /// copies and moved what was under them). An owner's copy of its
+    /// template's node `x` is the owner's path and `x`, for a picture and
+    /// for an item alike.
+    fn into_item(&self, item: &Item, outer: &Env, node: NodeId) -> NodeId {
+        let (o, p) = (outer.owner.path(), node.path());
+        if p.len() <= o.len() || p[..o.len()] != o[..] || !self.nodes.iter().any(|m| m.local == p[o.len()]) {
+            return node;
         }
+        let Some(scope) = NodeId::item_scope(item.repeat, &item.key) else { return node };
+        let mut q = scope.path();
+        q.extend_from_slice(&p[o.len()..]);
+        NodeId::from_path(&q).unwrap_or(node)
     }
 
     /// Node `i`'s facets as `env`'s copy has them: references resolved,
@@ -446,21 +459,19 @@ t.figures = Some(r.clone());
 
 /// `env`'s overrides of node `n`'s copy: an item's outer owner's first.
 fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
-    if let Some(Item { repeat, key, outer: Some((outer_t, outer)) }) = &env.item {
+    if let Some(item @ Item { outer: Some((outer_t, outer)), .. }) = &env.item {
         apply_overrides(outer_t, n, outer, facets);
-        // An outer override naming a node of this template, as the outer
-        // owner copies it, names the item's copy: the old code copied the
-        // item from the outer copy and resolved its references again.
+        // An outer override naming a node under this template's, as the
+        // outer owner copies it, names the item's copy
+        // (`Template::into_item`).
         if outer_sets_a_node(n, outer) {
             for f in facets.iter_mut() {
                 for field in f.field_names() {
-                    if let Some(Slot::Const(Value::Ref(to))) = f.get(field)
-                        && let Some(&x) = to.path().last()
-                        && t.nodes.iter().any(|m| m.local == x)
-                        && outer_t.copy_of(outer, x) == Some(*to)
-                        && let Some(copy) = NodeId::item(*repeat, key, x)
-                    {
-                        f.set(field, Slot::Const(Value::Ref(copy))).expect("field exists");
+                    if let Some(Slot::Const(Value::Ref(to))) = f.get(field) {
+                        let copy = t.into_item(item, outer, *to);
+                        if copy != *to {
+                            f.set(field, Slot::Const(Value::Ref(copy))).expect("field exists");
+                        }
                     }
                 }
             }
@@ -499,10 +510,11 @@ pub(crate) struct TemplateCache {
     pictures: HashMap<(NodeId, String), (u64, Option<Arc<Template>>)>,
     /// Each authored repeat's or conditional's.
     repeats: HashMap<NodeId, Arc<Template>>,
-    /// Each sub-template, by the template it is part of and its repeat
-    /// there: an authored repeat in a definition outside a library is
-    /// drawn in place and copied into pictures, with two templates.
-    subs: HashMap<(Source, NodeId), Arc<Template>>,
+    /// Each sub-template, by the template it is part of (its source and
+    /// scope) and its repeat there: a repeat in a definition outside a
+    /// library is drawn in place and copied into pictures, two templates
+    /// whose sub-templates have the same source and differ in scope.
+    subs: HashMap<(Source, NodeId, NodeId), Arc<Template>>,
 }
 
 impl std::fmt::Debug for TemplateCache {
@@ -562,7 +574,7 @@ impl<'c> Templates<'c> {
     /// The template of a copy of `outer`'s repeat `l`, current as `outer`
     /// is.
     pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Arc<Template> {
-        let key = (outer.source, l);
+        let key = (outer.source, outer.scope, l);
         match self.cache.subs.get(&key) {
             Some(t) if t.scope == outer.scope && t.stamp == outer.stamp => t.clone(),
             _ => {

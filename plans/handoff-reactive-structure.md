@@ -1861,8 +1861,8 @@ an optional step.
     clone going its own way, another document); a scope never written is at the
     document's own base stamp. A rollback stamps the scopes of everything it puts
     back, before and after, so what a refused transaction compiled never matches
-    again: the cache needs no transaction bookkeeping. Derived and session ids
-    are skipped.
+    again: the cache needs no transaction bookkeeping. Derived ids are skipped
+    (session ones too, until council round 2 below).
   - **What it covers:** everything the compilers read is inside the scope: a
     picture's `Body` classes (`is_body`, the definition's children), each inner
     `use`'s `inner_def` (the inner entity's `instance`, in the body), the
@@ -1918,6 +1918,41 @@ an optional step.
   - **Recorded, not fixed (older, Opus):** editing a definition placed outside
     a library does not re-expand its uses: the owner check reports "owners
     missed … Set size.w". It fails the same at `554185f`.
+
+- **Council round 2 (2026-11-18): Claude Opus 5.5 7.5/10, GPT Sol 6.2 6/10.**
+  Both found round 1's fixes correct. Fixed, each with a test that fails with
+  the fix undone:
+  - **A session write stamps its scopes** (both): a session node is copied by
+    no template, but the compilers see it: `definition::template_of` can pick
+    a session `template`, a picture's classes count what is under a session
+    group, and `inputs_of` reads a session `port_spec`. A session op moving
+    one in or out left the kept template stale. `touch` now skips derived ids
+    only (`a_session_template_moved_out_of_a_definition_is_no_longer_drawn`,
+    `a_session_group_moved_out_of_a_template_takes_its_nodes_out`).
+  - **What is under an item's node is the item's** (Sol): a reference in a
+    repeat to a part of a picture the repeat holds (`#iu/box`), or to the
+    outer picture's copy of a node the item copies (`#u/part`), named the
+    prototype, where it names the item's copy. A collection's template now
+    classifies by the id's first step, as a picture's does, and relocates into
+    the item scope; what resolves through the outer owner to under its copy of
+    one of the template's nodes moves into the item (`Template::into_item`,
+    which also does round 1's override remap). The oracle had the same gap
+    and now matches by the longest prefix in the template
+    (`a_repeat_node_naming_the_pictures_copy_of_another_names_the_items`,
+    `a_binding_into_an_inner_picture_in_a_repeat_reads_the_items_copy`,
+    `a_reference_into_a_picture_in_an_authored_repeat_names_the_items_copy`).
+  - **The sub-template key collided one level down** (Opus, speed only): a
+    nested repeat's sub-template in place and in a picture had the same
+    `(source, l)`; the key now has the outer template's scope.
+  - **Recorded, not fixed (older, outside the template cache):**
+    - Recreating a deleted id elsewhere (`Create` of a tombstone) schedules
+      only its new location's owners, so a picture that read it where it was
+      is not expanded again (Sol; fails the same at `554185f`). After the
+      write, nothing says where it was.
+    - A session op schedules no expansion: a session `port_spec` moved into a
+      definition changes its inputs, but nothing expands its instances until
+      an authored write does (Opus). And such a duplicate name makes
+      `validate_entity` refuse authored writes to the instances.
 
 Next: stage 3 itself, copies materialised on read. Its own prerequisites (above,
 "Stage 3"): the id → (owner, local) index without the path registry's lock,

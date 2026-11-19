@@ -2326,6 +2326,63 @@ the problem is built from the document as well as from `read`.
   solved; the cells change how, and need phase 2b's graph to grow Structure cells
   for clusters.
 
+### 4.9 Phase 4: observation (plan, 2026-11-19)
+
+Written by the builder on the user's instruction to go on and decide (§4.5's report).
+Phase 4 now carries, besides §17's row, what 2c moved here: lazy slots (D15),
+validation from templates (D14) and the path sweep (D13).
+
+**Where the code is.** The graph (`graph.rs`) evaluates every bound leaf eagerly
+(height order, equality cutoff); nothing knows what is observed. The host decides
+liveness from its views (`document_bridge/liveness.rs`: `Liveness`, `reached`) and
+passes the store one thing, `paused` (accumulators of compositions no view shows).
+Owners exist (stage 2) but have no states; every copy is stored.
+
+**Steps**, each with the differential suite green under `observe_all` (today's
+behaviour, the reference mode, §8.2):
+1. **Observers in the store, no behaviour change.** `observe(Interest) ->
+   ObserverId`, `reobserve`, `unobserve`; `Interest::{Region, Nodes, Look, Pin}`
+   (Volume with 3D, later). The host registers its panels' and embeds' views
+   instead of computing `paused` itself; `observe_all` is the default and what the
+   differential test runs. `paused` comes from the store.
+2. **Necessity in the graph.** A cell is necessary when an observed leaf needs it,
+   or by §8.3's list (state: a session `let`, a trace, an accumulator, a machine, a
+   query; what a solve reads; what a repeat's count reads). Only necessary cells are
+   evaluated each pass; the rest are marked stale and evaluated when read
+   (`Reactive::read` of a stale cell evaluates it and what it reads). Exit check:
+   under `observe_all` nothing changes; with one composition unobserved its pure
+   pictures cost 0 evaluations (§17's first exit).
+3. **Dormant pictures.** A picture owner none of whose bound meets an observed region
+   keeps its cells but is not evaluated; drawing it uses its last values (§8.5's
+   extent cell keeps its bound right). Needs the spatial index's owner entries
+   (§12.3).
+4. **Unloaded owners, with the lazy slots (D15) and validation from templates
+   (D14).** An Unloaded owner has no cells and no copies: its copies are answered
+   from slots filled on read (the 2c stage 3 design and its council findings,
+   §4.6, are the starting point: pieces, an id index without the registry's lock,
+   exceptions as effective state, solver values kept), and validation of ops
+   touching it reads templates. D13's sweep comes with the per-store id index.
+5. **Waking:** the wake budget, the idle sweep, reads that never load (§8.9), a
+   parked stateful owner woken by what it waits on (§8.3, A13).
+
+**The open points (spec §14) for phase 4, against the code as it is:**
+- *When an owner is at rest, and what wakes a parked one (§8.3, A13).* Today nothing
+  parks: every owner is loaded. Steps 1–3 do not park anything (Dormant keeps cells,
+  and stateful owners stay Live), so A13 is first needed at step 4. **Decision:**
+  at step 4 only pure pictures are Unloaded; stateful owners never are, until A13's
+  property test (§8.8) exists.
+- *A parked Body and its port readers (§8.4).* Bodies stay Live in steps 1–4
+  (only pictures go Dormant or Unloaded): a port reader never meets a parked body.
+- *A simulation range:* not designed; not built, as §8.3 says.
+- *A 3D owner's declared extent (§8.10):* 3D views stay `observe_all`-like (every
+  owner they show Live) until a `Volume` interest is designed.
+- *The limits (D9's owner count, the wake budget, the height to recompute):* set
+  from measurement when step 5 is built.
+
+**Decisions (the builder's):** the steps above, in that order; necessity before any
+owner state, because it gives §17's first exit on its own; pictures only, never
+bodies or stateful owners, change state in this phase.
+
 ## 5. Rules, and when to stop
 
 **Rules.**

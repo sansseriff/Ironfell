@@ -2316,8 +2316,10 @@ the problem is built from the document as well as from `read`.
   older than this work: it still names the bar `#12`, the laser body `#1f` and the
   dial `#1u`, which `00151fd`'s palette tokens moved (`6d2199d` fixed the same in
   `regression.txt` by reading ids by name). The steps naming them fail (`#12 is not
-  live`, three `TypeError`s in the gesture-ownership step); the rest runs. To fix:
-  read those three by name, as `regression.txt` does.
+  live`, three `TypeError`s in the gesture-ownership step); the rest runs. **Fixed:**
+  the script reads the bar, and the Optics composition's body and dial, by name; it
+  exits 0, and gesture ownership behaves as its comments say (the edit mid-drag
+  cancels it at x 80, the other drag commits at 180, 190, three undos give 60, 140).
 - **Not done in phase 5:** the rest (layout cells with containment, the network
   solve per island, clips as cells, the solver as Clusters and Solve cells with a
   solved layer and a commit step). The step above is the part that changes what is

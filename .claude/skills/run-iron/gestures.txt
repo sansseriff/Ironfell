@@ -281,7 +281,8 @@ key Meta+z
 sleep 500
 eval shapeView('ellipse')
 tab Main
-eval __iron.toPath('#12')
+# The bar's id moves whenever the demo grows, so it is read by name.
+eval (async () => { const bar = (await __iron.view({fidelity:'full'})).match(/<rect id="(#\w+)" name="bar"/)[1]; return __iron.toPath(bar); })()
 dclick 800 600
 sleep 400
 key Enter
@@ -354,7 +355,9 @@ eval (async () => [...await lasers(), await figured()])()
 # an edit to another node mid-drag leaves the drag running to its own commit.
 # Three undos put the body back.
 tab Optics
-eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(/<rect id="#1f"[^>]*>/)[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
+# The laser body's and the dial's ids move whenever the demo grows: read by name.
+eval (async () => { const all = await __iron.view({fidelity:'full'}); const v = all.slice(all.indexOf('name="optics"')); window.bodyId = v.match(/<rect id="(#\w+)" name="body"/)[1]; window.dialId = v.match(/<ellipse id="(#\w+)" name="dial"/)[1]; return [window.bodyId, window.dialId]; })()
+eval window.body = async () => { const v = await __iron.view({fidelity:'full'}); return v.match(new RegExp(`<rect id="${window.bodyId}"[^>]*>`))[0].match(/ x="[^"]*" y="[^"]*"/)[0]; }
 dmove 120 170
 down
 sleep 300
@@ -362,7 +365,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1f" x="80"/></edit>').then(r => r.ok)
+eval __iron.edit(`<edit><set id="${window.bodyId}" x="80"/></edit>`).then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300
@@ -376,7 +379,7 @@ dmove 140 180
 sleep 300
 dmove 180 200
 sleep 300
-eval __iron.edit('<edit><set id="#1u" radius.rx="60"/></edit>').then(r => r.ok)
+eval __iron.edit(`<edit><set id="${window.dialId}" radius.rx="60"/></edit>`).then(r => r.ok)
 sleep 300
 dmove 220 220
 sleep 300

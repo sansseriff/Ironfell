@@ -632,27 +632,98 @@ fn ten_thousand_random_scripts() {
 /// observed everything throughout reads, and accepts and refuses the same
 /// transactions on the way. Both run the same script, each step followed
 /// by an `advance`, where the one that observes decides what it needs.
+/// A leaf's value, or why its binding failed.
+fn shown_value(s: &Store, n: NodeId, leaf: LeafPath) -> Result<Option<Value>, String> {
+    match s.reactive().errors.get(&Leaf { node: n, path: leaf }) {
+        Some(why) => Err(why.clone()),
+        None => Ok(s.resolved(n, leaf)),
+    }
+}
+
 fn observed_script(seed: u64, steps: usize) -> usize {
+    // A second composition whose pictures read the sheet's through a
+    // reference a host producer moves (a tracked read across
+    // compositions), lay out by what they read, and a sheet picture that
+    // reads them back.
+    let viewer = |w: &mut World| {
+        w.edit(
+            r#"<let id="$pick" name="pick" value="0"/>
+            <composition id="$v" name="viewer" dims="2d">
+              <rect id="$v1" name="v1" x="{= deref($pick, 'transform2d.x', -1)}" y="{= deref($pick, 'transform2d.y', -1)}" w="{= deref($pick, 'size.w', 1)}" h="10"/>
+              <group name="vg" x="0" y="40" layout.mode="stack_x" layout.gap="2"><rect name="v2" w="{= $v1.transform2d.y + 1}" h="5"/><rect id="$v3" name="v3" w="5" h="5"/></group>
+            </composition>
+            <rect in="$c" id="$back" name="back" x="{= $v3.transform2d.x * 2}" y="{= $v1.transform2d.x}" w="4" h="4"/>"#,
+        )
+        .unwrap();
+    };
     let (mut all, mut some) = (build(seed), build(seed));
+    viewer(&mut all);
+    viewer(&mut some);
     let mut coin = Rng(seed ^ 0x0b5e_47ed);
     some.store.set_observe_all(false);
-    let c = some.names["$c"];
-    let mut watching = None;
+    let (c, v, pick) = (some.names["$c"], some.names["$v"], some.names["$pick"]);
+    let (pa, ps) = (all.store.register_producer("viewer"), some.store.register_producer("viewer"));
+    let mut watching: Vec<ObserverId> = Vec::new();
+    let mut shown: Vec<NodeId> = Vec::new();
     let mut stale = 0;
+    // Every leaf of what the observers show: the same in both stores at
+    // every step, not only once everything is observed. A failed binding
+    // counts by its reason: the value it holds is the last it computed,
+    // which depends on when it last ran.
+    let leaves = |s: &Store, comps: &[NodeId]| -> Vec<(NodeId, LeafPath, Result<Option<Value>, String>)> {
+        let doc = s.tree();
+        let mut out = Vec::new();
+        for &comp in comps {
+            for n in std::iter::once(comp).chain(doc.descendants(comp)) {
+                for f in doc.facets_of(n) {
+                    for field in f.field_names() {
+                        let leaf = LeafPath::new(f.kind(), field).expect("declared field");
+                        out.push((n, leaf, shown_value(s, n, leaf)));
+                    }
+                }
+            }
+        }
+        out
+    };
     for i in 0..steps {
         step(&mut all);
         step(&mut some);
-        assert_eq!(all.store.history().past().len(), some.store.history().past().len(), "seed {seed}, step {i}: the same transactions accepted");
+        if coin.chance(50) {
+            // Not the viewer's own pictures nor `$back`: a picture placed by
+            // what reads its own placement is a loop through layout, which
+            // moves each time layout runs (outside §8.8).
+            let own: BTreeSet<NodeId> = std::iter::once(v).chain(all.store.tree().descendants(v)).chain([all.names["$back"]]).collect();
+            let targets: Vec<NodeId> = all.live_nodes().into_iter().filter(|&n| !own.contains(&n) && all.store.tree().get::<facet::Transform2d>(n).is_some()).collect();
+            // Moved by a producer, or previewed (a gesture's path to layout
+            // and the solver, outside a transaction).
+            if let Some(&n) = targets.get(coin.below(targets.len().max(1))) {
+                let values = BTreeMap::from([(Leaf { node: pick, path: path("let.value") }, Value::Ref(n))]);
+                if coin.chance(50) {
+                    all.store.publish(pa, values.clone());
+                    some.store.publish(ps, values);
+                } else {
+                    all.store.preview(pick, path("let.value"), Value::Ref(n));
+                    some.store.preview(pick, path("let.value"), Value::Ref(n));
+                }
+            }
+        }
+        assert_eq!(all.store.history().past(), some.store.history().past(), "seed {seed}, step {i}: the same transactions, the same ops");
+        // As drawn in the frame of the change (a tool previews after
+        // `advance`), then after it.
+        assert_eq!(leaves(&all.store, &shown), leaves(&some.store, &shown), "seed {seed}, step {i}: what is shown, before advancing ({shown:?})");
         all.store.advance(all.now);
         some.store.advance(some.now);
         stale += some.store.reactive().stale_count();
-        match (coin.below(3), watching) {
-            (0, Some(id)) => {
+        assert_eq!(leaves(&all.store, &shown), leaves(&some.store, &shown), "seed {seed}, step {i}: what is shown ({shown:?})");
+        if coin.chance(40) {
+            for id in watching.drain(..) {
                 some.store.unobserve(id);
-                watching = None;
             }
-            (1, None) => watching = Some(some.store.observe(Interest::Region { composition: c, rect: [0.0, 0.0, 1000.0, 1000.0], zoom: 1.0 })),
-            _ => {}
+            shown = [vec![], vec![c], vec![v], vec![c, v]][coin.below(4)].clone();
+            for &comp in &shown {
+                watching.push(some.store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 1000.0, 1000.0], zoom: 1.0 }));
+            }
+            assert_eq!(leaves(&all.store, &shown), leaves(&some.store, &shown), "seed {seed}, step {i}: shown at once ({shown:?})");
         }
     }
     some.store.set_observe_all(true);
@@ -663,7 +734,7 @@ fn observed_script(seed: u64, steps: usize) -> usize {
         for f in a.facets_of(n) {
             for field in f.field_names() {
                 let leaf = LeafPath::new(f.kind(), field).expect("declared field");
-                assert_eq!(all.store.resolved(n, leaf), some.store.resolved(n, leaf), "seed {seed}: {n} {leaf}");
+                assert_eq!(shown_value(&all.store, n, leaf), shown_value(&some.store, n, leaf), "seed {seed}: {n} {leaf}");
             }
         }
     }
@@ -674,7 +745,9 @@ fn observed_script(seed: u64, steps: usize) -> usize {
 
 #[test]
 fn observing_part_of_the_time_changes_nothing_once_all_is_observed() {
-    let stale: usize = (0..40).map(|seed| observed_script(seed, 30)).sum();
+    // Twenty: each compares every shown leaf twice a step (the thousand
+    // below, ignored, for breadth).
+    let stale: usize = (0..20).map(|seed| observed_script(seed, 30)).sum();
     assert!(stale > 0, "no script left a cell stale");
 }
 

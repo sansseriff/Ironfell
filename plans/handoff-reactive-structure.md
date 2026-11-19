@@ -2574,10 +2574,22 @@ Known, next: layout lays out every group, so a hidden layout's children's sizes
 bound to something moving are recorded and pinned at the first pipeline (none in the
 demo: nothing pinned through the regression script). Skipping a hidden composition's
 layouts unless a needed cell reads their placements is the fix when a document needs
-it. The observation property test (`differential_random::observed_script`) has one
-composition and compares the end state; a version with several compositions, values
-shown along the way and committed transactions compared would have caught most of
-both rounds' findings.
+it.
+
+**The observation property test strengthened (2026-11-19).**
+`differential_random::observed_script` adds a second composition whose pictures read
+the sheet's through a reference a producer moves or a preview moves, one of them laid
+out in a stack, and a sheet picture that reads them back; the observer moves between
+none, either and both. Each step compares the committed transactions whole and every
+leaf of the shown compositions before and after `advance` (a tool previews after
+`advance` and draws in that frame: compared only after, the idle sweep had repaired
+round 1's stale layout first, and 1,000 seeds caught nothing). A failed binding
+counts by its reason, not the value it holds (its last computed, which depends on
+when it ran). Against `a2e530d` it fails at seed 14; on this code 20 seeds (the
+default, ~8 min in the gates' debug build with both checks) and 1,000 pass. Spec
+§8.8 now lists a value on a loop through layout or the solver as outside the property
+(each run moves it a step, observed or not): the test's reference never points the
+viewer at its own pictures.
 
 Tests: `a_preview_lays_out_a_hidden_stack_from_current_sizes`,
 `a_nested_tracked_wake_finds_no_false_cycle`,

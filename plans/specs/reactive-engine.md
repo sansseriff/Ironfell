@@ -682,6 +682,9 @@ throughout would have given.** Outside the property, by design:
 - answers from outside (a `query`'s request times and replies);
 - the network solve where more than one solution exists, since it starts from its last
   answer (`lib.rs:2146`); §9.1 keeps its inputs and warm start per island.
+- a value on a loop through what the store derives outside the graph (a picture whose
+  size reads its own laid-out placement): each run of layout or the solver moves it a
+  step, so it depends on how often they run, observed or not.
 
 §16.3 tests the property directly. Whether a transaction is accepted never depends on
 what is observed (§11).

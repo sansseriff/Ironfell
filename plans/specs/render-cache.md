@@ -538,6 +538,38 @@ Phase 2 measured 1.2 ms p50 for the fitted pan. These pans are 5 ms on a build w
 everything since (the gallery, the reactive engine), and the reason was not
 investigated.
 
+**Council round 1 (2026-11-19):** Opus 5.5 6/10, Sol 6.2 5/10. Both found the same
+four ways to show wrong pixels, all fixed:
+
+- An instance's shared runs drew outside a split clip. Under one, an instance is now
+  an ordinary chunk.
+- Two cases left a split piece's recorded clip wrong:
+  - a split group moved inside a clipped one, and the clip moved with it;
+  - a split group's clip was turned off, and the old clip stayed.
+
+  Each chunk now carries the clipped groups split above it (`Chunk::clips`). A change
+  to a split group whose pieces sit under a clip records them again, and a recut
+  carries a recording over only when that list is unchanged.
+- A loose root moved into a composition stayed drawn in the viewer
+  (`DocumentChanges.roots` now cuts the loose home again).
+- A child moved out of a template stayed drawn in its references (`template_of`
+  now counts the template itself).
+
+Opus also found:
+
+- A template that gained a nested reference left the compositions showing it with a
+  stale `shows_template`. They are now cut again.
+- One edit could start rastering a mid-sized view for half a second. The animated
+  rule now needs a visible chunk that changed on 4 frames in a row.
+
+Heat is cleared on a reload, and `loaded`/`unloaded` owners count as shaped. Left as
+they are:
+
+- Cooling happens only on a frame that renders. A hot node stays hot until the next
+  change; the pixels stay correct.
+- A top-level add or delete still records its whole home again, as before phase 3.
+- `must_cut_again` walks the group's subtree for embeds.
+
 §6's exit is met: two live chunks that change on their own each re-record only
 themselves. The view still encodes every live chunk each frame, with the still
 content drawn from tiles.

@@ -73,8 +73,11 @@ fn find_changed(chunks: &Chunks, store: &iron_document::Store, drawables: &super
             // its placement can matter, which its chunks' frames carry
             // (instance-cache.md §2). No re-recording, no cutting again.
             Some(Place::Split(range)) if !chunks.must_cut_again(store, drawables, n) => {
-                // A clipped group's pieces carry its clip: record them.
-                if iron_document::appearance::ClipFrame::read(store, n).is_some() {
+                // Pieces recorded under a clip, its own or one above it,
+                // drew that clip relative to their frame: record them.
+                // A group whose clip was just removed is among those.
+                let clipped = iron_document::appearance::ClipFrame::read(store, n).is_some() || chunks.homes.get(&home).is_some_and(|p| p.chunks.get(range.clone()).is_some_and(|cs| cs.iter().any(|c| !c.clips.is_empty())));
+                if clipped {
                     dirty.entry(home).or_default().extend(range);
                 } else {
                     reframe.entry(home).or_default().extend(range);
@@ -238,7 +241,8 @@ fn cache_key(home: nest::Home, first: NodeId, tinted: bool) -> u64 {
 
 /// The definition template `n` belongs to, if it is inside one.
 fn template_of(doc: Tree<'_>, n: NodeId) -> Option<NodeId> {
-    let mut at = doc.node(n).and_then(|x| x.parent);
+    // The template itself counts: a child moved out names it as the parent.
+    let mut at = Some(n);
     while let Some(p) = at {
         let node = doc.node(p)?;
         match node.ty.name() {
@@ -342,8 +346,23 @@ pub fn render_document_layer(
         // repeat re-expanding on a hidden page leaves a shown one alone);
         // one naming nothing, or something homeless, cuts every home.
         let shaped: Option<BTreeSet<nest::Home>> = (changed.structure && !changed.shaped.is_empty())
-            .then(|| changed.shaped.iter().filter(|&&n| doc.node(n).is_some()).map(|&n| nest::home(doc, n)).collect::<BTreeSet<_>>())
+            .then(|| {
+                let mut homes: BTreeSet<nest::Home> = changed.shaped.iter().filter(|&&n| doc.node(n).is_some()).map(|&n| nest::home(doc, n)).collect();
+                if changed.roots {
+                    homes.insert(nest::Home::Loose);
+                }
+                // A template that changed shape: the homes showing it through
+                // a reference, whose cut knows which templates they show.
+                let templates: BTreeSet<NodeId> = changed.shaped.iter().filter_map(|&n| template_of(doc, n)).collect();
+                if !templates.is_empty() {
+                    homes.extend(chunks.homes.iter().filter(|(_, p)| templates.iter().any(|t| p.shows_template.contains_key(t))).map(|(h, _)| *h));
+                }
+                homes
+            })
             .filter(|h| !h.contains(&nest::Home::Unknown));
+        if changed.structure && changed.shaped.is_empty() {
+            chunks.forget_heat();
+        }
         let mut recut: BTreeSet<nest::Home> = wanted.iter().copied().filter(|h| !chunks.homes.contains_key(h) || (changed.structure && shaped.as_ref().is_none_or(|s| s.contains(h)))).collect();
         // What changes frame after frame gets chunks of its own (`Chunks::heat`).
         let now = time.elapsed_secs_f64();

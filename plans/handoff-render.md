@@ -80,8 +80,25 @@ regression, a 70 ms encode on every idle frame of the Prussia import. The pixel
 check turned out to be comparing tiles with tiles: `__iron.raster(false)` waited for a
 frame that idle views no longer render. Fixed, and it passes. Open: a view whose
 tiles do not fit the atlas thrashes and keeps requesting frames (seen at 32 MB in the
-deep zoom, so the script now uses 64). **Next on this
-track:** item 8 (Bevy's default plugins, ~1.2 ms a paused frame), or the 90–100 ms
+deep zoom, so the script now uses 64).
+
+**The Prussia pan measured at 5 ms, not phase 2's 1.2 (checked 2026-11-19, not fixed).**
+Drawing it is cheap: encode 0.19 ms and render 0.18 ms p50 (`bench-large-svg.txt`,
+`wasm-bench`). The rest is two older costs, both worth investigating:
+
+- **An 80 ms hitch about four times a second while idle.** `prepare_spatial`'s
+  `Scene::update` rebuilds the whole spatial index whenever `structure` is set
+  (`iron_spatial/src/scene.rs:295`). With the Prussia import that is about 11,200
+  bounds a time, 13 times in 3 idle seconds, and it is every scenario's ~90 ms p99
+  frame. It is the same pattern as the chunk recut fixed above: some structural
+  change while idle (likely a hidden page's repeat) rebuilds everything. Either
+  find what changes structure while idle, or rebuild only the affected subtrees.
+- **A frame floor of about 3 ms with nothing to draw** (idle frame p50 2.98 ms). Of
+  that, `pick` is 0.65 ms every frame and about 2 ms is unattributed. Item 8 above
+  (Bevy's default plugins) is part of it.
+
+**Next on this
+track:** the idle spatial rebuild above, then item 8 (Bevy's default plugins, ~1.2 ms a paused frame), or the 90–100 ms
 single-frame bakes in the large-SVG table.
 
 **2026-11-18: the user wants render-cache phase 3 built** (vector retention for live

@@ -119,6 +119,10 @@ pub struct Chunk {
     /// For a component instance, its runs, each a layer of its own; its
     /// frame is then the instance's own position. Empty otherwise.
     pub runs: Vec<InstanceRun>,
+    /// The clipped groups split above it, outermost first: it is recorded
+    /// under their clips (`render.rs`, `Draw::chunk`), so a change to any
+    /// of them, or to a split group between, records it again.
+    pub clips: Vec<NodeId>,
     /// When it was last re-recorded (app seconds): the render inspector
     /// shows recent ones.
     pub recorded_at: f64,
@@ -258,14 +262,14 @@ impl Chunks {
     /// cuts decides afresh which chunks changed.
     pub fn partition(&mut self, store: &Store, drawables: &Drawables, home: Home) {
         let doc = store.tree();
-        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
+        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), clips: Vec::new(), out: Partition::default() };
         let roots = home_roots(doc, home);
         cut.pack(&roots);
         let mut out = cut.out;
         if let Some(old) = self.homes.remove(&home) {
             let mut before: HashMap<Vec<NodeId>, Chunk> = old.chunks.into_iter().map(|c| (c.roots.clone(), c)).collect();
             for c in &mut out.chunks {
-                if let Some(o) = before.remove(&c.roots).filter(|o| o.embeds == c.embeds && o.runs.is_empty() == c.runs.is_empty()) {
+                if let Some(o) = before.remove(&c.roots).filter(|o| o.embeds == c.embeds && o.runs.is_empty() == c.runs.is_empty() && o.clips == c.clips) {
                     c.recorded = o.recorded;
                     c.frame = o.frame;
                     c.basis = o.basis;
@@ -277,6 +281,13 @@ impl Chunks {
             }
         }
         self.homes.insert(home, out);
+    }
+
+    /// Forget how nodes have been changing: a new document's ids are not
+    /// the old one's.
+    pub fn forget_heat(&mut self) {
+        self.heat.clear();
+        self.hot.clear();
     }
 
     /// `rec` tinted for a render inspector: made once per recording.
@@ -306,7 +317,7 @@ impl Chunks {
     /// not.
     pub fn must_cut_again(&self, store: &Store, drawables: &Drawables, node: NodeId) -> bool {
         let doc = store.tree();
-        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), out: Partition::default() };
+        let mut cut = Cut { store, doc, drawables, hot: &self.hot, holds: HashMap::new(), cost: HashMap::new(), embeds: HashMap::new(), templates: HashMap::new(), clips: Vec::new(), out: Partition::default() };
         cut.whole(node) && !(cut.clip_splits(node) && cut.holds_hot(node))
     }
 }
@@ -322,6 +333,8 @@ struct Cut<'a> {
     embeds: HashMap<NodeId, bool>,
     /// The templates each subtree draws through references, transitively.
     templates: HashMap<NodeId, std::collections::BTreeSet<NodeId>>,
+    /// The clipped groups split above the subtree being packed.
+    clips: Vec<NodeId>,
     out: Partition,
 }
 
@@ -435,7 +448,10 @@ impl Cut<'_> {
             // reference's (they share by sub-pixel phase), and a light one
             // costs less drawn in an ordinary chunk.
             let light_reference = iron_document::expand::reference_template(self.doc, id).is_some() && self.subtree(id).0 < REFERENCE_LAYER;
-            if let Some(runs) = instance_runs(self.store, id).filter(|_| !self.has_embed(id) && !light_reference) {
+            // Instance runs are shared wherever their instances sit, so
+            // they cannot carry a clip above them: under one, an instance
+            // is an ordinary chunk.
+            if let Some(runs) = instance_runs(self.store, id).filter(|_| self.clips.is_empty() && !self.has_embed(id) && !light_reference) {
                 self.flush(&mut run, &mut run_cost);
                 run.push(id);
                 run_cost = self.subtree(id);
@@ -456,7 +472,14 @@ impl Cut<'_> {
                 self.out.of_node.insert(id, SPLIT);
                 let kids = self.doc.children(id).to_vec();
                 let start = self.out.chunks.len();
+                let clipped = iron_document::appearance::ClipFrame::read(self.store, id).is_some();
+                if clipped {
+                    self.clips.push(id);
+                }
                 self.pack(&kids);
+                if clipped {
+                    self.clips.pop();
+                }
                 self.out.split.insert(id, start..self.out.chunks.len());
                 continue;
             }
@@ -497,7 +520,7 @@ impl Cut<'_> {
                 self.out.shows_template.entry(t).or_default().insert(i);
             }
         }
-        self.out.chunks.push(Chunk { roots, cost: cost.0, nodes: cost.1, embeds, recorded: None, frame: kurbo::Affine::IDENTITY, basis: kurbo::Affine::IDENTITY, runs: Vec::new(), recorded_at: f64::NEG_INFINITY });
+        self.out.chunks.push(Chunk { roots, cost: cost.0, nodes: cost.1, embeds, recorded: None, frame: kurbo::Affine::IDENTITY, basis: kurbo::Affine::IDENTITY, runs: Vec::new(), clips: self.clips.clone(), recorded_at: f64::NEG_INFINITY });
         *cost = (0, 0);
     }
 }

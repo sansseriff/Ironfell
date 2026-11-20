@@ -197,6 +197,8 @@ pub struct DocumentChanges {
     /// The nodes whose structure changed: made, gone or moved, with their
     /// parents. Empty with `structure` set means anything may have (a load).
     pub shaped: BTreeSet<NodeId>,
+    /// The root list changed with them: the loose home is cut again.
+    pub roots: bool,
 }
 
 impl DocumentChanges {
@@ -611,10 +613,12 @@ pub(crate) fn sync_document(
     spatial.bypass_change_detection().unreconciled = false;
     let moved = inbox.take_reconcile();
     affected.extend(moved.nodes());
-    let mut shaped: BTreeSet<NodeId> = moved.created.iter().copied().collect();
+    let mut shaped: BTreeSet<NodeId> = moved.created.iter().chain(&moved.loaded).chain(&moved.unloaded).copied().collect();
+    let mut roots = moved.structure.iter().any(Option::is_none);
     for &(n, p) in moved.removed.iter().chain(&moved.moved) {
         shaped.insert(n);
         shaped.extend(p);
+        roots |= p.is_none();
     }
     shaped.extend(moved.structure.iter().flatten().copied());
     structure |= moved.structural();
@@ -645,6 +649,7 @@ pub(crate) fn sync_document(
         changes.structure = true;
     } else if !changes.structure || !changes.shaped.is_empty() {
         changes.shaped.extend(shaped);
+        changes.roots |= roots;
         changes.structure |= structure;
     }
 }

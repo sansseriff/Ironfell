@@ -356,7 +356,9 @@ fn a_node_changing_every_frame_is_cut_apart_from_still_ones() {
               <path name="curve" d="M0 0 L50 50 L100 0"/>
               <rect name="cursor" x="10" w="2" h="100"/>
             </group>
-            <rect in="{c}" name="note" x="0" y="200" w="20" h="10"/>"#
+            <rect in="{c}" name="note" x="0" y="200" w="20" h="10"/>
+            <place def="std:meter" in="$a" x="120" y="10"/>
+            <place def="std:meter" in="{c}" x="300" y="200"/>"#
         ),
     );
     let (area, back, curve, cursor) = (host.doc_named("area"), host.doc_named("back"), host.doc_named("curve"), host.doc_named("cursor"));
@@ -384,6 +386,11 @@ fn a_node_changing_every_frame_is_cut_apart_from_still_ones() {
     assert_eq!(part.chunks[i].roots, vec![cursor], "the cursor has a chunk of its own");
     let Some(Place::Chunk(j)) = chunks.chunk_of(home, back) else { panic!("back is in one chunk") };
     assert!(matches!(chunks.chunk_of(home, curve), Some(Place::Chunk(k)) if k == j), "the still children share a chunk");
+    // Every piece is recorded under the group's clip, and an instance under
+    // it draws as an ordinary chunk: its shared runs could not carry it.
+    let Some(Place::Split(range)) = chunks.chunk_of(home, area) else { unreachable!() };
+    assert!(part.chunks[range.clone()].iter().all(|c| c.clips == vec![area] && c.runs.is_empty()), "pieces under the clip, no instance runs");
+    assert!(part.chunks.iter().any(|c| !c.runs.is_empty() && c.clips.is_empty()), "the meter outside the clip keeps its runs");
     // Recordings carry over a cut that gives the same roots.
     let dummy = Arc::new(Recorded::record(|_| {}));
     for chunk in &mut chunks.homes.get_mut(&home).unwrap().chunks {

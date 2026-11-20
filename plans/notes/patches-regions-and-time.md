@@ -246,6 +246,42 @@ A view shows one point. This is reactive-engine.md §10.5's slice, and the user'
 as one slice through a high-dimensional space", made literal: the document is a function
 over a coordinate space, and every view is a slice of it.
 
+### 4.1 Components
+
+A definition is a base, and its placements are the points of an **instance axis**.
+
+| Region on the instance axis | Is |
+|---|---|
+| The whole axis | editing the definition ("edit main component"); "push overrides to main" is widening to it |
+| `{i}` | instance i's overrides |
+| A named subset | a **class**: "these three meters have a red needle", without forking the definition. USD's `inherits` arc is the precedent. This replaces most of what `extends` variants were for; a class may contain classes, so regions nest |
+
+- **Nesting falls out of specificity (law 4).** A meter placed as part `j` of an
+  oscilloscope has a region per level:
+  - the meter definition's patches cover every meter placement;
+  - the oscilloscope definition's patch on part `j` covers only meters that are part
+    `j` of some oscilloscope, a subset;
+  - oscilloscope instance `i`'s patch covers only part `j` of `i`, a smaller subset.
+
+  So the outermost opinion is strongest, which is component-model.md's 2026-10-18
+  decision, now derived rather than stated.
+- **A component carries its own axes.** Its machine states, its loop and its clock are
+  local axes. An instance's point is its place on the instance axis together with its
+  coordinates on those local axes. A patch may combine both, such as `{i} × {hover}`
+  for "while this one is hovered".
+- **Shared design is not shared state.** Patches carry authored values. Runtime state
+  (an integrator, a trace, a machine's current coordinate) belongs to each instance and
+  evolves from what the patches set; it is never shared through a patch.
+- **Two "instance" relations, kept apart:**
+  - **Several entities from one definition** share design and have separate state: the
+    instance axis.
+  - **One entity in several pictures** (reactive-engine.md §8.4: the body computes once)
+    shares state: a picture axis, whose points differ only in projection.
+- **The boundary stays.** What makes a component is its interface (ports, and the
+  narrative's rule that a move sets its state without reaching inside), not that it
+  holds state. Whether outside patches may reach a part's fields is a policy per
+  definition: Figma allows it, and a definition could declare which fields it exposes.
+
 ## 5. Editing
 
 - **Each view has an edit region.** Its default comes from the notation:

@@ -95,8 +95,11 @@ it is cheap: encode 0.19 ms and render 0.18 ms p50 (`bench-large-svg.txt`,
   rebuilds only the compositions touched. A deleted root or any template still
   rebuilds everything. Idle fitted: `bounds` 79.5 → 0.93 ms, 256 entries rewritten
   instead of 11,218, frames over 60 ms 13 → 0 in 3 s, raf p99 88 → 6.8 ms. The deep
-  drag's worst frame went 96.6 → 18.7 ms. The cause, a hidden page's repeat expanding
-  while nobody looks, is the reactive engine's deferred "Dormant by view".
+  drag's worst frame went 96.6 → 18.7 ms. A hidden page's plot still expands its ticks
+  because it is stateful (its trace) and §8.3 keeps what a repeat's count reads
+  necessary; reactive engine phase 4 skips only pure pictures. Making it Dormant or
+  parked is the deferred parking design (handoff-reactive-structure.md, phase 4 step 4),
+  which no phase schedules yet.
 - **Open: a frame floor of about 3 ms with nothing to draw** (idle frame p50 2.9 ms).
   Of that, `pick` is 0.65 ms every frame and about 2 ms is unattributed. Item 8 above
   (Bevy's default plugins) is part of it.

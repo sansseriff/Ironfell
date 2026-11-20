@@ -570,6 +570,21 @@ they are:
 - A top-level add or delete still records its whole home again, as before phase 3.
 - `must_cut_again` walks the group's subtree for embeds.
 
+**Council round 2:** Opus 8/10, Sol 6/10. Both found that turning a clip *on* for a
+group already split around a hot node kept its old cut. Instances there stayed
+runs, drawn unclipped, until the node cooled. A split group whose clip disagrees
+with its pieces' `clips` is now cut again (`clip_as_cut`).
+
+Sol also found that a re-cut dropped what the old cut alone could find: a deleted
+template's references kept their recordings. The first pass's marks now carry over
+the re-cut, matched by roots.
+
+The animated streak counts rendered frames in a row, not changes within 0.25 s.
+
+Still open, from before phase 3: retargeting a reference (`instance.def`) is a value
+change, so `shows_template` keeps the old target until the home is cut again. A
+later edit to the new target can then miss that home.
+
 §6's exit is met: two live chunks that change on their own each re-record only
 themselves. The view still encodes every live chunk each frame, with the still
 content drawn from tiles.

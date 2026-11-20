@@ -81,7 +81,7 @@ const LIVE_OFF: usize = 1000;
 /// drawn live.
 const MIN_GROUP: usize = 64;
 /// A view whose content keeps changing (a visible chunk that changed on
-/// [`ANIMATED_FRAMES`] frames in a row: a clip playing, a producer)
+/// [`ANIMATED_FRAMES`] rendered frames in a row: a clip playing, a producer)
 /// re-encodes its still content every frame, so it rasters once that
 /// content costs more than this, about 1 ms of encode a frame, and stops
 /// below [`ANIMATED_OFF`] (render-cache.md §10, phase 3). One edit is not
@@ -89,8 +89,6 @@ const MIN_GROUP: usize = 64;
 const ANIMATED_OK: usize = 256;
 const ANIMATED_OFF: usize = 128;
 const ANIMATED_FRAMES: u32 = 4;
-/// Seconds between two changes that still count as in a row.
-const ANIMATED_GAP: f64 = 0.25;
 /// Milliseconds of baking a frame may spend on work nothing waits for:
 /// prefetch, a grouping change, a stretched square's sharper tile. A tile
 /// whose estimate alone is over it bakes only in a frame where its view is
@@ -417,8 +415,9 @@ struct ChunkState {
     bakeable: bool,
     /// What encoding it costs, roughly in commands ([`cost`]).
     cost: usize,
-    /// How many times in a row it has changed ([`ANIMATED_GAP`] apart).
+    /// On how many rendered frames in a row it has changed, and the last.
     streak: u32,
+    changed_frame: u64,
 }
 
 #[derive(Default)]
@@ -454,6 +453,8 @@ pub(super) struct Raster {
     /// Bake time left this frame, and whether anything baked yet.
     bake_left: f32,
     baked_frame: u32,
+    /// Rendered frames so far ([`ChunkState::streak`]).
+    frame: u64,
     /// The view being built changed nothing but its raster work.
     idle: bool,
     /// Measured bake cost per command emitted, in µs: how a tile's cost is
@@ -488,6 +489,7 @@ impl Raster {
             views: HashMap::default(),
             bake_left: BAKE_MS,
             baked_frame: 0,
+            frame: 0,
             idle: false,
             us_per_cmd: 2.0,
             last_bake_cmds: 0,
@@ -507,6 +509,7 @@ impl Raster {
         self.now = self.origin.elapsed().as_secs_f64();
         self.bake_left = BAKE_MS;
         self.baked_frame = 0;
+        self.frame += 1;
         // A lower budget gives up the pages over it, and their tiles.
         self.max_pages = (BUDGET.load(Ordering::Relaxed) / PAGE_BYTES).max(1) as usize;
         if self.pages.len() > self.max_pages {
@@ -541,13 +544,14 @@ impl Raster {
                         damaged.push((key, d));
                     }
                     c.list = list.clone();
-                    c.streak = if self.now - c.changed_at <= ANIMATED_GAP { c.streak + 1 } else { 1 };
+                    c.streak = if c.changed_frame + 1 == self.frame { c.streak + 1 } else { 1 };
+                    c.changed_frame = self.frame;
                     c.changed_at = self.now;
                     c.bakeable = bakeable(list);
                     c.cost = cost(list);
                 }
                 None => {
-                    self.chunks.insert(key, ChunkState { list: list.clone(), changed_at: self.now, bakeable: bakeable(list), cost: cost(list), streak: 1 });
+                    self.chunks.insert(key, ChunkState { list: list.clone(), changed_at: self.now, bakeable: bakeable(list), cost: cost(list), streak: 1, changed_frame: self.frame });
                 }
             }
         }

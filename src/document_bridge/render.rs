@@ -72,7 +72,7 @@ fn find_changed(chunks: &Chunks, store: &iron_document::Store, drawables: &super
             // A split group changed: it draws nothing itself, so only
             // its placement can matter, which its chunks' frames carry
             // (instance-cache.md §2). No re-recording, no cutting again.
-            Some(Place::Split(range)) if !chunks.must_cut_again(store, drawables, n) => {
+            Some(Place::Split(range)) if !chunks.must_cut_again(store, drawables, n) && clip_as_cut(chunks, store, home, n, &range) => {
                 // Pieces recorded under a clip, its own or one above it,
                 // drew that clip relative to their frame: record them.
                 // A group whose clip was just removed is among those.
@@ -95,6 +95,15 @@ fn find_changed(chunks: &Chunks, store: &iron_document::Store, drawables: &super
             }
         }
     }
+}
+
+/// Whether split group `n` has a clip exactly when its pieces were cut
+/// under it: one turned on or off since is cut again, since the cut decides
+/// which pieces may be instance runs and which clips each records.
+fn clip_as_cut(chunks: &Chunks, store: &iron_document::Store, home: nest::Home, n: NodeId, range: &std::ops::Range<usize>) -> bool {
+    let now = iron_document::appearance::ClipFrame::read(store, n).is_some();
+    let then = chunks.homes.get(&home).and_then(|p| p.chunks.get(range.clone())).is_some_and(|cs| cs.iter().any(|c| c.clips.contains(&n)));
+    now == then
 }
 
 /// A group's clip frame as a shape in its own space.
@@ -376,16 +385,29 @@ pub fn render_document_layer(
         // Chunks whose frame may have moved, with nothing they draw changed.
         let mut reframe: BTreeMap<nest::Home, BTreeSet<usize>> = BTreeMap::new();
         find_changed(&chunks, &store.0, &drawables, &wanted, &changed.nodes, None, &mut dirty, &mut reframe, &mut recut);
+        // A new cut keeps the recordings of chunks it did not change, which
+        // were found above by the old cut's numbering: find them by the new,
+        // and carry over by roots what the old cut alone could find (a
+        // deleted template's references).
+        let mut carried: Vec<(nest::Home, Vec<NodeId>, bool)> = Vec::new();
         for &home in &recut {
+            if let Some(part) = chunks.homes.get(&home) {
+                for (marks, is_dirty) in [(dirty.remove(&home), true), (reframe.remove(&home), false)] {
+                    for i in marks.into_iter().flatten() {
+                        if let Some(c) = part.chunks.get(i) {
+                            carried.push((home, c.roots.clone(), is_dirty));
+                        }
+                    }
+                }
+            }
             chunks.partition(&store.0, &drawables, home);
         }
-        // A new cut keeps the recordings of chunks it did not change, which
-        // were found above by the old cut's numbering: find them by the new.
-        if !recut.is_empty() {
-            for h in &recut {
-                dirty.remove(h);
-                reframe.remove(h);
+        for (home, roots, is_dirty) in carried {
+            if let Some(i) = chunks.homes.get(&home).and_then(|p| p.chunks.iter().position(|c| c.roots == roots)) {
+                if is_dirty { &mut dirty } else { &mut reframe }.entry(home).or_default().insert(i);
             }
+        }
+        if !recut.is_empty() {
             let mut again = BTreeSet::new();
             find_changed(&chunks, &store.0, &drawables, &wanted, &changed.nodes, Some(&recut), &mut dirty, &mut reframe, &mut again);
         }

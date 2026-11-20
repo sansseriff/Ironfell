@@ -321,10 +321,14 @@ pub fn effect_of(doc: Tree<'_>, leaf: Leaf) -> GeometryEffect {
 }
 
 /// The changes since the last take, classified. `structure` means the tree's
-/// shape changed and painter order, scopes and chains must be rebuilt.
+/// shape changed and painter order, scopes and chains must be rebuilt where
+/// it changed: `shaped` names the nodes made, deleted, moved or given or
+/// relieved of a facet, and the parents involved (`None`: the roots). With
+/// `structure` set and `shaped` empty, anything may have changed (a load).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GeometryChanges {
     pub structure: bool,
+    pub shaped: BTreeSet<Option<NodeId>>,
     pub placement: BTreeSet<NodeId>,
     pub local: BTreeSet<NodeId>,
 }
@@ -334,9 +338,27 @@ impl GeometryChanges {
         !self.structure && self.placement.is_empty() && self.local.is_empty()
     }
 
+    /// Whether anything may have changed shape: rebuild everything.
+    pub fn everything(&self) -> bool {
+        self.structure && self.shaped.is_empty()
+    }
+
+    /// Name `parents` whose children changed too: a derived copy deleted
+    /// leaves no tombstone to find its place by, but its parent is here.
+    pub fn add_parents(&mut self, parents: &BTreeSet<Option<NodeId>>) {
+        if self.structure && !self.shaped.is_empty() {
+            self.shaped.extend(parents.iter().copied());
+        }
+    }
+
     /// Add `later`, taken after this.
     pub fn merge(&mut self, later: GeometryChanges) {
+        let everything = self.everything() || later.everything();
         self.structure |= later.structure;
+        self.shaped.extend(later.shaped);
+        if everything {
+            self.shaped.clear();
+        }
         self.placement.extend(later.placement);
         self.local.extend(later.local);
     }
@@ -356,6 +378,11 @@ pub struct Revisions {
     /// reports only re-evaluated bindings and previews).
     pending_leaves: BTreeSet<Leaf>,
     pending_structure: bool,
+    /// What structural ops named ([`GeometryChanges::shaped`]); `None`
+    /// inside: the roots.
+    pending_shaped: BTreeSet<Option<NodeId>>,
+    /// A change nothing names (a load): everything.
+    pending_everything: bool,
 }
 
 impl Revisions {
@@ -391,7 +418,15 @@ impl Revisions {
                 Op::Set { id, path, .. } => {
                     self.pending_leaves.insert(Leaf { node: *id, path: *path });
                 }
-                Op::Create { .. } | Op::Delete { .. } | Op::Reparent { .. } | Op::Reorder { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } => self.pending_structure = true,
+                Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
+                    self.pending_structure = true;
+                    self.pending_shaped.insert(Some(*id));
+                    self.pending_shaped.insert(*parent);
+                }
+                Op::Delete { id } | Op::Reorder { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
+                    self.pending_structure = true;
+                    self.pending_shaped.insert(Some(*id));
+                }
                 _ => {}
             }
         }
@@ -404,6 +439,7 @@ impl Revisions {
 
     pub(crate) fn note_structure(&mut self) {
         self.pending_structure = true;
+        self.pending_everything = true;
     }
 
     /// Classify everything pending plus `touched` from the reactive graph,
@@ -411,6 +447,8 @@ impl Revisions {
     pub(crate) fn take(&mut self, doc: Tree<'_>, touched: BTreeSet<Leaf>) -> GeometryChanges {
         let out = self.classify(doc, &touched);
         self.pending_structure = false;
+        self.pending_everything = false;
+        self.pending_shaped.clear();
         self.pending_leaves.clear();
         if out.structure {
             self.structure += 1;
@@ -426,7 +464,8 @@ impl Revisions {
 
     /// What `take` would return now, without taking it or bumping anything.
     pub(crate) fn classify(&self, doc: Tree<'_>, touched: &BTreeSet<Leaf>) -> GeometryChanges {
-        let mut out = GeometryChanges { structure: self.pending_structure, ..Default::default() };
+        let shaped = if self.pending_everything { BTreeSet::new() } else { self.pending_shaped.clone() };
+        let mut out = GeometryChanges { structure: self.pending_structure, shaped, ..Default::default() };
         for &leaf in self.pending_leaves.iter().chain(touched) {
             match effect_of(doc, leaf) {
                 GeometryEffect::Placement(n) => {

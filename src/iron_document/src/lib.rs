@@ -1375,6 +1375,7 @@ impl StoreCore {
         c.values = self.reactive.take_changed();
         c.marks = self.reactive.take_marks();
         c.geometry = self.geometry.take(Tree::of(&self.docs), self.reactive.take_moved());
+        c.geometry.add_parents(&c.structure);
         c.revisions = changes::Revisions { authored: self.docs.authored.version(), session: self.session_version };
         c.sorted()
     }
@@ -1388,6 +1389,7 @@ impl StoreCore {
         c.values = values;
         c.marks = marks;
         c.geometry = self.geometry.classify(Tree::of(&self.docs), touched);
+        c.geometry.add_parents(&c.structure);
         c.revisions = changes::Revisions { authored: self.docs.authored.version(), session: self.session_version };
         c.sorted()
     }

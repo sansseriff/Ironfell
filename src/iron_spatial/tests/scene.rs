@@ -376,3 +376,28 @@ fn update(scene: &mut iron_spatial::Scene, store: &mut iron_document::Store) {
     let changes = store.take_changes().geometry;
     scene.update(store, changes);
 }
+
+/// A shape made in one composition rebuilds that composition alone: the
+/// other's entries are left as they were, and the result is what a scene
+/// built from scratch holds.
+#[test]
+fn structure_in_one_composition_leaves_another_alone() {
+    let mut f = fixture(4, 25);
+    let ids = f.store.authored().next_ids(2);
+    let (other, dot) = (ids[0], ids[1]);
+    let make = vec![Op::Create { id: other, ty: ty("composition"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![comp2d(), named("other")] }];
+    f.store.apply(tx("other", make)).unwrap();
+    let mut scene = Scene::default();
+    update(&mut scene, &mut f.store);
+    let before = scene.len();
+    f.store.apply(tx("dot", vec![Op::Create { id: dot, ty: ty("rect"), parent: Some(other), order: OrderKey::first(), facets: vec![at(5.0, 5.0, 0.0), size(4.0, 4.0)] }])).unwrap();
+    update(&mut scene, &mut f.store);
+    assert_eq!(scene.len(), before + 1);
+    assert!(scene.updated <= 2, "only the other composition is rebuilt: {} entries rewritten", scene.updated);
+    let mut fresh = Scene::default();
+    fresh.update(&f.store, iron_document::geom::GeometryChanges { structure: true, ..Default::default() });
+    assert_eq!(scene.diff(&fresh), None);
+    let roots = roots_of(&f.store, f.composition, f.loose);
+    check_flat(&scene, &f.store, &roots);
+    assert_eq!(scene.candidates(&[dot], None, Rect::new(0.0, 0.0, 20.0, 20.0)), vec![dot]);
+}

@@ -8,8 +8,10 @@
 //!
 //! What the store reports (`Changes::geometry`) is what moves:
 //! a **placement** change rewrites one entry and the unions above it; a
-//! **local** change recomputes one leaf; **structure** rebuilds. Nothing here
-//! walks a moved group's descendants, which is the point.
+//! **local** change recomputes one leaf; **structure** rebuilds the
+//! compositions and templates it touched (`GeometryChanges::shaped`), each
+//! numbered in painter order on its own, so the rest keep their entries.
+//! Nothing here walks a moved group's descendants, which is the point.
 //!
 //! Hosts read painter-ordered candidates in composition space and keep the
 //! exact tests (shape containment, clips, embed regions) to themselves.
@@ -52,6 +54,53 @@ fn template_order(doc: Tree<'_>) -> Vec<NodeId> {
     out
 }
 
+/// Root types whose content is not 2D: not loose roots.
+const NOT_LOOSE: [&str; 6] = ["composition", "model", "library", "timeline", "session", "narrative"];
+
+/// The root `id`'s content is indexed under: the composition or template it
+/// is in (itself included), `Some(None)` for a loose 2D root's, `None` for
+/// content nothing indexes. Tombstones count, so a deleted node finds the
+/// root it left.
+fn root_of(doc: Tree<'_>, id: NodeId) -> Option<Option<NodeId>> {
+    let mut at = id;
+    loop {
+        let node = doc.node(at)?;
+        let ty = node.ty.name();
+        if ty == "composition" || ty == "template" {
+            return Some(Some(at));
+        }
+        match node.parent {
+            Some(p) => at = p,
+            None => return (!NOT_LOOSE.contains(&ty)).then_some(None),
+        }
+    }
+}
+
+/// Painter order within one root: the preorder of `roots`' subtrees.
+fn numbering(doc: Tree<'_>, roots: &[NodeId]) -> BTreeMap<NodeId, u32> {
+    let mut order = BTreeMap::new();
+    let mut stack: Vec<NodeId> = roots.iter().rev().copied().collect();
+    let mut i = 0u32;
+    while let Some(id) = stack.pop() {
+        order.insert(id, i);
+        i += 1;
+        stack.extend(doc.children(id).iter().rev().copied());
+    }
+    order
+}
+
+/// The loose 2D roots.
+fn loose_roots(doc: Tree<'_>) -> Vec<NodeId> {
+    doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !NOT_LOOSE.contains(&n.ty.name()))).collect()
+}
+
+/// Insert `id` into a sorted list once.
+fn add_sorted(list: &mut Vec<NodeId>, id: NodeId) {
+    if let Err(i) = list.binary_search(&id) {
+        list.insert(i, id);
+    }
+}
+
 /// Paint outset of an embed's frame, as the hosts stroke it.
 const EMBED_PAD: f64 = 2.0;
 
@@ -74,6 +123,9 @@ enum Kind {
 struct Entry {
     /// The scope that holds this entry: the node's parent.
     scope: Option<NodeId>,
+    /// The composition or template it is indexed under, `None` loose: what
+    /// a partial rebuild replaces.
+    root: Option<NodeId>,
     kind: Kind,
     /// The node's own transform in the scope's space.
     affine: Affine,
@@ -258,7 +310,9 @@ impl Scene {
         for scope in scopes {
             self.query(scope, Some(&root_set), point, rect, &mut out);
         }
-        out.sort_by_cached_key(|id| self.entries[id].order);
+        // Painter order is numbered per root; a panel draws its
+        // composition, then the loose roots.
+        out.sort_by_cached_key(|id| (self.entries[id].root.is_none(), self.entries[id].order));
         out
     }
 
@@ -292,11 +346,23 @@ impl Scene {
     /// Bring the scene up to date with what moved: `changes`, the geometry
     /// part of what the host took from the store (`Store::take_changes`).
     pub fn update(&mut self, store: &Store, changes: GeometryChanges) {
-        if changes.structure || !self.built {
+        if changes.everything() || !self.built {
             self.rebuild(store);
             return;
         }
         if changes.is_empty() {
+            return;
+        }
+        // The roots structure changed under, each rebuilt whole; one that
+        // went away, or a template (references elsewhere hold its union and
+        // order), rebuilds everything.
+        let doc = store.tree();
+        let roots: BTreeSet<Option<NodeId>> = changes.shaped.iter().filter_map(|n| match n {
+            Some(n) => root_of(doc, *n),
+            None => Some(None),
+        }).collect();
+        if roots.iter().flatten().any(|&r| !doc.is_live(r) || is_type(doc, r, "template")) {
+            self.rebuild(store);
             return;
         }
         self.generation = self.generation.wrapping_add(1);
@@ -304,6 +370,9 @@ impl Scene {
         self.updated = 0;
         for s in self.scopes.values_mut() {
             s.index.begin_changes();
+        }
+        for root in roots {
+            self.rebuild_root(store, root);
         }
         let mut dirty: BTreeSet<Option<NodeId>> = BTreeSet::new();
         let mut local: BTreeSet<NodeId> = changes.local;
@@ -396,7 +465,11 @@ impl Scene {
                 let parent = doc.live(g).and_then(|n| n.parent);
                 let affine = affine_of(store.local_affine(g));
                 let order = self.entries.values().map(|e| e.order).max().unwrap_or(0);
-                self.entries.insert(g, Entry { scope: parent, kind: Kind::Group, affine, bounds: u.mapped(affine), order });
+                let root = match parent {
+                    Some(p) if self.entries.contains_key(&p) => self.entries[&p].root,
+                    other => other,
+                };
+                self.entries.insert(g, Entry { scope: parent, root, kind: Kind::Group, affine, bounds: u.mapped(affine), order });
                 self.chains.insert(g, lineage(doc, g));
                 self.scopes.entry(parent).or_default().index.upsert(g, Record { bounds: u.mapped(affine), order });
                 self.updated += 1;
@@ -464,16 +537,9 @@ impl Scene {
         let old_damage: Vec<Rect> = self.entries.keys().filter_map(|id| self.painted(*id)).collect();
         *self = Scene { generation: self.generation.wrapping_add(1), built: true, ..Default::default() };
         self.damage = old_damage;
-        // Painter order is the document's preorder, as the reconciler's.
-        let mut order: BTreeMap<NodeId, u32> = BTreeMap::new();
-        let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
-        let mut i = 0u32;
-        while let Some(id) = stack.pop() {
-            order.insert(id, i);
-            i += 1;
-            stack.extend(doc.children(id).iter().rev().copied());
-        }
-        let structural = ["composition", "model", "library", "timeline", "session", "narrative"].map(|t| TypeId::lookup(t).expect("registered"));
+        // Painter order is the document's preorder within each root (a
+        // composition, a template, the loose roots), as the reconciler's:
+        // queries compare it only within one.
         // 2D compositions' children, then loose 2D roots.
         let mut top: Vec<(Option<NodeId>, Vec<NodeId>)> = Vec::new();
         for c in composition::compositions(doc) {
@@ -489,20 +555,22 @@ impl Scene {
             let mut s = Scope::default();
             s.depth = 0;
             self.scopes.insert(scope_of(t), s);
-            for c in doc.children(t).to_vec() {
-                self.build_node(store, c, scope_of(t), 1, &order);
+            let kids = doc.children(t).to_vec();
+            let order = numbering(doc, &kids);
+            for c in kids {
+                self.build_node(store, c, scope_of(t), Some(t), 1, &order);
             }
             let made: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| !before.contains(k)).collect();
             self.settle(store, made);
         }
-        let loose: Vec<NodeId> = doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect();
-        top.push((None, loose));
+        top.push((None, loose_roots(doc)));
         for (scope, roots) in top {
             let mut s = Scope::default();
             s.depth = 0;
             self.scopes.insert(scope, s);
+            let order = numbering(doc, &roots);
             for r in roots {
-                self.build_node(store, r, scope, 1, &order);
+                self.build_node(store, r, scope, scope, 1, &order);
             }
         }
         // Every scope commits, deepest first, so group entries get their
@@ -536,9 +604,78 @@ impl Scene {
         self.damage.extend(self.entries.keys().filter_map(|id| self.painted(*id)).collect::<Vec<_>>());
     }
 
+    /// Replace what is indexed under `root` (a live 2D composition, or the
+    /// loose roots) with its content now, as [`Self::rebuild`] would index
+    /// it: its entries, scopes, chains and embeds. What shows it (embeds
+    /// elsewhere) follows when its union changed.
+    fn rebuild_root(&mut self, store: &Store, root: Option<NodeId>) {
+        let doc = store.tree();
+        let gone: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
+        let old_damage: Vec<Rect> = gone.iter().filter_map(|id| self.painted(*id)).collect();
+        self.damage.extend(old_damage);
+        let gone_set: BTreeSet<NodeId> = gone.iter().copied().collect();
+        for id in &gone {
+            self.entries.remove(id);
+            self.chains.remove(id);
+            self.scopes.remove(&scope_of(*id));
+        }
+        for list in self.shown_by.values_mut().chain(self.camera_embeds.values_mut()) {
+            list.retain(|e| !gone_set.contains(e));
+        }
+        self.shown_by.retain(|_, l| !l.is_empty());
+        self.camera_embeds.retain(|_, l| !l.is_empty());
+        self.embeds.retain(|e| !gone_set.contains(e));
+        // The root's own scope starts again from its last union, so what
+        // shows it follows only if that changed.
+        let union = self.scopes.remove(&root).and_then(|s| s.union);
+        let kids = match root {
+            Some(c) if composition::dims(doc, c) == Some(Dims::Two) => doc.children(c).to_vec(),
+            Some(_) => Vec::new(),
+            None => loose_roots(doc),
+        };
+        let shown = root.is_none() || !kids.is_empty() || root.is_some_and(|c| composition::dims(doc, c) == Some(Dims::Two));
+        if shown {
+            self.scopes.insert(root, Scope { union, ..Default::default() });
+        }
+        let before: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| *k != root).collect();
+        let order = numbering(doc, &kids);
+        for k in kids {
+            self.build_node(store, k, root, root, 1, &order);
+        }
+        let made: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| !before.contains(k)).collect();
+        let fresh: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
+        self.updated += (gone.len() + fresh.len()) as u32;
+        for &id in &fresh {
+            if is_type(doc, id, "embed") {
+                add_sorted(&mut self.embeds, id);
+            }
+        }
+        self.settle(store, made);
+        // Embed regions that follow content, once unions exist (`rebuild`).
+        for _ in 0..MAX_EMBED_DEPTH {
+            let mut dirty = BTreeSet::new();
+            for &embed in &fresh {
+                let Some(e) = self.entries.get(&embed) else { continue };
+                if matches!(e.kind, Kind::Embed2d { framed: false, .. }) {
+                    let (scope, before) = (e.scope, e.bounds);
+                    self.refresh_embed(store, embed);
+                    if self.entries.get(&embed).map(|e| e.bounds) != Some(before) {
+                        dirty.insert(scope);
+                    }
+                }
+            }
+            if dirty.is_empty() {
+                break;
+            }
+            self.settle(store, dirty);
+        }
+        let painted: Vec<Rect> = fresh.iter().filter_map(|id| self.painted(*id)).collect();
+        self.damage.extend(painted);
+    }
+
     /// Index `id` into `scope`; recurse into its children as a scope of
     /// its own. Returns whether anything below `id` (or `id`) was indexed.
-    fn build_node(&mut self, store: &Store, id: NodeId, scope: Option<NodeId>, depth: u32, order: &BTreeMap<NodeId, u32>) -> bool {
+    fn build_node(&mut self, store: &Store, id: NodeId, scope: Option<NodeId>, root: Option<NodeId>, depth: u32, order: &BTreeMap<NodeId, u32>) -> bool {
         let doc = store.tree();
         let Some(node) = doc.live(id) else { return false };
         // A repeat's template is not drawn, so nothing in it can be hit.
@@ -549,28 +686,28 @@ impl Scene {
         let affine = affine_of(store.local_affine(id));
         let ty = node.ty.name();
         if let Some(template) = iron_document::expand::reference_template(doc, id) {
-            self.shown_by.entry(template).or_default().push(id);
+            add_sorted(self.shown_by.entry(template).or_default(), id);
             // Its template is indexed and settled already (`rebuild`); one
             // with nothing in it indexes nothing, like an empty group.
             let Some(u) = self.scopes.get(&scope_of(template)).and_then(|s| s.union) else { return false };
-            self.insert(id, scope, Kind::Embed2d { source: template, framed: false }, affine, u.mapped(affine), ord, doc);
+            self.insert(id, scope, root, Kind::Embed2d { source: template, framed: false }, affine, u.mapped(affine), ord, doc);
             return true;
         }
         if ty == "embed" {
             let kind = match composition::embedded(doc, id) {
                 Some(source) if composition::dims(doc, source) == Some(Dims::Two) => {
-                    self.shown_by.entry(source).or_default().push(id);
+                    add_sorted(self.shown_by.entry(source).or_default(), id);
                     Some((Kind::Embed2d { source, framed: doc.get::<iron_document::facet::Frame>(id).is_some() }, Bounds::transformed(Rect::ZERO, affine, EMBED_PAD, 0.0)))
                 }
                 _ => store.local_bounds(id).map(|lb| {
                     if let Some(cam) = composition::embed_camera(doc, id) {
-                        self.camera_embeds.entry(cam).or_default().push(id);
+                        add_sorted(self.camera_embeds.entry(cam).or_default(), id);
                     }
                     (Kind::Leaf, Bounds::of_local(&lb, affine))
                 }),
             };
             let Some((kind, bounds)) = kind else { return false };
-            self.insert(id, scope, kind, affine, bounds, ord, doc);
+            self.insert(id, scope, root, kind, affine, bounds, ord, doc);
             if let Kind::Embed2d { .. } = kind {
                 // Region filled in by `rebuild` once content unions exist.
                 if let Some((region, framed)) = self.embed_region(store, id, composition::embedded(doc, id).expect("checked")) {
@@ -581,7 +718,7 @@ impl Scene {
             return true;
         }
         if let Some(lb) = store.local_bounds(id) {
-            self.insert(id, scope, Kind::Leaf, affine, Bounds::of_local(&lb, affine), ord, doc);
+            self.insert(id, scope, root, Kind::Leaf, affine, Bounds::of_local(&lb, affine), ord, doc);
             // A path's points are its outline, not content of their own.
             return true;
         }
@@ -596,19 +733,20 @@ impl Scene {
         self.scopes.insert(scope_of(id), s);
         let mut any = false;
         for c in children {
-            any |= self.build_node(store, c, scope_of(id), depth + 1, order);
+            any |= self.build_node(store, c, scope_of(id), root, depth + 1, order);
         }
         if !any {
             self.scopes.remove(&scope_of(id));
             return false;
         }
         // Its entry's bounds come from `settle`, once the scope commits.
-        self.insert(id, scope, Kind::Group, affine, Bounds::transformed(Rect::ZERO, Affine::IDENTITY, 0.0, 0.0), ord, doc);
+        self.insert(id, scope, root, Kind::Group, affine, Bounds::transformed(Rect::ZERO, Affine::IDENTITY, 0.0, 0.0), ord, doc);
         true
     }
 
-    fn insert(&mut self, id: NodeId, scope: Option<NodeId>, kind: Kind, affine: Affine, bounds: Bounds, order: u32, doc: Tree<'_>) {
-        self.entries.insert(id, Entry { scope, kind, affine, bounds, order });
+    #[allow(clippy::too_many_arguments)]
+    fn insert(&mut self, id: NodeId, scope: Option<NodeId>, root: Option<NodeId>, kind: Kind, affine: Affine, bounds: Bounds, order: u32, doc: Tree<'_>) {
+        self.entries.insert(id, Entry { scope, root, kind, affine, bounds, order });
         self.chains.insert(id, lineage(doc, id));
         if let Kind::Group = kind {
             // Indexed by `settle` from its union; a placeholder box here

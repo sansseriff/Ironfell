@@ -82,23 +82,30 @@ frame that idle views no longer render. Fixed, and it passes. Open: a view whose
 tiles do not fit the atlas thrashes and keeps requesting frames (seen at 32 MB in the
 deep zoom, so the script now uses 64).
 
-**The Prussia pan measured at 5 ms, not phase 2's 1.2 (checked 2026-11-19, not fixed).**
-Drawing it is cheap: encode 0.19 ms and render 0.18 ms p50 (`bench-large-svg.txt`,
-`wasm-bench`). The rest is two older costs, both worth investigating:
+**The Prussia pan measured at 5 ms, not phase 2's 1.2 (checked 2026-11-19).** Drawing
+it is cheap: encode 0.19 ms and render 0.18 ms p50 (`bench-large-svg.txt`,
+`wasm-bench`). Two other costs made up the rest:
 
-- **An 80 ms hitch about four times a second while idle.** `prepare_spatial`'s
-  `Scene::update` rebuilds the whole spatial index whenever `structure` is set
-  (`iron_spatial/src/scene.rs:295`). With the Prussia import that is about 11,200
-  bounds a time, 13 times in 3 idle seconds, and it is every scenario's ~90 ms p99
-  frame. It is the same pattern as the chunk recut fixed above: some structural
-  change while idle (likely a hidden page's repeat) rebuilds everything. Either
-  find what changes structure while idle, or rebuild only the affected subtrees.
-- **A frame floor of about 3 ms with nothing to draw** (idle frame p50 2.98 ms). Of
-  that, `pick` is 0.65 ms every frame and about 2 ms is unattributed. Item 8 above
+- **Fixed the same day: an 80 ms hitch about four times a second while idle.** Any
+  structural change rebuilt the whole spatial index. Here the change was the hidden
+  Lorenz page's "x vs time" plot, whose axis scrolls with the simulation, so its tick
+  labels come and go. With the Prussia import that meant about 11,200 bounds each
+  time. Now `GeometryChanges::shaped` names what changed shape, painter order is
+  numbered per composition (a panel sorts its loose roots after it), and `Scene::update`
+  rebuilds only the compositions touched. A deleted root or any template still
+  rebuilds everything. Idle fitted: `bounds` 79.5 → 0.93 ms, 256 entries rewritten
+  instead of 11,218, frames over 60 ms 13 → 0 in 3 s, raf p99 88 → 6.8 ms. The deep
+  drag's worst frame went 96.6 → 18.7 ms. The cause, a hidden page's repeat expanding
+  while nobody looks, is the reactive engine's deferred "Dormant by view".
+- **Open: a frame floor of about 3 ms with nothing to draw** (idle frame p50 2.9 ms).
+  Of that, `pick` is 0.65 ms every frame and about 2 ms is unattributed. Item 8 above
   (Bevy's default plugins) is part of it.
 
+`picking.txt` fails 5 assertions on master as well as with this change: it edits the
+save's old `components` table, and its hover checks miss. It needs updating.
+
 **Next on this
-track:** the idle spatial rebuild above, then item 8 (Bevy's default plugins, ~1.2 ms a paused frame), or the 90–100 ms
+track:** item 8 (Bevy's default plugins, ~1.2 ms a paused frame), or the 90–100 ms
 single-frame bakes in the large-SVG table.
 
 **2026-11-18: the user wants render-cache phase 3 built** (vector retention for live

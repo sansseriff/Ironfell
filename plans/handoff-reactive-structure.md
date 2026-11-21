@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells are planned as RE-5.3 to RE-5.6 (§4.10); RE-5.3 is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10); RE-5.3 is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -2675,108 +2675,222 @@ Verified: differential suite (478) with IRON_ATOMICITY and IRON_OWNER_CHECK, pla
 app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
 smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
 
-### 4.10 Phase 5's cells (plan, 2026-11-20)
+### 4.10 Phase 5's cells: the general cell (plan, 2026-11-20)
 
-What is left of §17's phase 5, now that RE-5.1 (§4.8, a cluster solved only when
-something of it changed) and RE-5.2 (§4.8, the scans) are done: the network, the
-solver and layout as cells. Today all three run outside the graph's height order.
-`resolve_physics` runs them in a fixed order (repeats, state, network, theme, layout,
-contexts), `pipeline_from` repeats that up to four rounds while something read a stale
-cell, and the solver runs from `resolve_clusters_live` (two callers: `drag_to` and
-`derive`) and from `post_apply`. Measured before (`solve_cost`, native release,
-2026-11-20): a drag step 0.20 ms with one pendulum and 0.60 ms with 100; an
-unrelated constant edit 0.19 ms with one and **2.82 ms with 100**. That is §15's one
-target this phase still misses: `rebuild_clusters` regroups every constraint on
-every transaction, and `unmoved` builds every cluster's `Posed` to compare.
+What is left of §17's phase 5 is the network, layout and the solver as cells. RE-5.1
+(a cluster solved only when something of it changed) and RE-5.2 (the scans) are done
+(§4.8).
 
-**Not in this plan:**
-- clips as cells (PT-9);
-- `fits`: no fitting layout mode exists (`iron_layout::Mode` is `StackX`, `StackY`,
-  `Grid`), and wrapping is layout-engine work (§9.2, "Reaching CSS"). It comes with
-  the first such mode;
-- one-axis containment (§9.2 puts it after phase 5);
-- the live simulation, and `pause` and `coarse` for clusters (D11).
+**The user's decision (2026-11-20):** build one general cell in the graph, with the
+binding as one rule among others, not a second special kind beside it. Spec §5.1
+already describes a `Cell` with a kind; 2b built only the binding
+(`BTreeMap<Leaf, BoundNode>`). Everything else that computes is a producer outside
+the graph.
 
-**RE-5.3: computed cells, with the network as the first.** The graph gains a second
-kind of cell beside a binding: a computed cell, keyed by a `CellId`, that the store
-evaluates with a tracked read and that writes several output leaves into its
-producer's layer.
-- Its height is one above the highest leaf it read last time, its outputs sit at its
-  height, and what reads an output sits above it, so a reader runs once per pass.
-- A pass that reaches a computed cell's height hands it to the store (the graph
-  cannot call layout or the solver, which read the store). The store computes it,
-  and `Reactive` takes the reads and outputs back, compares each output with what it
-  held (equality cutoff) and goes on.
-- Necessity: a computed cell is needed when an output is needed or it is rooted (a
-  Solve cell always is, D11). Errors are per cell, on a node.
-- Host producers (`publish`) are unchanged.
-- Tests: a reader of an output evaluates once per pass; a diamond through a computed
-  cell; a tracked read that reaches further raises the cell; a cycle through one is
-  an error.
+#### Why: what is wrong today
 
-**The network per island.** Each island is the unknowns joined by any equation they
-share (§9.1), keyed by its lowest unknown, with its own warm start. The islands are
-made again only when an op touches a port, a connection or an equation (§7.2); today
-the network is made again whenever `docs.edits()` moves. `physics_error` becomes
-per island. Test: an edit in one circuit solves no other. The `ports`, `schematic`
-and `signals` suites stay green. `solve_network` goes.
+The pipeline runs outside the graph's height order. `resolve_physics` runs repeats,
+state, the network, the theme, layout and contexts in a fixed order. Each is a Rust
+function that reads through plain lookups, so the graph has no edges into it and
+sees only what it publishes.
+- **A stage that reads a later stage's output is one step behind, indefinitely.** A
+  probe (2026-11-20): a row with a `fill` child and a repeat with
+  `count = floor(child.size.w / 50)`.
 
-**RE-5.4: the solver as cells** (§9.4; the measured win).
-- A Clusters cell per composition regroups only when its constraints, their
-  relations or `enabled`, the connections that imply mates, or which operand leaves
-  are free changed.
-- A Solve cell per cluster, keyed by its lowest constraint, is a computed cell whose
-  reads are tracked. That replaces `Posed`, `unmoved`, `pose` and `posed`, which go.
-- Its outputs are a solved layer between the overlay and the binding.
-- Drivers and fingers are Input cells. The pose is state, adopted at the end of each
-  public `&mut` call outside a transaction and at step 7 (§11.2). An op that writes a
-  variable's constant sets its pose. Rolling back restores the output. The commit
-  writes `derived_ops` as `post_apply` does now.
-- `resolve_clusters_live` and `rebuild_clusters` go, and so does the `solved` set in
-  `necessity` (Solve cells are rooted).
-- Tests:
-  - `a_drag_in_one_cluster_solves_no_other` stays.
-  - The random scripts gain constraints (today they build none). Under
-    `IRON_OWNER_CHECK`, a Solve cell left current is solved anyway and must agree,
-    as `check_unmoved` does now.
-  - The `constraints`, `frame_constraints`, `gestures` and `handles` suites stay
-    green.
-- Target (`solve_cost`): with 100 pendulums at rest, a drag step and an unrelated
-  edit each within 2× of one pendulum's.
+  | Step | Width | Items | Should be |
+  |---|---|---|---|
+  | Load | 300 | 0 | 6 |
+  | After an `advance` | 300 | 0 | 6 |
+  | A transaction setting width 500 | 500 | 6 | 10 |
+  | Drag frames at 200, 400, 250 | | 10, 4, 8 | 4, 8, 5 |
 
-**RE-5.5: layout cells.**
-- First, a test of §17's exit, which today's rounds may already pass: a repeat whose
-  count reads a contained box's width adds items during a resize drag. What it
-  shows decides how much of the step below is needed for the exit. The rest is for
-  cost and for the write-time rule.
-- A Layout cell per outermost container (`layout::compute`'s unit), cut at contained
-  boxes. Each contained box has an allocation cell (the outer run, which treats the
-  box as a leaf of known size) and an interior cell (a run rooted at it).
-- `layout.contain` (`none`, `both`) is declared on groups; a sized `use` and a group
-  with a fixed size are contained without it. Schema bump.
-- A structural input that reads an uncontained box's size is refused at write time,
-  or reported as a cycle on the Collection (D6).
-- Pins move into their frame's Layout cell. Table tracks become outputs, reported as
-  a mark when they move. Glides stay presentation over the target.
-- `resolve_layout` and `relayout` go.
-- Risk: structure between the two cells in height means a Collection's settle must
-  run inside the pass, but `settle_repeats` runs outside it today. If the exit needs
-  that, stop and report its size before building it (§5).
+  `pipeline_from`'s rounds repeat only when a stage read a hidden cell's stale value
+  (`settle_reads`), so nothing repeats here. This is §17's exit test, and it fails.
+- **Cost.** The one §15 target this phase still misses is the solver (`solve_cost`,
+  native release): an unrelated edit costs 0.19 ms with one pendulum and **2.82 ms
+  with 100 at rest**. Every transaction regroups every cluster, and `unmoved` builds
+  every cluster's `Posed`.
+
+#### The design
+
+**A cell** is keyed by a `CellId`:
+- `Leaf(Leaf)`: a value cell;
+- `Native(NativeKey)`: an engine computation, keyed by what it computes for (a
+  container, an island's lowest unknown, a cluster's lowest constraint, a repeat).
+
+A read is always of a `CellId`. A leaf with no cell (an unbound constant) is still
+read as `Leaf(l)`, so `dependents: BTreeMap<CellId, BTreeSet<CellId>>` covers
+constants, as it does today with `Leaf`.
+
+```rust
+struct Cell { rule: Rule, deps: BTreeSet<CellId>, tracked: BTreeSet<CellId>, height: u32 }
+enum Rule {
+    Formula { expr: Arc<Expr>, ctx: BTreeMap<String, Leaf>, tracks: bool }, // today's BoundNode
+    Native(Arc<dyn Native>),            // reads tracked, output a bundle
+    Pick { from: NativeKey, producer: ProducerId }, // one leaf of a native's bundle
+}
+trait Native: Send + Sync {
+    fn compute(&self, env: &Env, cx: &mut Cx) -> Result<Bundle, String>;
+    fn memory(&self) -> Memory;         // Pure | Integrating (spec §10.4)
+    fn on_failure(&self) -> Failure;    // Error | KeepLast
+}
+```
+
+The properties:
+- **Rule:**
+  - Formula (author or engine expressions: bindings, connection signals, anchor
+    positions);
+  - Native;
+  - Pick.
+
+  Sources need no rule: a leaf with no cell reads through the layers as now
+  (overlay, runtime, constant), so host producers, selection, session state and
+  events keep publishing into `runtime` unchanged.
+- **Output:**
+  - a Formula has one value (`resolved`, as now);
+  - a Native has a `Bundle` (`BTreeMap<Leaf, Value>`), held on the cell;
+  - a Pick reads one leaf of it.
+
+  The equality cutoff is per Pick, so when layout runs again and one child moved,
+  only that child's readers wake.
+- **Memory:** Pure, or Integrating (the network's warm start, the solver's pose), held
+  in the cell as `state: Option<Box<dyn Any + Send + Sync>>`. Logged and Presentation
+  come with PT-9 and PT-10.
+- **When it runs:** on a change of what it read, in height order. Clock-driven rules
+  are PT-10's.
+- **On failure:**
+  - **Error**, like a Formula: the readers fail too, "depends on …";
+  - **KeepLast**: the bundle stands, and the failure is a problem on the key's node.
+    This is a solve that did not converge.
+
+**Reads are tracked through `Cx`**, which a Native gets in place of the store:
+- `cx.read(leaf)` reads through the layers and records `Leaf(leaf)`.
+- `cx.beneath(leaf)` reads without the native's own Picks, as `layout::base` does
+  now.
+- `cx.children(node)`, `cx.facets(node)` and `cx.nodes_of_type(ty)` record a
+  **structure read** of the node, or of the type. `restructure(nodes)` primes every
+  native that structure-read one of them. Today layout and the network read
+  structure directly. Without structure reads, a child added to a laid-out group
+  would not re-run its layout.
+- The Native's height is one above the highest cell it read. A Pick's is one above
+  that, and readers sit above the Pick. A read that reaches its own Picks is a
+  cycle, reported as for a tracked read today.
+
+**`Env`** is what a native may consult besides values, borrowed from `StoreCore`'s
+fields other than `reactive`:
+- the `Tree`;
+- the contexts library;
+- fingers and drivers (from RE-5.5);
+- the layout preview;
+- the text engine, which is global.
+
+Every `Reactive` method that evaluates takes `&Env` where it takes `Tree` today.
+There are about 25 call sites in `lib.rs`. So the graph never calls back into the
+store, and the borrow is disjoint.
+
+**Index natives make and drop natives.** "Which islands exist" is a Native whose
+output is a set of keys: the Islands index, which structure-reads ports,
+connections and equations. The graph makes and drops the corresponding natives in
+the same pass, at heights above the index. Later cells of the same shape:
+- the Clusters index per composition (RE-5.5);
+- the containers per composition (RE-5.4).
+
+This is structure inside the graph. A repeat's structure is the document's, so it
+waits for RE-5.4 (below).
+
+**Necessity.** A native is a candidate when its key's node is hidden, and needed when
+a needed cell reads one of its Picks or it is rooted. A Solve cell is always rooted
+(D11), which replaces `necessity`'s `solved` set. A hidden composition's layout is
+then not run, and the pipeline's reads stop being pinned through `escaped`.
+
+**Producers stay where they are not yet cells.** `signal`, `driven_by`,
+`published_by` and `is_driven` answer for a Pick from its `producer`, so `handle.rs`
+("placed by its group's layout"), `view.rs` and the inspector see what they see
+today. A Pick on a leaf that a Formula binds is refused and reported as now
+("is bound; producer … cannot drive it").
+
+**Verification.**
+- The differential facade's reference keeps the old pipeline (`solve_network`,
+  `resolve_layout`, `rebuild_clusters`) while the subject runs the cells, as 2b's
+  reference kept the old engine. Each step is exact against it, except where a step
+  fixes ordering (RE-5.4's probe), which is listed in `INTENDED` with its test.
+- The random scripts, the 1,000-seed §8.8 property and the suites run as for every
+  phase.
+- When RE-5.5 ends, the old pipeline is deleted from the reference.
+
+#### Steps
+
+**RE-5.3: the general cell, then the network on it.**
+1. `CellId`, `Cell` and `Rule::Formula` replace `BoundNode`. Every mechanism is keyed
+   by `CellId`: heights, `raise`, necessity, `stale`, `escaped`, `behind`, the sweep,
+   cycles and `blocked`. `&Env` replaces `Tree` in the evaluating methods. No
+   behaviour change: the suites, the random scripts and the §8.8 property pass
+   unchanged, and `evaluations` counts stay the same.
+2. `Rule::Native` and `Rule::Pick`, `Cx` with tracked and structure reads, bundles,
+   state, KeepLast, and index natives. Unit tests in `graph.rs`, with test natives:
+   - a reader of a Pick runs once per pass;
+   - a diamond through a native;
+   - a cutoff per Pick;
+   - a structure read re-runs on a new child;
+   - a cycle through a native is an error;
+   - a hidden native is not run, and is run when read.
+3. The network: an Islands index and an Island native per island (unknowns joined by
+   any shared equation, keyed by the lowest unknown), each with its own warm start
+   (Integrating) and `physics_error` per island (KeepLast). `solve_network` goes from
+   the subject.
+   - Test: an edit in one circuit solves no other.
+   - The `ports`, `schematic` and `signals` suites stay green.
+
+**RE-5.4: repeats and layout.** Each container per composition is a Layout native
+(today's unit, `layout::compute`'s roots), cut at contained boxes into allocation and
+interior (§9.2). Pins are in their frame's Layout native. Table tracks are outputs,
+reported as a mark. Glides stay presentation over the target, so cells read the
+target (§9.1). That is a change: today readers read the glide.
+
+A repeat becomes a native whose output is structure: its items are made inside the
+pass, then the pass goes on in height order. This is the step's hard part. It joins
+the owners (`engine/owners.rs`) and the document journal to the pass. **It is
+designed before it is built:** a sub-plan here, and a council on it.
+- `layout.contain` is declared on groups (schema bump). A structural input that reads
+  an uncontained box's size is refused at write time, or reported as a cycle on the
+  Collection (D6).
+- The probe is a test, `#[ignore]`d until this step.
+- `resolve_layout`, `relayout` and `settle_repeats` go.
 - The `layout`, `table` and `sized` suites stay green.
 
-**RE-5.6: phase end.**
-- §15's rows are measured: the solver, constant and structural edits at 700 and
-  1,000 meters, and the plot pan.
-- Whatever still runs in `pipeline_from`'s rounds is named, with why.
-- A council, then the roadmap.
-- Then this file closes: RE-4.3 moves to `handoff-render.md`, and the file moves to
-  `archive/`.
+**RE-5.5: the solver** (§9.4).
+- A Clusters index per composition, and a Solve native per cluster: Integrating (the
+  pose) and KeepLast. Its reads are tracked, which replaces `Posed`, `unmoved`, `pose`
+  and `posed`.
+- The solved layer is its Picks. Drivers and fingers are in `Env`.
+- The pose is adopted outside the pass, and an op writing a variable's constant sets
+  it. Rolling back restores the output. The commit writes `derived_ops`.
+- `resolve_clusters_live` and `rebuild_clusters` go.
+- Tests:
+  - `a_drag_in_one_cluster_solves_no_other`;
+  - the random scripts gain constraints;
+  - the `constraints`, `frame_constraints`, `gestures` and `handles` suites.
+- Target (`solve_cost`): with 100 pendulums at rest, a drag step and an unrelated edit
+  each within 2× of one pendulum's.
 
-**Order.** The network comes first because it is the smallest cell: pure, with no
-state beyond its warm start, so the graph's new kind of cell lands with one real
-user. The solver comes next because it is the one §15 target still unmet. Layout
-comes last because it is the largest: containment needs a schema change and a
-write-time rule.
+**RE-5.6: phase end.**
+- §15's rows are measured.
+- What still runs in `pipeline_from`'s rounds is named (the theme, contexts, and the
+  producers PT-9 and PT-10 move), with why.
+- The old pipeline is deleted from the reference.
+- A council, then the roadmap. Then this file closes: RE-4.3 moves to
+  `handoff-render.md`, and the file moves to `archive/`.
+
+**Not in this plan:**
+- clips (PT-9) and steppers (PT-10), which are later rules on the same cell;
+- `fits`: no fitting layout mode exists, and wrapping is layout-engine work (§9.2);
+- one-axis containment;
+- dense arrays for cells (§5.1's layout in memory), a performance change of its own;
+- the live simulation, and `pause` and `coarse`;
+- native rules written by authors.
+
+**Councils:** on this design before step 1; on RE-5.4's structure sub-plan; at the
+end of each step.
 
 ## 5. Rules, and when to stop
 

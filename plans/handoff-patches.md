@@ -55,7 +55,7 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
-| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | |
+| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council next, then the user |
 | PT-4b | The storage-and-query spec | Design | PT-4a written | |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
 | PT-6 | Machines rebuilt on axes | Build | PT-5 | |

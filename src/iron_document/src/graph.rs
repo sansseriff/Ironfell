@@ -102,6 +102,12 @@ pub enum NativeKey {
     /// A drawn repeat or conditional: what its items are settled from
     /// (`Store::settle_repeats`).
     Repeat(NodeId),
+    /// The grouping of the document's constraints (`solve::ClustersNative`).
+    Clusters,
+    /// Whether the document's constraints are well formed (`solve::ValidateNative`).
+    Validate,
+    /// One constraint cluster, by its lowest constraint (`solve::ClusterNative`).
+    Cluster(NodeId),
     /// A native for the graph's own tests.
     #[cfg(test)]
     Test(NodeId, u32),
@@ -111,7 +117,8 @@ impl NativeKey {
     fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
-            NativeKey::Layout(n) | NativeKey::Repeat(n) => n,
+            NativeKey::Layout(n) | NativeKey::Repeat(n) | NativeKey::Cluster(n) => n,
+            NativeKey::Clusters | NativeKey::Validate => NodeId::from_raw(0),
             NativeKey::Pins => NodeId::from_raw(0),
             #[cfg(test)]
             NativeKey::Test(n, _) => n,
@@ -163,6 +170,8 @@ struct NativeCell {
     checked: u64,
     /// The inputs it read at its last run.
     inputs: BTreeSet<InputKey>,
+    /// The leaves whose claims it watched at its last run (`Cx::driven`).
+    watches: BTreeSet<Leaf>,
     /// What it handed the store at its last run (`Cx::set_extra`).
     extra: Option<Held>,
 }
@@ -176,6 +185,8 @@ pub enum InputKey {
     Fonts,
     /// The container laid out in a previewed order (`layout::Preview`).
     LayoutPreview,
+    /// The contexts library, when the document has contexts of its own.
+    Contexts,
 }
 
 /// An input's value, or a native's side output, shared and immutable.
@@ -198,6 +209,8 @@ pub(crate) struct Cx<'a> {
     /// Cells nothing needed that a read reached.
     reached: std::cell::RefCell<BTreeSet<CellId>>,
     inputs: std::cell::RefCell<BTreeSet<InputKey>>,
+    /// Leaves whose claims it watches: whether a producer drives them.
+    watches: std::cell::RefCell<BTreeSet<Leaf>>,
     /// Leaves to report changed with no change of value (`Reactive::mark`).
     marks: std::cell::RefCell<Vec<Leaf>>,
     /// What it hands the store beside its claims (a table's grid).
@@ -235,6 +248,18 @@ impl Cx<'_> {
         beneath(self.doc, leaf)
     }
 
+    /// The tree it reads.
+    pub fn tree(&self) -> Tree<'_> {
+        self.doc
+    }
+
+    /// The graph, for what is structure and not a value (whether a leaf is
+    /// bound, what a binding reads): structure that changes makes natives
+    /// again.
+    pub fn graph(&self) -> &Reactive {
+        self.graph
+    }
+
     /// What this native last wrote on `leaf`, if it holds it: a warm start
     /// (handoff §4.10), read outside the cycle rule and not tracked.
     pub fn previous(&self, leaf: Leaf) -> Option<Value> {
@@ -245,6 +270,13 @@ impl Cx<'_> {
     pub fn input<T: 'static>(&self, key: InputKey) -> Option<&T> {
         self.inputs.borrow_mut().insert(key);
         self.graph.inputs.get(&key).and_then(|h| h.0.downcast_ref::<T>())
+    }
+
+    /// Whether a producer claims `leaf`; tracked, so a claim that comes or
+    /// goes runs this again (its value moving does not).
+    pub fn driven(&self, leaf: Leaf) -> bool {
+        self.watches.borrow_mut().insert(leaf);
+        self.graph.runtime.contains_key(&leaf)
     }
 
     /// Report `leaf` changed with no change of value, once this run is kept.
@@ -510,6 +542,8 @@ pub struct Reactive {
     inputs: BTreeMap<InputKey, Held>,
     /// The natives that read each input.
     input_readers: BTreeMap<InputKey, BTreeSet<NativeKey>>,
+    /// The natives that watch whether each leaf is claimed.
+    claim_watchers: BTreeMap<Leaf, BTreeSet<NativeKey>>,
     /// Repeat natives that ran since the store last took them: the repeats
     /// whose inputs changed.
     ran: BTreeSet<NativeKey>,
@@ -893,6 +927,9 @@ impl Reactive {
                 }
                 Some(s) if s.value == value => {}
                 _ => {
+                    if !self.runtime.contains_key(&leaf) {
+                        self.claim_came_or_went(leaf);
+                    }
                     self.runtime.insert(leaf, Signal { value, producer });
                     changed.push(leaf);
                 }
@@ -903,6 +940,7 @@ impl Reactive {
         for leaf in was.difference(&now) {
             if self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
                 self.runtime.remove(leaf);
+                self.claim_came_or_went(*leaf);
                 changed.push(*leaf);
             }
         }
@@ -1718,10 +1756,10 @@ impl Reactive {
         let rule = self.natives[&k].rule.clone();
         // `evaluations` counts expressions; a native counts its own runs.
         self.natives.get_mut(&k).expect("native").runs += 1;
-        if matches!(k, NativeKey::Repeat(_)) {
+        if matches!(k, NativeKey::Repeat(_) | NativeKey::Cluster(_)) {
             self.ran.insert(k);
         }
-        let (result, reads, base, reached, inputs, marks, extra) = {
+        let (result, reads, base, reached, inputs, watches, marks, extra) = {
             let mut cx = Cx {
                 doc,
                 graph: &*self,
@@ -1730,11 +1768,12 @@ impl Reactive {
                 base: Default::default(),
                 reached: Default::default(),
                 inputs: Default::default(),
+                watches: Default::default(),
                 marks: Default::default(),
                 extra: Default::default(),
             };
             let result = rule.compute(&mut cx);
-            (result, cx.reads.into_inner(), cx.base.into_inner(), cx.reached.into_inner(), cx.inputs.into_inner(), cx.marks.into_inner(), cx.extra.into_inner())
+            (result, cx.reads.into_inner(), cx.base.into_inner(), cx.reached.into_inner(), cx.inputs.into_inner(), cx.watches.into_inner(), cx.marks.into_inner(), cx.extra.into_inner())
         };
         // What it read that nothing needed is needed now: evaluated first,
         // this after it.
@@ -1824,10 +1863,23 @@ impl Reactive {
         for new in inputs.difference(&old_inputs) {
             self.input_readers.entry(*new).or_default().insert(k);
         }
+        let old_watches = std::mem::take(&mut self.natives.get_mut(&k).expect("native").watches);
+        for gone in old_watches.difference(&watches) {
+            if let Some(ns) = self.claim_watchers.get_mut(gone) {
+                ns.remove(&k);
+                if ns.is_empty() {
+                    self.claim_watchers.remove(gone);
+                }
+            }
+        }
+        for new in watches.difference(&old_watches) {
+            self.claim_watchers.entry(*new).or_default().insert(k);
+        }
         let native = self.natives.get_mut(&k).expect("native");
         native.reads = reads;
         native.base = base;
         native.inputs = inputs;
+        native.watches = watches;
         if !closing.is_empty() {
             // Raised over the read it dropped (a binding made over its output
             // raises what read it): back to above what it reads now, with
@@ -1962,6 +2014,9 @@ impl Reactive {
                 }
                 Some(s) if s.value == value => {}
                 _ => {
+                    if !self.runtime.contains_key(&leaf) {
+                        self.claim_came_or_went(leaf);
+                    }
                     self.runtime.insert(leaf, Signal { value, producer });
                     changed.push(leaf);
                 }
@@ -1976,6 +2031,7 @@ impl Reactive {
         for leaf in was.difference(&now) {
             if self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
                 self.runtime.remove(leaf);
+                self.claim_came_or_went(*leaf);
                 changed.push(*leaf);
             }
         }
@@ -2126,6 +2182,7 @@ impl Reactive {
                 continue;
             }
             self.runtime.remove(&l);
+            self.claim_came_or_went(l);
             if let Some(h) = self.held.get_mut(&producer) {
                 h.remove(&l);
                 if h.is_empty() {
@@ -2158,6 +2215,22 @@ impl Reactive {
         }
     }
 
+    /// A claim on `leaf` came or went: the natives watching it run in the
+    /// next pass (`flush`, or any pass).
+    fn claim_came_or_went(&mut self, leaf: Leaf) {
+        if let Some(ns) = self.claim_watchers.get(&leaf) {
+            let cells: Vec<CellId> = ns.iter().map(|k| CellId::Native(*k)).collect();
+            self.pending.extend(cells);
+        }
+    }
+
+    /// Run what waits in `pending` (but held layout natives).
+    pub(crate) fn flush(&mut self, doc: Tree<'_>) {
+        if self.pending.iter().any(|c| !(self.holding && matches!(c, CellId::Native(NativeKey::Layout(_) | NativeKey::Pins)))) {
+            self.evaluate(doc, &BTreeSet::new(), &BTreeSet::new());
+        }
+    }
+
     /// Whether a layout native waits to run.
     pub(crate) fn layout_pending(&self) -> bool {
         self.pending.iter().any(|c| matches!(c, CellId::Native(NativeKey::Layout(_) | NativeKey::Pins)))
@@ -2176,9 +2249,19 @@ impl Reactive {
     /// Whether a repeat native ran since the last take: a repeat's inputs
     /// changed.
     pub(crate) fn take_ran_repeats(&mut self) -> bool {
-        let any = !self.ran.is_empty();
-        self.ran.clear();
+        let any = self.ran.iter().any(|k| matches!(k, NativeKey::Repeat(_)));
+        self.ran.retain(|k| !matches!(k, NativeKey::Repeat(_)));
         any
+    }
+
+    /// Whether cluster `k`'s native ran since `clear_ran` (something of it
+    /// changed).
+    pub(crate) fn ran(&self, k: NativeKey) -> bool {
+        self.ran.contains(&k)
+    }
+
+    pub(crate) fn clear_ran(&mut self, k: NativeKey) {
+        self.ran.remove(&k);
     }
 
     /// The native cells' keys.
@@ -2257,6 +2340,7 @@ impl Reactive {
                     _ => {
                         if self.runtime.get(&l).is_some_and(|s| s.producer == producer) {
                             self.runtime.remove(&l);
+            self.claim_came_or_went(l);
                             if let Some(h) = self.held.get_mut(&producer) {
                                 h.remove(&l);
                                 if h.is_empty() {
@@ -2279,6 +2363,11 @@ impl Reactive {
                     ns.remove(k);
                 }
             }
+            for w in &old.watches {
+                if let Some(ns) = self.claim_watchers.get_mut(w) {
+                    ns.remove(k);
+                }
+            }
         }
         for (k, new) in batch {
             let Some((rule, rooted)) = new else { continue };
@@ -2291,7 +2380,7 @@ impl Reactive {
                 self.claims.insert(k, ls);
             }
             let runs = runs_of.get(&k).copied().unwrap_or(0);
-            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0, inputs: BTreeSet::new(), extra: None });
+            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0, inputs: BTreeSet::new(), watches: BTreeSet::new(), extra: None });
             made.push(cell);
             primed.insert(cell);
             // Readers of its outputs now read through it.

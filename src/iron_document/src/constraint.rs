@@ -101,6 +101,11 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
         return Ok(None);
     }
     let c = doc.get::<Constraint>(id).ok_or_else(|| format!("{id} has no constraint component"))?;
+    // Read through `read_value` too, though only their constants count: a
+    // native grouping or validating constraints follows their edits.
+    for f in ["kind", "enabled"] {
+        let _ = read_value(Leaf { node: id, path: crate::facet::LeafPath::new(crate::facet::FacetKind::Constraint, f).expect("declared") });
+    }
     let kind = c.kind.constant().and_then(|v| v.as_str()).unwrap_or("");
     let spec = spec(kind).ok_or_else(|| {
         let names: Vec<&str> = KINDS.iter().map(|s| s.kind).collect();

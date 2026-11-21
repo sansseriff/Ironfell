@@ -337,6 +337,7 @@ struct Saved {
     /// What each cluster's last converged solve could read, by its key: a
     /// cluster that would read the same is not solved again (§9.4, A6).
     posed: BTreeMap<NodeId, solve::Posed>,
+    committed: BTreeSet<NodeId>,
     geometry: geom::Revisions,
     repeats: expand::Items,
     item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
@@ -362,6 +363,7 @@ impl Saved {
             reactive: s.reactive.clone(),
             clusters: s.clusters.clone(),
             posed: s.posed.clone(),
+            committed: s.committed.clone(),
             geometry: s.geometry.clone(),
             repeats: s.repeats.clone(),
             item_memo: s.item_memo.clone(),
@@ -386,6 +388,7 @@ impl Saved {
         s.reactive = self.reactive;
         s.clusters = self.clusters;
         s.posed = self.posed;
+        s.committed = self.committed;
         s.geometry = self.geometry;
         s.repeats = self.repeats;
         s.item_memo = self.item_memo;
@@ -443,6 +446,7 @@ pub struct StoreCore {
     /// What each cluster's last converged solve could read, by its key: a
     /// cluster that would read the same is not solved again (§9.4, A6).
     posed: BTreeMap<NodeId, solve::Posed>,
+    committed: BTreeSet<NodeId>,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -642,6 +646,7 @@ impl StoreCore {
             time_errors: self.time_errors.clone(),
             clusters: self.clusters.clone(),
             posed: self.posed.clone(),
+            committed: self.committed.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
@@ -817,6 +822,9 @@ impl StoreCore {
             self.sync_layout(false);
             self.sync_repeats(false);
             self.prime_layout(&shaped);
+            // Constraints and their operands are structure to the grouping
+            // and to validation.
+            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
         }
         self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
     }
@@ -931,6 +939,7 @@ impl StoreCore {
             time_errors: Default::default(),
             clusters: Default::default(),
             posed: BTreeMap::new(),
+            committed: BTreeSet::new(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -1003,9 +1012,77 @@ impl StoreCore {
     fn rebuild_clusters(&mut self) {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
+        if !self.old_pipeline {
+            if let Ok(c) = self.grouped() {
+                self.owners.hold(c.copies());
+                self.clusters = c;
+                self.sync_cluster_natives();
+            }
+            return;
+        }
         if let Ok(c) = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()) {
             self.owners.hold(c.copies());
             self.clusters = c;
+        }
+    }
+
+    /// The constraints as grouped now: in native mode the grouping native's
+    /// result, made again only when what it read changed (handoff §4.10,
+    /// RE-5.5).
+    fn grouped(&mut self) -> Result<solve::Clusters, String> {
+        if self.old_pipeline {
+            return solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts());
+        }
+        if self.reactive.native(graph::NativeKey::Clusters).is_none() {
+            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
+        }
+        // A claim that came or went on an operand waits to run it.
+        self.reactive.flush(Tree::of(&self.docs));
+        match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<Result<solve::Clusters, String>>()) {
+            Some(r) => r.clone(),
+            None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
+        }
+    }
+
+    /// Whether the constraints are well formed: in native mode the
+    /// validating native's result, made again only when what it read or
+    /// structure changed (RE-5.5).
+    fn validated(&mut self) -> Result<(), String> {
+        let read_now = |s: &StoreCore| {
+            let read = |l: Leaf| s.reactive.read(Tree::of(&s.docs), l);
+            constraint::validate_all(Tree::of(&s.docs), &read)
+        };
+        if self.old_pipeline {
+            return read_now(self);
+        }
+        if self.reactive.native(graph::NativeKey::Validate).is_none() {
+            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Validate, Some((std::sync::Arc::new(solve::ValidateNative::default()), true)))], true);
+        }
+        self.reactive.flush(Tree::of(&self.docs));
+        match self.reactive.native_extra(graph::NativeKey::Validate).and_then(|e| e.downcast_ref::<Result<(), String>>()) {
+            Some(r) => r.clone(),
+            None => read_now(self),
+        }
+    }
+
+    /// A watching native per cluster (`solve::ClusterNative`): made for a
+    /// cluster that is new or changed, dropped for one gone.
+    fn sync_cluster_natives(&mut self) {
+        let want: BTreeMap<graph::NativeKey, &solve::Cluster> = self.clusters.list.iter().map(|c| (graph::NativeKey::Cluster(c.key()), c)).collect();
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
+            .reactive
+            .native_keys()
+            .filter(|k| matches!(k, graph::NativeKey::Cluster(_)) && !want.contains_key(k))
+            .map(|k| (k, None))
+            .collect();
+        for (k, c) in &want {
+            let n = solve::ClusterNative::new((*c).clone());
+            if self.reactive.native(*k).and_then(|x| x.as_any().downcast_ref::<solve::ClusterNative>()) != Some(&n) {
+                batch.push((*k, Some((std::sync::Arc::new(n), true))));
+            }
+        }
+        if !batch.is_empty() {
+            self.reactive.set_natives(Tree::of(&self.docs), batch, true);
         }
     }
 
@@ -1056,6 +1133,16 @@ impl StoreCore {
         if drivers.iter().any(|d| c.vars.contains(&d.leaf)) || self.fingers.iter().any(|f| c.nodes.contains(&f.node)) {
             return false;
         }
+        if !self.old_pipeline {
+            // Its watching native ran since its last committed solve:
+            // something of it changed (RE-5.5).
+            if !self.committed.contains(&c.key()) || self.reactive.ran(graph::NativeKey::Cluster(c.key())) {
+                return false;
+            }
+            #[cfg(feature = "differential")]
+            self.check_unmoved(c);
+            return true;
+        }
         let Some(was) = self.posed.get(&c.key()) else { return false };
         let doc = Tree::of(&self.docs);
         let read = |l: Leaf| self.reactive.read(doc, l);
@@ -1070,6 +1157,11 @@ impl StoreCore {
     /// Record what cluster `c`'s converged solve left for its next one to
     /// compare with (`unmoved`).
     fn pose(&mut self, c: &solve::Cluster) {
+        if !self.old_pipeline {
+            self.committed.insert(c.key());
+            self.reactive.clear_ran(graph::NativeKey::Cluster(c.key()));
+            return;
+        }
         let doc = Tree::of(&self.docs);
         let read = |l: Leaf| self.reactive.read(doc, l);
         self.posed.insert(c.key(), c.posed(doc, &read));
@@ -2593,9 +2685,15 @@ impl StoreCore {
         if markups.is_empty() {
             if self.contexts.take().is_some() {
                 self.glide_specs();
+                if !self.old_pipeline {
+                    self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, None);
+                }
             }
         } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
             let lib = contexts::Library::with_document(&markups);
+            if !self.old_pipeline {
+                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, Some(std::sync::Arc::new(lib.clone())));
+            }
             self.contexts = Some((markups, lib));
             self.glide_specs();
         }
@@ -3983,17 +4081,18 @@ impl StoreCore {
     fn post_apply(&mut self, tx: &mut Transaction, exact: bool, held: &[Leaf]) -> Result<Option<SolverSummary>, Vec<ApplyError>> {
         let last = tx.ops.len().saturating_sub(1);
         let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
-        {
-            let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
-            constraint::validate_all(Tree::of(&self.docs), &read).map_err(|m| err(ErrorKind::BadConstraint, m))?;
-        }
-        let clusters = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()).map_err(|m| err(ErrorKind::Cycle, m))?;
+        self.validated().map_err(|m| err(ErrorKind::BadConstraint, m))?;
+        let clusters = self.grouped().map_err(|m| err(ErrorKind::Cycle, m))?;
         let keys: BTreeSet<NodeId> = clusters.list.iter().map(solve::Cluster::key).collect();
         self.posed.retain(|k, _| keys.contains(k));
+        self.committed.retain(|k| keys.contains(k));
         let now = clusters.copies();
         self.release(tx, held, &now, last).map_err(|e| vec![e])?;
         self.owners.hold(now);
         self.clusters = clusters.clone();
+        if !self.old_pipeline {
+            self.sync_cluster_natives();
+        }
         if clusters.list.is_empty() {
             return Ok(None);
         }

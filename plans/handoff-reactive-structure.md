@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). **RE-5.4 done 2026-11-21** (layout and repeats as natives, containment; §4.10); RE-5.5 (the solver) is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). **RE-5.4 done 2026-11-21** (layout and repeats as natives, containment); **RE-5.5 done 2026-11-21** (grouping, validation and each cluster's change test as natives; §4.10); RE-5.6 (phase end) is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -3318,6 +3318,68 @@ outputs in a solved layer. `resolve_clusters_live`, `rebuild_clusters`, `Posed` 
 - Target (`solve_cost`): with 100 pendulums at rest, a drag step and an unrelated edit
   each within 2× of one pendulum's.
 - The suites listed in §17. The random scripts gain constraints.
+
+**RE-5.5, as done (2026-11-21): the solver's work only where something changed.**
+- **Measured first.** `sample` of an unrelated edit with 100 pendulums at rest (2.96 ms)
+  showed where the time went:
+  - grouping every constraint, twice per transaction (`rebuild_clusters`, then
+    `post_apply`): about 50%;
+  - building and comparing every cluster's `Posed` (`unmoved`): 22%;
+  - `validate_all`: 8%;
+  - cloning and dropping `Saved`: about 7%.
+- **Built, on natives that watch:**
+  - **`ClustersNative`** (one, rooted) groups through `Cx` (`solve::clusters_with`).
+    It runs again only when:
+    - a value it read changed (constraint values, and a constraint's `kind` and
+      `enabled`, now read through `read`);
+    - a claim on an operand came or went (`Cx::driven`, a new tracked read of
+      whether a producer drives a leaf, so a variable's value moving does not
+      re-group);
+    - the contexts library changed (`InputKey::Contexts`);
+    - structure changed (`regraph` primes it).
+  - **`ValidateNative`** (one, rooted) runs `validate_all` the same way.
+  - **`ClusterNative`** (one per cluster, rooted) reads what the cluster's solve reads
+    (`Cluster::posed`'s leaves). That it ran since the cluster was last solved and
+    committed is what `unmoved` asks in native mode, instead of building and
+    comparing `Posed`.
+  - `committed` marks the clusters solved and committed.
+  - `IRON_OWNER_CHECK` still solves a cluster left alone and checks it does not
+    move.
+- **Measured after** (`solve_cost`, native release; the 2× target in §15):
+
+  | Pendulums at rest | Drag step | Unrelated edit |
+  |---|---|---|
+  | 100, before | 0.59 ms | 2.96 ms |
+  | 100, after | **0.146** ms | **0.78** ms |
+  | 1, after | 0.27 ms | 0.37 ms |
+
+  The probe times only 9 edits, each just after a drag ends, so its small-count
+  rows carry the drag's aftermath. A steady loop of the same edit with 100
+  pendulums ran at about 0.08 ms. What is left at 100 is mostly cloning and dropping
+  `Saved` (the graph, which holds more now). The target (an unrelated edit within 2×
+  of one pendulum's) is met in steady state; the probe's own number is 2.1×.
+- **Not built, and why:**
+  - the spec's Solve cells that solve inside the pass;
+  - a solved layer;
+  - pose adoption at the call boundary;
+  - removing `resolve_clusters_live`.
+
+  Solving stays in `post_apply` and `resolve_clusters_live`, as before: they write
+  `derived_ops` and previews, and their pose semantics (drags, undo, replay) are
+  unchanged. With grouping, validation and the change test as natives, the measured
+  cost was the scans, not where the solve runs. Moving the solve into the pass would
+  change gestures and pose. §17's exit "`resolve_clusters_live` has no callers" is not
+  met, and is recorded so.
+- Verified:
+  - the differential suite (484), exact against the old solver, with
+    `IRON_ATOMICITY` and `IRON_OWNER_CHECK`;
+  - the plain suite and the app's lib tests;
+  - the build;
+  - the smoke, pulses, fiber, idle and plot-view scripts, and regression (pendulum
+    digits aside).
+
+  Found and fixed: grouping missed a constraint's `enabled` and `kind`, read from the
+  slot (`copies_apart::disabling_a_solved_copys_constraint_lets_it_go`).
 
 **RE-5.6: phase end.** As before.
 

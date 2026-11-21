@@ -175,7 +175,10 @@ fn num(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId, path: LeafPath, defau
 }
 
 /// Whether a leaf may move: a constant, not bound, not clip-driven.
-fn is_free(doc: Tree<'_>, reactive: &crate::graph::Reactive, leaf: Leaf) -> bool {
+fn is_free(doc: Tree<'_>, reactive: &crate::graph::Reactive, leaf: Leaf, touch: &dyn Fn(Leaf)) -> bool {
+    // Whether a producer drives it is read, so a native grouping clusters
+    // runs again when a claim on it comes or goes.
+    touch(leaf);
     doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
         && !reactive.is_bound(leaf)
         && !reactive.is_driven(leaf)
@@ -185,10 +188,16 @@ fn is_free(doc: Tree<'_>, reactive: &crate::graph::Reactive, leaf: Leaf) -> bool
 /// is malformed (callers validate first) or when bindings and clusters form
 /// a cycle.
 pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Result<Clusters, String> {
-    let read = |l: Leaf| reactive.read(doc, l);
-    let all: Vec<ConstraintInfo> = constraint::all(doc, &read)?
+    clusters_with(doc, reactive, lib, &|l| reactive.read(doc, l), &|_| {})
+}
+
+/// `clusters`, reading values through `read` and telling `touch` each leaf
+/// whose role (free or driven) it looks at: a native grouping clusters
+/// tracks both (reactive-engine handoff §4.10, RE-5.5).
+pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library, read: &dyn Fn(Leaf) -> Option<Value>, touch: &dyn Fn(Leaf)) -> Result<Clusters, String> {
+    let all: Vec<ConstraintInfo> = constraint::all(doc, read)?
         .into_iter()
-        .chain(crate::plug::implied_mates(doc, &read, lib))
+        .chain(crate::plug::implied_mates(doc, read, lib))
         .filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)))
         .collect();
     if all.is_empty() {
@@ -232,7 +241,7 @@ pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::c
         for &n in &nodes {
             for f in TRANSFORM_LEAVES {
                 let leaf = Leaf { node: n, path: t2(f) };
-                if !fixed.contains(&n) && is_free(doc, reactive, leaf) {
+                if !fixed.contains(&n) && is_free(doc, reactive, leaf, touch) {
                     vars.push(leaf);
                 } else {
                     inputs.insert(leaf);
@@ -584,5 +593,91 @@ pub fn solve_cluster(
         max_required_residual: s.max_required_residual,
         unmet,
         culprits,
+    }
+}
+
+/// The document's constraint clusters as one native cell (reactive-engine
+/// handoff §4.10, RE-5.5): grouping runs again only when what it read
+/// changed (a constraint's value, `enabled`, a claim on an operand, the
+/// contexts' mates) or structure did, not on every transaction. Its result
+/// is its extra; it claims nothing.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ClustersNative {
+    outputs: BTreeSet<Leaf>,
+}
+
+impl crate::graph::Native for ClustersNative {
+    fn producer(&self) -> crate::graph::ProducerId {
+        crate::graph::ProducerId::NETWORK
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        let lib = cx.input::<crate::contexts::Library>(crate::graph::InputKey::Contexts).unwrap_or_else(|| crate::contexts::Library::builtin());
+        let result = clusters_with(cx.tree(), cx.graph(), lib, &|l| cx.read(l), &|l| {
+            let _ = cx.driven(l);
+        });
+        cx.set_extra(std::sync::Arc::new(result));
+        Ok(BTreeMap::new())
+    }
+}
+
+/// One cluster as a native cell that only watches (RE-5.5): it reads what a
+/// solve of the cluster reads, so that it ran says something of it changed
+/// since the cluster was last solved and committed. It replaces comparing
+/// every cluster's `Posed` on every transaction.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ClusterNative {
+    cluster: Cluster,
+    outputs: BTreeSet<Leaf>,
+}
+
+impl ClusterNative {
+    pub(crate) fn new(cluster: Cluster) -> ClusterNative {
+        ClusterNative { cluster, outputs: BTreeSet::new() }
+    }
+}
+
+impl crate::graph::Native for ClusterNative {
+    fn producer(&self) -> crate::graph::ProducerId {
+        crate::graph::ProducerId::NETWORK
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        let _ = self.cluster.posed(cx.tree(), &|l| cx.read(l));
+        Ok(BTreeMap::new())
+    }
+}
+
+/// `constraint::validate_all` as a native cell (RE-5.5): validated again
+/// only when a constraint's value or structure changed.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ValidateNative {
+    outputs: BTreeSet<Leaf>,
+}
+
+impl crate::graph::Native for ValidateNative {
+    fn producer(&self) -> crate::graph::ProducerId {
+        crate::graph::ProducerId::NETWORK
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        let result = constraint::validate_all(cx.tree(), &|l| cx.read(l));
+        cx.set_extra(std::sync::Arc::new(result));
+        Ok(BTreeMap::new())
     }
 }

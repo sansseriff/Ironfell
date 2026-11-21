@@ -335,6 +335,66 @@ bob: slides 4–5", not a list of points.
   - Values with history are "not seekable", and the answer says so.
   - "Blue" should match theme tokens as well as literal colours.
 
+### 4.3 Storage, loading and search
+
+What this would change in the storage plans, as they stand on 2026-11-20:
+- **scopes.md:** a scope is a snapshot plus an op log, in OPFS.
+- **reactive-engine.md §13:** an owner with a `Summary` is the loading unit.
+- **iron-platform:** a room holds a whole `Store`; Postgres is a catalogue, and scope
+  contents are opaque JSON blobs that only `iron_document` parses.
+
+**What is stored.** A scope holds:
+- **its base:** nodes, facets and relations, as today;
+- **its axes;**
+- **its patches:** each a region (a union of boxes) and entries of (node, field,
+  value), plus added and hidden nodes.
+
+Instance overrides, variants, machine poses, clips and narrative overrides all become
+rows of that one shape. Points are never stored. The op log stays the finest grain of
+history. A recorded move refers to a range of it, and an authored move is a patch.
+
+**What a view loads** is the base of the owners it shows, plus the patches whose
+regions contain its point:
+- That is scopes.md §8's "what a narrative position needs", now exact.
+- Moving along an axis (next slide, the next take) loads only the arrow: the patches
+  entering and leaving. That is also what to prefetch.
+- Large bases stay chunked by owner and bound, as reactive-engine.md §13 and the render
+  cache already assume.
+
+**The index is derived, and it is what makes large documents searchable without
+loading them:**
+
+| Index | Answers |
+|---|---|
+| (node, field) → patches setting it | "why", blast radius, winning regions |
+| field value → (node, patch) | "everything blue" |
+| axis value → patches whose region contains it | "what applies on slide 7, or in hover" |
+
+- **In Postgres,** an ordered axis's intervals are ranges and multiranges with GiST
+  indexes, an unordered axis's values are arrays with GIN, and entries are rows. The
+  room maintains them from each transaction: the server already links `iron_document`.
+- **A client** keeps the same index for what it has cached.
+- **The agent** queries instead of reading whole documents (§4.2), which is what keeps
+  its prompts small on large scopes.
+
+**Snapshots become chunked.** A snapshot becomes content-addressed chunks: owner
+subtrees, and patch sets. The `Summary` hashes form a tree, so:
+- a client fetches only the chunks a point needs;
+- unchanged chunks are shared between versions;
+- the narrative note's "states are content-addressed" holds for the chunks. A point's
+  hash, the hash of its base chunks and winning patches, can key caches: returning to
+  slide 2 can find its tiles.
+
+**Sync.** Patch entries are per-field writes, so the room's last-writer-wins per
+property is unchanged. A region edit must merge: two people widening one patch at once
+should both win. So region ops add or remove values per axis (a set CRDT's rule), and
+never write a whole region.
+
+**What is still unsolved:** ops on parts not loaded (scopes.md §8, reactive-engine.md
+§13). Patches make value writes easier, because an entry is a row that can be applied
+without its node loaded. Validating them still needs the node's type, and structural
+ops remain hard.
+
 ## 5. Editing
 
 - **Each view has an edit region.** Its default comes from the notation:

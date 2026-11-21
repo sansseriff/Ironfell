@@ -123,6 +123,11 @@ fn parts_follow_a_resized_instance_by_their_constraints() {
     assert_eq!(at(&store, u, title, "transform2d.y"), 0.0);
     // Nothing of it is saved: the file holds the parts as drawn.
     assert!(!store.save().contains("260"));
+    // A part's constraint edited on the template moves its copy at once.
+    store.apply(tx("left", vec![Op::Set { id: button, path: path("constraints.horizontal"), slot: Slot::Const(Value::Enum("left".into())) }])).unwrap();
+    assert_eq!(at(&store, u, button, "transform2d.x"), 160.0, "kept to the left now");
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(at(&store, u, button, "transform2d.x"), 260.0);
     // Undo puts the instance back at the template's size.
     store.undo(0).unwrap().unwrap();
     assert_eq!(at(&store, u, button, "transform2d.x"), 160.0);

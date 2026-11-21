@@ -241,13 +241,15 @@ impl Builder<'_> {
             }
             Kind::Container if contained(store, id) => {
                 // Its interior, at the size its parent gave it.
-                let parent_lays_out = store.tree().live(id).and_then(|n| n.parent).is_some_and(|p| matches!(kind_of(store, p), Kind::Container | Kind::Table));
+                // Allocated by its parent's run when it is an item there (fill
+                // included); else its own: fixed, or as if empty.
+                let allocated = store.tree().live(id).and_then(|n| n.parent).is_some_and(|p| matches!(kind_of(store, p), Kind::Container | Kind::Table)) && is_item(store, id);
                 let pad = |a: &str, b: &str| num(store, id, a, 0.0).max(0.0) + num(store, id, b, 0.0).max(0.0);
                 let size = |leaf: &str, size: &str, d: f64, empty: f64| {
-                    if word(store, id, leaf) == "fixed" {
-                        num(store, id, size, d)
-                    } else if parent_lays_out {
+                    if allocated {
                         store.resolved(id, path(size)).and_then(|v| v.as_f64()).unwrap_or(empty)
+                    } else if word(store, id, leaf) == "fixed" {
+                        num(store, id, size, d)
                     } else {
                         empty
                     }
@@ -577,8 +579,10 @@ fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
             if !doc.is_live(copy) {
                 continue;
             }
-            let mode = |slot: &crate::value::Slot, d: &str| slot.constant().and_then(|v| v.as_str()).unwrap_or(d).to_owned();
-            let (mh, mv) = (mode(&c.horizontal, "left"), mode(&c.vertical, "top"));
+            let _ = c;
+            // Read as values: an edit of a part's constraint moves its copy.
+            let mode = |field: &str, d: &str| store.constant(part, path(field)).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_else(|| d.to_owned());
+            let (mh, mv) = (mode("constraints.horizontal", "left"), mode("constraints.vertical", "top"));
             let ty = doc.live(copy).map_or("", |n| n.ty.name());
             // The part's box: a rect's (and anything sized) from its corner,
             // an ellipse's around its centre; anything else a point.
@@ -609,7 +613,11 @@ fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
             };
             let (nx, nw) = axis(&mh, bx, bw, w0, w);
             let (ny, nh) = axis(&mv, by, bh, h0, h);
-            let free = |leaf: &str| doc.leaf(copy, path(leaf)).is_none_or(|s| s.constant().is_some());
+            let free = |leaf: &str| {
+                // Bound or not is read as a value too (tracked).
+                let _ = store.constant(copy, path(leaf));
+                doc.leaf(copy, path(leaf)).is_none_or(|s| s.constant().is_some())
+            };
             let mut put = |leaf: &str, v: f64| {
                 if free(leaf) {
                     out.insert(Leaf { node: copy, path: path(leaf) }, Value::Number(v));
@@ -762,6 +770,9 @@ pub(crate) fn pinned_parts(doc: DocTree<'_>) -> BTreeSet<NodeId> {
 pub(crate) struct LayoutNative {
     root: NodeId,
     outputs: BTreeSet<Leaf>,
+    /// Whether a pinned part is among its nodes: its pins are its own, over
+    /// what it lays out (they overrode a container's before natives).
+    pins: bool,
 }
 
 impl LayoutNative {
@@ -782,8 +793,14 @@ impl LayoutNative {
                 }
             }
         }
-        let outputs = nodes.into_iter().filter(|n| !pinned.contains(n)).flat_map(|n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect();
-        LayoutNative { root, outputs }
+        let pins = nodes.iter().any(|n| pinned.contains(n));
+        let outputs = nodes.into_iter().flat_map(|n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect();
+        LayoutNative { root, outputs, pins }
+    }
+
+    /// The nodes it may write.
+    pub(crate) fn nodes(&self) -> BTreeSet<NodeId> {
+        self.outputs.iter().map(|l| l.node).collect()
     }
 }
 
@@ -800,7 +817,11 @@ impl crate::graph::Native for LayoutNative {
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         // Text measures through the engine's fonts.
         let _ = cx.input::<u64>(crate::graph::InputKey::Fonts);
-        let (values, grids) = lay_out(&*cx, self.root);
+        let (mut values, grids) = lay_out(&*cx, self.root);
+        debug_assert!(values.keys().all(|l| self.outputs.contains(l)), "layout of {} wrote outside its outputs", self.root);
+        if self.pins {
+            values.extend(constrained(&*cx));
+        }
         // A table whose tracks moved redraws its lines.
         let columns: LeafPath = path("table.columns");
         let before = cx.previous_extra::<BTreeMap<NodeId, crate::table::Grid>>();
@@ -813,7 +834,8 @@ impl crate::graph::Native for LayoutNative {
     }
 }
 
-/// `constrained` as a native cell, for the whole document.
+/// `constrained` as a native cell, for the pinned parts no layout native
+/// holds.
 #[derive(Debug, PartialEq)]
 pub(crate) struct PinsNative {
     outputs: BTreeSet<Leaf>,

@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). RE-5.4 step 1 done 2026-11-21 (repeats settle again after layout); its structure sub-plan is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). **RE-5.4 done 2026-11-21** (layout and repeats as natives, containment; §4.10); RE-5.5 (the solver) is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -3201,6 +3201,56 @@ cited by member and number.
   layout natives' hold and rooting.
 - Then a pass lays out in height order, and a hidden composition is not laid out.
   Both are behaviour changes, and get their own tests then.
+
+**Council on RE-5.4 (2026-11-21): Opus 5.5 6.5/10, Sol 6.2 5/10.** Fixed, each with a
+test that fails before (five checked):
+- **Reads layout made from the tree, not through `Cx`** (both).
+  - An embed's source, its camera and the source's `dims` are now tracked constant
+    reads (`composition::embed_3d_extent`).
+  - So are a pinned part's `constraints` modes and whether its leaf is bound
+    (`constrained`'s `free`).
+  - Test: `frame_constraints::parts_follow_a_resized_instance_by_their_constraints`
+    now edits a part's constraint.
+- **Pins** (both). A layout native now holds the pins of the parts in its subtree, and
+  applies them over what it lays out, as `constrained` overrode containers. Where a
+  pin writes nothing, the layout's value stands. A `PinsNative` holds only the parts
+  no layout holds.
+- **A leaf a native may write but does not claim is no edge to it** (Sol): `cell_of`
+  maps a leaf to its native only while the native claims it. A leaf claimed anew
+  raises its readers. Test: `a_fixed_stacks_gap_may_read_its_own_width`, which
+  failed as a false cycle.
+- **A settle that only moved item values left a layout waiting** (Sol): the round
+  loop goes on while a layout native is pending. Test:
+  `a_layout_reading_a_repeats_value_over_another_layout_follows_it_at_once`.
+- **A dropped layout native's claims were released at once** (Sol): while layout is
+  held, they are released where it is let go (`release_later`).
+- **A contained box that fills laid out its interior at its authored size** (both):
+  an item of a laying-out parent takes its allocation; otherwise it is fixed or as if
+  empty. Test: `a_contained_box_that_fills_lays_out_its_interior_at_its_allocation`.
+- **Glides:**
+  - another layout's placement is read at its target, not as drawn mid-glide (Opus 3);
+  - turning motion off primes the layouts in flight, so they land at their next run,
+    as the old pipeline published targets at its next layout. Test:
+    `turning_motion_off_mid_glide_lands_the_items`;
+  - turning motion on again keeps what is in flight;
+  - deleting the last context renews the glide specs.
+- **Cost:**
+  - `sync_layout` and `sync_repeats` are keyed on a count of structural changes
+    (`structure_gen`, moved by `regraph`), not on every edit (Opus 5);
+  - held natives no longer dirty their readers on every pass (Opus 7).
+- **Undeclared outputs:** a layout's values outside its outputs are a `debug_assert`.
+- **Found by the 1,000-seed property (seed 682):** a layout claim at an unchanged
+  value cleared a host's claim error on its leaf, where the old pipeline, publishing
+  nothing, kept it. Layout's claims now clear errors all at once, when a placement
+  moved (`layout_published`, `clear_layout_errors`), as one publish of every
+  placement did.
+
+**Not fixed, recorded:**
+- `pinned_parts` depends on a `use`'s notation, a value, but is kept by structure: a
+  notation change keeps the old pins until the next structural change.
+- The layout preview is one input.
+- A probe for an embed's camera change is not written: its reads are tracked, as
+  above.
 
 **The demonstrations, as measured (2026-11-21).** `tests/cells_demo.rs`
 (`cells_demo`, ignored, release), against `StoreCore::with_old_pipeline()`. The

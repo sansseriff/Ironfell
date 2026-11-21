@@ -514,7 +514,10 @@ pub struct StoreCore {
     /// `resolve_layout`) instead of as native cells: the differential
     /// reference, until phase 5 ends (reactive-engine handoff §4.10).
     old_pipeline: bool,
-    /// The count of document writes the layout natives were made for.
+    /// Counts structural changes (`regraph`): the layout and repeat natives
+    /// are made again only when it moved.
+    structure_gen: u64,
+    /// The structural change the layout natives were made for.
     layout_at: Option<u64>,
     /// The count of document writes the repeat natives were made for.
     repeats_at: Option<u64>,
@@ -668,6 +671,7 @@ impl StoreCore {
             network: self.network.clone(),
             old_pipeline: self.old_pipeline,
             layout_at: self.layout_at,
+            structure_gen: self.structure_gen,
             repeats_at: self.repeats_at,
             repeat_inputs: self.repeat_inputs.clone(),
             session_state: self.session_state.clone(),
@@ -713,6 +717,7 @@ impl StoreCore {
     /// Bring the graph up to date after structure changed through `ops`:
     /// update what the ops touched (reactive-engine handoff §4.4, stage 3a).
     fn regraph<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        self.structure_gen += 1;
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
         // The nodes a structural op made, moved, removed or reshaped, and
         // their parents (the inverse ops name the old ones): what a layout
@@ -956,6 +961,7 @@ impl StoreCore {
             network: None,
             old_pipeline,
             layout_at: None,
+            structure_gen: 0,
             repeats_at: None,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -2554,7 +2560,8 @@ impl StoreCore {
         let mut moved = false;
         for round in 0..=LAYOUT_ROUNDS {
             let derived = self.settle_repeats();
-            if round > 0 && derived.is_empty() && !moved {
+            // A settle that only moved values may have woken a held layout.
+            if round > 0 && derived.is_empty() && !moved && !self.reactive.layout_pending() {
                 break;
             }
             self.note_changes(derived.iter(), &[]);
@@ -2584,7 +2591,9 @@ impl StoreCore {
             .filter_map(|n| Some((n, Tree::of(&self.docs).get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
             .collect();
         if markups.is_empty() {
-            self.contexts = None;
+            if self.contexts.take().is_some() {
+                self.glide_specs();
+            }
         } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
             let lib = contexts::Library::with_document(&markups);
             self.contexts = Some((markups, lib));
@@ -2663,8 +2672,12 @@ impl StoreCore {
             self.clear_presentation();
         }
         if !self.old_pipeline {
-            self.reactive.glide = enabled.then(|| graph::Glide::new(self.motion.clock, self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n)));
-            self.glide_specs();
+            if !enabled {
+                self.reactive.glide_off();
+            } else if self.reactive.glide.is_none() {
+                self.reactive.glide = Some(graph::Glide::new(self.motion.clock, self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n)));
+                self.glide_specs();
+            }
         }
     }
 
@@ -3405,21 +3418,24 @@ impl StoreCore {
     /// Make the layout natives (handoff §4.10, RE-5.4): one per structural
     /// root, and the pins, keeping each that is as it would be made now.
     fn sync_layout(&mut self, run: bool) {
-        let edits = self.docs.edits();
-        if self.layout_at == Some(edits) {
+        if self.layout_at == Some(self.structure_gen) {
             return;
         }
-        self.layout_at = Some(edits);
+        self.layout_at = Some(self.structure_gen);
         let doc = Tree::of(&self.docs);
         let pinned = layout::pinned_parts(doc);
         let mut want: Vec<(graph::NativeKey, std::sync::Arc<dyn graph::Native>)> = Vec::new();
+        let mut covered: BTreeSet<NodeId> = BTreeSet::new();
         for root in layout::structural_roots(doc) {
             let k = graph::NativeKey::Layout(root);
             let n = layout::LayoutNative::new(doc, root, &pinned);
+            covered.extend(n.nodes());
             if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<layout::LayoutNative>()) != Some(&n) {
                 want.push((k, std::sync::Arc::new(n)));
             }
         }
+        // The pins of parts no layout holds.
+        let pinned: BTreeSet<NodeId> = pinned.difference(&covered).copied().collect();
         let pins = layout::PinsNative::new(&pinned);
         let keep_pins = !pinned.is_empty();
         if keep_pins && self.reactive.native(graph::NativeKey::Pins).and_then(|x| x.as_any().downcast_ref::<layout::PinsNative>()) != Some(&pins) {
@@ -3460,11 +3476,10 @@ impl StoreCore {
     /// Make a repeat native for each drawn repeat and conditional, and drop
     /// the rest, when the document's structure changed.
     fn sync_repeats(&mut self, run: bool) {
-        let edits = self.docs.edits();
-        if self.repeats_at == Some(edits) {
+        if self.repeats_at == Some(self.structure_gen) {
             return;
         }
-        self.repeats_at = Some(edits);
+        self.repeats_at = Some(self.structure_gen);
         let drawn: BTreeSet<NodeId> = expand::drawn_repeats(Tree::of(&self.docs)).into_iter().collect();
         let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
             .reactive

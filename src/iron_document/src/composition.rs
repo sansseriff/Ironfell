@@ -404,7 +404,12 @@ pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
 /// composition.
 pub fn embed_3d_extent(store: &dyn crate::reads::Reads, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
     let doc = store.tree();
+    // What it shows and through which camera are read as values, so that a
+    // layout reading this (through a native's `Cx`) follows their edits.
+    let leaf = |l: &str| l.parse::<crate::facet::LeafPath>().expect("declared leaf");
+    let _ = (store.constant(embed, leaf("embed.source")), store.constant(embed, leaf("embed_camera.camera")));
     let source = embedded(doc, embed)?;
+    let _ = store.constant(source, leaf("composition.dims"));
     if dims(doc, source) != Some(Dims::Three) {
         return None;
     }

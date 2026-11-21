@@ -364,3 +364,83 @@ fn a_contained_hugging_group_is_sized_as_if_empty() {
     assert_eq!(num(&store, boxed, "size.w"), 10.0);
     assert_eq!(num(&store, after, "transform2d.x"), 10.0);
 }
+
+/// A leaf a layout may write but does not (a fixed width) is no edge to it:
+/// a stack's gap bound to its own fixed width is no cycle.
+#[test]
+fn a_fixed_stacks_gap_may_read_its_own_width() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="300" size.h="10" layout.mode="stack_x" layout.sizing_w="fixed" layout.gap="{= $g.size.w / 10}">
+        <rect name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let b = plan.aliases["$b"];
+    store.apply(tx("gap", plan.ops)).unwrap();
+    assert!(store.problems().is_empty(), "{:?}", store.problems());
+    assert_eq!(num(&store, b, "transform2d.x"), 40.0, "a's 10, then a gap of 300 / 10");
+}
+
+/// A repeat whose items' values (not their number) follow a layout reaches
+/// a second layout reading them in the same call.
+#[test]
+fn a_layout_reading_a_repeats_value_over_another_layout_follows_it_at_once() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$a" name="a" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x"><rect id="$r" name="r" w="10" h="10"/></group>
+      <group id="$many" name="many" y="50" repeat.each="{= list($a.size.w)}"><rect w="1" h="1"/></group>
+      <group id="$b" name="b" x="0" y="100" size.w="10" size.h="10" layout.mode="stack_x" layout.gap="{= $many.repeat.item}">
+        <rect name="one" w="10" h="10"/><rect id="$two" name="two" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (r, two) = (plan.aliases["$r"], plan.aliases["$two"]);
+    store.apply(tx("chain", plan.ops)).unwrap();
+    assert_eq!(num(&store, two, "transform2d.x"), 20.0);
+    store.preview(r, path("size.w"), Value::Number(40.0));
+    assert_eq!(num(&store, two, "transform2d.x"), 50.0, "a gap of a's 40, before the preview returns");
+}
+
+/// A contained box that is fixed and fills lays out its interior at the
+/// size its parent gave it.
+#[test]
+fn a_contained_box_that_fills_lays_out_its_interior_at_its_allocation() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$row" name="row" x="0" y="0" size.w="300" size.h="40" layout.mode="stack_x" layout.sizing_w="fixed" layout.sizing_h="fixed">
+        <group id="$box" name="box" size.w="40" size.h="40" layout.mode="stack_x" layout.sizing_w="fixed" layout.contain="both" layout_item.w="fill">
+          <rect id="$inner" name="inner" w="10" h="10" layout_item.w="fill"/>
+        </group>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (boxed, inner) = (plan.aliases["$box"], plan.aliases["$inner"]);
+    store.apply(tx("contained", plan.ops)).unwrap();
+    assert_eq!(num(&store, boxed, "size.w"), 300.0);
+    assert_eq!(num(&store, inner, "size.w"), 300.0, "the interior fills the box as allocated");
+}
+
+/// Motion turned off mid-glide puts what is in flight at its target.
+#[test]
+fn turning_motion_off_mid_glide_lands_the_items() {
+    let mut store = Store::new();
+    store.set_motion(true);
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y">
+        <rect id="$a" name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/><rect id="$c" name="c" w="10" h="10"/>
+      </group>
+      <rect id="$lone" name="lone" x="100" y="0" w="10" h="10"/>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (a, c, lone) = (plan.aliases["$a"], plan.aliases["$c"], plan.aliases["$lone"]);
+    store.apply(tx("stack", plan.ops)).unwrap();
+    store.advance_motion(0.0);
+    let first = store.tree().live(a).unwrap().order.clone();
+    store.apply(tx("reorder", vec![Op::Reorder { id: c, order: OrderKey::before(&first) }])).unwrap();
+    store.advance_motion(0.08);
+    store.set_motion(false);
+    // At the next layout, they land.
+    store.apply(tx("unrelated", vec![Op::Set { id: lone, path: path("size.w"), slot: n(20.0) }])).unwrap();
+    assert_eq!((num(&store, a, "transform2d.y"), num(&store, c, "transform2d.y")), (10.0, 0.0));
+}

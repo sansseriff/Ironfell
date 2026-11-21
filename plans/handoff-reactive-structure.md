@@ -2981,103 +2981,152 @@ buys:
   round, so `LAYOUT_ROUNDS` goes;
 - a box can be contained (§9.2), so structure may read its size.
 
-**Decisions this plan makes (for the council to challenge):**
+**Council on the sub-plan (2026-11-21): Opus 5.5 5/10, Sol 6.2 6/10.** Its first draft
+paused the pass so the store could make a repeat's items inside it. Both members
+showed that this breaks how expansion works:
+- owners' fallbacks reach beyond the repeat;
+- expansion is batched, under a budget in id order;
+- presence changes during settling;
+- `restructure` runs passes of its own;
+- 45 call sites would have to handle the pause.
 
-1. **Structure by scope, values by read.** A layout native's values are read through
-   `cx` and tracked, constants included. Its structure is not: it has a scope, its
-   container's subtree, and `restructure` primes every native whose scope holds a
-   touched node, or the old or new parent of one. `regraph` already reports the
-   node of each op, and it is given the old parent of a reparent and the ends of an
-   unlink.
+They also found that the first draft's glides were not exact, nor were its
+implicit containment and its write-time rule. Revised as follows; the findings are
+cited by member and number.
 
-   This replaces §4.10's per-read structure tracking (children, parent, membership).
-   Layout reads structure throughout its tree, so a per-read record would be most
-   of its tree anyway. The cost is a relayout of one container when a node in it is
-   made, moved or deleted.
-2. **`Reads`, a trait over what layout consults:**
-   - `resolved(id, path)`, which tracks;
-   - `beneath(id, path)`;
-   - `tree()`, which is raw and scope-covered;
-   - `layout_preview()`;
-   - `font_generation()`;
-   - `contexts()`.
+**Decisions:**
 
-   `StoreCore` and `Cx` both implement it. Layout and the helpers it calls (`text`'s
-   measure and sizing, `content_bounds`'s geometry, `table`'s placement,
-   `constrained`) move from `&StoreCore` to `&impl Reads`, mechanically and exactly,
-   as a step of its own.
-3. **Inputs the store sets.** The layout preview and the font generation are
-   `Input` cells: a value held in `Reactive` (`Arc<dyn Any>`) with readers. The store
-   sets them (`set_layout_preview`, `refresh_text`), which primes their readers.
-   `relayout()` goes. The theme already reaches layout as token leaves.
-4. **Glides are a presentation layer.**
-   - Layout natives claim targets.
-   - A new layer in `Reactive`, read above runtime claims and below the gesture
-     overlay, holds where each gliding item is drawn.
-   - The store starts glides after the pass, from the claims that moved (as
-     `record(now)` does, §10.4). `advance_motion` writes the layer.
-   - So readers still see the glide, as today, exactly.
+1. **The old pipeline's lags are fixed first, on both sides** (Opus 4). Each is
+   confirmed by a probe test, as step 1 did for repeats:
+   - a container nested in a plain group, read through `content_bounds`, sees the
+     last call's placement;
+   - a layout → binding → layout chain is one call behind, because the rounds
+     repeat only when repeats made ops.
 
-   §9.1's "cells read the target" is not taken up: it would change what bindings
-   read, and nothing asks for it.
-5. **A repeat is a Structure native, and the store makes its items inside the
-   pass.**
-   - Its compute reads its inputs (`each`, `count`, `key`, `when`, `max`, the timings)
-     and returns the item keys and values it wants. It makes nothing.
-   - The pass then stops at it: `evaluate` hands the store a request with its queue
-     kept.
-   - The store expands those items (`owners.expand_items`, journaled as now),
-     restructures the new cells into the kept queue (at heights above the repeat,
-     as the kernel's R4 anchors them), and resumes.
-   - The store drives this from each evaluating call through one loop,
-     `self.stabilise()`, so no call site handles a request itself.
-   - `settle_repeats`, `repeat_inputs`, `item_memo` and the presence settling move
-     into it.
-6. **Containment.** `layout.contain` (`none`, `both`) is on groups, with a schema bump.
-   A contained box splits its container's native in two:
-   - an allocation native, the outer run, with the box as a leaf of its own size;
-   - an interior native, a run rooted at the box, whose scope is the box's subtree.
+   `resolve_physics` lays out again while a LAYOUT leaf that something reads moved,
+   bounded as the repeats are. That fixed pipeline is also the honest baseline for
+   the demonstrations.
+2. **One `lay_out_root(read, tree, root)`**, shared by the old pipeline and the
+   natives as `solve_island` is shared (Opus 10, 7).
+   - Values are read through a closure, after `table::place_with`. There is no trait
+     over ~50 helpers.
+   - The helpers layout calls take the closure:
+     - `text`'s style, content, runs, measure and cell padding;
+     - `geom`'s local bounds and paint padding;
+     - `shape::outline`;
+     - `contour`;
+     - `composition::embed_3d_extent`;
+     - `table`'s place and column count.
+   - Constants are read through the closure too (`constant(id, path)`, tracked), not
+     from a raw slot.
+   - `beneath` means beneath any LAYOUT claim, as `base` does today, not only the
+     native's own (Opus 7).
+3. **Layout natives are keyed by structure, not values** (Opus 3).
+   - There is one per *structural root*: a group with a `layout` facet, or a table,
+     whose parent has neither.
+   - A bound `layout.mode` or `layout_item.absolute` is handled inside its compute,
+     including absolute nested containers, each its own Taffy tree.
+4. **Scope covers structure only** (Opus 6, Sol 6). A structural op on a node in a
+   native's subtree, or on the old or new parent of one, primes it:
+   - create, delete, reparent, a facet added or removed;
+   - a pure reorder, which `regraph` is given.
 
-   A sized `use` and a fixed-size group are contained without declaring it. A
-   structural input (`each`, `count`, `key`, `when`) that reads an uncontained box's
-   size is refused at write time, in the applier's checks. A read that goes through
-   tracked reads is a cycle on the repeat (D6).
-7. **Verification.** The differential reference keeps the old layout and repeats
-   (`old_pipeline`, which widens `old_network`) until this step ends. Each step is
-   exact against it, except step 7's write-time rule, which the reference does not
-   have. Its tests stand alone.
+   A `Set` does not; values are tracked reads. Reads outside the subtree are tracked
+   through the closure:
+   - pins (`constrained`: the definition through its link, template constants,
+     `Constraints` facets);
+   - another composition's extent for an embed;
+   - the parent's kind.
+5. **Inputs.** The font generation is one `Input`. The layout preview is an `Input`
+   per container, so a drag frame runs only its own container (Opus 7).
+6. **Glides are applied inside the claim, before readers run** (Opus 5, Sol 4).
+   - The glide state lives in `Reactive`: the targets, the transitions in flight and
+     the clock.
+   - When a LAYOUT native claims, the claim starts a transition for each node whose
+     target moved and that has a glide declared, then claims the glided values. The
+     targets stay private.
+   - What a node may glide by (the context rule's `ms` and `ease`) is set by the
+     store, in a map it keeps current whenever contexts or structure change. The
+     claim does not resolve contexts.
+   - `advance_motion` moves the clock and re-claims only the nodes in flight, with no
+     layout run.
+   - So readers see what `motion.apply`-before-publish gives them, at the same
+     moments.
+   - `scratch()` clears it.
+7. **Repeats in batches, not inside a pass** (Opus 2, Sol 1, 2, 3).
+   - A repeat is a Structure native. Its compute reads its inputs (`each`, `count`,
+     `key`, `when`, `max`, the timings) and outputs the wanted items as one value on
+     a membership leaf of the repeat. It makes nothing.
+   - When the pass empties its queue, `stabilise` takes every repeat whose wanted
+     items changed. It settles them with today's code, in one batch: owners batched,
+     the budget in id order, the memo, presence, the fallbacks, `store_found`,
+     `check_owners`, `regraph`. Then it runs the next pass. It is bounded by
+     `DEPTH_MAX + 1` and `LAYOUT_ROUNDS`, as now.
+   - This is exact against `settle_repeats` by construction. The saving is that
+     only repeats whose inputs changed are looked at; today every drawn repeat's
+     inputs are read on every call.
+   - A layout native that holds a repeat's items reads its membership leaf, so it
+     sits above the repeat (Sol 1). Feedback stays the bounded `feedback` problem.
+   - `LAYOUT_ROUNDS` stays. One pass per round, not one pass per change, is the
+     honest claim. The test "readers run once per change" becomes "once per round".
+8. **Containment is opt-in, and has no write-time rule** (Opus 8, Sol 5).
+   - `layout.contain` (`none`, `both`) comes with a schema bump.
+   - A contained box is a leaf of its own size in the outer run, with `flex_shrink`
+     0 so it is not shrunk there, and an interior run at that size (the border box
+     as `Px`).
+   - A contained group that fills or hugs is sized as if empty (CSS size
+     containment).
+   - No box is contained implicitly: a fixed group laid out at its authored size
+     would differ from today where an overflowing stack shrinks it.
+   - A structural read of an uncontained box's size is the runtime cycle (D6), not a
+     write-time refusal: a static check misses `deref`, transitive bindings and an
+     edit that turns containment off.
 
 **Steps.**
 1. Done: repeats settle again after layout.
-2. `Reads`, mechanical and exact.
-3. `Input` cells (the layout preview, fonts) and `regraph`'s parents. No layout
-   native yet; `relayout` reads the inputs.
-4. **Layout natives**, one per outermost container, with their scope. Outputs are a
-   superset fixed by structure. Table tracks are outputs reported as marks, pins are
-   in their frame's native, and glides are the presentation layer.
-   `resolve_layout` goes from the subject.
-   - Test: an edit in one container lays out no other.
-5. **Repeats as Structure natives**, with the pass stopping for the store.
-   `settle_repeats` and `LAYOUT_ROUNDS` go from the subject.
-   - Tests: the probe and the feedback case pass unchanged. A repeat and its items'
-     readers run once per change.
-6. **Containment**, with a schema bump.
+2. **The old pipeline's two lags fixed, then `lay_out_root` shared.** Probes first;
+   exact on both sides.
+3. **Inputs, and `regraph` for reorders and old parents.**
+4. **Layout natives, with glides in the claim.** The reference keeps
+   `resolve_layout` (`old_pipeline`, which widens `old_network`).
    - Tests:
-     - a repeat inside a contained box, whose count reads the box's width, follows a
-       resize in one pass;
-     - the same in an uncontained, hugging group is refused at write time.
-7. The reference's old layout and repeats go. Council, then roadmap.
+     - an edit in one container lays out no other;
+     - a drag preview in one container runs only it;
+     - a glide's start, interruption and release are the same as before.
+5. **Repeats as Structure natives in batches.** `settle_repeats`' scan of every drawn
+   repeat goes from the subject.
+6. **Containment.** Tests:
+   - a repeat in a contained box, whose count reads the box's width, follows a resize
+     with no `feedback` problem;
+   - the same in a hugging group is the `feedback` problem.
+7. **The demonstrations** (below). The reference's old layout and repeats go. A
+   council, then the roadmap.
 
-**Risks:**
-- Step 5 is the largest: the pass gains a pause, and the owners and the journal run
-  inside it.
-- Exactness through step 4 depends on the presentation layer giving readers what
-  `motion.apply` gives them today, at the same moments.
-- Measured cost may not improve at today's sizes: layout is a small part of an edit
-  at 700 meters.
+**The demonstrations** (the user's request, 2026-11-21: show the design's efficiency
+with simple cases), in release, against the old pipeline as step 2 leaves it. Each
+reports:
+- p50 and p95;
+- layout runs (Taffy trees);
+- native runs;
+- evaluations;
+- repeats settled.
 
-Then Layout natives per container, cut at contained boxes (§9.2). Repeats as natives
-whose output is structure, made inside the pass: the kernel's R4 is the worked example
+The cases:
+- **N containers, edit one** (N = 10, 100, 1,000). The old pipeline lays out N, the
+  new one 1.
+- **A chain**: K containers, each one's gap bound to the last's laid-out width,
+  editing the first. The old pipeline lays out every container in each of K rounds;
+  the new one runs K natives once each.
+- **A drag preview** in one container among many.
+- **What does not improve, also reported:**
+  - load (R5 runs a new native twice);
+  - one container of 1,000 items;
+  - a structural edit inside a big container;
+  - text-heavy containers;
+  - the 700-meter document.
+
+(Superseded by the sub-plan above.) Layout natives per container, cut at contained boxes (§9.2). Repeats as natives
+whose output is structure: the kernel's R4 is the worked example
 of that. Glides are presentation over the target. `layout.contain` comes with a schema
 bump. **This step's structure part gets a sub-plan and a council before it is built.**
 

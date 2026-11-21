@@ -2970,6 +2970,112 @@ fixed points (RE-5.5) if a document needs it. No document does today.
   323.714909407), the same on every run. SKILL.md is updated. A finger's solves
   depend on how many calls a drag makes (§9.4), which this changes.
 
+#### RE-5.4's sub-plan: layout and repeats as cells (plan, 2026-11-21)
+
+The user chose to build all of RE-5.4 before RE-5.5 (2026-11-21), though step 1
+already meets §17's exit for it and there is no measured cost target here. What it
+buys:
+- each container is laid out only when something it reads changed (today every
+  container, on every pipeline call);
+- a repeat makes its items in the pass that changed its inputs, not in a later
+  round, so `LAYOUT_ROUNDS` goes;
+- a box can be contained (§9.2), so structure may read its size.
+
+**Decisions this plan makes (for the council to challenge):**
+
+1. **Structure by scope, values by read.** A layout native's values are read through
+   `cx` and tracked, constants included. Its structure is not: it has a scope, its
+   container's subtree, and `restructure` primes every native whose scope holds a
+   touched node, or the old or new parent of one. `regraph` already reports the
+   node of each op, and it is given the old parent of a reparent and the ends of an
+   unlink.
+
+   This replaces §4.10's per-read structure tracking (children, parent, membership).
+   Layout reads structure throughout its tree, so a per-read record would be most
+   of its tree anyway. The cost is a relayout of one container when a node in it is
+   made, moved or deleted.
+2. **`Reads`, a trait over what layout consults:**
+   - `resolved(id, path)`, which tracks;
+   - `beneath(id, path)`;
+   - `tree()`, which is raw and scope-covered;
+   - `layout_preview()`;
+   - `font_generation()`;
+   - `contexts()`.
+
+   `StoreCore` and `Cx` both implement it. Layout and the helpers it calls (`text`'s
+   measure and sizing, `content_bounds`'s geometry, `table`'s placement,
+   `constrained`) move from `&StoreCore` to `&impl Reads`, mechanically and exactly,
+   as a step of its own.
+3. **Inputs the store sets.** The layout preview and the font generation are
+   `Input` cells: a value held in `Reactive` (`Arc<dyn Any>`) with readers. The store
+   sets them (`set_layout_preview`, `refresh_text`), which primes their readers.
+   `relayout()` goes. The theme already reaches layout as token leaves.
+4. **Glides are a presentation layer.**
+   - Layout natives claim targets.
+   - A new layer in `Reactive`, read above runtime claims and below the gesture
+     overlay, holds where each gliding item is drawn.
+   - The store starts glides after the pass, from the claims that moved (as
+     `record(now)` does, §10.4). `advance_motion` writes the layer.
+   - So readers still see the glide, as today, exactly.
+
+   §9.1's "cells read the target" is not taken up: it would change what bindings
+   read, and nothing asks for it.
+5. **A repeat is a Structure native, and the store makes its items inside the
+   pass.**
+   - Its compute reads its inputs (`each`, `count`, `key`, `when`, `max`, the timings)
+     and returns the item keys and values it wants. It makes nothing.
+   - The pass then stops at it: `evaluate` hands the store a request with its queue
+     kept.
+   - The store expands those items (`owners.expand_items`, journaled as now),
+     restructures the new cells into the kept queue (at heights above the repeat,
+     as the kernel's R4 anchors them), and resumes.
+   - The store drives this from each evaluating call through one loop,
+     `self.stabilise()`, so no call site handles a request itself.
+   - `settle_repeats`, `repeat_inputs`, `item_memo` and the presence settling move
+     into it.
+6. **Containment.** `layout.contain` (`none`, `both`) is on groups, with a schema bump.
+   A contained box splits its container's native in two:
+   - an allocation native, the outer run, with the box as a leaf of its own size;
+   - an interior native, a run rooted at the box, whose scope is the box's subtree.
+
+   A sized `use` and a fixed-size group are contained without declaring it. A
+   structural input (`each`, `count`, `key`, `when`) that reads an uncontained box's
+   size is refused at write time, in the applier's checks. A read that goes through
+   tracked reads is a cycle on the repeat (D6).
+7. **Verification.** The differential reference keeps the old layout and repeats
+   (`old_pipeline`, which widens `old_network`) until this step ends. Each step is
+   exact against it, except step 7's write-time rule, which the reference does not
+   have. Its tests stand alone.
+
+**Steps.**
+1. Done: repeats settle again after layout.
+2. `Reads`, mechanical and exact.
+3. `Input` cells (the layout preview, fonts) and `regraph`'s parents. No layout
+   native yet; `relayout` reads the inputs.
+4. **Layout natives**, one per outermost container, with their scope. Outputs are a
+   superset fixed by structure. Table tracks are outputs reported as marks, pins are
+   in their frame's native, and glides are the presentation layer.
+   `resolve_layout` goes from the subject.
+   - Test: an edit in one container lays out no other.
+5. **Repeats as Structure natives**, with the pass stopping for the store.
+   `settle_repeats` and `LAYOUT_ROUNDS` go from the subject.
+   - Tests: the probe and the feedback case pass unchanged. A repeat and its items'
+     readers run once per change.
+6. **Containment**, with a schema bump.
+   - Tests:
+     - a repeat inside a contained box, whose count reads the box's width, follows a
+       resize in one pass;
+     - the same in an uncontained, hugging group is refused at write time.
+7. The reference's old layout and repeats go. Council, then roadmap.
+
+**Risks:**
+- Step 5 is the largest: the pass gains a pause, and the owners and the journal run
+  inside it.
+- Exactness through step 4 depends on the presentation layer giving readers what
+  `motion.apply` gives them today, at the same moments.
+- Measured cost may not improve at today's sizes: layout is a small part of an edit
+  at 700 meters.
+
 Then Layout natives per container, cut at contained boxes (§9.2). Repeats as natives
 whose output is structure, made inside the pass: the kernel's R4 is the worked example
 of that. Glides are presentation over the target. `layout.contain` comes with a schema

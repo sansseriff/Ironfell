@@ -1490,6 +1490,18 @@ Phase 3 comes before 4 because what may sleep depends on how steppers and events
 classified. Phase 5 does not depend on 3 or 4. Chunked storage (§13) is separate work
 after 4.
 
+**Moved, 2026-11-20.** Several items now belong to
+[`../handoff-patches.md`](../handoff-patches.md) §1, the order of work for the note
+[`../notes/patches-regions-and-time.md`](../notes/patches-regions-and-time.md):
+- phase 3's clock providers, with a visibility gate in place of §8.3's facet-kind
+  list;
+- phase 5's clips as cells;
+- phase 6;
+- phase 4's Unloaded owners.
+
+The rest of this table stands. If the user does not adopt that note, these items return
+here unchanged.
+
 ## 18. Risks
 
 | Risk | Mitigation |

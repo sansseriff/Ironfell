@@ -3,7 +3,8 @@
 **Status:** Note: a design conversation, not a plan. Nothing here is adopted; do not
 build from it. It leans hard enough that a spec should follow it, and the user has
 said breaking changes to the UX and the internals are welcome to get one coherent
-system (2026-11-20).
+system (2026-11-20). The order of work from this note to specs and code is in
+[`../handoff-patches.md`](../handoff-patches.md).
 **Date:** 2026-11-20.
 **Context:** A conversation that began with a hidden tab's plot costing frames (its
 tick labels kept coming and going) and went on to time, takes, slides and state
@@ -507,15 +508,13 @@ Each is a projection of the algebra, not a separate feature.
 - **What persists per point:** simulation state per placed point, and whether takes
   share a checkpoint at their start.
 
-## 10. A building order, if adopted
+## 10. A building order
 
-1. **Composition clocks with the visibility gate and fixed-step steppers.** This fixes
-   the hidden-tab cost this began with, and everything after builds on the clocks
-   without changing them.
-2. **The algebra as a toy with property tests:** identity, associativity, commutation of
-   disjoint patches, locality, specificity, stale entries. These are random scripts, as
-   the store's tests already are. Then a spec.
-3. **Machines rebuilt on axes and patches**, replacing machines.md's poses; the plot's
-   `vis` is the first user.
-4. **Decks and takes:** ordered axes, the timeline as region editor, provenance chips.
-5. **Clock operators, loops with `n`, ghosts; then coverage and checkpoints.**
+Moved to [`../handoff-patches.md`](../handoff-patches.md) §2 (2026-11-20), the one place
+that orders this work. In short:
+1. composition clocks;
+2. a council on this note;
+3. the algebra as a crate with property tests;
+4. the algebra spec, then the storage-and-query spec;
+5. after the user approves both, patches in the store;
+6. then machines, instances, search, decks and takes, clock operators, and storage.

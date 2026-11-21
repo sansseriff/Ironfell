@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-19 for the reactive-engine phases. Update this file whenever a plan is added,
+**Updated:** 2026-11-20 for the patches track. Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -23,7 +23,16 @@ finishes, or is superseded.
      swapped in 2026-11-17, the old engine deleted; 2c (copies leave the document),
      3 (time) and 4 (observation) done 2026-11-19, each with named steps deferred.
      Now: phase 5 (the pipeline as cells), its first two steps done; the handoff's
-     §2 has the state of each phase.
+     §2 has the state of each phase. The plan ends with phase 5's layout, network and
+     solver cells; its clock providers, clips, parking and phase 6 move to the
+     patches track.
+   - **Patches, regions and time** (one algebra for instances, variants, machine
+     states, slides, takes, clips and narrative extents; composition clocks):
+     [`handoff-patches.md`](handoff-patches.md). The design is a note,
+     [`notes/patches-regions-and-time.md`](notes/patches-regions-and-time.md), not
+     adopted. Step 1 (composition clocks) can be built now. Steps 2 to 4 are a
+     council, a pure crate with property tests, and two specs. Building from step 5
+     on waits for the user to approve those specs.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
@@ -89,7 +98,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`agent-streaming.md`](specs/agent-streaming.md) | Live agent progress: one event stream from provider to chat (phases, reasoning summaries, streamed prose, Stop, idle timeout), a T3-style work log, and partial-edit previews through provisional store transactions | Phases 1–2 built 2026-11-06 (§6: live work log, Stop, streamed prose and forming edit, idle timeouts); 3–4 (partial-edit previews) proposed |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
 | [`plot.md`](specs/plot.md) | Series values (numbers with a unit), broadcasting floor functions and lambdas (`x => …`); paths bound to SVG path data (`points`, `circles`, `segments`); instances with their own size that reflow on a corner drag; the `std:plot` standard component | Phases 1–3 built 2026-11-08 (§12); `std:plot` is markup (`std/plot.xml`) since 2026-11-09 |
-| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; waits on the user |
+| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; built in part (`roadmap.md`). **To be replaced** by the patches spec: states become points on an axis, poses patches ([`handoff-patches.md`](handoff-patches.md) step 6) |
 | [`wires-and-formulas.md`](specs/wires-and-formulas.md) | The node graph Iron already has, shown on demand: formulas as the source of truth, purple wires only around the selection, modifier chips on wires (Easy Ease, Map range, Window…) that are calls in the formula, components for depth, no free node canvas; `ease()`, `window()`, `cubic-bezier`, Trim Paths | Proposed 2026-11-08; phase 1 next |
 | [`frame-constraints.md`](specs/frame-constraints.md) | Figma's resizing model for people: a `pin` facet per child (left, right, stretch, center, scale) interpreted by the layout step, the Resizable toggle, the constraints widget, an auto-layout section | Proposed 2026-11-08; phases 1–2 (minimal) built 2026-11-08 (§7) |
 | [`repeat.md`](specs/repeat.md) | A repeat (a `repeat` facet on a group): one derived copy of its children per element of a series or count, keyed by index or value, entering and exiting through machines; `let` named values; node markup, in which the standard components are written | Phase 1, `let` and node markup built 2026-11-09 (§9): `std:plot` and the other standard components are markup; reworked the same day onto item nodes and live settling (reactivity.md); value keys, enter/exit open |
@@ -97,7 +106,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`reactive-engine.md`](specs/reactive-engine.md) | A new reactive engine replacing the graph, expansion and settling: an owner tree, evaluation only of what is observed, structure inside one pass, instances as references to shared templates, transactions in place, the pipeline (layout, network, clips, steppers) as cells, clocks with a scheduler and slices, readiness for partial loading | Approved for building 2026-11-15, decisions settled; not built. Revised 2026-11-16 after a third council round: phases 0 to 2 are ready, phases 3 to 5 have open points listed in its §14. Covers the constraint solver as cells (§9.4) and 3D (§8.10). Unverified assumptions in its §14; review history in [`reactive-engine-review.md`](specs/reactive-engine-review.md). Work order and phase 0 and 1 tasks in `handoff-reactive-structure.md` |
 | [`themes.md`](specs/themes.md) | Colour tokens with light and dark values: `@name` in formulas, a palette of token nodes, the built-in validated theme added on first use, the theme published by the store, the picker's Tokens section, `std:plot` on tokens | Built 2026-11-08 (step 5) |
 | [`types-and-units.md`](specs/types-and-units.md) | A typed component boundary: `port.type` (quantities with display units, `choice(a\|b)`, `bool`, `color`, `series`, `fn(n)`, `\| auto`), checks at set and connect, widgets by type, literals that keep their unit, pin visibility (`port.show`, `port.group`) and its author flow. Prior art for plots beyond `std:plot`: `notes/plot-system-vision.md` | Proposed 2026-11-08; phase 1 with widgets and pins built 2026-11-08 (§9) |
-| [`variants-and-imports.md`](specs/variants-and-imports.md) | Lesson variants (`extends`, differences only, re-applied when the base changes); `iron://owner/package@range` imports, pinned and copied in with a hash | Proposed 2026-11-08; syntax only, building waits on narrative moves and the server |
+| [`variants-and-imports.md`](specs/variants-and-imports.md) | Lesson variants (`extends`, differences only, re-applied when the base changes); `iron://owner/package@range` imports, pinned and copied in with a hash | Proposed 2026-11-08; syntax only, building waits on narrative moves and the server. V1's `extends` is **to be replaced** by regions on a variant axis ([`handoff-patches.md`](handoff-patches.md)) |
 
 ## 4. Rendering
 
@@ -162,7 +171,7 @@ acceleration. It is **not adopted**; wait for user approval before implementatio
 
 - Record completion in `roadmap.md`'s Status table and the spec's "Done" notes, not in a
   new document.
-- Order work only in the two handoffs. Specs describe phases and exits; they point to a
+- Order work only in the handoffs. Specs describe phases and exits; they point to a
   handoff for sequence.
 - Give every plan a `**Status:**` line under its title and update it when work lands.
 - When a document is superseded, add a "Historical" banner at its top, `git mv` it to

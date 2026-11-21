@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10); RE-5.3 is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them); RE-5.4 is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -2846,6 +2846,45 @@ fail as from a binding, and a KeepLast keeps its claims and reports a problem.
    one native per island, rooted, KeepLast. `solve_network` stays only in the
    reference's mode, exact against it. The `ports`, `schematic` and `signals` suites
    stay green.
+
+**RE-5.3, as done (2026-11-20).**
+1. **Rekey** (`808c698`). Exact: the suites pass unchanged.
+2. **Natives** (`f4fc24f`): `Native`, `Cx`, claims, `owned`, `base_readers`, failures,
+   necessity, R5 and R6.
+   - Nine unit tests in `graph.rs`. The R5 and R6 tests fail with their rule taken
+     out.
+   - R6 retries blocked bindings too. The suites are unchanged by it.
+3. **Islands in the old pipeline** (`a34b77e`), on both sides.
+   - Test: `a_circuit_that_cannot_settle_does_not_hold_back_another`, which failed
+     before.
+4. **The network on natives.**
+   - `port::IslandNative` is one native per island, rooted and KeepLast.
+   - `solve_island` is shared with the old pipeline, so the two agree to the bit.
+   - `StoreCore::old_network` keeps the old pipeline in the differential reference,
+     the store with copies in its document. The suites are exact against it.
+   - `physics_error` is the unsettled island with the lowest unknown, on both sides.
+   - Found while comparing: when islands merge or split, the new native starts with
+     no claims. Its first solve can fail to converge (a connection mid-way), and the
+     island's values then vanished where the old pipeline kept them by leaf.
+     `set_natives` now passes a dropped native's claims on a leaf to the new native
+     that writes it, in the same batch.
+   - Test: `an_edit_in_one_circuit_solves_no_other` (`Reactive::native_runs`).
+   - The network's structure is still found again on any document write
+     (`docs.edits()`), as before, and only islands whose unknowns or equations
+     changed are made again.
+   - Not done:
+     - an equation's constant inlined as a literal is structure, so editing it
+       remakes its island;
+     - a `deref` in an equation that reads one of its own island's unknowns reads it
+       beneath the claim (its constant), where the old pipeline read the last
+       solution. No document does that today.
+
+   Verified:
+   - the differential suite (488) with `IRON_ATOMICITY` and `IRON_OWNER_CHECK`, and the
+     plain suite;
+   - the app's lib tests and the build;
+   - the smoke, pulses and fiber scripts, and regression, the same as expected once
+     line numbers and timings are stripped.
 
 **RE-5.4: repeats and layout.** Its first steps:
 1. Fix the lag in the old pipeline on both sides: run the rounds again when a stage

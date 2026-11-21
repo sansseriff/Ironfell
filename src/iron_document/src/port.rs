@@ -14,6 +14,7 @@
 //! (ECM §6.1, step 3).
 
 use crate::Tree;
+use crate::Value;
 use crate::facet::{FacetKind, LeafPath, Port};
 use crate::document::RelKind;
 use crate::expr::{Expr, Leaf};
@@ -260,12 +261,136 @@ impl Network {
     }
 }
 
+impl Network {
+    /// An island's unknowns and its equations over them, with `Linear`
+    /// coefficients indexing the island's unknowns.
+    pub fn localise(&self, island: &Island) -> (Vec<(Leaf, crate::units::Dim)>, Vec<Equation>) {
+        let local: BTreeMap<usize, usize> = island.unknowns.iter().enumerate().map(|(pos, &i)| (i, pos)).collect();
+        let unknowns = island.unknowns.iter().map(|&i| self.unknowns[i]).collect();
+        let equations = island
+            .equations
+            .iter()
+            .map(|&e| match &self.equations[e] {
+                Equation::Linear(coefs) => Equation::Linear(coefs.iter().map(|(i, c)| (local[i], *c)).collect()),
+                eq => eq.clone(),
+            })
+            .collect();
+        (unknowns, equations)
+    }
+
+    /// Every island as a native cell, by its lowest unknown.
+    pub(crate) fn island_natives(&self) -> Vec<(crate::graph::NativeKey, IslandNative)> {
+        self.islands()
+            .iter()
+            .map(|island| {
+                let (unknowns, equations) = self.localise(island);
+                let outputs: std::collections::BTreeSet<Leaf> = unknowns.iter().map(|(l, _)| *l).collect();
+                let key = crate::graph::NativeKey::Island(*outputs.first().expect("an island has an unknown"));
+                (key, IslandNative { outputs, unknowns, equations })
+            })
+            .collect()
+    }
+}
+
+/// The magnitude a solve works in: a number, or a quantity in SI.
+fn magnitude(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => Some(*n),
+        Value::Quantity { si, .. } => Some(*si),
+        _ => None,
+    }
+}
+
+/// Solve one island from `x0`, reading what is not an unknown through
+/// `read`. The old pipeline and the island's native both solve through
+/// this, so the two agree to the bit (handoff §4.10).
+pub(crate) fn solve_island(unknowns: &[(Leaf, crate::units::Dim)], equations: &[Equation], x0: Vec<f64>, read: &dyn Fn(Leaf) -> Option<Value>) -> iron_solve::Solution {
+    let index: BTreeMap<Leaf, usize> = unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
+    let mut problem = iron_solve::Problem::uniform(x0, 1.0);
+    for eq in equations {
+        match eq {
+            Equation::Linear(coefs) => {
+                let vars: Vec<usize> = coefs.iter().map(|(i, _)| *i).collect();
+                let k: Vec<f64> = coefs.iter().map(|(_, c)| *c).collect();
+                problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars, 1, move |v, out| {
+                    out[0] = v.iter().zip(&k).map(|(x, c)| x * c).sum();
+                }));
+            }
+            Equation::Expr { lhs, rhs, .. } => {
+                // The unknowns it reads by name; a `deref`'s reads go
+                // through `read`.
+                let mut vars: Vec<usize> = lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect();
+                vars.sort();
+                vars.dedup();
+                if vars.is_empty() {
+                    continue;
+                }
+                let index = &index;
+                problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars.clone(), 1, move |v, out| {
+                    let at = |l: Leaf| match index.get(&l).and_then(|i| vars.iter().position(|j| j == i)) {
+                        Some(pos) => Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
+                        None => read(l),
+                    };
+                    let side = |e: &Expr| e.eval(&at).ok().as_ref().and_then(magnitude);
+                    out[0] = match (side(lhs), side(rhs)) {
+                        (Some(a), Some(b)) => a - b,
+                        _ => 1e6,
+                    };
+                }));
+            }
+        }
+    }
+    // A network is a set of equations, not a drag: nothing should stay
+    // where it was at the expense of an equation (the weak rows stalled a
+    // kΩ–mA circuit short of the tolerance).
+    let options = iron_solve::Options { max_iterations: 100, least_change: false, ..Default::default() };
+    iron_solve::solve(&problem, &options)
+}
+
+/// Why an island kept its last solution.
+pub(crate) fn unsettled(residual: f64) -> String {
+    format!("the across/through network does not settle (residual {residual:.3e})")
+}
+
+/// An island of the network as a native cell (handoff §4.10, RE-5.3 step
+/// 4): its unknowns are its outputs, solved from where it last left them,
+/// reading through the graph what is not an unknown. One that does not
+/// converge keeps its last solution.
+#[derive(Debug, PartialEq)]
+pub(crate) struct IslandNative {
+    outputs: std::collections::BTreeSet<Leaf>,
+    unknowns: Vec<(Leaf, crate::units::Dim)>,
+    equations: Vec<Equation>,
+}
+
+impl crate::graph::Native for IslandNative {
+    fn producer(&self) -> crate::graph::ProducerId {
+        crate::graph::ProducerId::NETWORK
+    }
+    fn outputs(&self) -> &std::collections::BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        let x0: Vec<f64> = self.unknowns.iter().map(|(l, _)| cx.previous(*l).as_ref().and_then(magnitude).unwrap_or(0.0)).collect();
+        let cx = std::cell::RefCell::new(cx);
+        let solution = solve_island(&self.unknowns, &self.equations, x0, &|l| cx.borrow_mut().read(l));
+        if solution.status != iron_solve::Status::Converged {
+            return Err(crate::graph::Failure::KeepLast(unsettled(solution.max_required_residual)));
+        }
+        Ok(self.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect())
+    }
+}
+
 fn has_deref(e: &Expr) -> bool {
     let mut found = false;
     e.walk(&mut |x| found |= matches!(x, Expr::Call(name, _) if name == "deref"));
     found
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub enum Equation {
     Linear(Vec<(usize, f64)>),
     Expr { node: NodeId, lhs: Expr, rhs: Expr },

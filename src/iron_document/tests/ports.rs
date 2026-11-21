@@ -342,6 +342,31 @@ fn a_circuit_that_cannot_settle_does_not_hold_back_another() {
     assert!((across(&lab.store, h_out) - 313.15).abs() < 1e-6, "{}", across(&lab.store, h_out));
 }
 
+/// Each island is a native cell (reactive-engine handoff §4.10, RE-5.3):
+/// a parameter of one circuit solves that circuit and no other.
+#[test]
+fn an_edit_in_one_circuit_solves_no_other() {
+    let (mut store, model, [heater, link, ambient]) = thermal();
+    let q = |s: &str| Value::parse_quantity(s).unwrap();
+    let one = [(heater, "heater"), (link, "link"), (ambient, "ambient")].map(|(d, n)| place(&mut store, model, d, n));
+    let two = [(heater, "heater"), (link, "link"), (ambient, "ambient")].map(|(d, n)| place(&mut store, model, d, n));
+    let mut lab = Lab { store, laser: one[0], fiber: one[1], meter: one[2], model };
+    for [h, l, a] in [one, two] {
+        let (h_out, la, lb, amb) = (lab.port(h, "out"), lab.port(l, "a"), lab.port(l, "b"), lab.port(a, "p"));
+        lab.connect(h_out, la).unwrap();
+        lab.connect(lb, amb).unwrap();
+    }
+    let (out1, out2) = (lab.port(one[0], "out"), lab.port(two[0], "out"));
+    let across = |s: &Store, p: NodeId| watts(&s.resolved(p, path("port.across")).unwrap());
+    let runs = |s: &Store, p: NodeId| s.reactive().native_runs(Leaf { node: p, path: path("port.across") }).expect("solved by a native");
+    let (r1, r2) = (runs(&lab.store, out1), runs(&lab.store, out2));
+    lab.store.apply(tx("10 W", vec![Op::Set { id: one[0], path: path("args.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
+    assert!((across(&lab.store, out1) - 313.15).abs() < 1e-6, "{}", across(&lab.store, out1));
+    assert!((across(&lab.store, out2) - 303.15).abs() < 1e-6, "{}", across(&lab.store, out2));
+    assert!(runs(&lab.store, out1) > r1, "the edited circuit solved");
+    assert_eq!(runs(&lab.store, out2), r2, "the other did not");
+}
+
 /// The entity's first figure; the lab's fiber template draws nothing, so
 /// the fiber gets a plain rect for one.
 fn figure_of_entity(store: &mut Store, entity: NodeId) -> NodeId {

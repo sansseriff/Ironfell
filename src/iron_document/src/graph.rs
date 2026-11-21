@@ -119,12 +119,13 @@ pub(crate) trait Native: Send + Sync + std::fmt::Debug {
     /// Every leaf it may write.
     fn outputs(&self) -> &BTreeSet<Leaf>;
     fn compute(&self, cx: &mut Cx<'_>) -> Result<BTreeMap<Leaf, Value>, Failure>;
+    /// For the store to tell whether a native it would make is the one it
+    /// has (`native`).
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Why a native gave no result.
 #[derive(Clone, Debug, PartialEq)]
-// The network's natives use it (RE-5.3 step 4); until then, only the tests.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum Failure {
     /// Its outputs fail, and what reads them: "depends on …".
     Error(String),
@@ -143,10 +144,11 @@ struct NativeCell {
     height: u32,
     /// Run whether or not anything observed needs it.
     rooted: bool,
+    /// How many times it has run.
+    runs: u64,
 }
 
 /// What a native reads through: every read is recorded.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct Cx<'a> {
     doc: Tree<'a>,
     graph: &'a Reactive,
@@ -157,7 +159,6 @@ pub(crate) struct Cx<'a> {
     reached: BTreeSet<CellId>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Cx<'_> {
     /// A leaf as any reader sees it. One this native owns reads beneath
     /// its own claim: the authored constant, or the facet's default (as
@@ -208,7 +209,6 @@ impl Iterator for Readers<'_> {
 
 /// A leaf beneath every claim and binding: its authored constant, or its
 /// facet's default when the node lacks it.
-#[cfg_attr(not(test), allow(dead_code))]
 fn beneath(doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
     doc.live(leaf.node)?;
     match doc.leaf(leaf.node, leaf.path) {
@@ -1447,6 +1447,7 @@ impl Reactive {
         let cell = CellId::Native(k);
         let rule = self.natives[&k].rule.clone();
         self.evaluations += 1;
+        self.natives.get_mut(&k).expect("native").runs += 1;
         let (result, reads, base, reached) = {
             let mut cx = Cx { doc, graph: &*self, me: k, reads: BTreeSet::new(), base: BTreeSet::new(), reached: BTreeSet::new() };
             let result = rule.compute(&mut cx);
@@ -1631,69 +1632,117 @@ impl Reactive {
         changed
     }
 
+    /// How many times the native that writes `leaf` has run, if one does:
+    /// tests use it to check that a change runs only what it reaches.
+    pub fn native_runs(&self, leaf: Leaf) -> Option<u64> {
+        self.owned.get(&leaf).and_then(|k| self.natives.get(k)).map(|n| n.runs)
+    }
+
+    /// The native cells' keys.
+    pub(crate) fn native_keys(&self) -> impl Iterator<Item = NativeKey> + '_ {
+        self.natives.keys().copied()
+    }
+
+    /// The rule of native `k`, if there is one.
+    pub(crate) fn native(&self, k: NativeKey) -> Option<&dyn Native> {
+        self.natives.get(&k).map(|n| &*n.rule)
+    }
+
     /// Make, replace or drop native cells as one batch (`None` drops), then
     /// run the ones made and what read what was dropped (handoff §4.10:
     /// natives are made where structure changes, not inside a pass). A
     /// native kept with the same rule is left as it is; `rooted` ones run
     /// whether or not anything observed needs them.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_natives(&mut self, doc: Tree<'_>, batch: Vec<(NativeKey, Option<(std::sync::Arc<dyn Native>, bool)>)>) {
         let mut primed: BTreeSet<CellId> = BTreeSet::new();
         let mut made: Vec<CellId> = Vec::new();
+        // The leaves the natives made in this batch will write: a claim a
+        // dropped native held on one passes to its new owner, so what it
+        // last wrote stands (a warm start, and what a first solve that does
+        // not converge keeps) when islands merge or split.
+        let incoming: BTreeMap<Leaf, (NativeKey, ProducerId)> =
+            batch.iter().filter_map(|(k, n)| n.as_ref().map(|(r, _)| (*k, r))).flat_map(|(k, r)| r.outputs().iter().map(move |o| (*o, (k, r.producer())))).collect();
+        let mut passed: BTreeMap<NativeKey, BTreeSet<Leaf>> = BTreeMap::new();
+        let mut released: Vec<Leaf> = Vec::new();
+        for (k, _) in &batch {
+            let Some(old) = self.natives.remove(k) else { continue };
+            let cell = CellId::Native(*k);
+            for r in &old.reads {
+                if let Some(ds) = self.dependents.get_mut(r) {
+                    ds.remove(&cell);
+                    if ds.is_empty() {
+                        self.dependents.remove(r);
+                    }
+                }
+            }
+            for b in &old.base {
+                if let Some(ns) = self.base_readers.get_mut(b) {
+                    ns.remove(k);
+                    if ns.is_empty() {
+                        self.base_readers.remove(b);
+                    }
+                }
+            }
+            for o in old.rule.outputs() {
+                if self.owned.get(o) == Some(k) {
+                    self.owned.remove(o);
+                }
+                if self.errors.remove(o).is_some() {
+                    primed.extend(self.dependents.get(o).into_iter().flatten().copied());
+                }
+            }
+            let producer = old.rule.producer();
+            for l in self.claims.remove(k).unwrap_or_default() {
+                match incoming.get(&l) {
+                    Some(&(to, p)) if p == producer => {
+                        passed.entry(to).or_default().insert(l);
+                    }
+                    _ => {
+                        if self.runtime.get(&l).is_some_and(|s| s.producer == producer) {
+                            self.runtime.remove(&l);
+                            if let Some(h) = self.held.get_mut(&producer) {
+                                h.remove(&l);
+                                if h.is_empty() {
+                                    self.held.remove(&producer);
+                                }
+                            }
+                            released.push(l);
+                        }
+                    }
+                }
+            }
+            self.blocked.remove(&cell);
+            self.unneeded.remove(&cell);
+            self.stale.remove(&cell);
+            self.pinned.remove(&cell);
+            self.candidates.remove(&cell);
+            self.native_problems.remove(k);
+        }
         for (k, new) in batch {
+            let Some((rule, rooted)) = new else { continue };
             let cell = CellId::Native(k);
-            if let Some(old) = self.natives.remove(&k) {
-                for r in &old.reads {
-                    if let Some(ds) = self.dependents.get_mut(r) {
-                        ds.remove(&cell);
-                        if ds.is_empty() {
-                            self.dependents.remove(r);
-                        }
-                    }
-                }
-                for b in &old.base {
-                    if let Some(ns) = self.base_readers.get_mut(b) {
-                        ns.remove(&k);
-                        if ns.is_empty() {
-                            self.base_readers.remove(b);
-                        }
-                    }
-                }
-                for o in old.rule.outputs() {
-                    if self.owned.get(o) == Some(&k) {
-                        self.owned.remove(o);
-                    }
-                    if self.errors.remove(o).is_some() {
-                        primed.extend(self.dependents.get(o).into_iter().flatten().copied());
-                    }
-                }
-                self.blocked.remove(&cell);
-                self.unneeded.remove(&cell);
-                self.stale.remove(&cell);
-                self.pinned.remove(&cell);
-                self.candidates.remove(&cell);
-                self.native_problems.remove(&k);
-                if new.is_none() {
-                    // Its claims go: released leaves read as before it.
-                    self.natives.insert(k, old);
-                    for l in self.claim(doc, k, BTreeMap::new()) {
-                        primed.extend(self.dependents.get(&l).into_iter().flatten().copied());
-                    }
-                    self.natives.remove(&k);
-                }
+            for o in rule.outputs() {
+                debug_assert!(self.owned.get(o).is_none_or(|o2| *o2 == k), "{o} owned twice");
+                self.owned.insert(*o, k);
             }
-            if let Some((rule, rooted)) = new {
-                for o in rule.outputs() {
-                    debug_assert!(self.owned.get(o).is_none_or(|o2| *o2 == k), "{o} owned twice");
-                    self.owned.insert(*o, k);
-                }
-                self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted });
-                made.push(cell);
-                primed.insert(cell);
-                // Readers of its outputs now read through it.
-                let readers: Vec<CellId> = self.natives[&k].rule.outputs().iter().flat_map(|o| self.dependents.get(o).into_iter().flatten().copied()).collect();
-                primed.extend(readers);
+            if let Some(ls) = passed.remove(&k) {
+                self.claims.insert(k, ls);
             }
+            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs: 0 });
+            made.push(cell);
+            primed.insert(cell);
+            // Readers of its outputs now read through it.
+            let readers: Vec<CellId> = self.natives[&k].rule.outputs().iter().flat_map(|o| self.dependents.get(o).into_iter().flatten().copied()).collect();
+            primed.extend(readers);
+        }
+        // Released leaves read as they would without a native: say so.
+        for l in released {
+            if !self.overlay.contains_key(&l)
+                && let Some(v) = self.read(doc, l)
+            {
+                self.note(l, v);
+            }
+            primed.extend(self.dependents.get(&l).into_iter().flatten().copied());
         }
         // Readers of a native's outputs sit above it.
         if !self.raise(&made) {
@@ -1842,6 +1891,9 @@ mod tests {
         }
         fn outputs(&self) -> &BTreeSet<Leaf> {
             &self.outputs
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
         fn compute(&self, cx: &mut Cx<'_>) -> Result<BTreeMap<Leaf, Value>, Failure> {
             self.runs.fetch_add(1, Ordering::SeqCst);

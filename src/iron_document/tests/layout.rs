@@ -206,3 +206,46 @@ fn add_auto_layout_keeps_the_arrangement_it_was_given() {
         assert_eq!(&world(&store, *r), b);
     }
 }
+
+/// A repeat whose count reads a width that layout decides follows it at
+/// once: at load, after a transaction and on each drag frame, not one step
+/// behind (reactive-engine.md §17's phase 5 exit; handoff §4.10, RE-5.4).
+#[test]
+fn a_repeat_counting_a_laid_out_width_follows_it_at_once() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$row" name="row" x="0" y="0" size.w="300" size.h="40" layout.mode="stack_x" layout.sizing_w="fixed" layout.sizing_h="fixed">
+        <rect id="$slot" name="slot" w="10" h="10" layout_item.w="fill"/>
+      </group>
+      <group id="$many" name="many" y="100" repeat.count="{= floor($slot.size.w / 50)}"><rect x="{= $many.repeat.index * 20}" w="5" h="5"/></group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (row, slot, many) = (plan.aliases["$row"], plan.aliases["$slot"], plan.aliases["$many"]);
+    store.apply(tx("probe", plan.ops)).unwrap();
+    let items = |s: &Store| s.tree().children(many).iter().filter(|c| c.is_item_scope() && s.tree().is_live(**c)).count();
+    let want = |s: &Store| (num(s, slot, "size.w") / 50.0).floor() as usize;
+    assert_eq!((num(&store, slot, "size.w"), items(&store)), (300.0, 6), "at load");
+    store.advance(0.1);
+    assert_eq!(items(&store), 6);
+    store.apply(tx("wider", vec![Op::Set { id: row, path: path("size.w"), slot: n(500.0) }])).unwrap();
+    assert_eq!(items(&store), want(&store), "after a transaction");
+    for w in [200.0, 400.0, 250.0] {
+        store.preview(row, path("size.w"), Value::Number(w));
+        assert_eq!(items(&store), want(&store), "on a drag frame at {w}");
+    }
+    assert!(store.problems().iter().all(|p| p.kind != "feedback"), "{:?}", store.problems());
+}
+
+/// A count that reads its own items' layout never rests: it is a problem on
+/// the repeat, and the store goes on (decision D6).
+#[test]
+fn a_count_that_reads_its_own_items_layout_is_a_problem() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$many" name="many" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x" repeat.count="{= floor($many.size.w / 10) + 1}"><rect w="10" h="5"/></group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let many = plan.aliases["$many"];
+    store.apply(tx("feedback", plan.ops)).unwrap();
+    assert!(store.problems().iter().any(|p| p.kind == "feedback" && p.node == many), "{:?}", store.problems());
+}

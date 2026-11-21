@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them); RE-5.4 is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). RE-5.4 step 1 done 2026-11-21 (repeats settle again after layout); its structure sub-plan is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -2950,6 +2950,25 @@ fixed points (RE-5.5) if a document needs it. No document does today.
    with a true feedback case that keeps its last items and reports a cycle.
 2. The `Reads` trait, mechanical and exact.
 3. Structure reads, and `regraph`'s parents.
+
+**RE-5.4 step 1, as done (2026-11-21).**
+- `resolve_physics` settles the repeats again after layout and lays out again
+  what they made, until they rest, up to `LAYOUT_ROUNDS` (4). This is the same on
+  both sides of the facade.
+- A repeat still moving after the last round is a `feedback` problem on it
+  (decision D6). It does not freeze: each later call goes round again until its
+  items rest (a `repeat.max` stops it).
+- Tests (in the `fonts` binary, since layout measures text):
+  - `a_repeat_counting_a_laid_out_width_follows_it_at_once` (the probe: at load, after
+    a frame, after a transaction, and on drag frames);
+  - `a_count_that_reads_its_own_items_layout_is_a_problem`.
+
+  Both fail before the change.
+- Cost: `plot_pan_and_zoom_cost` (release), values-only pan p50 0.050 ms, against 0.077
+  ms without the change in the same run: no slower.
+- `regression.txt`: the pendulum's last digits moved (x 323.714905573 →
+  323.714909407), the same on every run. SKILL.md is updated. A finger's solves
+  depend on how many calls a drag makes (§9.4), which this changes.
 
 Then Layout natives per container, cut at contained boxes (§9.2). Repeats as natives
 whose output is structure, made inside the pass: the kernel's R4 is the worked example

@@ -890,7 +890,7 @@ DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 1
 DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.26 ms
 DEBUG src/bevy_app/manipulate.rs:481 solve: cluster #V, 12 vars, 1 iterations, 196 evaluations, 0.23 ms
 DEBUG src/document_bridge/mod.rs:548 "move ellipse" by Human: cluster #V re-solved; moved 2 node(s): #Y #Z
-"<ellipse id=\"#a\" name=\"ball\" x=\"323.714905573\" x.by=\"#V\" y=\"359.976998246\" y.by=\"#V\""
+"<ellipse id=\"#a\" name=\"ball\" x=\"323.714909407\" x.by=\"#V\" y=\"359.976998198\" y.by=\"#V\""
 ["<ellipse id=\"#a\" name=\"ball\" x=\"320\" x.by=\"#V\" y=\"360\" y.by=\"#V\"","<ellipse id=\"#Y\" name=\"j1\" x=\"320\" x.by=\"#V\" y=\"160\" y.by=\"#V\""]
 DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.x is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)
 DEBUG src/bevy_app/select.rs:3440 #b locked for this drag: #b.transform2d.y is bound to 4 free leaves (#X.transform2d.x, #X.transform2d.y, #Y.transform2d.x, #Y.transform2d.y)

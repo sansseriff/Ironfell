@@ -237,6 +237,10 @@ impl Drop for Rollback {
 /// Stale cells an idle `advance` brings up to date (§8.7).
 const IDLE_SWEEP: usize = 256;
 
+/// How many times `resolve_physics` settles repeats again after layout
+/// before a repeat whose items keep changing is a problem (decision D6).
+const LAYOUT_ROUNDS: usize = 4;
+
 /// Facets whose nodes' cells the store reads besides drawing them, so they
 /// stay needed whatever is observed (reactive-engine.md §8.3): state
 /// (`let`, traces, accumulators, machines and what their player reads,
@@ -512,6 +516,9 @@ pub struct StoreCore {
     /// Events actions emitted for the host (`take_emitted`).
     emitted: Vec<(NodeId, String)>,
     /// Repeats that asked for more items than `repeat.max` allows.
+    /// Repeats whose inputs read their own items' layout, so that they did
+    /// not come to rest (decision D6), as of the last `resolve_physics`.
+    feedback: Vec<expand::Problem>,
     truncated: Vec<expand::Problem>,
     /// Derived structure made outside a transaction (a repeat that grew
     /// during a drag, or when a producer published), for the host to
@@ -521,6 +528,8 @@ pub struct StoreCore {
     /// when it is taken.
     pending: Changes,
     settling: bool,
+    /// The repeats whose items the last `settle_repeats` changed.
+    moved_repeats: Vec<NodeId>,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -648,8 +657,10 @@ impl StoreCore {
             session_state: self.session_state.clone(),
             emitted: Vec::new(),
             truncated: self.truncated.clone(),
+            feedback: self.feedback.clone(),
             pending: Changes::default(),
             settling: false,
+            moved_repeats: Vec::new(),
             gesture: None,
             ended: None,
             next_gesture: self.next_gesture,
@@ -875,8 +886,10 @@ impl StoreCore {
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
+            feedback: Vec::new(),
             pending: Changes::default(),
             settling: false,
+            moved_repeats: Vec::new(),
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -1877,6 +1890,7 @@ impl StoreCore {
             return Vec::new();
         }
         self.settling = true;
+        self.moved_repeats.clear();
         let mut applied = Vec::new();
         let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
         let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");
@@ -2010,6 +2024,7 @@ impl StoreCore {
                     .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
                     .collect();
                 let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
+                self.moved_repeats.extend(changed_repeats.iter().copied());
                 self.repeats = counts;
                 let stamp = self.docs.authored.version();
                 // Only the items that changed, where that matches a whole
@@ -2424,23 +2439,40 @@ impl StoreCore {
     pub fn problems(&self) -> Vec<expand::Problem> {
         let mut out = self.expansion_problems.clone();
         out.extend(self.truncated.iter().cloned());
+        out.extend(self.feedback.iter().cloned());
         out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
         out.extend(self.machines_unsettled.iter().cloned());
         out
     }
 
-    /// Recompute what the store derives after every change: the
+/// Recompute what the store derives after every change: the
     /// across/through network's solution, then the layouts that place
     /// groups' children (`layout.rs`), which may read it.
     pub fn resolve_physics(&mut self) {
         // Structure first: what follows places and styles the new items.
         self.publish_selection();
-        let derived = self.settle_repeats();
-        self.note_changes(derived.iter(), &[]);
-        self.publish_state();
-        self.solve_network();
-        self.resolve_theme();
-        self.resolve_layout();
+        // Layout may move what a repeat's inputs read (a count from a
+        // laid-out width): the repeats settle again after it, and what they
+        // made is laid out, until they rest (reactive-engine handoff §4.10,
+        // RE-5.4). A count that reads its own items' layout never rests: it
+        // is a problem on the repeat (decision D6).
+        self.feedback.clear();
+        for round in 0..=LAYOUT_ROUNDS {
+            let derived = self.settle_repeats();
+            if round > 0 && derived.is_empty() {
+                break;
+            }
+            self.note_changes(derived.iter(), &[]);
+            if round == LAYOUT_ROUNDS
+                && let Some(&node) = self.moved_repeats.first()
+            {
+                self.feedback.push(expand::Problem { node, kind: "feedback", message: "its items keep changing: what it repeats over reads their own layout".into() });
+            }
+            self.publish_state();
+            self.solve_network();
+            self.resolve_theme();
+            self.resolve_layout();
+        }
         self.resolve_contexts();
     }
 

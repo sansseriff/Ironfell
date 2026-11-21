@@ -333,26 +333,76 @@ impl Reads for Fresh<'_> {
     }
 }
 
+/// Whether a node places its children: a group with a `layout` facet, or a
+/// table.
+fn lays_out(doc: DocTree<'_>, n: NodeId) -> bool {
+    doc.live(n).is_some_and(|x| match x.ty.name() {
+        "group" => doc.facet(n, FacetKind::Layout).is_some(),
+        "table" => true,
+        _ => false,
+    })
+}
+
+/// The structural roots (reactive-engine handoff §4.10, RE-5.4): each live
+/// node that places its children and whose parent does not. Which of them
+/// a run lays out depends on values (a bound `layout.mode`, an absolute
+/// item); these do not, so a layout native is keyed by one.
+pub(crate) fn structural_roots(doc: DocTree<'_>) -> Vec<NodeId> {
+    let group = TypeId::lookup("group").expect("registered");
+    let table = TypeId::lookup("table").expect("registered");
+    doc.nodes_of_type(group)
+        .chain(doc.nodes_of_type(table))
+        .filter(|&n| lays_out(doc, n) && !doc.live(n).and_then(|x| x.parent).is_some_and(|p| lays_out(doc, p)))
+        .collect()
+}
+
+/// How many ancestors a node has.
+fn depth(doc: DocTree<'_>, n: NodeId) -> usize {
+    std::iter::successors(doc.live(n).and_then(|x| x.parent), |p| doc.live(*p).and_then(|x| x.parent)).count()
+}
+
 pub fn compute(store: &dyn Reads) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
     let mut out = BTreeMap::new();
     let mut grids = BTreeMap::new();
     let doc = store.tree();
-    let group = TypeId::lookup("group").expect("registered");
-    let table = TypeId::lookup("table").expect("registered");
+    // Deepest first: an outer root reads an inner one's placements through
+    // a plain group's bounds.
+    let mut roots = structural_roots(doc);
+    roots.sort_by_key(|&r| std::cmp::Reverse(depth(doc, r)));
+    for root in roots {
+        let (values, g) = lay_out(&Fresh { store, out: &out }, root);
+        out.extend(values);
+        grids.extend(g);
+    }
+    out.extend(constrained(store));
+    (out, grids)
+}
+
+/// Lay out structural root `root`: each container in it that a run lays out
+/// from its top (one inside another's layout is laid out in its parent's
+/// tree), deepest first. Shared by `compute` and the layout natives, so the
+/// two agree to the bit.
+pub(crate) fn lay_out(store: &dyn Reads, root: NodeId) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
+    let mut out = BTreeMap::new();
+    let mut grids = BTreeMap::new();
+    let doc = store.tree();
     let is_container = |k: Kind| matches!(k, Kind::Container | Kind::Table);
-    // Outermost containers: a container inside another's layout is laid
-    // out in its parent's pass.
-    let roots: Vec<(NodeId, Kind)> = doc
-        .nodes_of_type(group)
-        .filter(|&g| doc.is_live(g) && doc.facet(g, FacetKind::Layout).is_some() && container(store, g).is_some())
-        .map(|g| (g, Kind::Container))
-        .chain(doc.nodes_of_type(table).filter(|&t| doc.is_live(t)).map(|t| (t, Kind::Table)))
+    // The nodes that place children, reached through nodes that do.
+    let mut placing = Vec::new();
+    let mut stack = vec![root];
+    while let Some(n) = stack.pop() {
+        placing.push(n);
+        stack.extend(doc.children(n).iter().copied().filter(|&c| lays_out(doc, c)));
+    }
+    let mut roots: Vec<(NodeId, Kind)> = placing
+        .into_iter()
+        .filter_map(|n| match doc.live(n)?.ty.name() {
+            "table" => Some((n, Kind::Table)),
+            _ => container(store, n).map(|_| (n, Kind::Container)),
+        })
         .filter(|&(g, _)| !(doc.live(g).and_then(|n| n.parent).is_some_and(|p| is_container(kind_of(store, p))) && is_item(store, g)))
         .collect();
-    // Deepest first: an outer root reads an inner one's placements.
-    let depth = |n: NodeId| std::iter::successors(doc.live(n).and_then(|x| x.parent), |p| doc.live(*p).and_then(|x| x.parent)).count();
-    let mut roots = roots;
-    roots.sort_by_key(|&(r, _)| std::cmp::Reverse(depth(r)));
+    roots.sort_by_key(|&(r, _)| (std::cmp::Reverse(depth(doc, r)), r));
     for (root, kind) in roots {
         let mut mine: BTreeMap<Leaf, Value> = BTreeMap::new();
         let fresh = Fresh { store, out: &out };
@@ -457,7 +507,6 @@ pub fn compute(store: &dyn Reads) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
         }
         out.extend(mine);
     }
-    out.extend(constrained(store));
     (out, grids)
 }
 

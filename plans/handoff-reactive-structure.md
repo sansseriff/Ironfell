@@ -3178,6 +3178,30 @@ cited by member and number.
 - Clock gating counts a native at the nodes it writes, or at its own node when it
   writes none. Only an island counts everywhere.
 
+**RE-5.4 step 6, as done (2026-11-21): containment.**
+- `layout.contain` (`none`, `both`) is on the `layout` facet. Schema 15.
+- A contained box is a leaf of its own size in its parent's run: fixed, filled, or
+  as if empty (its padding) where it hugs, kept from shrinking (`iron_layout`'s new
+  `Item::keep`).
+- Its interior is a run of its own at that size, after the run that sized it, and
+  shared by the old pipeline and the natives.
+- No box is contained implicitly, and there is no write-time rule: a structural read
+  of an uncontained size is the runtime `feedback` problem.
+- The model's manifest says what `contain` does.
+- Tests:
+  - `a_repeat_inside_a_contained_box_counts_by_its_width`: a resize of the row moves
+    the box and the item count with it, with no feedback;
+  - `a_contained_hugging_group_is_sized_as_if_empty`.
+- `scopes` tests (Rust and TS) are updated to schema 15.
+
+**Decided: the reference keeps the old pipeline through RE-5.5.**
+- The solver reads layout and the network, so the differential stays exact against
+  the old pipeline while the solver moves.
+- When RE-5.5 ends (RE-5.6), `old_pipeline` goes from the reference, and with it the
+  layout natives' hold and rooting.
+- Then a pass lays out in height order, and a hidden composition is not laid out.
+  Both are behaviour changes, and get their own tests then.
+
 **The demonstrations, as measured (2026-11-21).** `tests/cells_demo.rs`
 (`cells_demo`, ignored, release), against `StoreCore::with_old_pipeline()`. The
 counters are structural roots laid out (`layout::lay_out_count`) and settles that read

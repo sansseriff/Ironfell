@@ -190,6 +190,8 @@ fn sizing(store: &dyn Reads, id: NodeId) -> Sizing {
 
 struct Builder<'s> {
     store: &'s dyn Reads,
+    /// The run's root: a contained box is a leaf of every run but its own.
+    root: NodeId,
     tree: Tree,
     entries: Vec<Entry>,
     /// Each table's cell areas, from `table::place`.
@@ -227,6 +229,35 @@ impl Builder<'_> {
                 container_spec = Some(Container { mode: Mode::Grid, gap: [0.0, 0.0], pad: [0.0; 4], align: Align::Stretch, justify: Justify::Start, columns, rows: Vec::new() });
             }
             Kind::Cell => measured = true,
+            Kind::Container if contained(store, id) && id != self.root => {
+                // A contained box (reactive-engine.md §9.2): a leaf of its
+                // own size here, sized as if empty where it hugs; its
+                // interior is a run of its own, after this one.
+                let pad = |a: &str, b: &str| num(store, id, a, 0.0).max(0.0) + num(store, id, b, 0.0).max(0.0);
+                let own = |leaf: &str, size: &str, d: f64, empty: f64| Dim::Px(if word(store, id, leaf) == "fixed" { num(store, id, size, d) } else { empty } as f32);
+                item.w = own("layout.sizing_w", "size.w", 100.0, pad("layout.pad_l", "layout.pad_r"));
+                item.h = own("layout.sizing_h", "size.h", 100.0, pad("layout.pad_t", "layout.pad_b"));
+                item.keep = true;
+            }
+            Kind::Container if contained(store, id) => {
+                // Its interior, at the size its parent gave it.
+                let parent_lays_out = store.tree().live(id).and_then(|n| n.parent).is_some_and(|p| matches!(kind_of(store, p), Kind::Container | Kind::Table));
+                let pad = |a: &str, b: &str| num(store, id, a, 0.0).max(0.0) + num(store, id, b, 0.0).max(0.0);
+                let size = |leaf: &str, size: &str, d: f64, empty: f64| {
+                    if word(store, id, leaf) == "fixed" {
+                        num(store, id, size, d)
+                    } else if parent_lays_out {
+                        store.resolved(id, path(size)).and_then(|v| v.as_f64()).unwrap_or(empty)
+                    } else {
+                        empty
+                    }
+                };
+                item.w = Dim::Px(size("layout.sizing_w", "size.w", 100.0, pad("layout.pad_l", "layout.pad_r")) as f32);
+                item.h = Dim::Px(size("layout.sizing_h", "size.h", 100.0, pad("layout.pad_t", "layout.pad_b")) as f32);
+                // Its parent's run gave it its size: nothing fills here.
+                fills = [false, false];
+                container_spec = container(store, id);
+            }
             Kind::Container => {
                 let fixed = |leaf: &str, size: &str, d: f64| (word(store, id, leaf) == "fixed").then(|| Dim::Px(num(store, id, size, d) as f32));
                 item.w = fixed("layout.sizing_w", "size.w", 100.0).unwrap_or(Dim::Auto);
@@ -270,7 +301,7 @@ impl Builder<'_> {
         let index = self.tree.nodes.len();
         self.tree.nodes.push(Node { key: id.raw(), item, container: container_spec, children: Vec::new(), measured });
         self.entries.push(Entry { id, kind, offset, fill: fills });
-        if kind == Kind::Container {
+        if kind == Kind::Container && self.tree.nodes[index].container.is_some() {
             let mut kids: Vec<NodeId> = store.tree().children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
             if let Some(p) = store.layout_preview().filter(|p| p.container == id) {
                 kids.sort_by_key(|k| p.order.iter().position(|o| o == k).unwrap_or(usize::MAX));
@@ -295,6 +326,11 @@ impl Builder<'_> {
         }
         index
     }
+}
+
+/// Whether a group is contained (`layout.contain = both`).
+fn contained(store: &dyn Reads, id: NodeId) -> bool {
+    word(store, id, "layout.contain") == "both"
 }
 
 fn kind_of(store: &dyn Reads, id: NodeId) -> Kind {
@@ -402,14 +438,16 @@ pub(crate) fn lay_out(store: &dyn Reads, root: NodeId) -> (BTreeMap<Leaf, Value>
             "table" => Some((n, Kind::Table)),
             _ => container(store, n).map(|_| (n, Kind::Container)),
         })
-        .filter(|&(g, _)| !(doc.live(g).and_then(|n| n.parent).is_some_and(|p| is_container(kind_of(store, p))) && is_item(store, g)))
+        .filter(|&(g, _)| contained(store, g) || !(doc.live(g).and_then(|n| n.parent).is_some_and(|p| is_container(kind_of(store, p))) && is_item(store, g)))
         .collect();
-    roots.sort_by_key(|&(r, _)| (std::cmp::Reverse(depth(doc, r)), r));
+    // Deepest first, but a contained box after the run that sizes it,
+    // shallowest first.
+    roots.sort_by_key(|&(r, _)| if contained(store, r) { (1, depth(doc, r) as i64, r) } else { (0, -(depth(doc, r) as i64), r) });
     for (root, kind) in roots {
         let mut mine: BTreeMap<Leaf, Value> = BTreeMap::new();
         let fresh = Fresh { store, out: &out };
         let store: &dyn Reads = &fresh;
-        let mut b = Builder { store, tree: Tree::default(), entries: Vec::new(), tables: BTreeMap::new() };
+        let mut b = Builder { store, root, tree: Tree::default(), entries: Vec::new(), tables: BTreeMap::new() };
         b.tree.root = b.add(root, kind);
         let by_key: BTreeMap<u64, (NodeId, [f64; 2])> = b.entries.iter().map(|e| (e.id.raw(), (e.id, if e.kind == Kind::Cell { text::cell_pad(store, e.id) } else { [0.0, 0.0] }))).collect();
         let result = b.tree.layout([None, None], &mut |key, ask: Ask| {

@@ -346,7 +346,9 @@ ${p.contextFields}`,
   A group with layout.mode stack_x, stack_y or grid places its children: gap,
   row_gap (grids), pad_t pad_r pad_b pad_l, align (start center end stretch),
   justify (start center end between), columns and rows (grids: "auto 120 1fr"),
-  sizing_w / sizing_h (hug: fits its children; fixed: its own size.w / size.h).
+  sizing_w / sizing_h (hug: fits its children; fixed: its own size.w / size.h),
+  contain="both" (its size is never its children's: a hugging one is sized as
+  if empty; a repeat inside it may count by its size.w / size.h).
   A child's x and y, and any size the layout decides, show as x.by="#group": they
   are the layout's and cannot be set. A child's layout_item says how it sits:
   w / h (auto or fill), align, absolute="true" (leaves the flow, keeps its own x, y),

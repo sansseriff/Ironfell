@@ -106,6 +106,9 @@ pub struct Item {
     /// Grid placement; `None` flows into the next free cell.
     pub column: Option<Area>,
     pub row: Option<Area>,
+    /// Keep its size: a stack does not shrink it below it (a contained box,
+    /// whose interior is laid out at that size).
+    pub keep: bool,
 }
 
 /// One node of the tree to lay out.
@@ -290,6 +293,9 @@ impl Run<'_> {
                 let item = &self.tree.nodes[k].item;
                 let (main, cross) = if c.mode == Mode::StackX { (item.w, item.h) } else { (item.h, item.w) };
                 let s = &mut self.styles[k];
+                if item.keep && main != Dim::Fill {
+                    s.flex_shrink = 0.0;
+                }
                 if main == Dim::Fill {
                     s.flex_grow = 1.0;
                     s.flex_basis = Dimension::length(0.0);

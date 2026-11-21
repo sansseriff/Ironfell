@@ -319,3 +319,48 @@ fn an_edit_in_one_container_lays_out_no_other() {
     assert!(runs(&store, next) > a0, "the edited container laid out");
     assert_eq!(runs(&store, two), b0, "the other did not");
 }
+
+/// A contained box (`layout.contain = both`, reactive-engine.md §9.2) takes
+/// no size from what is in it, so a repeat inside it may count by its
+/// width: it follows the box as its row is resized, and is no feedback.
+#[test]
+fn a_repeat_inside_a_contained_box_counts_by_its_width() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$row" name="row" x="0" y="0" size.w="300" size.h="40" layout.mode="stack_x" layout.sizing_w="fixed" layout.sizing_h="fixed">
+        <group id="$box" name="box" size.w="10" size.h="40" layout.mode="stack_x" layout.contain="both" layout_item.w="fill">
+          <group id="$many" name="many" repeat.count="{= floor($box.size.w / 50)}"><rect x="{= $many.repeat.index * 50}" w="40" h="10"/></group>
+        </group>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (row, boxed, many) = (plan.aliases["$row"], plan.aliases["$box"], plan.aliases["$many"]);
+    store.apply(tx("contained", plan.ops)).unwrap();
+    let items = |s: &Store| s.tree().children(many).iter().filter(|c| c.is_item_scope() && s.tree().is_live(**c)).count();
+    assert_eq!((num(&store, boxed, "size.w"), items(&store)), (300.0, 6));
+    for w in [500.0, 200.0, 420.0] {
+        store.apply(tx("resize", vec![Op::Set { id: row, path: path("size.w"), slot: n(w) }])).unwrap();
+        assert_eq!(num(&store, boxed, "size.w"), w, "the box takes the row's width, not its content's");
+        assert_eq!(items(&store), (w / 50.0).floor() as usize);
+    }
+    assert!(store.problems().iter().all(|p| p.kind != "feedback"), "{:?}", store.problems());
+}
+
+/// A contained group that hugs is sized as if empty: its padding.
+#[test]
+fn a_contained_hugging_group_is_sized_as_if_empty() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$row" name="row" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x">
+        <group id="$box" name="box" size.w="10" size.h="10" layout.mode="stack_x" layout.contain="both" layout.pad_l="4" layout.pad_r="6">
+          <rect w="100" h="20"/>
+        </group>
+        <rect id="$after" name="after" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (boxed, after) = (plan.aliases["$box"], plan.aliases["$after"]);
+    store.apply(tx("contained", plan.ops)).unwrap();
+    assert_eq!(num(&store, boxed, "size.w"), 10.0);
+    assert_eq!(num(&store, after, "transform2d.x"), 10.0);
+}

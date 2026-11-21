@@ -271,8 +271,11 @@ facets! {
     /// stack (`start`, `center`, `end`, `between`). A grid's `columns` and
     /// `rows` are space-separated tracks: `auto`, a length, or `2fr`; rows
     /// left empty are `auto`. `sizing_w`/`sizing_h`: `hug` (the group fits
-    /// its content) or `fixed` (its `size`). The positions it gives its
-    /// children are published, never stored (`layout.rs`).
+    /// its content) or `fixed` (its `size`). `contain`: `both` makes it a box
+    /// of its own size to its parent's layout, its content laid out inside
+    /// it (sized as if empty where it hugs), so what is in it may read its
+    /// size (reactive-engine.md §9.2). The positions it gives its children
+    /// are published, never stored (`layout.rs`).
     Layout / "layout" => Layout {
         mode: Enum = Value::Enum("stack_y".to_owned()) => ["none", "stack_x", "stack_y", "grid"],
         gap: Number = Value::Number(0.0),
@@ -287,6 +290,7 @@ facets! {
         rows: Str = Value::Str(String::new()),
         sizing_w: Enum = Value::Enum("hug".to_owned()) => ["hug", "fixed"],
         sizing_h: Enum = Value::Enum("hug".to_owned()) => ["hug", "fixed"],
+        contain: Enum = Value::Enum("none".to_owned()) => ["none", "both"],
     }
 
     /// How a child sits in its group's layout. `w`/`h`: `auto` (its own

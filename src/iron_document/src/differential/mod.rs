@@ -403,8 +403,8 @@ impl Store {
         self.call("resolve_query", |s| s.resolve_query(node, seq, result.clone()))
     }
 
-    pub fn advance_steps(&mut self, now: f64, paused: &std::collections::BTreeSet<NodeId>) -> Vec<NodeId> {
-        self.call("advance_steps", |s| s.advance_steps(now, paused))
+    pub fn advance_steps(&mut self, now: f64) -> Vec<NodeId> {
+        self.call("advance_steps", |s| s.advance_steps(now))
     }
 
     pub fn advance_motion(&mut self, now: f64) -> Vec<NodeId> {

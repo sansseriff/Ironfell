@@ -541,37 +541,37 @@ fn a_trace_delays_a_click_and_an_accumulator_integrates() {
     let out = |s: &Store| s.resolved(n["tr"], path("trace.out")).unwrap();
     let dash = |s: &Store| s.resolved(n["glow"], path("stroke.dash")).unwrap().as_str().unwrap().to_owned();
     let acc = |s: &Store| s.resolved(n["acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
-    assert!(store.advance_steps(0.0, &Default::default()).contains(&n["acc"]), "the accumulator starts");
+    assert!(store.advance_steps(0.0).contains(&n["acc"]), "the accumulator starts");
     assert_eq!((out(&store), dash(&store).as_str()), (Value::Bool(false), "0 1"));
     assert_eq!(acc(&store), 10.0);
     // On at 1 s: the far end still shows off; the lit run grows from the start.
     store.apply(tx("on", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
-    assert!(store.advance_steps(1.0, &Default::default()).contains(&n["tr"]));
-    store.advance_steps(1.05, &Default::default());
+    assert!(store.advance_steps(1.0).contains(&n["tr"]));
+    store.advance_steps(1.05);
     let a = acc(&store);
-    store.advance_steps(1.1, &Default::default());
+    store.advance_steps(1.1);
     assert!((acc(&store) - (a + 3.0 * 0.05)).abs() < 1e-9, "a step of 0.05 s at 3 a second");
-    store.advance_steps(1.5, &Default::default());
+    store.advance_steps(1.5);
     assert_eq!(out(&store), Value::Bool(false));
     assert_eq!(dash(&store), "0.2500 1");
     // Off at 2 s: a pulse one second long travels the path.
     store.apply(tx("off", vec![Op::Set { id: n["lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(false)) }])).unwrap();
-    store.advance_steps(2.0, &Default::default());
-    store.advance_steps(2.5, &Default::default());
+    store.advance_steps(2.0);
+    store.advance_steps(2.5);
     assert_eq!(dash(&store), "0 0.2500 0.5000 1");
     // 2 s after the click the far end turns on, and what reads it follows.
-    store.advance_steps(3.1, &Default::default());
+    store.advance_steps(3.1);
     assert_eq!(out(&store), Value::Bool(true));
     assert_eq!(store.resolved(n["lamp"], path("fill.opacity")), Some(Value::Number(1.0)));
-    store.advance_steps(4.1, &Default::default());
+    store.advance_steps(4.1);
     assert_eq!(out(&store), Value::Bool(false));
     // The pulse has left: the trace rests, and nothing was ever committed.
-    assert!(!store.advance_steps(4.2, &Default::default()).contains(&n["tr"]));
+    assert!(!store.advance_steps(4.2).contains(&n["tr"]));
     assert_eq!(dash(&store), "0 1");
     assert_eq!(store.history().past().len(), version + 2, "only the two clicks");
     // Reset puts the accumulator back.
     store.apply(tx("reset", vec![Op::Set { id: n["acc"], path: path("accumulate.reset"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
-    store.advance_steps(4.3, &Default::default());
+    store.advance_steps(4.3);
     assert_eq!(acc(&store), 10.0);
 }
 
@@ -598,14 +598,14 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
     store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let out = |s: &Store| s.resolved(port(s, fiber, "out"), path("port.signal")).unwrap();
     let light = |s: &Store| s.resolved(named(s, fiber, "light")[0], path("stroke.dash")).unwrap().as_str().unwrap().to_owned();
-    store.advance_steps(0.0, &Default::default());
+    store.advance_steps(0.0);
     assert_eq!(light(&store), "0 1");
     store.apply(tx("on", vec![Op::Set { id: le, path: path("args.power"), slot: watts("5 mW") }])).unwrap_or_else(|e| panic!("{e:?}"));
-    store.advance_steps(1.0, &Default::default());
-    store.advance_steps(1.5, &Default::default());
+    store.advance_steps(1.0);
+    store.advance_steps(1.5);
     assert_eq!(light(&store), "0.5000 1", "half way along");
     assert_eq!(format!("{}", out(&store)), "0 W");
-    store.advance_steps(2.01, &Default::default());
+    store.advance_steps(2.01);
     assert_eq!(light(&store), "", "lit throughout");
     assert_eq!(format!("{}", out(&store)), "5 mW", "the far end has it");
 }
@@ -616,17 +616,20 @@ fn a_delayed_fiber_carries_a_pulse_to_its_far_end() {
 fn an_accumulator_in_a_hidden_composition_holds_still() {
     let (mut store, comp, n) = sheet(r##"<accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/>"##);
     let acc = |s: &Store| s.resolved(n["acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
-    let hidden: std::collections::BTreeSet<NodeId> = [comp].into();
-    store.advance_steps(0.0, &Default::default());
-    store.advance_steps(0.05, &Default::default());
+    store.set_observe_all(false);
+    let id = store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    store.advance(0.0);
+    store.advance(0.05);
     let before = acc(&store);
     assert!(before > 0.0, "it runs while shown");
+    store.unobserve(id);
     for i in 1..10 {
-        assert_eq!(store.advance_steps(0.05 + i as f64 * 0.05, &hidden), vec![], "nothing moves at hidden frame {i}");
+        assert!(store.advance(0.05 + i as f64 * 0.05).wake.live.is_empty(), "nothing moves at hidden frame {i}");
     }
     assert_eq!(acc(&store), before, "it held while hidden");
-    store.advance_steps(0.6, &Default::default());
-    store.advance_steps(0.65, &Default::default());
+    store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    store.advance(0.6);
+    store.advance(0.65);
     assert!(acc(&store) > before, "it carries on when shown again");
 }
 
@@ -646,13 +649,13 @@ fn steady_stepped_producers_are_at_rest() {
     let read = |l: Leaf| store.resolved(l.node, l.path);
     let ops = author::connect(store.tree(), &read, port(&store, laser, "out"), port(&store, fiber, "in")).unwrap();
     store.apply(tx("plug", ops)).unwrap_or_else(|e| panic!("{e:?}"));
-    store.advance_steps(0.0, &Default::default());
+    store.advance_steps(0.0);
     store.advance_presence(0.0);
-    store.advance_steps(0.01, &Default::default());
+    store.advance_steps(0.01);
     store.take_changes();
     for i in 1..20 {
         let now = i as f64 * 0.0163 + (i % 3) as f64 * 0.001;
-        assert_eq!(store.advance_steps(now, &Default::default()), vec![], "steps at frame {i}");
+        assert_eq!(store.advance_steps(now), vec![], "steps at frame {i}");
         assert_eq!(store.advance_presence(now), vec![], "presence at frame {i}");
         assert!(store.advance_queries(now).is_empty() && store.pending_queries().is_empty());
         assert!(store.advance_motion(now).is_empty(), "motion at frame {i}");
@@ -1068,6 +1071,55 @@ fn a_hidden_page_s_own_placed_plot_does_not_keep_it_running() {
         }
         assert_eq!(at(&store) > 0.0, runs, "plot placed in {into}");
     }
+}
+
+/// A trace's change in flight on a hidden page stays in flight
+/// (handoff-patches.md PT-1.2): the page's clock stands still, so the change
+/// arrives a delay after it was made in the page's own time.
+#[test]
+fn a_hidden_page_s_trace_keeps_its_change_in_flight() {
+    let (mut store, _all, _p, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"/>
+        <composition id="$b" name="b" dims="2d"><let id="$lit" name="lit" value="false"/><trace id="$tr" name="tr" of="{= $lit}" delay="1"/></composition>"#,
+    );
+    let out = |s: &Store| s.resolved(n["$tr"], path("trace.out")).unwrap();
+    let b = store.observe(Interest::Region { composition: n["$b"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    store.advance(0.0);
+    store.apply(tx("on", vec![Op::Set { id: n["$lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
+    store.advance(0.5);
+    store.advance(0.6);
+    store.unobserve(b);
+    for k in 0..30 {
+        let out_now = store.advance(0.7 + k as f64 * 0.1);
+        assert!(out_now.wake.live.is_empty(), "the hidden trace is reported moving");
+    }
+    assert_eq!(out(&store), Value::Bool(false), "still in flight while hidden");
+    store.observe(Interest::Region { composition: n["$b"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    store.advance(4.0);
+    assert_eq!(out(&store), Value::Bool(false), "0.7 s on the page's clock");
+    store.advance(4.75);
+    assert_eq!(out(&store), Value::Bool(false), "1.45 s on the page's clock");
+    store.advance(4.85);
+    assert_eq!(out(&store), Value::Bool(true), "1.55 s on the page's clock: it has arrived");
+}
+
+/// `run = always` keeps a hidden composition's clock running
+/// (handoff-patches.md PT-1.3): its accumulator steps, and its trace's
+/// change arrives on time, with no view showing it.
+#[test]
+fn an_always_running_page_keeps_running_while_hidden() {
+    let (mut store, _all, _p, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"/>
+        <composition id="$b" name="b" dims="2d" run="always"><let id="$lit" name="lit" value="false"/><trace id="$tr" name="tr" of="{= $lit}" delay="1"/><accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/></composition>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
+    store.advance(0.0);
+    store.apply(tx("on", vec![Op::Set { id: n["$lit"], path: path("let.value"), slot: Slot::Const(Value::Bool(true)) }])).unwrap();
+    for k in 1..=12 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > 0.5, "the hidden accumulator stepped: {}", acc(&store));
+    assert_eq!(store.resolved(n["$tr"], path("trace.out")), Some(Value::Bool(true)), "the change arrived a second later");
 }
 
 /// §8.7's idle sweep: at rest, an unobserved composition's stale pictures

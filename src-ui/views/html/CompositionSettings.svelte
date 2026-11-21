@@ -26,7 +26,7 @@
 
   const MODES: { id: Run; label: string; hint: string }[] = [
     { id: "auto", label: "Auto", hint: "Runs while something in it is live" },
-    { id: "always", label: "Always", hint: "Renders every frame" },
+    { id: "always", label: "Always", hint: "Renders every frame; keeps running when hidden" },
     { id: "on_demand", label: "On demand", hint: "Renders on input; live parts pause" },
   ];
 

@@ -18,6 +18,7 @@
 
 pub mod facet;
 mod engine;
+mod clocks;
 pub mod analysis;
 pub mod composition;
 pub mod compose;
@@ -464,6 +465,9 @@ pub struct StoreCore {
     /// presentation state (reactivity.md §13, phase 7).
     presence: BTreeMap<NodeId, Presence>,
     presence_at: Option<f64>,
+    /// Each composition's and pictured entity's clock, which the gate
+    /// pauses while nothing shows or reads it (clocks.rs).
+    clocks: clocks::Clocks,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
     /// The graph's propagation count as the last `advance` ended: when it
@@ -623,6 +627,7 @@ impl StoreCore {
             queries: self.queries.clone(),
             presence: self.presence.clone(),
             presence_at: self.presence_at,
+            clocks: self.clocks.clone(),
             advanced_at: self.advanced_at,
             evaluated_at: self.evaluated_at,
             advanced: self.advanced.clone(),
@@ -840,6 +845,7 @@ impl StoreCore {
             queries: query::Queries::default(),
             presence: BTreeMap::new(),
             presence_at: None,
+            clocks: clocks::Clocks::default(),
             advanced_at: None,
             evaluated_at: 0,
             advanced: (BTreeSet::new(), Vec::new()),
@@ -2049,14 +2055,20 @@ impl StoreCore {
 
     /// Move the items entering and leaving to `now` (seconds, the host's
     /// clock): `presence` rises over its owner's `enter_ms` and falls over
-    /// `exit_ms`, and an item that has finished leaving is removed.
+    /// `exit_ms`, and an item that has finished leaving is removed. An
+    /// owner on a paused clock holds.
     /// Returns the owners with an item still on its way.
     pub fn advance_presence(&mut self, now: f64) -> Vec<NodeId> {
         let dt = self.presence_at.map_or(0.0, |l| (now - l).clamp(0.0, 0.1)) * 1000.0;
         self.presence_at = Some(now);
         let mut gone = false;
         let mut active = Vec::new();
+        let (doc, clocks) = (Tree::of(&self.docs), &self.clocks);
         for (r, p) in &mut self.presence {
+            // On a paused clock (clocks.rs) items hold where they are.
+            if clocks.held(doc, *r) {
+                continue;
+            }
             let (enter_ms, exit_ms) = (p.enter_ms, p.exit_ms);
             p.items.retain(|_, e| {
                 if e.leaving {
@@ -2560,7 +2572,8 @@ impl StoreCore {
                 let reactive = &self.reactive;
                 let doc = Tree::of(&self.docs);
                 let read = |l: Leaf| reactive.read(doc, l);
-                self.machines.advance(doc, &read, now, self.time())
+                let clocks = &self.clocks;
+                self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, e, now), clocks.held(doc, e)))
             };
             running = now_running;
             // A leaf publishing refuses (bound, or another producer's) is a
@@ -2608,10 +2621,10 @@ impl StoreCore {
 
     /// Step the traces and accumulators to `now` (seconds, the host's
     /// clock) and publish them (step.rs). Returns the nodes still
-    /// changing, so the host keeps their compositions drawing. The
-    /// accumulators in a `paused` composition (one no view shows) hold
-    /// still: a simulation in a hidden tab costs nothing.
-    pub fn advance_steps(&mut self, now: f64, paused: &std::collections::BTreeSet<NodeId>) -> Vec<NodeId> {
+    /// changing, so the host keeps their compositions drawing. Those on a
+    /// paused clock (clocks.rs: a composition no view shows) hold still: a
+    /// simulation in a hidden tab costs nothing.
+    pub fn advance_steps(&mut self, now: f64) -> Vec<NodeId> {
         // Each accumulator's formula reads the step's length, so it is
         // published before the formulas are read: but only while one of
         // them is moving. Frame times jitter, and republishing a length
@@ -2631,7 +2644,7 @@ impl StoreCore {
             }
             let restless = {
                 let (reactive, doc) = (&self.reactive, Tree::of(&self.docs));
-                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), paused)
+                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), &self.clocks)
             };
             if restless {
                 shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
@@ -2643,7 +2656,7 @@ impl StoreCore {
             let reactive = &self.reactive;
             let doc = Tree::of(&self.docs);
             let read = |l: Leaf| reactive.read(doc, l);
-            self.steps.advance(doc, &read, now, paused)
+            self.steps.advance(doc, &read, now, &self.clocks)
         };
         values.extend(dts);
         if values != self.reactive.published_by(ProducerId::STEPS) {
@@ -2828,34 +2841,38 @@ impl StoreCore {
         out
     }
 
-    /// The compositions whose accumulators hold still: those holding one
-    /// that no observer reaches on an open path (a simulation in a hidden
-    /// tab costs nothing). None while everything is observed.
-    fn paused(&self) -> BTreeSet<NodeId> {
+    /// Pause the clocks of what nothing shows or reads (clocks.rs; the
+    /// gate of handoff-patches.md PT-1.2): every composition no observer
+    /// shows, and every entity pictured only there, unless something
+    /// running reads it or its composition's `run` is `always` (PT-1.3).
+    /// Nothing is paused while everything is observed.
+    fn gate(&mut self, now: f64) {
+        let (paused, pictured) = self.paused();
+        let doc = Tree::of(&self.docs);
+        self.clocks.set(doc, now, paused, pictured);
+    }
+
+    /// The clocks to pause, and the entities some composition pictures.
+    fn paused(&self) -> (BTreeSet<NodeId>, BTreeSet<NodeId>) {
         if self.observe_all {
-            return BTreeSet::new();
+            return Default::default();
         }
         let doc = Tree::of(&self.docs);
+        let comps: BTreeSet<NodeId> = composition::compositions(doc).into_iter().collect();
+        let observed = self.observed_compositions();
+        // What an observer shows runs, but accumulators step only on an
+        // open path: one in an `on_demand` composition holds even while
+        // shown (free-running.md), and so does all of that composition.
         let holding: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).filter_map(|n| composition::composition_of(doc, n)).collect();
-        if holding.is_empty() {
-            return holding;
+        let still: BTreeSet<NodeId> = holding.difference(&composition::reach(doc, &observed, &holding).running).copied().collect();
+        let mut live: BTreeSet<NodeId> = composition::shown(doc, &observed).difference(&still).copied().collect();
+        // `run = always` keeps a composition's clock running while hidden
+        // (PT-1.3; free-running.md §2).
+        live.extend(comps.iter().copied().filter(|&c| composition::run_mode(doc, c) == composition::RunMode::Always));
+        let hidden: Vec<NodeId> = comps.iter().copied().filter(|c| !live.contains(c)).collect();
+        if hidden.is_empty() {
+            return Default::default();
         }
-        let running = composition::reach(doc, &self.observed_compositions(), &holding).running;
-        let still: BTreeSet<NodeId> = holding.difference(&running).copied().collect();
-        if still.is_empty() {
-            return still;
-        }
-        // A composition read from one that runs runs too, accumulators and
-        // all: a meter in view reading a simulation in a hidden tab,
-        // directly, through a trace or through a stack's placements. A
-        // reader outside every composition is a model node, such as a
-        // placed instance's entity reading its arguments: it runs where it
-        // is pictured, when something running reads it, or always when
-        // nothing pictures it (the timeline, loose roots). Decided until no
-        // more join (one hidden tab read through another).
-        let shown = composition::shown(doc, &self.observed_compositions());
-        let mut live: BTreeSet<NodeId> = shown.difference(&still).copied().collect();
-        let hidden: Vec<NodeId> = composition::compositions(doc).into_iter().filter(|c| !live.contains(c)).collect();
         let mut pictured: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
         for r in doc.relations().filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.is_live(r.to)) {
             if let Some(c) = composition::composition_of(doc, r.from) {
@@ -2874,6 +2891,14 @@ impl StoreCore {
             }
             None
         };
+        // A composition read from one that runs runs too: a meter in view
+        // reading a simulation in a hidden tab, directly, through a trace or
+        // through a stack's placements. A reader outside every composition
+        // is a model node, such as a placed instance's entity reading its
+        // arguments: it runs where it is pictured, when something running
+        // reads it, or always when nothing pictures it (the timeline, loose
+        // roots). Decided until no more join (one hidden tab read through
+        // another).
         let mut entities: BTreeSet<NodeId> = pictured.iter().filter(|(_, cs)| cs.iter().any(|c| live.contains(c))).map(|(&e, _)| e).collect();
         loop {
             let reads = |n: NodeId| match composition::composition_of(doc, n) {
@@ -2888,7 +2913,9 @@ impl StoreCore {
             live.extend(joined);
             entities.extend(joined_entities);
         }
-        still.difference(&live).copied().collect()
+        let mut paused: BTreeSet<NodeId> = hidden.into_iter().filter(|c| !live.contains(c)).collect();
+        paused.extend(pictured.keys().filter(|e| !entities.contains(e)));
+        (paused, pictured.into_keys().collect())
     }
 
     /// Bring everything that runs on time to `now` (seconds, the host's
@@ -2902,8 +2929,8 @@ impl StoreCore {
         if !self.observe_all && self.reactive.relaxed() {
             self.necessity();
         }
-        let paused = self.paused();
-        let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now, &paused), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
+        self.gate(now);
+        let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
         // What they read that nothing needed is needed from the next frame
         // (what the player reads besides is rooted: `ROOTED`).
         let read = self.settle_reads();

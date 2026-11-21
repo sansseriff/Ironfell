@@ -279,7 +279,11 @@ pub struct Running {
 impl Player {
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
-    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
+    /// `time` is each entity's time at `now` and whether its clock is
+    /// paused (clocks.rs): a transition starts and plays on its entity's
+    /// clock, so one on a paused clock holds part-way, and is not reported
+    /// running, until its clock runs again.
+    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64, time: &dyn Fn(NodeId, f64) -> (f64, bool)) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
         let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
         let mut running = Vec::new();
@@ -331,7 +335,7 @@ impl Player {
                     Some(k) if k.state != state => {
                         let from_state = std::mem::replace(&mut k.state, state.clone());
                         match plan(doc, read, def, mc, &from_state, &state).filter(|p| p.ms > 0.0 && !snap.contains(&e)) {
-                            Some(plan) => k.run = Some(Run { plan, start: now, from: k.values.clone(), to, states: (from_state.clone(), state.clone()) }),
+                            Some(plan) => k.run = Some(Run { plan, start: time(e, now).0, from: k.values.clone(), to, states: (from_state.clone(), state.clone()) }),
                             None => {
                                 k.values = to;
                                 k.run = None;
@@ -366,7 +370,8 @@ impl Player {
                 busy.insert(copy_of(doc, Some(e), m));
             }
             if let Some(run) = &k.run {
-                let p = ((now - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
+                let (t, held) = time(e, now);
+                let p = ((t - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
                 for (&c, to) in &run.to {
                     let from = run.from.get(&c).unwrap_or(to);
                     k.values.insert(c, mix(from, to, run.plan.shaped(c, p)));
@@ -374,7 +379,7 @@ impl Player {
                 if p >= 1.0 {
                     k.values = run.to.clone();
                     k.run = None;
-                } else {
+                } else if !held {
                     running.push(Running { entity: e, transition: run.plan.transition, progress: p, from: run.states.0.clone(), to: run.states.1.clone() });
                 }
             }

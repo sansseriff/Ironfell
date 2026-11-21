@@ -272,3 +272,57 @@ fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_doc
     let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
     Ok((plan.ops, plan.summary.join("\n")))
 }
+
+/// A plot on a hidden page (handoff-patches.md PT-1.2): its vis transition
+/// stands still while no view shows the page, is not reported running, and
+/// goes on from where it stood when the page is shown again. A store that
+/// always shows the plot, stepped through the page's own time, sees the same.
+#[test]
+fn a_hidden_plot_s_transition_holds_part_way() {
+    let build = || {
+        let (mut store, bench) = desk();
+        let other = store.authored().next_id();
+        let mut c = Composition::default();
+        c.dims = Slot::Const(Value::Enum("2d".into()));
+        store.apply(tx("other", vec![Op::Create { id: other, ty: ty("composition"), parent: None, order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![named("other"), c.wrap()] }])).unwrap();
+        let (e, u) = place(&mut store, "");
+        (store, bench, other, e, u)
+    };
+    let (mut store, bench, other, e, u) = build();
+    let (mut reference, ..) = build();
+    let parts = ["axis lines", "series 1", "frame"];
+    let pose = |s: &Store| -> Vec<Option<Value>> { parts.iter().flat_map(|p| ["trim.end", "appearance.opacity"].map(|l| s.resolved(part(s, u, p), path(l)))).collect() };
+    let vis = |s: &mut Store, v: &str| s.apply(tx("vis", vec![Op::Set { id: e, path: path("args.vis"), slot: Slot::Const(Value::Str(v.into())) }])).unwrap();
+    let region = |c: NodeId| Interest::Region { composition: c, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 };
+    store.set_observe_all(false);
+    let id = store.observe(region(bench));
+    for s in [&mut store, &mut reference] {
+        s.advance(0.0);
+        vis(s, "hidden");
+        s.advance(1.0);
+        s.advance(1.1);
+    }
+    let mid = pose(&store);
+    assert_eq!(mid, pose(&reference));
+    store.reobserve(id, region(other));
+    // Hidden from 1.2 s: nothing is reported moving, and once the idle
+    // sweep has brought the hidden pictures up to date they show 1.2 s.
+    for k in 0..20 {
+        let out = store.advance(1.2 + k as f64 * 0.1);
+        assert!(out.wake.live.is_empty(), "the hidden plot is reported moving at {}", 1.2 + k as f64 * 0.1);
+    }
+    reference.advance(1.2);
+    assert_eq!(pose(&store), pose(&reference), "held at 1.2 s while hidden");
+    assert_ne!(pose(&store), mid, "it moved before it was hidden");
+    assert_ne!(pose(&store)[2], Some(Value::Number(0.0)), "part-way");
+    store.reobserve(id, region(bench));
+    for (wall, local) in [(4.0, 1.2), (4.05, 1.25), (4.15, 1.35), (5.0, 2.2)] {
+        store.advance(wall);
+        reference.advance(local);
+        let close = pose(&store).iter().zip(pose(&reference)).all(|(a, b)| match (a, &b) {
+            (Some(a), Some(b)) => (a.as_f64().unwrap() - b.as_f64().unwrap()).abs() < 1e-9,
+            _ => *a == b,
+        });
+        assert!(close, "{wall} s, {local} s on the page's clock: {:?} against {:?}", pose(&store), pose(&reference));
+    }
+}

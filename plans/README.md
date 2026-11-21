@@ -30,7 +30,7 @@ finishes, or is superseded.
      states, slides, takes, clips and narrative extents; composition clocks):
      [`handoff-patches.md`](handoff-patches.md). The design is a note,
      [`notes/patches-regions-and-time.md`](notes/patches-regions-and-time.md), not
-     adopted. PT-1 (composition clocks) is in progress. PT-2 to PT-4b are a council,
+     adopted. PT-1 (composition clocks) is done. PT-2 to PT-4b are a council,
      a pure crate with property tests, and two specs. Building from PT-5 on waits for
      the user to approve those specs.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,

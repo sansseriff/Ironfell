@@ -459,7 +459,7 @@ fn step(w: &mut World) {
                 w.reach("enter or exit in flight");
             }
             w.store.advance_machines(w.now);
-            w.store.advance_steps(w.now, &BTreeSet::new());
+            w.store.advance_steps(w.now);
             w.store.advance_queries(w.now);
             w.store.advance_motion(w.now);
         }
@@ -659,6 +659,14 @@ fn observed_script(seed: u64, steps: usize) -> usize {
     let (mut all, mut some) = (build(seed), build(seed));
     viewer(&mut all);
     viewer(&mut some);
+    // §8.8 is about necessity: with the gate's pause (reactive-engine.md
+    // §10.1, a deliberate exception) overridden, what is observed changes
+    // nothing that is shown. The script's undo must not take the override
+    // back, so the setup is not undoable.
+    for w in [&mut all, &mut some] {
+        w.edit(r#"<set id="$c" composition.run="always"/><set id="$v" composition.run="always"/>"#).unwrap();
+        w.store.clear_history();
+    }
     let mut coin = Rng(seed ^ 0x0b5e_47ed);
     some.store.set_observe_all(false);
     let (c, v, pick) = (some.names["$c"], some.names["$v"], some.names["$pick"]);

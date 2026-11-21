@@ -17,7 +17,8 @@
 //!   length is not republished, so nothing changes and no frame is drawn.
 
 use crate::Tree;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use crate::clocks::Clocks;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::expr::Leaf;
 use crate::facet::{FacetKind, LeafPath};
@@ -41,10 +42,6 @@ fn leaf(node: NodeId, facet: FacetKind, field: &'static str) -> Leaf {
     Leaf { node, path: LeafPath { facet, field } }
 }
 
-/// Whether `n` sits in one of the `paused` compositions.
-fn held(doc: Tree<'_>, n: NodeId, paused: &BTreeSet<NodeId>) -> bool {
-    !paused.is_empty() && crate::composition::composition_of(doc, n).is_some_and(|c| paused.contains(&c))
-}
 
 /// Whether a value counts as on, for the lit runs of a trace.
 pub fn on(v: &Value) -> bool {
@@ -111,8 +108,8 @@ impl Steps {
     /// length now published (any length above 0 answers the same for a
     /// formula at rest). The store publishes the real length only then, so
     /// an accumulator at rest changes nothing from frame to frame.
-    pub fn restless(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, paused: &BTreeSet<NodeId>) -> bool {
-        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && !held(doc, n, paused)).any(|n| {
+    pub(crate) fn restless(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, clocks: &Clocks) -> bool {
+        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && !clocks.held(doc, n)).any(|n| {
             let f = |field| leaf(n, FacetKind::Accumulate, field);
             let Some(v) = self.values.get(&n) else { return true };
             if read(f("reset")).and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -122,11 +119,14 @@ impl Steps {
         })
     }
 
-    /// Step every trace and accumulator to `now`. Answers what to publish
-    /// beside the step lengths, and the nodes still changing.
-    /// An accumulator in a `paused` composition holds its value: no view
-    /// shows it, so it does not advance behind the picture.
-    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, paused: &BTreeSet<NodeId>) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+    /// Step every trace and accumulator to `now` (presentation time), each
+    /// on its own clock (clocks.rs). Answers what to publish beside the step
+    /// lengths, and the nodes still changing. On a paused clock an
+    /// accumulator holds its value and a trace's changes stay in flight: no
+    /// view shows them, so they do not advance behind the picture, and
+    /// neither counts as changing.
+    pub(crate) fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clocks: &Clocks) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+        let presentation = now;
         let mut out = BTreeMap::new();
         let mut active = Vec::new();
 
@@ -134,6 +134,7 @@ impl Steps {
         let traces = live(FacetKind::Trace);
         self.traces.retain(|n, _| traces.contains(n));
         for n in traces {
+            let now = clocks.time(doc, n, presentation);
             let f = |field| leaf(n, FacetKind::Trace, field);
             let delay = read(f("delay")).and_then(|v| v.as_f64()).filter(|d| d.is_finite()).unwrap_or(0.0).max(0.0);
             let ring = self.traces.entry(n).or_default();
@@ -156,7 +157,7 @@ impl Steps {
             out.insert(f("dash"), Value::Str(dash(ring, now, delay)));
             out.insert(f("ages"), Value::series(ring.iter().rev().map(|(t, _)| (now - t).min(delay)).collect::<Vec<f64>>(), crate::units::Dim::NONE));
             out.insert(f("values"), Value::list(ring.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>()));
-            if ring.len() > 1 {
+            if ring.len() > 1 && !clocks.held(doc, n) {
                 active.push(n);
             }
         }
@@ -169,7 +170,7 @@ impl Steps {
             let before = self.values.get(&n).cloned();
             let bound = doc.leaf(n, f("next").path).is_some_and(|s| s.expr().is_some());
             let value = match &before {
-                Some(v) if held(doc, n, paused) => v.clone(),
+                Some(v) if clocks.held(doc, n) => v.clone(),
                 Some(v) if !reset => if bound { read(f("next")).unwrap_or_else(|| v.clone()) } else { v.clone() },
                 _ => read(f("initial")).unwrap_or(Value::Number(0.0)),
             };

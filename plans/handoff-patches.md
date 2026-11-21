@@ -52,7 +52,7 @@ view rectangles, not this.
 
 | Key | Step | Kind | Gate before it | State |
 |---|---|---|---|---|
-| PT-1 | Composition clocks | Build | none (approved spec §10.1) | **In progress** 2026-11-20: PT-1.1 done |
+| PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | |
 | PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | |
@@ -97,13 +97,57 @@ Tasks, in order; each is committed alone.
     mid-transition, and a pulse in flight stays in flight.
   - Amend the spec's §10.1 with the gate in the same change. The user asked for
     "hidden tabs pause by default, overridable" (2026-11-20).
+  - **Done 2026-11-20.** What was built:
+    - `clocks.rs` keeps each clock's pause. A clock belongs to a composition, or to an
+      entity some composition pictures. `Store::gate`, run once a frame from
+      `advance`, sets them.
+    - The steppers read their node's clock: traces and accumulators (`step.rs`),
+      machines' own transitions (`machine.rs`), and presence.
+    - Layout glides and a query's debounce stay on presentation time.
+    - A shown `on_demand` composition still pauses only if it holds an accumulator,
+      as before.
+  - **Tests:**
+    - `plot::a_hidden_plot_s_transition_holds_part_way` (against a store stepped
+      through the page's own time);
+    - `reactivity::a_hidden_page_s_trace_keeps_its_change_in_flight`;
+    - `reactivity::an_accumulator_in_a_hidden_composition_holds_still`, now through
+      observers.
+  - **Cost:** the gate scans every hidden composition each frame, not only those
+    with an accumulator. On the demo with one page shown, `advance` is 0.72 ms p50
+    in release, against 0.68 ms before. How much of the 0.7 ms is the gate is not
+    measured; caching its result is open.
 - **PT-1.3, the override:** a composition setting that keeps it running while hidden,
-  in the composition settings menu.
-- **PT-1.4, fixed-step steppers:** accumulators step at a fixed length, several steps
-  a frame if needed, so a result does not depend on the frame rate. Gallery pages'
-  `min(dt, 0.03)` clamps then go.
-- **PT-1.5, `now()` and `clock()` in formulas:** the composition's time as a
-  dependency the graph tracks (spec §10.1).
+  in the composition settings menu. **Done 2026-11-20**, with PT-1.2:
+  - The existing **Run** setting carries it. `run = always`, which already meant
+    "render every frame", now also keeps the clock running while hidden. The menu's
+    hint says so, and free-running.md §2 is amended.
+  - Test: `reactivity::an_always_running_page_keeps_running_while_hidden`.
+  - **§8.8's property test now runs with its two pages set to Always**
+    (`observing_part_of_the_time_changes_nothing_once_all_is_observed`). Its random
+    script holds presence, the fiber's traces and the plot's machine, which the gate
+    now pauses: a deliberate exception to §8.8. With the gate overridden, the test
+    is about necessity alone, which is what §8.8 states.
+- **PT-1.4, fixed-step steppers: moved to PT-10** (2026-11-20). Accumulators would
+  step at a fixed length, several steps a frame if needed, so a result does not
+  depend on the frame rate.
+  - **Why it moved:** each extra step is a graph pass, and a pass re-evaluates the
+    pictures that read the accumulators, not only their `next` formulas. The Lorenz
+    page would compute its two 400-point plots twice a frame to show one.
+  - **What it needs first:** a pass that evaluates only the accumulators' own cells
+    between steps.
+  - **Where it pays:** replays, takes and checkpoints, where results must not depend
+    on the frame rate.
+  - Gallery pages' `min(dt, 0.03)` clamps go with it.
+- **PT-1.5, `now()` and `clock()` in formulas: moved to PT-9** (2026-11-20).
+  - **The conflict:** spec §10.1 defines `clock()` as the nearest *scripted* clock,
+    the playhead by default. The note makes each composition's clock the default
+    and a scripted one a placement (note §3.1).
+  - **PT-9 decides what "scripted" means.** The name, what a model node reads, and
+    how a shared template reads its host composition's time all depend on that.
+  - **Until then,** an accumulator summing `dt` is the way to read time in a
+    formula, as the Lorenz page's `clock` does. It is on its composition's clock.
+- **PT-1's exit (below) is met without PT-1.4 and PT-1.5. PT-1 is done
+  (2026-11-20).**
 - **Moved to PT-10:**
   - UI transitions on unscaled time: nothing scales time until rate operators exist.
   - Replacing `ROOTED`'s facet-kind list: once a paused clock holds a composition's
@@ -202,10 +246,11 @@ Each gets a section here, with tasks and an exit, once its spec is approved.
   - Narrative positions as points (narrative note §6.5).
   - One source leads per axis.
   - The free-running to scripted UX.
+  - `now()` and `clock()` in formulas (PT-1.5, moved here).
 - **PT-10. Clock operators** (rate, offset, loop with `n`, ping-pong, gate, hold, remap),
   then ghosts, coverage shading and checkpoints.
-  Also UI transitions on unscaled time, and `ROOTED`'s facet-kind list replaced
-  (both moved from PT-1).
+  Also from PT-1: UI transitions on unscaled time; `ROOTED`'s facet-kind list
+  replaced; fixed-step accumulators (PT-1.4).
 - **PT-11. Storage and the server.**
   - Chunked snapshots.
   - Loading a view's point; prefetching the arrow.

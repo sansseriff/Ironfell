@@ -962,6 +962,26 @@ Formulas have no way to read time today except a reference to the session `clock
   a mapping (offset, rate, paused, loop). Uses: the narrative clock (position, not
   seconds), a preview at another time, a component in slow motion.
 
+**Composition clocks and the gate** (added 2026-11-20, handoff-patches.md PT-1.2;
+`clocks.rs`):
+- **Each clock is presentation time less the time it spent paused.** Every
+  composition has one, and so does every entity a composition pictures, since a
+  placed instance's machines and traces live in the model.
+- **Once a frame, the store's gate pauses a clock** when no observer shows its
+  composition and nothing running reads it. A pictured entity is paused when every
+  composition picturing it is paused and nothing running reads it.
+- **On a paused clock, what steps holds where it is and goes on from there:**
+  accumulators, traces' changes in flight, machines' own transitions, and items
+  entering or leaving. None of it is reported moving.
+- **Not on these clocks:** layout glides and a query's debounce run on presentation
+  time, and the playhead is its own clock.
+- **This is a deliberate exception to §8.8.** A hidden page resumes where it stopped,
+  not where it would have been, as §8.3's simulation range does. The user asked
+  for it on 2026-11-20 ("hidden tabs pause by default, overridable").
+- **The override is `run = always`** (PT-1.3, free-running.md §2): such a
+  composition's clock runs while hidden. §8.8's property test sets it, so that it
+  tests necessity alone.
+
 **A model has one time.** A body resolves `clock()` along the model's own tree (its
 entity's ancestors), never through a picture, because one entity may be pictured under
 several clocks and computes once (§8.4). A clock provided on a picture's side reaches

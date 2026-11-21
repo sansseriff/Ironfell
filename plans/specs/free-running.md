@@ -31,7 +31,7 @@ demand. It is decided per frame, not stored, from two inputs:
 | `run` | Meaning |
 |---|---|
 | `auto` (default) | Free running when it is a live source, or anything it shows is free running (bubbling, below) |
-| `always` | Free running regardless |
+| `always` | Free running regardless. Its clock also keeps running while no view shows it (added 2026-11-20, handoff-patches.md PT-1.3): a hidden `always` composition is not paused by the gate (reactive-engine.md §10.1) |
 | `on_demand` | Never free running. What it shows does not bubble out of it, and producers seen only through it are paused |
 
 **Bubbling.** Liveness flows outward through embeds: a composition embedding a free

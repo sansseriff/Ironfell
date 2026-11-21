@@ -58,6 +58,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | ⏱ `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~2.5–3 min warm, debug (2m 38s, 2m 44s, 2026-11-18): four tests of 45–55 s each bound it; skipping them (`--skip two_hundred_random_scripts --skip every_page_builds_in_one_transaction --skip a_plot_s_new_tick_writes_nothing_outside_it --skip sibling_order_survives_many_inserts`) leaves 16 s of tests |
 | `cargo test -p iron_document --release --features differential --target aarch64-apple-darwin --test suite differential_random::ten_thousand -- --ignored` | ~4.5 min (4m 33s, 2026-11-18) |
 | ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
+| ⏱ `differential_random::observing_part_of_the_time_over_a_thousand_seeds` (release, `--features differential`, `--ignored`): §8.8 over 1,000 seeds, one test so one thread | ~9 min (537 s at load average 16, 2026-11-20) |
 | `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference`: the host reference (reactive-engine handoff §4.1, task 6) | ~50 s warm (48 s, 2026-11-16) |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |

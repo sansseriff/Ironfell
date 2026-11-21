@@ -199,6 +199,73 @@ pub struct Network {
     pub equations: Vec<Equation>,
 }
 
+/// One island of a network (reactive-engine handoff §4.10, RE-5.3): the
+/// unknowns joined by any equation they share, as indices into
+/// `Network::unknowns` (ascending), and the equations over them, as indices
+/// into `Network::equations`. Islands are solved apart, each from its own
+/// warm start.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Island {
+    pub unknowns: Vec<usize>,
+    pub equations: Vec<usize>,
+}
+
+impl Network {
+    /// The unknowns an equation reads. An `Expr` holding a `deref` may read
+    /// any of them, so it reads them all: its island is conservative.
+    pub fn vars_of(&self, eq: &Equation, index: &BTreeMap<Leaf, usize>) -> Vec<usize> {
+        let mut vars: Vec<usize> = match eq {
+            Equation::Linear(coefs) => coefs.iter().map(|(i, _)| *i).collect(),
+            Equation::Expr { lhs, rhs, .. } if has_deref(lhs) || has_deref(rhs) => (0..self.unknowns.len()).collect(),
+            Equation::Expr { lhs, rhs, .. } => lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect(),
+        };
+        vars.sort();
+        vars.dedup();
+        vars
+    }
+
+    /// The islands, by lowest unknown. An equation over no unknown is in
+    /// none (it constrains nothing the network solves).
+    pub fn islands(&self) -> Vec<Island> {
+        let index: BTreeMap<Leaf, usize> = self.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
+        let mut parent: Vec<usize> = (0..self.unknowns.len()).collect();
+        fn root(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        let vars: Vec<Vec<usize>> = self.equations.iter().map(|eq| self.vars_of(eq, &index)).collect();
+        for vs in &vars {
+            for w in vs.windows(2) {
+                let (a, b) = (root(&mut parent, w[0]), root(&mut parent, w[1]));
+                if a != b {
+                    parent[a.max(b)] = a.min(b);
+                }
+            }
+        }
+        let mut islands: BTreeMap<usize, Island> = BTreeMap::new();
+        for i in 0..self.unknowns.len() {
+            let r = root(&mut parent, i);
+            islands.entry(r).or_insert_with(|| Island { unknowns: Vec::new(), equations: Vec::new() }).unknowns.push(i);
+        }
+        for (e, vs) in vars.iter().enumerate() {
+            if let Some(&first) = vs.first() {
+                let r = root(&mut parent, first);
+                islands.get_mut(&r).expect("island").equations.push(e);
+            }
+        }
+        islands.into_values().collect()
+    }
+}
+
+fn has_deref(e: &Expr) -> bool {
+    let mut found = false;
+    e.walk(&mut |x| found |= matches!(x, Expr::Call(name, _) if name == "deref"));
+    found
+}
+
 pub enum Equation {
     Linear(Vec<(usize, f64)>),
     Expr { node: NodeId, lhs: Expr, rhs: Expr },

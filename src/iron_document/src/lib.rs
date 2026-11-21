@@ -3128,55 +3128,77 @@ impl StoreCore {
             _ => None,
         };
         let index: std::collections::BTreeMap<Leaf, usize> = net.unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
-        let x0: Vec<f64> = net.unknowns.iter().map(|(l, _)| self.reactive.signal(*l).map(|s| &s.value).and_then(magnitude).unwrap_or(0.0)).collect();
-        let solution = {
-            let doc = Tree::of(&self.docs);
-            let reactive = &self.reactive;
-            let unknowns = &net.unknowns;
-            let mut problem = iron_solve::Problem::uniform(x0, 1.0);
-            for eq in &net.equations {
-                match eq {
-                    crate::port::Equation::Linear(coefs) => {
-                        let vars: Vec<usize> = coefs.iter().map(|(i, _)| *i).collect();
-                        let k: Vec<f64> = coefs.iter().map(|(_, c)| *c).collect();
-                        problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars, 1, move |v, out| {
-                            out[0] = v.iter().zip(&k).map(|(x, c)| x * c).sum();
-                        }));
-                    }
-                    crate::port::Equation::Expr { lhs, rhs, .. } => {
-                        let mut vars: Vec<usize> = lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect();
-                        vars.sort();
-                        vars.dedup();
-                        if vars.is_empty() {
-                            continue;
+        // Each island alone, from its own warm start (handoff §4.10,
+        // RE-5.3): one that does not settle keeps its last solution, and
+        // the others still solve.
+        let held = self.reactive.published_by(ProducerId::NETWORK);
+        let mut values: std::collections::BTreeMap<Leaf, Value> = std::collections::BTreeMap::new();
+        let mut worst: Option<f64> = None;
+        for island in net.islands() {
+            let x0: Vec<f64> = island.unknowns.iter().map(|&i| self.reactive.signal(net.unknowns[i].0).map(|s| &s.value).and_then(magnitude).unwrap_or(0.0)).collect();
+            let local: std::collections::BTreeMap<usize, usize> = island.unknowns.iter().enumerate().map(|(pos, &i)| (i, pos)).collect();
+            let solution = {
+                let doc = Tree::of(&self.docs);
+                let reactive = &self.reactive;
+                let unknowns = &net.unknowns;
+                let mut problem = iron_solve::Problem::uniform(x0, 1.0);
+                for &e in &island.equations {
+                    let eq = &net.equations[e];
+                    match eq {
+                        crate::port::Equation::Linear(coefs) => {
+                            let vars: Vec<usize> = coefs.iter().map(|(i, _)| local[i]).collect();
+                            let k: Vec<f64> = coefs.iter().map(|(_, c)| *c).collect();
+                            problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars, 1, move |v, out| {
+                                out[0] = v.iter().zip(&k).map(|(x, c)| x * c).sum();
+                            }));
                         }
-                        let (lhs, rhs, index) = (lhs.clone(), rhs.clone(), index.clone());
-                        problem.term(iron_solve::Term::new(iron_solve::Tier::Required, vars.clone(), 1, move |v, out| {
-                            let read = |l: Leaf| match index.get(&l).and_then(|i| vars.iter().position(|j| j == i)) {
-                                Some(pos) => Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
-                                None => reactive.read(doc, l),
-                            };
-                            let side = |e: &Expr| e.eval(&read).ok().as_ref().and_then(magnitude);
-                            out[0] = match (side(&lhs), side(&rhs)) {
-                                (Some(a), Some(b)) => a - b,
-                                _ => 1e6,
-                            };
-                        }));
+                        crate::port::Equation::Expr { lhs, rhs, .. } => {
+                            // The unknowns it reads by name; a `deref`'s
+                            // reads it makes through the graph, as before.
+                            let mut vars: Vec<usize> = lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect();
+                            vars.sort();
+                            vars.dedup();
+                            if vars.is_empty() {
+                                continue;
+                            }
+                            let term_vars: Vec<usize> = vars.iter().map(|i| local[i]).collect();
+                            let (lhs, rhs, index) = (lhs.clone(), rhs.clone(), index.clone());
+                            problem.term(iron_solve::Term::new(iron_solve::Tier::Required, term_vars, 1, move |v, out| {
+                                let read = |l: Leaf| match index.get(&l).and_then(|i| vars.iter().position(|j| j == i)) {
+                                    Some(pos) => Some(Value::quantity(v[pos], unknowns[vars[pos]].1)),
+                                    None => reactive.read(doc, l),
+                                };
+                                let side = |e: &Expr| e.eval(&read).ok().as_ref().and_then(magnitude);
+                                out[0] = match (side(&lhs), side(&rhs)) {
+                                    (Some(a), Some(b)) => a - b,
+                                    _ => 1e6,
+                                };
+                            }));
+                        }
                     }
                 }
+                // A network is a set of equations, not a drag: nothing should
+                // stay where it was at the expense of an equation (the weak
+                // rows stalled a kΩ–mA circuit short of the tolerance).
+                let options = iron_solve::Options { max_iterations: 100, least_change: false, ..Default::default() };
+                iron_solve::solve(&problem, &options)
+            };
+            if solution.status != iron_solve::Status::Converged {
+                worst = Some(worst.map_or(solution.max_required_residual, |w: f64| w.max(solution.max_required_residual)));
+                for &i in &island.unknowns {
+                    let leaf = net.unknowns[i].0;
+                    if let Some(v) = held.get(&leaf) {
+                        values.insert(leaf, v.clone());
+                    }
+                }
+                continue;
             }
-            // A network is a set of equations, not a drag: nothing should
-            // stay where it was at the expense of an equation (the weak
-            // rows stalled a kΩ–mA circuit short of the tolerance).
-            let options = iron_solve::Options { max_iterations: 100, least_change: false, ..Default::default() };
-            iron_solve::solve(&problem, &options)
-        };
-        if solution.status != iron_solve::Status::Converged {
-            self.physics_error = Some(format!("the across/through network does not settle (residual {:.3e})", solution.max_required_residual));
-            return;
+            for (&i, x) in island.unknowns.iter().zip(&solution.vars) {
+                let (leaf, dim) = net.unknowns[i];
+                values.insert(leaf, Value::quantity(*x, dim));
+            }
         }
-        self.physics_error = None;
-        let values = net.unknowns.iter().zip(&solution.vars).map(|((l, dim), x)| (*l, Value::quantity(*x, *dim))).collect();
+        self.physics_error = worst.map(|r| format!("the across/through network does not settle (residual {r:.3e})"));
         self.reactive.publish(Tree::of(&self.docs), ProducerId::NETWORK, values);
     }
 

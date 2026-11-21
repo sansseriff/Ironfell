@@ -225,8 +225,9 @@ fn connections_must_join_one_kind_one_way_once() {
 /// link, and an ambient at 293.15 K. The connections' equations (equal
 /// temperature, heat summing to zero) and each part's behaviour equation
 /// are solved together: the heater sits at 303.15 K and 5 W flows.
-#[test]
-fn a_heater_settles_through_its_thermal_link() {
+/// A thermal library (a heater, a link, an ambient) and a model, as
+/// definitions: `(store, model, [heater, link, ambient])`.
+fn thermal() -> (Store, NodeId, [NodeId; 3]) {
     use iron_document::facet::Equation;
     let mut store = Store::new();
     let q = |s: &str| Value::parse_quantity(s).unwrap();
@@ -279,14 +280,23 @@ fn a_heater_settles_through_its_thermal_link() {
             ],
         ))
         .unwrap();
-    let mut entities = Vec::new();
-    for (def, name) in [(heater, "heater"), (link, "link"), (ambient, "ambient")] {
-        let after = store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone());
-        let place = Placement { entity_parent: Some(model), entity_after: after, figure_parent: None, figure_after: None };
-        let (e, ops) = definition::instantiate(store.tree(), def, "cartoon", name, &place).unwrap();
-        store.apply(tx(name, ops)).unwrap();
-        entities.push(e);
-    }
+    (store, model, [heater, link, ambient])
+}
+
+/// An instance of `def` in `model`, by its entity.
+fn place(store: &mut Store, model: NodeId, def: NodeId, name: &str) -> NodeId {
+    let after = store.tree().children(model).last().map(|&c| store.tree().live(c).unwrap().order.clone());
+    let place = Placement { entity_parent: Some(model), entity_after: after, figure_parent: None, figure_after: None };
+    let (e, ops) = definition::instantiate(store.tree(), def, "cartoon", name, &place).unwrap();
+    store.apply(tx(name, ops)).unwrap();
+    e
+}
+
+#[test]
+fn a_heater_settles_through_its_thermal_link() {
+    let (mut store, model, [heater, link, ambient]) = thermal();
+    let q = |s: &str| Value::parse_quantity(s).unwrap();
+    let entities: Vec<NodeId> = [(heater, "heater"), (link, "link"), (ambient, "ambient")].into_iter().map(|(d, n)| place(&mut store, model, d, n)).collect();
     let mut lab = Lab { store, laser: entities[0], fiber: entities[1], meter: entities[2], model };
     let (h, la, lb, amb) = (lab.port(lab.laser, "out"), lab.port(lab.fiber, "a"), lab.port(lab.fiber, "b"), lab.port(lab.meter, "p"));
     lab.connect(h, la).unwrap();
@@ -304,6 +314,32 @@ fn a_heater_settles_through_its_thermal_link() {
     // The model view shows the pair.
     let view = lab.store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Model }).unwrap();
     assert!(view.contains(r#"kind="heat_flow""#) && view.contains("across=") && view.contains("through="), "{view}");
+}
+
+/// Islands are solved apart (reactive-engine handoff §4.10, RE-5.3): a
+/// circuit that cannot settle keeps its last solution and says so, and a
+/// circuit beside it still follows its parameters.
+#[test]
+fn a_circuit_that_cannot_settle_does_not_hold_back_another() {
+    let (mut store, model, [heater, link, ambient]) = thermal();
+    let q = |s: &str| Value::parse_quantity(s).unwrap();
+    let [h, l, a] = [(heater, "heater"), (link, "link"), (ambient, "ambient")].map(|(d, n)| place(&mut store, model, d, n));
+    let [c1, c2] = [ambient, ambient].map(|d| place(&mut store, model, d, "cold"));
+    let mut lab = Lab { store, laser: h, fiber: l, meter: a, model };
+    let (h_out, la, lb, amb) = (lab.port(h, "out"), lab.port(l, "a"), lab.port(l, "b"), lab.port(a, "p"));
+    lab.connect(h_out, la).unwrap();
+    lab.connect(lb, amb).unwrap();
+    assert_eq!(lab.store.physics_error(), None);
+    let across = |s: &Store, p: NodeId| watts(&s.resolved(p, path("port.across")).unwrap());
+    assert!((across(&lab.store, h_out) - 303.15).abs() < 1e-6);
+    // Two ambients joined at one temperature each: no solution.
+    lab.store.apply(tx("colder", vec![Op::Set { id: c2, path: path("args.t"), slot: Slot::Const(q("250 K")) }])).unwrap();
+    let (p1, p2) = (lab.port(c1, "p"), lab.port(c2, "p"));
+    let _ = lab.connect(p1, p2);
+    assert!(lab.store.physics_error().is_some_and(|e| e.contains("does not settle")), "{:?}", lab.store.physics_error());
+    // The heater's circuit still follows its power.
+    lab.store.apply(tx("10 W", vec![Op::Set { id: h, path: path("args.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
+    assert!((across(&lab.store, h_out) - 313.15).abs() < 1e-6, "{}", across(&lab.store, h_out));
 }
 
 /// The entity's first figure; the lab's fiber template draws nothing, so

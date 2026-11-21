@@ -69,6 +69,23 @@ pub struct Signal {
     pub producer: ProducerId,
 }
 
+/// A cell of the graph (reactive-engine.md §5.1; handoff §4.10): what the
+/// pass queues, orders by height, and decides necessity for. A `Leaf` cell
+/// is a Formula, a binding's expression on that leaf (`BoundNode`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CellId {
+    Leaf(Leaf),
+}
+
+impl CellId {
+    /// The node the cell belongs to, for necessity and `read_by`.
+    pub fn node(self) -> NodeId {
+        match self {
+            CellId::Leaf(l) => l.node,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct BoundNode {
     /// Shared, so an evaluation borrows it for the price of a count.
@@ -86,8 +103,8 @@ struct BoundNode {
 #[derive(Clone, Debug, Default)]
 pub struct Reactive {
     nodes: BTreeMap<Leaf, BoundNode>,
-    /// Any leaf -> the bound leaves that read it.
-    dependents: BTreeMap<Leaf, BTreeSet<Leaf>>,
+    /// Any leaf -> the cells that read it.
+    dependents: BTreeMap<Leaf, BTreeSet<CellId>>,
     resolved: BTreeMap<Leaf, Value>,
     overlay: BTreeMap<Leaf, Value>,
     /// The runtime layer (vision 10 §4): named signals published by
@@ -138,16 +155,16 @@ pub struct Reactive {
     /// Nothing tells them when that ends (the read that closed the cycle
     /// was never made an edge), so `restructure` runs them again (the
     /// spec's §6.3; the rebuild ran everything).
-    blocked: BTreeSet<Leaf>,
+    blocked: BTreeSet<CellId>,
     /// Cells nothing observed needs (reactive-engine.md §8.2, §8.3): when
     /// what they read changes they are not evaluated but marked `stale`.
     /// Closed downwards: whatever reads a cell outside it is outside it too,
     /// so a needed cell never reads a stale one. The store sets it
     /// (`set_unneeded`); empty while everything is observed.
-    unneeded: BTreeSet<Leaf>,
+    unneeded: BTreeSet<CellId>,
     /// Unneeded cells whose inputs changed since they were last evaluated:
     /// they hold their last value (§8.9) until needed again.
-    stale: BTreeSet<Leaf>,
+    stale: BTreeSet<CellId>,
     /// Whether necessity is out of date: `unneeded` was emptied for
     /// exactness (a transaction, a structure change), or a tracked read
     /// left a cell only it had made needed, since the store last set it.
@@ -161,11 +178,11 @@ pub struct Reactive {
     escaped: Escaped,
     /// Cells read from outside the graph while unneeded: needed whenever
     /// the store decides necessity, until the next rebuild.
-    pinned: BTreeSet<Leaf>,
+    pinned: BTreeSet<CellId>,
     /// The cells that could be unneeded (those of hidden nodes not rooted)
     /// as the store last decided: when a tracked read leaves one, it may
     /// be unneeded now, and the store decides necessity again.
-    candidates: BTreeSet<Leaf>,
+    candidates: BTreeSet<CellId>,
 }
 
 /// The unneeded cells read from outside the graph since the store last
@@ -190,8 +207,12 @@ impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
-        if !self.unneeded.is_empty() && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0 && self.unneeded.contains(&leaf) {
-            let old = self.behind(leaf);
+        if !self.unneeded.is_empty()
+            && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0
+            && let Some(c) = self.cell_of(leaf)
+            && self.unneeded.contains(&c)
+        {
+            let old = self.behind(c);
             *self.escaped.read.lock().expect("escaped lock").entry(leaf).or_default() |= old;
         }
         read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
@@ -201,7 +222,42 @@ impl Reactive {
     /// nothing observed needed it (reactive-engine.md §8.9). What reads it
     /// is unneeded too and holds its last value without being listed here.
     pub fn is_stale(&self, leaf: Leaf) -> bool {
-        self.stale.contains(&leaf)
+        self.cell_of(leaf).is_some_and(|c| self.stale.contains(&c))
+    }
+
+    /// The cell `leaf` reads as, if one computes it.
+    fn cell_of(&self, leaf: Leaf) -> Option<CellId> {
+        self.nodes.contains_key(&leaf).then_some(CellId::Leaf(leaf))
+    }
+
+    /// Whether the cell exists.
+    fn exists(&self, c: CellId) -> bool {
+        match c {
+            CellId::Leaf(l) => self.nodes.contains_key(&l),
+        }
+    }
+
+    /// A cell's height. It must exist.
+    fn height_of(&self, c: CellId) -> u32 {
+        match c {
+            CellId::Leaf(l) => self.nodes[&l].height,
+        }
+    }
+
+    /// The cells `c` reads: its static and its tracked dependencies that
+    /// are cells (a constant has none).
+    fn reads_of(&self, c: CellId) -> Vec<CellId> {
+        match c {
+            CellId::Leaf(l) => self.nodes.get(&l).map(|n| n.deps.iter().chain(&n.tracked).filter_map(|d| self.cell_of(*d)).collect()).unwrap_or_default(),
+        }
+    }
+
+    /// The cells that read `c`'s value.
+    fn readers_of(&self, c: CellId) -> impl Iterator<Item = CellId> + '_ {
+        let leaf = match c {
+            CellId::Leaf(l) => l,
+        };
+        self.dependents.get(&leaf).into_iter().flatten().copied()
     }
 
     /// How many cells hold a value older than their inputs.
@@ -212,22 +268,20 @@ impl Reactive {
     /// The cells of `nodes` nothing needs: those of nodes not `rooted`
     /// (state, and what the store reads besides drawing, §8.3) that no cell
     /// outside the set reads, directly or through others.
-    pub(crate) fn necessity(&mut self, nodes: &BTreeSet<NodeId>, rooted: &dyn Fn(NodeId) -> bool) -> BTreeSet<Leaf> {
-        let mut candidates: BTreeSet<Leaf> = BTreeSet::new();
+    pub(crate) fn necessity(&mut self, nodes: &BTreeSet<NodeId>, rooted: &dyn Fn(NodeId) -> bool) -> BTreeSet<CellId> {
+        let mut candidates: BTreeSet<CellId> = BTreeSet::new();
         for &n in nodes {
             if !rooted(n) {
-                candidates.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
+                candidates.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).map(CellId::Leaf));
             }
         }
-        let mut stack: Vec<Leaf> = candidates.iter().filter(|l| self.pinned.contains(l) || self.dependents.get(l).is_some_and(|ds| ds.iter().any(|d| !candidates.contains(d)))).copied().collect();
-        let mut needed: BTreeSet<Leaf> = BTreeSet::new();
-        while let Some(l) = stack.pop() {
-            if !needed.insert(l) {
+        let mut stack: Vec<CellId> = candidates.iter().filter(|c| self.pinned.contains(c) || self.readers_of(**c).any(|d| !candidates.contains(&d))).copied().collect();
+        let mut needed: BTreeSet<CellId> = BTreeSet::new();
+        while let Some(c) = stack.pop() {
+            if !needed.insert(c) {
                 continue;
             }
-            if let Some(n) = self.nodes.get(&l) {
-                stack.extend(n.deps.iter().chain(&n.tracked).filter(|d| candidates.contains(d) && !needed.contains(d)).copied());
-            }
+            stack.extend(self.reads_of(c).into_iter().filter(|d| candidates.contains(d) && !needed.contains(d)));
         }
         self.candidates = candidates.clone();
         candidates.retain(|l| !needed.contains(l));
@@ -236,9 +290,9 @@ impl Reactive {
 
     /// Make `unneeded` the cells nothing needs, evaluating the stale ones
     /// that are needed again. Whether it evaluated anything.
-    pub(crate) fn set_unneeded(&mut self, doc: Tree<'_>, unneeded: BTreeSet<Leaf>) -> bool {
+    pub(crate) fn set_unneeded(&mut self, doc: Tree<'_>, unneeded: BTreeSet<CellId>) -> bool {
         self.relaxed = false;
-        let wake: BTreeSet<Leaf> = self.stale.iter().filter(|l| !unneeded.contains(l)).copied().collect();
+        let wake: BTreeSet<CellId> = self.stale.iter().filter(|c| !unneeded.contains(c)).copied().collect();
         self.stale.retain(|l| unneeded.contains(l));
         self.unneeded = unneeded;
         if wake.is_empty() {
@@ -257,22 +311,20 @@ impl Reactive {
     /// Whether an unneeded cell's value is older than its inputs: a stale
     /// cell is it or upstream of it, among the unneeded (a needed cell is
     /// current).
-    fn behind(&self, leaf: Leaf) -> bool {
+    fn behind(&self, cell: CellId) -> bool {
         if self.stale.is_empty() {
             return false;
         }
-        let mut stack = vec![leaf];
+        let mut stack = vec![cell];
         let mut seen = BTreeSet::new();
-        while let Some(l) = stack.pop() {
-            if !self.unneeded.contains(&l) || !seen.insert(l) {
+        while let Some(c) = stack.pop() {
+            if !self.unneeded.contains(&c) || !seen.insert(c) {
                 continue;
             }
-            if self.stale.contains(&l) {
+            if self.stale.contains(&c) {
                 return true;
             }
-            if let Some(n) = self.nodes.get(&l) {
-                stack.extend(n.deps.iter().chain(&n.tracked).copied());
-            }
+            stack.extend(self.reads_of(c));
         }
         false
     }
@@ -293,8 +345,9 @@ impl Reactive {
     /// Whether anything was brought up to date, so that what read them
     /// may have read an old value.
     pub(crate) fn need(&mut self, doc: Tree<'_>, leaves: &BTreeSet<Leaf>) -> bool {
-        self.pinned.extend(leaves.iter().filter(|l| self.unneeded.contains(l)));
-        let wake = self.wake_closure(leaves.iter().copied());
+        let cells: Vec<CellId> = leaves.iter().filter_map(|l| self.cell_of(*l)).collect();
+        self.pinned.extend(cells.iter().filter(|c| self.unneeded.contains(c)));
+        let wake = self.wake_closure(cells);
         if wake.is_empty() {
             return false;
         }
@@ -306,33 +359,31 @@ impl Reactive {
     /// Take `from` and every unneeded cell it reads, directly or through
     /// others, out of `unneeded`; the stale ones among them, which the
     /// caller evaluates.
-    fn wake_closure(&mut self, from: impl IntoIterator<Item = Leaf>) -> BTreeSet<Leaf> {
+    fn wake_closure(&mut self, from: impl IntoIterator<Item = CellId>) -> BTreeSet<CellId> {
         self.wake_counted(from).0
     }
 
     /// `wake_closure`, and how many cells it took out of `unneeded`.
-    fn wake_counted(&mut self, from: impl IntoIterator<Item = Leaf>) -> (BTreeSet<Leaf>, usize) {
-        let mut stack: Vec<Leaf> = from.into_iter().collect();
+    fn wake_counted(&mut self, from: impl IntoIterator<Item = CellId>) -> (BTreeSet<CellId>, usize) {
+        let mut stack: Vec<CellId> = from.into_iter().collect();
         let mut wake = BTreeSet::new();
         let mut taken = 0;
-        while let Some(l) = stack.pop() {
-            if !self.unneeded.remove(&l) {
+        while let Some(c) = stack.pop() {
+            if !self.unneeded.remove(&c) {
                 continue;
             }
             taken += 1;
-            if self.stale.remove(&l) {
-                wake.insert(l);
+            if self.stale.remove(&c) {
+                wake.insert(c);
             }
-            if let Some(n) = self.nodes.get(&l) {
-                stack.extend(n.deps.iter().chain(&n.tracked).copied());
-            }
+            stack.extend(self.reads_of(c));
         }
         (wake, taken)
     }
 
     /// Whether a cell on a node `by` names reads a leaf of `nodes`.
     pub(crate) fn read_by(&self, nodes: impl IntoIterator<Item = NodeId>, by: &dyn Fn(NodeId) -> bool) -> bool {
-        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(|d| by(d.node))))
+        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(|d| by(d.node()))))
     }
 
     /// Need every cell again, bringing the stale ones up to date: what a
@@ -358,26 +409,26 @@ impl Reactive {
         let mut left = budget;
         let swept = !self.stale.is_empty();
         while left > 0 && !self.stale.is_empty() {
-            let mut by: Vec<(u32, Leaf)> = self.stale.iter().map(|l| (self.nodes[l].height, *l)).collect();
+            let mut by: Vec<(u32, CellId)> = self.stale.iter().map(|c| (self.height_of(*c), *c)).collect();
             by.sort();
             by.truncate(left);
-            let picked: BTreeSet<Leaf> = by.into_iter().map(|(_, l)| l).collect();
+            let picked: BTreeSet<CellId> = by.into_iter().map(|(_, c)| c).collect();
             let before = self.evaluations;
             // What this round takes out of `unneeded`: the picked cells, and
             // what a tracked read in one of them wakes (an unneeded reader's
             // reads make nothing needed).
             let was = self.unneeded.clone();
-            for l in &picked {
-                self.stale.remove(l);
-                self.unneeded.remove(l);
+            for c in &picked {
+                self.stale.remove(c);
+                self.unneeded.remove(c);
             }
             let dirty = self.readers(&picked);
             self.evaluate(doc, &dirty, &picked);
-            let taken: Vec<Leaf> = was.difference(&self.unneeded).copied().collect();
+            let taken: Vec<CellId> = was.difference(&self.unneeded).copied().collect();
             self.unneeded.extend(taken.iter().copied());
             // Needed after all if a needed cell reads it (a tracked read
             // from outside the round reached it): it and what it reads.
-            let read: Vec<Leaf> = taken.iter().filter(|l| self.dependents.get(l).is_some_and(|ds| ds.iter().any(|d| self.nodes.contains_key(d) && !self.unneeded.contains(d)))).copied().collect();
+            let read: Vec<CellId> = taken.iter().filter(|c| self.readers_of(**c).any(|d| self.exists(d) && !self.unneeded.contains(&d))).copied().collect();
             let wake = self.wake_closure(read);
             if !wake.is_empty() {
                 let dirty = self.readers(&wake);
@@ -396,18 +447,17 @@ impl Reactive {
     /// `from` and every cell that reads it, directly or through others,
     /// not going on through a cell nothing needs (what reads one is
     /// unneeded too, and is reached only if it is evaluated).
-    fn readers(&self, from: &BTreeSet<Leaf>) -> BTreeSet<Leaf> {
+    fn readers(&self, from: &BTreeSet<CellId>) -> BTreeSet<CellId> {
         let mut dirty = from.clone();
-        let mut stack: Vec<Leaf> = from.iter().copied().collect();
-        while let Some(l) = stack.pop() {
-            if self.unneeded.contains(&l) && !from.contains(&l) {
+        let mut stack: Vec<CellId> = from.iter().copied().collect();
+        while let Some(c) = stack.pop() {
+            if self.unneeded.contains(&c) && !from.contains(&c) {
                 continue;
             }
-            if let Some(ds) = self.dependents.get(&l) {
-                for d in ds {
-                    if self.nodes.contains_key(d) && dirty.insert(*d) {
-                        stack.push(*d);
-                    }
+            let ds: Vec<CellId> = self.readers_of(c).collect();
+            for d in ds {
+                if self.exists(d) && dirty.insert(d) {
+                    stack.push(d);
                 }
             }
         }
@@ -583,7 +633,7 @@ impl Reactive {
             let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
             deps.extend(ctx.values().copied());
             for d in &deps {
-                self.dependents.entry(*d).or_default().insert(leaf);
+                self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
             }
             // A boundary's type check reads the instance's arguments
             // (`like(…)`) while it evaluates: those reads are tracked, so an
@@ -612,7 +662,7 @@ impl Reactive {
                 }
             }
         }
-        let all: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
+        let all: BTreeSet<CellId> = self.nodes.keys().copied().map(CellId::Leaf).collect();
         self.evaluate(doc, &all, &all);
     }
 
@@ -694,8 +744,8 @@ impl Reactive {
             }
         }
         let tokens = crate::palette::leaves(doc);
-        let mut primed: BTreeSet<Leaf> = BTreeSet::new();
-        let mut made: Vec<Leaf> = Vec::new();
+        let mut primed: BTreeSet<CellId> = BTreeSet::new();
+        let mut made: Vec<CellId> = Vec::new();
         for leaf in look {
             // A derived signal takes precedence over a stored binding, as the
             // rebuild's later insert does.
@@ -704,8 +754,8 @@ impl Reactive {
                 (Some(old), Some(e)) if **old == e => {}
                 (_, Some(e)) => {
                     self.set_cell(doc, leaf, e, &tokens);
-                    made.push(leaf);
-                    primed.insert(leaf);
+                    made.push(CellId::Leaf(leaf));
+                    primed.insert(CellId::Leaf(leaf));
                 }
                 (Some(_), None) => {
                     self.drop_cell(leaf);
@@ -729,8 +779,8 @@ impl Reactive {
                 if ctx != node.ctx {
                     let expr = (*node.expr).clone();
                     self.set_cell(doc, leaf, expr, &tokens);
-                    made.push(leaf);
-                    primed.insert(leaf);
+                    made.push(CellId::Leaf(leaf));
+                    primed.insert(CellId::Leaf(leaf));
                 }
             }
         }
@@ -748,21 +798,22 @@ impl Reactive {
                     b.tracks = tracks;
                 }
             }
-            primed.extend(own);
-            let readers: Vec<Leaf> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
+            primed.extend(own.into_iter().map(CellId::Leaf));
+            let readers: Vec<CellId> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
             primed.extend(readers);
         }
         primed.extend(self.blocked.iter().copied());
-        primed.retain(|l| self.nodes.contains_key(l));
+        primed.retain(|c| self.exists(*c));
         // A cell that tracks its reads starts again from none, as the
         // rebuild starts every cell: what it reads is found afresh, and a
         // read that now closes a cycle is caught (it would not be if the
         // read were already known).
-        for l in &primed {
+        for c in &primed {
+            let CellId::Leaf(l) = c;
             let old: Vec<Leaf> = self.nodes.get_mut(l).map(|n| std::mem::take(&mut n.tracked).into_iter().collect()).unwrap_or_default();
             for t in old {
                 if let Some(ds) = self.dependents.get_mut(&t) {
-                    ds.remove(l);
+                    ds.remove(c);
                     if ds.is_empty() {
                         self.dependents.remove(&t);
                     }
@@ -787,7 +838,7 @@ impl Reactive {
         let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, tokens).map(|l| (n, l))).collect();
         deps.extend(ctx.values().copied());
         for d in &deps {
-            self.dependents.entry(*d).or_default().insert(leaf);
+            self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
         }
         let tracks = tracks_reads(doc, leaf, &expr);
         let height = 1 + deps.iter().filter_map(|d| self.nodes.get(d).map(|n| n.height)).max().unwrap_or(0);
@@ -797,33 +848,38 @@ impl Reactive {
     /// Remove `leaf`'s cell and its edges.
     fn drop_cell(&mut self, leaf: Leaf) {
         let Some(old) = self.nodes.remove(&leaf) else { return };
+        let cell = CellId::Leaf(leaf);
         for d in old.deps.iter().chain(&old.tracked) {
             if let Some(ds) = self.dependents.get_mut(d) {
-                ds.remove(&leaf);
+                ds.remove(&cell);
                 if ds.is_empty() {
                     self.dependents.remove(d);
                 }
             }
         }
         self.token_readers.remove(&leaf);
-        self.blocked.remove(&leaf);
-        self.unneeded.remove(&leaf);
-        self.stale.remove(&leaf);
-        self.pinned.remove(&leaf);
-        self.candidates.remove(&leaf);
+        self.blocked.remove(&cell);
+        self.unneeded.remove(&cell);
+        self.stale.remove(&cell);
+        self.pinned.remove(&cell);
+        self.candidates.remove(&cell);
     }
 
     /// Raise the readers of `made` until every edge goes upward (spec
     /// §6.3). `false` when that would not end: the caller relaxes the whole
     /// graph instead.
-    fn raise(&mut self, made: &[Leaf]) -> bool {
-        let mut stack: Vec<Leaf> = made.to_vec();
+    fn raise(&mut self, made: &[CellId]) -> bool {
+        let mut stack: Vec<CellId> = made.to_vec();
         let mut budget = self.nodes.len().saturating_mul(2) + 64;
-        while let Some(l) = stack.pop() {
-            let Some(h) = self.nodes.get(&l).map(|n| n.height) else { continue };
-            let readers: Vec<Leaf> = self.dependents.get(&l).into_iter().flatten().copied().collect();
+        while let Some(c) = stack.pop() {
+            if !self.exists(c) {
+                continue;
+            }
+            let h = self.height_of(c);
+            let readers: Vec<CellId> = self.readers_of(c).collect();
             for r in readers {
-                if let Some(rn) = self.nodes.get_mut(&r)
+                let CellId::Leaf(rl) = r;
+                if let Some(rn) = self.nodes.get_mut(&rl)
                     && rn.height <= h
                 {
                     if budget == 0 {
@@ -841,22 +897,26 @@ impl Reactive {
     /// The values of `changed` leaves moved (a constant was set, or the
     /// overlay changed). Re-evaluate what depends on them, in height order.
     pub fn invalidate(&mut self, doc: Tree<'_>, changed: impl IntoIterator<Item = Leaf>) {
-        let mut primed = BTreeSet::new();
-        let mut dirty = BTreeSet::new();
-        let mut stack: Vec<Leaf> = changed.into_iter().collect();
-        for l in &stack {
+        let mut primed: BTreeSet<CellId> = BTreeSet::new();
+        let mut dirty: BTreeSet<CellId> = BTreeSet::new();
+        let changed: Vec<Leaf> = changed.into_iter().collect();
+        for l in &changed {
             if let Some(ds) = self.dependents.get(l) {
                 primed.extend(ds.iter().copied());
             }
         }
-        while let Some(l) = stack.pop() {
-            if let Some(ds) = self.dependents.get(&l) {
-                for d in ds {
-                    // What reads an unneeded cell is unneeded, and primed
-                    // only if that cell is evaluated.
-                    if dirty.insert(*d) && !self.unneeded.contains(d) {
-                        stack.push(*d);
-                    }
+        let mut stack: Vec<CellId> = changed.iter().flat_map(|l| self.dependents.get(l).into_iter().flatten().copied()).collect();
+        for d in &stack {
+            dirty.insert(*d);
+        }
+        stack.retain(|d| !self.unneeded.contains(d));
+        while let Some(c) = stack.pop() {
+            let ds: Vec<CellId> = self.readers_of(c).collect();
+            for d in ds {
+                // What reads an unneeded cell is unneeded, and primed
+                // only if that cell is evaluated.
+                if dirty.insert(d) && !self.unneeded.contains(&d) {
+                    stack.push(d);
                 }
             }
         }
@@ -987,26 +1047,27 @@ impl Reactive {
     /// which is the equality cutoff. A binding with a tracked read may find
     /// it depends on a leaf evaluated after it; when that leaf changes, the
     /// binding is queued again.
-    fn evaluate(&mut self, doc: Tree<'_>, dirty: &BTreeSet<Leaf>, primed: &BTreeSet<Leaf>) {
+    fn evaluate(&mut self, doc: Tree<'_>, dirty: &BTreeSet<CellId>, primed: &BTreeSet<CellId>) {
         self.propagations += 1;
         let mut primed = primed.clone();
-        let mut queue: BTreeSet<(u32, Leaf)> = dirty.iter().map(|l| (self.nodes[l].height, *l)).collect();
+        let mut queue: BTreeSet<(u32, CellId)> = dirty.iter().map(|c| (self.height_of(*c), *c)).collect();
         // Static dependencies never queue a node twice; tracked ones may, a
         // bounded number of times in an acyclic graph. The limit is a guard.
         let mut budget = dirty.len().saturating_mul(4) + 1024;
         // Bindings whose cycle check waited once for the rest of the pass.
-        let mut deferred: BTreeSet<Leaf> = BTreeSet::new();
-        while let Some((_, leaf)) = queue.pop_first() {
-            if !primed.remove(&leaf) {
+        let mut deferred: BTreeSet<CellId> = BTreeSet::new();
+        while let Some((_, cell)) = queue.pop_first() {
+            if !primed.remove(&cell) {
                 continue;
             }
-            if self.unneeded.contains(&leaf) {
-                self.stale.insert(leaf);
+            if self.unneeded.contains(&cell) {
+                self.stale.insert(cell);
                 continue;
             }
+            let CellId::Leaf(leaf) = cell;
             if budget == 0 {
                 self.errors.insert(leaf, "did not settle: tracked reads keep changing each other".into());
-                self.blocked.insert(leaf);
+                self.blocked.insert(cell);
                 continue;
             }
             budget -= 1;
@@ -1030,7 +1091,7 @@ impl Reactive {
                     if tracks {
                         reads.borrow_mut().insert(l);
                     }
-                    if unneeded.contains(&l) {
+                    if unneeded.contains(&CellId::Leaf(l)) {
                         reached.borrow_mut().insert(l);
                     }
                     if errors.contains_key(&l) && !overlay.contains_key(&l) {
@@ -1069,17 +1130,17 @@ impl Reactive {
             let reached = reached.into_inner();
             if !reached.is_empty() {
                 let top = reached.iter().filter_map(|l| self.nodes.get(l).map(|n| n.height)).max().unwrap_or(0);
-                let (wake, taken) = self.wake_counted(reached);
+                let (wake, taken) = self.wake_counted(reached.into_iter().map(CellId::Leaf));
                 if !wake.is_empty() {
                     budget = budget.saturating_add(taken.saturating_mul(4));
-                    for l in wake {
-                        primed.insert(l);
-                        queue.insert((self.nodes[&l].height, l));
+                    for c in wake {
+                        primed.insert(c);
+                        queue.insert((self.height_of(c), c));
                     }
                     // After everything waiting, nested wakes included.
-                    primed.insert(leaf);
+                    primed.insert(cell);
                     let last = queue.last().map_or(0, |(h, _)| *h);
-                    queue.insert((last.max(top).max(self.nodes[&leaf].height) + 1, leaf));
+                    queue.insert((last.max(top).max(self.nodes[&leaf].height) + 1, cell));
                     continue;
                 }
             }
@@ -1096,30 +1157,31 @@ impl Reactive {
                         // waiting in this pass (a wake beneath it): its edges
                         // are those of its last evaluation until it runs.
                         // Read this once more after everything waiting.
-                        if primed.iter().any(|t| *t != leaf && self.nodes.contains_key(t)) && deferred.insert(leaf) {
-                            primed.insert(leaf);
+                        if primed.iter().any(|t| *t != cell && self.exists(*t)) && deferred.insert(cell) {
+                            primed.insert(cell);
                             let last = queue.last().map_or(0, |(h, _)| *h);
-                            queue.insert((last.max(self.nodes[&leaf].height) + 1, leaf));
+                            queue.insert((last.max(self.nodes[&leaf].height) + 1, cell));
                             continue;
                         }
                         result = Err(format!("reads {own} through deref, which depends on this leaf: a cycle"));
-                        self.blocked.insert(leaf);
+                        self.blocked.insert(cell);
                     } else {
                         for gone in old.difference(&tracked) {
                             if let Some(ds) = self.dependents.get_mut(gone) {
-                                ds.remove(&leaf);
+                                ds.remove(&cell);
                             }
                             // It may have been needed only for this read.
-                            if self.candidates.contains(gone) && !self.unneeded.contains(gone) {
+                            let g = CellId::Leaf(*gone);
+                            if self.candidates.contains(&g) && !self.unneeded.contains(&g) {
                                 self.relaxed = true;
                             }
                         }
                         for new in tracked.difference(&old) {
-                            self.dependents.entry(*new).or_default().insert(leaf);
+                            self.dependents.entry(*new).or_default().insert(cell);
                         }
                         // A newly read binding still waiting in this pass:
                         // read it again once it has been evaluated.
-                        let waiting = tracked.difference(&old).any(|t| primed.contains(t) && self.nodes.contains_key(t));
+                        let waiting = tracked.difference(&old).any(|t| primed.contains(&CellId::Leaf(*t)) && self.nodes.contains_key(t));
                         // Heights move only when it now reads something
                         // at or above its own.
                         let need = 1 + tracked.iter().filter_map(|t| self.nodes.get(t).map(|n| n.height)).max().unwrap_or(0);
@@ -1129,8 +1191,8 @@ impl Reactive {
                             self.compute_heights();
                         }
                         if waiting {
-                            primed.insert(leaf);
-                            queue.insert((self.nodes[&leaf].height, leaf));
+                            primed.insert(cell);
+                            queue.insert((self.nodes[&leaf].height, cell));
                             continue;
                         }
                     }
@@ -1140,7 +1202,7 @@ impl Reactive {
             // or stops failing (a recovery to the same value still clears
             // their errors).
             if result.is_ok() {
-                self.blocked.remove(&leaf);
+                self.blocked.remove(&cell);
             }
             let changed = match result {
                 Ok(v) => {
@@ -1157,12 +1219,13 @@ impl Reactive {
                 // on …, which failed: <why>").
                 Err(e) => self.errors.insert(leaf, e.clone()).as_ref() != Some(&e),
             };
-            if changed && let Some(ds) = self.dependents.get(&leaf) {
+            if changed {
+                let ds: Vec<CellId> = self.readers_of(cell).collect();
                 for d in ds {
-                    primed.insert(*d);
+                    primed.insert(d);
                     // A reader by a tracked read may already have run.
-                    if let Some(n) = self.nodes.get(d) {
-                        queue.insert((n.height, *d));
+                    if self.exists(d) {
+                        queue.insert((self.height_of(d), d));
                     }
                 }
             }

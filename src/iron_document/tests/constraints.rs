@@ -650,3 +650,66 @@ fn a_live_solve_is_written_by_the_next_transaction() {
     store.apply(tx("rename", vec![Op::Set { id: n["g"], path: path("name.text"), slot: Slot::Const(Value::Str("renamed".into())) }])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(store.tree().leaf(n["a"], x).and_then(Slot::constant), Some(&Value::Number(5.0)));
 }
+
+/// As above, with each operand in a wrapper group and the wrappers swapped
+/// between the parents: the operands are not touched, but their ancestry
+/// is, and the cluster is solved again (RE-5.5's watchers look again on a
+/// reparent).
+#[test]
+fn swapping_wrapped_operands_between_parents_is_solved_again() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("sheet").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(r#"<group id="$g0" x="0" y="0"><group id="$w0"><rect id="$a" x="20" y="0" w="5" h="5"/></group></group><group id="$g1" x="20" y="0"><group id="$w1"><rect id="$b" x="0" y="0" w="5" h="5"/></group></group><constraint id="$c" kind="coincident" value="0"/><constraint id="$fa" kind="fix" value="0"/><constraint id="$fb" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let r = store.authored().next_relation_ids(4);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(r[0], n["c"], n["a"], "a"), constrains(r[1], n["c"], n["b"], "b"), constrains(r[2], n["fa"], n["a"], "a"), constrains(r[3], n["fb"], n["b"], "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    let swap = store.apply(tx("swap", vec![Op::Reparent { id: n["w0"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["w1"], parent: Some(n["g0"]), order: OrderKey::first() }]));
+    assert!(swap.is_err(), "coincident operands 40 apart, both fixed: {swap:?}");
+}
+
+/// A constraint's value read through `deref`, retargeted onto a variable of
+/// its own cluster at the same value, is a cycle: refused, as a binding
+/// reading and feeding one cluster is.
+#[test]
+fn a_deref_retargeted_onto_its_own_clusters_variable_is_a_cycle() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("sheet").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(r#"<rect id="$a" x="0" y="0" w="5" h="5"/><rect id="$b" x="10" y="0" w="5" h="5"/><rect id="$o" x="10" y="50" w="5" h="5"/><let id="$ref" value="0"/><constraint id="$d" kind="distance" value="{= deref($ref.let.value, 'transform2d.x', 10)}"/><constraint id="$fa" kind="fix" value="0"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let r = store.authored().next_relation_ids(3);
+    store.apply(tx("tie", built.ops.into_iter().chain([constrains(r[0], n["d"], n["a"], "a"), constrains(r[1], n["d"], n["b"], "b"), constrains(r[2], n["fa"], n["a"], "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("outside", vec![Op::Set { id: n["ref"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["o"])) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    // b's x is 10, as o's is: the value does not move, but what it reads does.
+    let inside = store.apply(tx("inside", vec![Op::Set { id: n["ref"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["b"])) }]));
+    assert!(inside.is_err(), "the distance reads b's x, a variable of its own cluster: {inside:?}");
+}
+
+/// RE-5.5's natives do no work where nothing of theirs changed: an edit
+/// nothing constrained reads runs neither the grouping, nor validation, nor
+/// any cluster's watcher.
+#[test]
+fn an_unrelated_edit_runs_no_constraint_native() {
+    let (mut store, n) = two_parents();
+    let comp = store.tree().live(n["g0"]).and_then(|x| x.parent).unwrap();
+    let lone = store.authored().next_id();
+    let mut s = facet::Size::default();
+    s.w = Slot::Const(Value::Number(5.0));
+    s.h = Slot::Const(Value::Number(5.0));
+    store.apply(tx("lone", vec![Op::Create { id: lone, ty: ty("rect"), parent: Some(comp), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), s.wrap()] }])).unwrap();
+    let runs = |s: &Store| {
+        let r = s.reactive();
+        [graph::NativeKey::Clusters, graph::NativeKey::Validate].map(|k| r.runs_of(k))
+    };
+    let cluster = graph::NativeKey::Cluster(store.clusters().list[0].constraints.iter().map(|c| c.id).min().unwrap());
+    let (before, cluster_before) = (runs(&store), store.reactive().runs_of(cluster));
+    store.apply(tx("move", vec![Op::Set { id: lone, path: path("transform2d.x"), slot: Slot::Const(Value::Number(30.0)) }])).unwrap();
+    assert_eq!(runs(&store), before, "grouping and validation did not run");
+    assert_eq!(store.reactive().runs_of(cluster), cluster_before, "nor the cluster's watcher");
+    assert!(before.iter().all(|r| r.is_some()), "the natives exist: {before:?}");
+}

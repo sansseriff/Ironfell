@@ -3381,6 +3381,33 @@ outputs in a solved layer. `resolve_clusters_live`, `rebuild_clusters`, `Posed` 
   Found and fixed: grouping missed a constraint's `enabled` and `kind`, read from the
   slot (`copies_apart::disabling_a_solved_copys_constraint_lets_it_go`).
 
+**Council on RE-5.5 (2026-11-21): Opus 5.5 6.5/10, Sol 6.2 5/10.** Fixed, with tests
+that fail before (three checked):
+- **Context edits that decide a mate** (both). The contexts resolver reads notation,
+  inline styles and context names from the document. A constant set on a
+  `composition`, `template`, `use`, `context`, `affords` or `context_def` leaf now primes
+  grouping and validation (`prime_grouping`), and so does a session link or unlink
+  (Sol). Test: `anchors::plugging_two_rigid_ports_mates_their_parts` now parts a mate
+  with a style and makes it again.
+- **A `deref` retargeted at the same value** (both): a binding whose tracked reads
+  change primes grouping, which uses them for the solve order and its cycles. Test:
+  `a_deref_retargeted_onto_its_own_clusters_variable_is_a_cycle`.
+- **Wrappers swapped between parents** (Sol): any reparent primes every cluster's
+  watcher. Test: `swapping_wrapped_operands_between_parents_is_solved_again`.
+- **Grouping on every frame of a mated drag** (Opus): a mate's frame in its body's
+  space is the local transforms between them, not the body's world chain.
+- **Cost:** `rebuild_clusters` takes the grouping again only when its native ran
+  (`grouped_at`), and `post_apply` syncs the cluster watchers only when the grouping
+  changed.
+- A cluster's watcher reads `size` and `radius` whether its facet is there or not.
+- Test: `an_unrelated_edit_runs_no_constraint_native` (run counts, `Reactive::runs_of`).
+
+**Not fixed, recorded:**
+- A live solve uses the grouping as of the last transaction, as the old pipeline
+  did (Sol 5).
+- A context's `for` selector reading an arbitrary leaf is not tracked.
+- `solve_cost` after: 100 pendulums, drag step 0.155 ms, unrelated edit 0.84 ms.
+
 **RE-5.6: phase end.** As before.
 
 **Not in this plan:**

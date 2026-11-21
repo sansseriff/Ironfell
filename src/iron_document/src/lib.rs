@@ -338,6 +338,10 @@ struct Saved {
     /// cluster that would read the same is not solved again (§9.4, A6).
     posed: BTreeMap<NodeId, solve::Posed>,
     committed: BTreeSet<NodeId>,
+    /// The grouping native's run count when its result was last taken
+    /// (`grouped`), and the error it gave then.
+    grouped_at: Option<u64>,
+    grouping_error: Option<String>,
     geometry: geom::Revisions,
     repeats: expand::Items,
     item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
@@ -364,6 +368,8 @@ impl Saved {
             clusters: s.clusters.clone(),
             posed: s.posed.clone(),
             committed: s.committed.clone(),
+            grouped_at: s.grouped_at,
+            grouping_error: s.grouping_error.clone(),
             geometry: s.geometry.clone(),
             repeats: s.repeats.clone(),
             item_memo: s.item_memo.clone(),
@@ -389,6 +395,8 @@ impl Saved {
         s.clusters = self.clusters;
         s.posed = self.posed;
         s.committed = self.committed;
+        s.grouped_at = self.grouped_at;
+        s.grouping_error = self.grouping_error;
         s.geometry = self.geometry;
         s.repeats = self.repeats;
         s.item_memo = self.item_memo;
@@ -447,6 +455,10 @@ pub struct StoreCore {
     /// cluster that would read the same is not solved again (§9.4, A6).
     posed: BTreeMap<NodeId, solve::Posed>,
     committed: BTreeSet<NodeId>,
+    /// The grouping native's run count when its result was last taken
+    /// (`grouped`), and the error it gave then.
+    grouped_at: Option<u64>,
+    grouping_error: Option<String>,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -647,6 +659,8 @@ impl StoreCore {
             clusters: self.clusters.clone(),
             posed: self.posed.clone(),
             committed: self.committed.clone(),
+            grouped_at: self.grouped_at,
+            grouping_error: self.grouping_error.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
@@ -728,6 +742,7 @@ impl StoreCore {
         // their parents (the inverse ops name the old ones): what a layout
         // whose subtree holds one must lay out again.
         let mut shaped: BTreeSet<NodeId> = BTreeSet::new();
+        let mut reparented = false;
         let mut rescope = false;
         let mut rederive = false;
         let doc = Tree::of(&self.docs);
@@ -744,7 +759,12 @@ impl StoreCore {
         };
         for op in ops {
             match op {
-                Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
+                Op::Create { id, parent, .. } => {
+                    shaped.insert(*id);
+                    shaped.extend(*parent);
+                }
+                Op::Reparent { id, parent, .. } => {
+                    reparented = true;
                     shaped.insert(*id);
                     shaped.extend(*parent);
                 }
@@ -823,8 +843,14 @@ impl StoreCore {
             self.sync_repeats(false);
             self.prime_layout(&shaped);
             // Constraints and their operands are structure to the grouping
-            // and to validation.
+            // and to validation; a reparent can move an operand's ancestry
+            // without touching it (a wrapper swapped), so every cluster
+            // looks again.
             self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+            if reparented {
+                let keys: Vec<graph::NativeKey> = self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect();
+                self.reactive.prime_natives(keys);
+            }
         }
         self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
     }
@@ -940,6 +966,8 @@ impl StoreCore {
             clusters: Default::default(),
             posed: BTreeMap::new(),
             committed: BTreeSet::new(),
+            grouped_at: None,
+            grouping_error: None,
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -1013,6 +1041,13 @@ impl StoreCore {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
         if !self.old_pipeline {
+            if self.reactive.native(graph::NativeKey::Clusters).is_some() {
+                // Nothing to take when the grouping did not run since.
+                self.reactive.flush(Tree::of(&self.docs));
+                if self.reactive.runs_of(graph::NativeKey::Clusters) == self.grouped_at {
+                    return;
+                }
+            }
             if let Ok(c) = self.grouped() {
                 self.owners.hold(c.copies());
                 self.clusters = c;
@@ -1038,10 +1073,25 @@ impl StoreCore {
         }
         // A claim that came or went on an operand waits to run it.
         self.reactive.flush(Tree::of(&self.docs));
-        match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<Result<solve::Clusters, String>>()) {
+        // Its result is taken again only when it ran since it was last taken.
+        let runs = self.reactive.runs_of(graph::NativeKey::Clusters);
+        if runs.is_some() && runs == self.grouped_at {
+            return match &self.grouping_error {
+                Some(e) => Err(e.clone()),
+                None => Ok(self.clusters.clone()),
+            };
+        }
+        let result = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<Result<solve::Clusters, String>>()) {
             Some(r) => r.clone(),
             None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
+        };
+        self.grouped_at = runs;
+        if let Err(e) = &result {
+            self.grouping_error = Some(e.clone());
+        } else {
+            self.grouping_error = None;
         }
+        result
     }
 
     /// Whether the constraints are well formed: in native mode the
@@ -2032,6 +2082,7 @@ impl StoreCore {
             self.regraph(ops.iter().chain(&undo));
         } else {
             self.prime_reorders(ops.iter());
+            self.prime_grouping(ops.iter());
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
             if !changed.is_empty() {
                 // Report each written leaf as changed, as a preview does, so
@@ -3560,6 +3611,24 @@ impl StoreCore {
         self.glide_specs();
     }
 
+    /// What decides whether a plugged pair mates, read from the document by
+    /// the contexts resolver (a notation, an inline style, a context's name),
+    /// and a session link or unlink: grouping and validation look again
+    /// (RE-5.5).
+    fn prime_grouping<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        if self.old_pipeline {
+            return;
+        }
+        let touches = |op: &Op| match op {
+            Op::Set { path, .. } => matches!(path.facet, FacetKind::Composition | FacetKind::Template | FacetKind::Use | FacetKind::ContextOf | FacetKind::Affords | FacetKind::ContextDef),
+            Op::Link { .. } | Op::Unlink { .. } => true,
+            _ => false,
+        };
+        if ops.into_iter().any(touches) {
+            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+        }
+    }
+
     /// A reorder that moved nothing else (not structural to the graph)
     /// still changes how its parent lays out.
     fn prime_reorders<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
@@ -3774,6 +3843,7 @@ impl StoreCore {
                 })
                 .collect();
             self.prime_reorders(tx.ops.iter().chain(expanded.iter()));
+            self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
             self.reactive.invalidate(Tree::of(&self.docs), changed);
             // A set on a clip's timing, or a link, changes the sample too.
             // Cheap enough to do unconditionally: clips are few.
@@ -4089,8 +4159,9 @@ impl StoreCore {
         let now = clusters.copies();
         self.release(tx, held, &now, last).map_err(|e| vec![e])?;
         self.owners.hold(now);
+        let regrouped = self.clusters != clusters;
         self.clusters = clusters.clone();
-        if !self.old_pipeline {
+        if !self.old_pipeline && regrouped {
             self.sync_cluster_natives();
         }
         if clusters.list.is_empty() {

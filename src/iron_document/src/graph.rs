@@ -1681,6 +1681,11 @@ impl Reactive {
                         for new in tracked.difference(&old) {
                             self.dependents.entry(*new).or_default().insert(cell);
                         }
+                        // What a binding reads decides the solve order and
+                        // its cycles (`solve::clusters`): grouping looks again.
+                        if self.natives.contains_key(&NativeKey::Clusters) {
+                            self.pending.insert(CellId::Native(NativeKey::Clusters));
+                        }
                         // A newly read binding still waiting in this pass:
                         // read it again once it has been evaluated.
                         let waiting = tracked.difference(&old).filter_map(|t| self.cell_of(*t)).any(|t| primed.contains(&t));
@@ -2063,6 +2068,11 @@ impl Reactive {
     /// tests use it to check that a change runs only what it reaches.
     pub fn native_runs(&self, leaf: Leaf) -> Option<u64> {
         self.owned.get(&leaf).and_then(|k| self.natives.get(k)).map(|n| n.runs)
+    }
+
+    /// How many times native `k` has run.
+    pub fn runs_of(&self, k: NativeKey) -> Option<u64> {
+        self.natives.get(&k).map(|n| n.runs)
     }
 
     /// A layout native's targets as drawn: transitions started for the nodes

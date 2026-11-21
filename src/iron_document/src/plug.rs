@@ -285,8 +285,20 @@ pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &
         }
         let operand = |role: &'static str, x: &Plugged| -> Option<Operand> {
             doc.facet(x.body, FacetKind::Transform2d)?;
-            // The anchor's frame in its body's space.
-            let m = geom::world_affine(doc, read, x.body).inverse()?.then(geom::world_affine(doc, read, x.anchor));
+            // The anchor's frame in its body's space: the local transforms
+            // between them, not the body's world chain (which a solve moves,
+            // and which a native grouping would then follow on every frame).
+            let mut chain = Vec::new();
+            let mut cur = Some(x.anchor);
+            while let Some(n) = cur.filter(|&n| n != x.body) {
+                chain.push(n);
+                cur = doc.live(n).and_then(|l| l.parent);
+            }
+            let m = if cur == Some(x.body) {
+                chain.iter().rev().fold(geom::Affine2::IDENTITY, |acc, &n| acc.then(geom::local_affine(doc, read, n)))
+            } else {
+                geom::world_affine(doc, read, x.body).inverse()?.then(geom::world_affine(doc, read, x.anchor))
+            };
             let [ma, mb, ..] = m.0;
             Some(Operand { role, node: x.body, anchor: m.apply([0.0, 0.0]), at: None, turn: mb.atan2(ma) })
         };

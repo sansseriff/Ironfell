@@ -654,6 +654,12 @@ impl crate::graph::Native for ClusterNative {
     }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         let _ = self.cluster.posed(cx.tree(), &|l| cx.read(l));
+        // What scales a rotation, whether or not its facet is there yet.
+        for &n in &self.cluster.nodes {
+            for p in ["size.w", "size.h", "radius.rx", "radius.ry"] {
+                let _ = cx.read(Leaf { node: n, path: p.parse().expect("declared leaf") });
+            }
+        }
         Ok(BTreeMap::new())
     }
 }

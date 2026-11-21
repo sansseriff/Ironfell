@@ -244,6 +244,7 @@ fn plugging_two_rigid_ports_mates_their_parts() {
     assert!((facing.abs() - std::f64::consts::PI).abs() < 1e-6, "{facing}");
     assert!(store.clusters().containing(socket_use).is_some(), "mated");
 
+
     // Mated: dragging either part moves the other.
     let h = store.begin_drag(jack_use, [0.0, 0.0]);
     store.drag_to(&h, [130.0, 200.0]);
@@ -266,6 +267,22 @@ fn plugging_two_rigid_ports_mates_their_parts() {
     }
     assert_eq!(world(&store, socket_anchor), (400.0, 5.0));
     assert!(store.clusters().containing(socket_use).is_none());
+    // Plugged again (a redo): mated.
+    store.redo(1).unwrap().unwrap();
+    assert!(store.clusters().containing(socket_use).is_some(), "plugged again");
+    // A style that says the plug does not mate, set on the socket's picture
+    // for its parts, parts them; set back, they mate again (RE-5.5: what the
+    // contexts resolver reads from the document reaches the grouping).
+    let mut affords = facet::Affords::default();
+    affords.scope = Slot::Const(Value::Enum("children".into()));
+    store.apply(tx("affords", vec![Op::AddFacet { id: socket_use, facet: affords.wrap() }])).unwrap();
+    assert!(store.clusters().containing(socket_use).is_some(), "still mated");
+    let style = |v: &str| tx("style", vec![Op::Set { id: socket_use, path: path("affords.style"), slot: Slot::Const(Value::Str(v.into())) }]);
+    store.apply(style("plug.mate: no")).unwrap();
+    assert!(store.clusters().containing(socket_use).is_none(), "the style parts them");
+    store.apply(style("")).unwrap();
+    assert!(store.clusters().containing(socket_use).is_some(), "mated again");
+
 }
 
 #[test]

@@ -694,3 +694,12 @@ and falling through); `[B, D]` against `[C, ∞)`; the instance override against
 definition's hover pose; a class against a nesting patch; and §5's "Apply from B on"
 with B's own patch present.
 
+### 11.6 What PT-3 found (2026-11-21)
+
+`src/iron_patch` tried the repairs above (plans/handoff-patches.md, PT-3 "As done"):
+§11.1's per-axis keys are a total order that extends inclusion; strength must be
+**stored**, given from those keys when a patch is made, since derived strength (and
+widening by moving entries) changes points a region edit keeps; §11.2's drag obeys
+the lens laws; Sol's merge counterexample is refused. Still a note: PT-4a writes the
+spec.
+

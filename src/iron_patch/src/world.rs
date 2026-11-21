@@ -1,0 +1,264 @@
+//! A world: the axes, the base, the patches, and the value at a point
+//! (`value(x) = base ⊕ p₁ ⊕ p₂ ⊕ …`, the note's §2.1).
+
+use crate::axis::{Point, Space};
+use crate::patch::{Doc, Field, HIDDEN, Key, Node, PRESENT, Patch, PatchId, Strength, compare};
+use crate::region::{Product, Region};
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct World {
+    pub space: Space,
+    pub doc: Doc,
+    /// In storage order, which decides nothing (determinism, §11.5 item 2).
+    pub patches: Vec<Patch>,
+    pub strength: Strength,
+}
+
+/// Everything at one point: each key's value, `None` where its node does
+/// not exist. `PRESENT` reads 1 where the node exists and `HIDDEN` 1 where
+/// it is not shown, cascades applied.
+pub type State = BTreeMap<Key, Option<i64>>;
+
+impl World {
+    pub fn new(space: Space, doc: Doc, strength: Strength) -> Self {
+        World {
+            space,
+            doc,
+            patches: Vec::new(),
+            strength,
+        }
+    }
+
+    pub fn patch(&self, id: PatchId) -> Option<&Patch> {
+        self.patches.iter().find(|p| p.id == id)
+    }
+
+    pub fn cmp(&self, p: &Patch, q: &Patch) -> Ordering {
+        compare(&self.space, self.strength, p, q)
+    }
+
+    /// The strongest patch that sets `key` at `point`.
+    pub fn winner(&self, point: &Point, key: Key) -> Option<&Patch> {
+        let mut best: Option<&Patch> = None;
+        for p in &self.patches {
+            if p.entries.contains_key(&key)
+                && p.region.contains(&self.space, point)
+                && best.is_none_or(|b| self.cmp(p, b) == Ordering::Greater)
+            {
+                best = Some(p);
+            }
+        }
+        best
+    }
+
+    /// `key` at `point` before structure: the winner's entry, else the base.
+    pub fn raw(&self, point: &Point, key: Key) -> Option<i64> {
+        match self.winner(point, key) {
+            Some(p) => p.entries.get(&key).copied(),
+            None => self.doc.base.get(&key).copied(),
+        }
+    }
+
+    /// Whether `node` exists at `point`: presence is resolved before any
+    /// other field (§11.1).
+    pub fn present(&self, point: &Point, node: Node) -> bool {
+        self.raw(
+            point,
+            Key {
+                node,
+                field: PRESENT,
+            },
+        ) == Some(1)
+            && self
+                .doc
+                .parent
+                .get(&node)
+                .copied()
+                .flatten()
+                .is_none_or(|p| self.present(point, p))
+    }
+
+    pub fn shown(&self, point: &Point, node: Node) -> bool {
+        self.present(point, node)
+            && self.raw(
+                point,
+                Key {
+                    node,
+                    field: HIDDEN,
+                },
+            ) != Some(1)
+            && self
+                .doc
+                .parent
+                .get(&node)
+                .copied()
+                .flatten()
+                .is_none_or(|p| self.shown(point, p))
+    }
+
+    /// `key` at `point`: `None` where its node does not exist, so an entry
+    /// on an absent node does nothing (law 6).
+    pub fn value(&self, point: &Point, key: Key) -> Option<i64> {
+        if !self.present(point, key.node) {
+            return None;
+        }
+        match key.field {
+            PRESENT => Some(1),
+            HIDDEN => Some(if self.shown(point, key.node) { 0 } else { 1 }),
+            _ => self.raw(point, key),
+        }
+    }
+
+    /// Every key any patch or the base names, and every node's presence and
+    /// hiding.
+    pub fn keys(&self) -> BTreeSet<Key> {
+        let mut out: BTreeSet<Key> = self.doc.base.keys().copied().collect();
+        out.extend(self.patches.iter().flat_map(|p| p.entries.keys().copied()));
+        for &node in self.doc.parent.keys() {
+            out.insert(Key {
+                node,
+                field: PRESENT,
+            });
+            out.insert(Key {
+                node,
+                field: HIDDEN,
+            });
+        }
+        out
+    }
+
+    pub fn state(&self, point: &Point) -> State {
+        self.keys()
+            .into_iter()
+            .map(|k| (k, self.value(point, k)))
+            .collect()
+    }
+
+    /// Every point's state: what the properties compare.
+    pub fn snapshot(&self) -> Vec<(Point, State)> {
+        self.space
+            .points()
+            .into_iter()
+            .map(|p| {
+                let s = self.state(&p);
+                (p, s)
+            })
+            .collect()
+    }
+
+    /// Where patch `id`'s entry for `key` is the one that applies: its
+    /// region minus every stronger patch's that sets `key` (the note's §4.2,
+    /// and law 3's real blast radius, §11.1). Symbolic.
+    pub fn winning(&self, id: PatchId, key: Key) -> Region {
+        let Some(p) = self.patch(id).filter(|p| p.entries.contains_key(&key)) else {
+            return Region::default();
+        };
+        let mut out = Region(vec![p.region.clone()]);
+        for q in &self.patches {
+            if q.id != p.id && q.entries.contains_key(&key) && self.cmp(q, p) == Ordering::Greater {
+                out = out.minus(&q.region, &self.space);
+            }
+        }
+        out
+    }
+
+    /// The entries that do nothing anywhere they would win: their node is
+    /// absent at every point of a non-empty winning region (§11.1: one
+    /// absent at some points only is normal, and not listed).
+    pub fn stale(&self) -> Vec<(PatchId, Key)> {
+        let mut out = Vec::new();
+        for p in &self.patches {
+            for &key in p.entries.keys() {
+                let points = self.winning(p.id, key).points(&self.space);
+                if !points.is_empty() && points.iter().all(|x| !self.present(x, key.node)) {
+                    out.push((p.id, key));
+                }
+            }
+        }
+        out
+    }
+
+    /// Pairs where a patch whose region is strictly inside another's, and
+    /// that sets a key the other sets, is the weaker: possible under
+    /// `Stored` after a region edit, and a lint (§11.1).
+    pub fn contradictions(&self) -> Vec<(PatchId, PatchId)> {
+        let mut out = Vec::new();
+        for p in &self.patches {
+            for q in &self.patches {
+                let inside = p.region.subset(&q.region, &self.space)
+                    && !q.region.subset(&p.region, &self.space);
+                let shared = p.entries.keys().any(|k| q.entries.contains_key(k));
+                if p.id != q.id
+                    && inside
+                    && shared
+                    && !p.region.is_empty(&self.space)
+                    && self.cmp(p, q) == Ordering::Less
+                {
+                    out.push((p.id, q.id));
+                }
+            }
+        }
+        out
+    }
+
+    /// An id no patch has.
+    pub fn fresh_id(&self) -> PatchId {
+        PatchId(self.patches.iter().map(|p| p.id.0 + 1).max().unwrap_or(0))
+    }
+
+    /// A rank for a new patch on `region`: just above every patch whose
+    /// region is no more specific (`AxisKeys`' keys), and below the next
+    /// rank above those. A newer patch on an equal region is stronger.
+    pub fn default_rank(&self, region: &Product) -> f64 {
+        let mine = crate::patch::keys(&self.space, region);
+        let below = self
+            .patches
+            .iter()
+            .filter(|p| crate::patch::keys(&self.space, &p.region) <= mine)
+            .map(|p| p.rank)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if below == f64::NEG_INFINITY {
+            return self
+                .patches
+                .iter()
+                .map(|p| p.rank)
+                .fold(f64::INFINITY, f64::min)
+                .min(1.0)
+                - 1.0;
+        }
+        self.rank_above(below)
+    }
+
+    /// A rank between `r` and the next rank above it.
+    pub fn rank_above(&self, r: f64) -> f64 {
+        let next = self
+            .patches
+            .iter()
+            .map(|p| p.rank)
+            .filter(|&x| x > r)
+            .fold(f64::INFINITY, f64::min);
+        if next == f64::INFINITY {
+            r + 1.0
+        } else {
+            (r + next) / 2.0
+        }
+    }
+
+    /// A new patch, not yet added: `Op::Add` adds it.
+    pub fn make(&self, region: Product, entries: BTreeMap<Key, i64>) -> Patch {
+        Patch {
+            id: self.fresh_id(),
+            rank: self.default_rank(&region),
+            region,
+            entries,
+            writable: true,
+        }
+    }
+}
+
+/// The fields the properties edit; `PRESENT` and `HIDDEN` are structure.
+pub fn is_structure(field: Field) -> bool {
+    field == PRESENT || field == HIDDEN
+}

@@ -54,7 +54,7 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 |---|---|---|---|---|
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
-| PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | |
+| PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
 | PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | |
 | PT-4b | The storage-and-query spec | Design | PT-4a written | |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
@@ -194,6 +194,53 @@ PT-3 settles two open items: **law 5's axis order** and **structure in patches**
   - the plot's `vis` machine;
   - a three-slide deck where B, C and D build on A;
   - a two-level instance nesting with outermost-wins.
+
+**As done (2026-11-21).** `src/iron_patch`, no dependencies, about 900 lines, its tests
+in 5 s (`[profile.dev.package.iron_patch]` builds it at opt-level 2):
+- `axis`: ordered, unordered and path axes; values by stable id, a deleted value kept
+  as a tombstone in its place; points.
+- `region`: per-axis selections (intervals with open and closed ends, sets, cofinite
+  sets, suffix patterns), a patch's region as one product, unions as query answers;
+  intersection, difference, inclusion, all symbolic.
+- `patch`: patches with a stored rank, the base as a fixed tree, presence and
+  hiding as fields, and three strength rules: `AsWritten` (laws 4 and 5 as the note
+  writes them), `AxisKeys` (derived from the regions) and `Stored`.
+- `world`: the value at a point, winning regions, the stale listing, the inclusion
+  lint, a new patch's default rank.
+- `edit`: edit, region edits, widening by moving entries, split, merge (refused
+  where it would change a value), reorder and the drag, as ops with inverses.
+
+`tests/laws.rs`: 17 properties against enumerating every point, 10,000 scripts each.
+`tests/examples.rs`: 10 worked examples, the three above and seven from the note's
+§11.5. **What it settled:**
+- **Law 5.** The laws as written cycle (found at seed 1554). Per-axis keys (an ordered
+  axis: later first value, then earlier last; a path axis: trailing steps every
+  selected instance shares; then fewer values), compared in the declared axis order,
+  then rank, are a strict total order that extends inclusion over 10,000 scripts.
+  The axis order decides an instance override against a definition's hover pose
+  (instances first: the instance wins).
+- **Strength is stored.** Derived strength changes points a region edit keeps (seed 53:
+  narrowing a patch from everywhere to `[1, 4)` changed slide 1), and so does widening
+  by moving entries, under either rule. A stored rank, given from the axis keys when
+  a patch is made, keeps region edits local over 10,000 scripts, and agrees with
+  inclusion until a region edit; `World::contradictions` is the lint for after.
+- **The drag** (note §11.2) obeys PutGet, GetPut and PutPut, changes nothing outside
+  its edit region, and never writes a read-only patch, under both total rules.
+- **Structure:** presence is a field resolved before the rest; hiding cascades; an
+  entry on an absent node is inert, and listed as stale only when absent wherever it
+  wins. Axis values are tombstoned, so an interval keeps its place.
+- **Merge** is refused where a patch between the two in strength sets what the weaker
+  sets (Sol's counterexample, as a test).
+- **For PT-4a to decide:** a class whose members all end in the same step ties with
+  that step's pattern on the keys, and the rank decides (the newer); whether that is a
+  lint.
+
+**Not modelled, and why:** continuous axes (intervals with open ends are built, so
+real positions change no rule); values that are functions of the coordinates (a
+clip's); patches that set coordinates (not fields here, so refused by construction);
+relative regions such as "each instance in its own state" (note §11.4, open); the cost
+counts of §11.5 item 12 (the crate enumerates by design; PT-5's index is where cost is
+measured).
 
 ### PT-4a: the algebra spec
 

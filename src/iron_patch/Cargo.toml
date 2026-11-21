@@ -1,0 +1,9 @@
+[package]
+name = "iron_patch"
+version = "0.1.0"
+edition = "2024"
+description = "The patch algebra as a pure model (plans/handoff-patches.md PT-3): axes, regions, patches, strength, the edit operations, tested against brute-force enumeration. Not used by the app."
+
+# No dependencies, by design: a model the specs (PT-4a) are written from and
+# PT-5 checks `iron_document` against. It knows nothing about documents.
+[dependencies]

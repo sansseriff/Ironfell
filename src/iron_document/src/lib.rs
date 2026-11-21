@@ -252,10 +252,11 @@ pub fn settle_scan_count() -> u64 {
 const LAYOUT_ROUNDS: usize = 4;
 
 /// How many times one repeat's items may change in one `resolve_physics`
-/// before they are a problem, settling no further (decision D6): a repeat
-/// that reads its own items' layout would otherwise grow to `repeat.max`,
-/// since layout runs in the settle's own passes (handoff §4.10, RE-5.6). One
-/// that reads another's changes once per repeat in the chain.
+/// before the store asks whether what it repeats over reads its own items.
+/// One that does never rests, and would grow to `repeat.max`, since layout
+/// runs in the settle's own passes (handoff §4.10, RE-5.6): its items are
+/// held, and it is a problem (decision D6). One that reads a chain of
+/// others changes once per link, and goes on.
 const REPEAT_CHANGES: usize = LAYOUT_ROUNDS + 1;
 
 /// Facets whose nodes' cells the store reads besides drawing them, so they
@@ -341,8 +342,8 @@ pub struct Advanced {
 struct Saved {
     reactive: graph::Reactive,
     clusters: solve::Clusters,
-    /// What each cluster's last converged solve could read, by its key: a
-    /// cluster that would read the same is not solved again (§9.4, A6).
+    /// The clusters, by key, whose last solve converged and whose change
+    /// native has not run since: not solved again (§9.4, A6).
     committed: BTreeSet<NodeId>,
     /// The grouping native's run count when its result was last taken
     /// (`grouped`), and the error it gave then.
@@ -449,8 +450,8 @@ pub struct StoreCore {
     time_errors: std::collections::BTreeMap<NodeId, String>,
     /// Constraint clusters, rebuilt after every transaction.
     clusters: solve::Clusters,
-    /// What each cluster's last converged solve could read, by its key: a
-    /// cluster that would read the same is not solved again (§9.4, A6).
+    /// The clusters, by key, whose last solve converged and whose change
+    /// native has not run since: not solved again (§9.4, A6).
     committed: BTreeSet<NodeId>,
     /// The grouping native's run count when its result was last taken
     /// (`grouped`), and the error it gave then.
@@ -465,7 +466,6 @@ pub struct StoreCore {
     /// the document's version alone.
     session_version: u64,
     machines_unsettled: Option<expand::Problem>,
-    /// Each table's grid from the last layout (`layout.rs`, `table.rs`).
     /// The built-in contexts with this document's `context` nodes over
     /// them, and the markups they were made from; `None` while it has none.
     contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
@@ -555,6 +555,10 @@ pub struct StoreCore {
     /// How many times each repeat's items changed in this `resolve_physics`
     /// (`REPEAT_CHANGES`).
     repeat_changes: BTreeMap<NodeId, usize>,
+    /// The repeats found reading their own items: their items are held as
+    /// they are, and are the `feedback` problems, until the next
+    /// transaction lets them try again.
+    restless: BTreeSet<NodeId>,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -651,6 +655,7 @@ impl StoreCore {
             pending: Changes::default(),
             settling: false,
             repeat_changes: BTreeMap::new(),
+            restless: BTreeSet::new(),
             gesture: None,
             ended: None,
             next_gesture: self.next_gesture,
@@ -935,6 +940,7 @@ impl StoreCore {
             pending: Changes::default(),
             settling: false,
             repeat_changes: BTreeMap::new(),
+            restless: BTreeSet::new(),
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -2012,14 +2018,10 @@ impl StoreCore {
         if self.settling {
             return Vec::new();
         }
-        // A repeat that keeps changing settles no further here.
-        if self.repeat_changes.values().any(|&n| n >= REPEAT_CHANGES) {
-            return Vec::new();
-        }
         self.settling = true;
         // Nothing to settle when no repeat's inputs changed (their natives
-        // did not run) and the last settle's inputs stand: the scan of every
-        // drawn repeat's inputs is the old pipeline's (handoff §4.10, RE-5.4).
+        // did not run) and the last settle's inputs stand; else every drawn
+        // repeat's inputs are scanned (handoff §4.10, RE-5.4).
         self.sync_repeats(true);
         if !self.reactive.take_ran_repeats() && self.repeat_inputs.is_some() {
             self.settling = false;
@@ -2055,6 +2057,13 @@ impl StoreCore {
             let mut results: Vec<ItemsOf> = Vec::with_capacity(inputs.len());
             for (r, [each, count, key, shown]) in &inputs {
                 let r = *r;
+                if self.restless.contains(&r)
+                    && let Some((_, got)) = self.item_memo.get(&r)
+                {
+                    counts.insert(r, got.keys.clone());
+                    results.push(got.clone());
+                    continue;
+                }
                 let is_repeat = Tree::of(&self.docs).facet(r, facet::FacetKind::Repeat).is_some();
                 // A conditional that fails to evaluate shows nothing.
                 let shown = Tree::of(&self.docs).facet(r, facet::FacetKind::When).is_none() || (shown.as_ref().and_then(|v| v.as_bool()) == Some(true) && !self.reactive.errors.contains_key(&Leaf { node: r, path: when }));
@@ -2159,16 +2168,16 @@ impl StoreCore {
                     .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
                     .collect();
                 let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
-                let mut restless: Option<NodeId> = None;
                 for &r in &changed_repeats {
                     let n = self.repeat_changes.entry(r).or_default();
                     *n += 1;
-                    if *n >= REPEAT_CHANGES && restless.is_none() {
-                        restless = Some(r);
+                    if *n == REPEAT_CHANGES && !self.restless.contains(&r) {
+                        let doc = Tree::of(&self.docs);
+                        if self.reactive.reaches_into(graph::CellId::Native(graph::NativeKey::Repeat(r)), &|n| n != r && doc.is_ancestor(r, n)) {
+                            self.restless.insert(r);
+                            self.feedback.push(expand::Problem { node: r, kind: "feedback", message: "its items keep changing: what it repeats over reads their own layout".into() });
+                        }
                     }
-                }
-                if let Some(node) = restless {
-                    self.feedback.push(expand::Problem { node, kind: "feedback", message: "its items keep changing: what it repeats over reads their own layout".into() });
                 }
                 self.repeats = counts;
                 let stamp = self.docs.authored.version();
@@ -2203,9 +2212,6 @@ impl StoreCore {
                 self.regraph(these.iter());
                 self.resample();
                 self.publish_state();
-            }
-            if self.repeat_changes.values().any(|&n| n >= REPEAT_CHANGES) {
-                break;
             }
         }
         self.settling = false;
@@ -2605,7 +2611,6 @@ impl StoreCore {
         // the structure that made, until it rests. A count that reads its
         // own items' layout never rests: it is a problem on the repeat
         // (decision D6, `REPEAT_CHANGES`).
-        self.feedback.clear();
         self.repeat_changes.clear();
         for round in 0..=LAYOUT_ROUNDS {
             let derived = self.settle_repeats();
@@ -3354,9 +3359,10 @@ impl StoreCore {
             })
             .map(|k| (k, None))
             .collect();
-        // Not rooted: a hidden composition is not laid out until it shows
-        // (handoff §4.10, RE-5.6).
-        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, false)))));
+        // Rooted, so a hidden composition stays laid out: an unrun native
+        // claims nothing, so a host could take a placement first, and a
+        // capture draws what no observer shows (handoff §4.10, RE-5.6).
+        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
         if !batch.is_empty() {
             self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
@@ -3548,6 +3554,9 @@ impl StoreCore {
     /// expansion wrote for it, to which settling adds the repeats' copies.
     /// Derived ops are never history: undo, redo and replay re-derive.
     fn after_transaction(&mut self, tx: &Transaction, expanded: &mut Vec<Op>, full_inverse: &[Op]) {
+        // A repeat held as feedback tries again (`restless`).
+        self.feedback.clear();
+        self.restless.clear();
         // Outside a gesture the overlay holds only a live solve's pose (a
         // producer's publish or a playhead move re-solves the clusters).
         // Nothing else owns it, so it would shadow what this transaction
@@ -3645,6 +3654,7 @@ impl StoreCore {
         // A transaction from outside a running gesture is classified against
         // it (`gesture`) and applied without its previews.
         let conflict = self.gesture.as_ref().and_then(|g| gesture::conflict(Tree::of(&self.docs), &input.ops, g, &self.drivers));
+        let glides = self.gesture.as_ref().and(self.reactive.glide.clone());
         let suspended = self.suspend_gesture();
         let result = self.apply_now(input);
         if let Some(s) = suspended {
@@ -3654,7 +3664,10 @@ impl StoreCore {
             };
             match conflict.filter(|_| result.is_ok()).or(moved) {
                 Some(reason) => self.end_gesture(GestureStatus::Cancelled(reason)),
-                None => self.resume_gesture(s),
+                None => {
+                    self.resume_gesture(s);
+                    self.reactive.glide_keep(Tree::of(&self.docs), glides);
+                }
             }
         }
         result

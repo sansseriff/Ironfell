@@ -100,6 +100,11 @@ fn cells_demo() {
     }
     let big = format!(r#"<group x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y"><rect id="$r0" w="10" h="10"/>{}</group>"#, (0..999).map(|_| r#"<rect w="10" h="10"/>"#).collect::<String>());
     both("one container of 1,000 items, edit one", &big, 40, |s, names, i| set_w(s, names["$r0"], if i % 2 == 0 { 30.0 } else { 10.0 }));
+    // Every container re-laid out by one edit (the RE-5.6 council's case):
+    // each claim that moves clears layout's claim errors.
+    let shared = r#"<rect id="$src" w="10" h="10"/>"#.to_owned()
+        + &(0..1000).map(|i| format!(r#"<group x="0" y="{y}" size.w="10" size.h="10" layout.mode="stack_x" layout.gap="{{= $src.size.w / 10}}">{}</group>"#, r#"<rect w="10" h="10"/>"#.repeat(10), y = 20 + i * 20)).collect::<String>();
+    both("1,000 containers, an edit all of them read", &shared, 10, |s, names, i| set_w(s, names["$src"], if i % 2 == 0 { 30.0 } else { 10.0 }));
     let repeats: String = (0..200).map(|i| format!(r#"<group y="{y}" repeat.count="3"><rect w="5" h="5"/></group>"#, y = i * 10)).collect::<String>() + r#"<rect id="$lone" w="10" h="10"/>"#;
     both("200 repeats, an edit none of them reads", &repeats, 40, |s, names, i| set_w(s, names["$lone"], if i % 2 == 0 { 30.0 } else { 10.0 }));
     // Load: 100 containers built from nothing.

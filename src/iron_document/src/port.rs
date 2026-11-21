@@ -302,8 +302,7 @@ fn magnitude(v: &Value) -> Option<f64> {
 }
 
 /// Solve one island from `x0`, reading what is not an unknown through
-/// `read`. The old pipeline and the island's native both solve through
-/// this, so the two agree to the bit (handoff §4.10).
+/// `read`: an island native's run (handoff §4.10).
 pub(crate) fn solve_island(unknowns: &[(Leaf, crate::units::Dim)], equations: &[Equation], x0: Vec<f64>, read: &dyn Fn(Leaf) -> Option<Value>) -> iron_solve::Solution {
     let index: BTreeMap<Leaf, usize> = unknowns.iter().enumerate().map(|(i, (l, _))| (*l, i)).collect();
     let mut problem = iron_solve::Problem::uniform(x0, 1.0);

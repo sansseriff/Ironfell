@@ -114,3 +114,22 @@ fn place_ops(store: &iron_document::Store, markup: &str) -> Result<(Vec<iron_doc
     let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).map_err(|f| f.message())?;
     Ok((plan.ops, plan.summary.join("\n")))
 }
+
+/// A repeat that reads a chain of others changes once per link as they
+/// settle in turn, and settles: only one that reads its own items is held
+/// as feedback (handoff §4.10, RE-5.6; the council's chain of eight).
+#[test]
+fn a_repeat_reading_a_chain_of_eight_settles() {
+    let mut links = String::from(r#"<let id="$src" name="src" value="0"/><group id="$r1" name="r1" repeat.each="{= range($src, $src + 1, 1)}"><rect w="1" h="1"/></group>"#);
+    for k in 2..=8 {
+        links += &format!(r#"<group id="$r{k}" name="r{k}" repeat.each="{{= range($r{p}.repeat.item + 1, $r{p}.repeat.item + 2, 1)}}"><rect w="1" h="1"/></group>"#, p = k - 1);
+    }
+    let sum: Vec<String> = (1..=8).map(|k| format!("$r{k}.repeat.item")).collect();
+    links += &format!(r#"<group id="$sink" name="sink" repeat.count="{{= {}}}"><rect w="1" h="1"/></group>"#, sum.join(" + "));
+    let (mut store, n) = sheet(&links);
+    let sink = n["sink"];
+    assert_eq!(items(&store, sink).len(), 28, "0 + 1 + … + 7");
+    store.preview(n["src"], "let.value".parse().unwrap(), Value::Number(1.0));
+    assert_eq!(items(&store, sink).len(), 36, "1 + 2 + … + 8");
+    assert!(store.problems().iter().all(|p| p.kind != "feedback"), "{:?}", store.problems());
+}

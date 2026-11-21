@@ -305,7 +305,7 @@ impl crate::reads::Reads for Cx<'_> {
         let leaf = Leaf { node: id, path };
         let v = self.read(leaf);
         // Another layout's placement as it targets, not as it is drawn
-        // mid-glide: the old pipeline laid every root out in one run.
+        // mid-glide: a layout reads where its neighbours are going.
         if let Some(g) = &self.graph.glide
             && self.graph.runtime.get(&leaf).is_some_and(|s| s.producer == ProducerId::LAYOUT)
             && self.graph.owned.get(&leaf) != Some(&self.me)
@@ -632,6 +632,31 @@ impl Reactive {
             CellId::Leaf(l) => self.nodes.get(&l).map(|n| n.deps.iter().chain(&n.tracked).filter_map(|d| self.cell_of(*d)).collect()).unwrap_or_default(),
             CellId::Native(k) => self.natives.get(&k).map(|n| n.reads.iter().filter_map(|d| self.cell_of(*d)).filter(|d| *d != c).collect()).unwrap_or_default(),
         }
+    }
+
+    /// Whether `from` reads, directly or through the cells it reads, a leaf
+    /// of a node `inside` names (a repeat reading its own items' layout).
+    pub(crate) fn reaches_into(&self, from: CellId, inside: &dyn Fn(NodeId) -> bool) -> bool {
+        let mut stack = vec![from];
+        let mut seen: BTreeSet<CellId> = BTreeSet::new();
+        while let Some(c) = stack.pop() {
+            if !seen.insert(c) {
+                continue;
+            }
+            let leaves: Vec<Leaf> = match c {
+                CellId::Leaf(l) => self.nodes.get(&l).map(|n| n.deps.iter().chain(&n.tracked).copied().collect()).unwrap_or_default(),
+                CellId::Native(k) => self.natives.get(&k).map(|n| n.reads.iter().copied().collect()).unwrap_or_default(),
+            };
+            for l in leaves {
+                if inside(l.node) {
+                    return true;
+                }
+                if let Some(d) = self.cell_of(l) {
+                    stack.push(d);
+                }
+            }
+        }
+        false
     }
 
     /// The cells that read `c`'s value: a native's, any of its outputs.
@@ -2082,6 +2107,27 @@ impl Reactive {
         values
     }
 
+    /// Take back the transitions a round trip of layout's targets restarted
+    /// since `was` (a gesture set aside around a transaction and put back):
+    /// one whose target is where it was goes on as it was, not from where it
+    /// is drawn.
+    pub(crate) fn glide_keep(&mut self, doc: Tree<'_>, was: Option<Glide>) {
+        let (Some(g), Some(was)) = (self.glide.as_mut(), was) else { return };
+        let (xp, yp) = xy();
+        let mut kept = false;
+        for (n, anim) in was.anims {
+            let same = [xp, yp].iter().all(|&path| g.targets.get(&Leaf { node: n, path }) == was.targets.get(&Leaf { node: n, path }));
+            if same && g.anims.contains_key(&n) {
+                g.anims.insert(n, anim);
+                kept = true;
+            }
+        }
+        if kept {
+            let now = g.clock;
+            self.glide_to(doc, now);
+        }
+    }
+
     /// Move the transitions in flight to `now` and draw them there. The
     /// nodes in flight before.
     pub(crate) fn glide_to(&mut self, doc: Tree<'_>, now: f64) -> Vec<NodeId> {
@@ -2161,12 +2207,14 @@ impl Reactive {
     }
 
     /// Clear the claim errors on every leaf layout holds, when a layout
-    /// claim moved: as a publish of every placement does.
+    /// claim moved: as a publish of every placement does. Walks the errors,
+    /// which are few, not the placements.
     fn clear_layout_errors(&mut self) {
-        let leaves: Vec<Leaf> = self.held.get(&ProducerId::LAYOUT).into_iter().flatten().copied().collect();
-        for l in leaves {
-            self.signal_errors.remove(&l);
+        if self.signal_errors.is_empty() {
+            return;
         }
+        let Some(held) = self.held.get(&ProducerId::LAYOUT) else { return };
+        self.signal_errors.retain(|l, _| !held.contains(l));
     }
 
     /// A claim on `leaf` came or went: the natives watching it run in the
@@ -2186,8 +2234,8 @@ impl Reactive {
     }
 
     /// Turn glides off. What is in flight stays where it is drawn until its
-    /// layout runs next, and then lands at its target, as the old pipeline
-    /// published targets at its next layout: its layout runs then.
+    /// layout runs next, and then lands at its target: its layout runs
+    /// then.
     pub(crate) fn glide_off(&mut self) {
         let Some(g) = self.glide.take() else { return };
         let (xp, _) = xy();

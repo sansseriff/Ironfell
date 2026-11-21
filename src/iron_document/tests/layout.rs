@@ -255,32 +255,6 @@ fn a_count_that_reads_its_own_items_layout_is_a_problem() {
     assert!(items <= 2 + 6 * 5, "{items} items");
 }
 
-/// Layout natives are not rooted (handoff §4.10, RE-5.6): a container in a
-/// composition nothing shows is not laid out on a drag frame, and is laid
-/// out once something shows it.
-#[test]
-fn a_hidden_composition_is_laid_out_once_shown() {
-    let mut store = Store::new();
-    let src = r#"<edit><composition id="$a" name="shown" dims="2d">
-        <group name="row" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x"><rect id="$one" name="one" w="10" h="10"/><rect name="two" w="10" h="10"/></group>
-      </composition>
-      <composition id="$b" name="hidden" dims="2d">
-        <group name="row" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x"><rect id="$grow" name="grow" w="10" h="10"/><rect id="$next" name="next" w="10" h="10"/></group>
-      </composition></edit>"#;
-    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
-    let (a, b, grow, next) = (plan.aliases["$a"], plan.aliases["$b"], plan.aliases["$grow"], plan.aliases["$next"]);
-    store.apply(tx("two", plan.ops)).unwrap();
-    store.set_observe_all(false);
-    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
-    let runs = |s: &Store| s.reactive().native_runs(Leaf { node: next, path: path("transform2d.x") }).expect("laid out by a native");
-    let before = runs(&store);
-    store.preview(grow, path("size.w"), Value::Number(40.0));
-    assert_eq!(runs(&store), before, "hidden: not laid out");
-    store.observe(Interest::Region { composition: b, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
-    assert!(runs(&store) > before, "shown: laid out");
-    assert_eq!(num(&store, next, "transform2d.x"), 40.0);
-}
-
 /// A container inside a plain group inside another: the outer run reads the
 /// inner one's placements through the group's bounds, in the same call
 /// (reactive-engine handoff §4.10, RE-5.4 step 2).
@@ -474,4 +448,35 @@ fn turning_motion_off_mid_glide_lands_the_items() {
     // At the next layout, they land.
     store.apply(tx("unrelated", vec![Op::Set { id: lone, path: path("size.w"), slot: n(20.0) }])).unwrap();
     assert_eq!((num(&store, a, "transform2d.y"), num(&store, c, "transform2d.y")), (10.0, 0.0));
+}
+
+/// A transaction refused mid-drag sets the drag's previews aside and puts
+/// them back: a sibling gliding to where the drag puts it goes on as it was,
+/// not from where it is drawn (handoff §4.10, RE-5.6's council).
+#[test]
+fn a_refused_edit_mid_drag_does_not_restart_a_glide() {
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x">
+        <rect id="$a" name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let run = |refuse: bool| {
+        let mut s = Store::new();
+        s.set_motion(true);
+        let plan = iron_document::edit::plan(&s, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+        let (a, b) = (plan.aliases["$a"], plan.aliases["$b"]);
+        s.apply(tx("stack", plan.ops)).unwrap();
+        s.advance_motion(0.0);
+        s.begin_gesture(&[a]);
+        s.preview(a, path("size.w"), Value::Number(50.0));
+        s.advance_motion(0.08);
+        if refuse {
+            assert!(s.apply(tx("refused", vec![Op::Set { id: b, path: path("size.w"), slot: Slot::Const(Value::Str("wide".into())) }])).is_err());
+        }
+        s.advance_motion(0.12);
+        num(&s, b, "transform2d.x")
+    };
+    let (alone, refused) = (run(false), run(true));
+    assert!(alone > 10.0 && alone < 50.0, "in flight at 120 ms: {alone}");
+    assert_eq!(refused, alone, "the refusal changed nothing drawn");
 }

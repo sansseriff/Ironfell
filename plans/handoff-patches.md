@@ -52,7 +52,7 @@ view rectangles, not this.
 
 | Key | Step | Kind | Gate before it | State |
 |---|---|---|---|---|
-| PT-1 | Composition clocks | Build | none (approved spec §10.1) | **In progress** 2026-11-20 |
+| PT-1 | Composition clocks | Build | none (approved spec §10.1) | **In progress** 2026-11-20: PT-1.1 done |
 | PT-2 | Council on the note | Design, read-only | none | |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | |
 | PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | |
@@ -73,20 +73,41 @@ either order. RE-5's cells can be built before, between or after any of these.
 
 RE-3.4, deferred there, amended with the gate (note §3.1, §3.2).
 
-- **First, diagnose.** `Store::paused` (`src/iron_document/src/lib.rs`, ~2834)
-  should already hold the Lorenz plot's accumulators in a hidden tab (demo.md). In
-  the Prussia session it did not. Find out why, with a test, before building on it.
-- **Then build:**
-  - `now()` and `clock()`;
-  - a `clock` facet that defines a composition's clock from its parent clock;
-  - the **visibility gate**: a paused clock by default when nothing observes the
-    composition and nothing running reads it, overridable per composition;
-  - fixed-step steppers;
-  - UI transitions on unscaled time.
-- **Replace `ROOTED`'s facet-kind list** for stateful nodes: a paused clock does not
-  advance them. Necessity, not `ROOTED`, then decides what is computed.
-- **Amend the spec's §10.1 with the gate** in the same change. The user asked for
-  "hidden tabs pause by default, overridable" (2026-11-20).
+Tasks, in order; each is committed alone.
+
+- **PT-1.1, diagnose.** `Store::paused` should already hold the Lorenz page's
+  accumulators while the page is hidden (demo.md), and in the Prussia session it did
+  not. **Done 2026-11-20.**
+  - **Cause:** `paused` counted any reader outside every composition as running. A
+    placed instance's entity is outside every composition, and it reads its
+    arguments. So any page with a placed component that reads the page's state was
+    "read by something running", even when that component is pictured on the page
+    alone. Lorenz has two such plots.
+  - **Fix:** a model node runs with the compositions that picture it. It also runs
+    when something running reads it, or when nothing pictures it (the timeline,
+    loose roots).
+  - **Tests:** `reactivity::a_hidden_page_s_own_placed_plot_does_not_keep_it_running`;
+    `demo::tests::a_hidden_lorenz_page_holds_still` over the real demo document.
+- **PT-1.2, composition clocks and the gate.**
+  - A composition's time is presentation time less the time it spent paused.
+  - Every stepper in it reads that time: accumulators, traces, machines' own
+    transitions, presence, glides and a query's debounce.
+  - The gate (today's `paused` rule) pauses a hidden composition holding any of
+    these, not only accumulators. A machine paused mid-transition therefore resumes
+    mid-transition, and a pulse in flight stays in flight.
+  - Amend the spec's §10.1 with the gate in the same change. The user asked for
+    "hidden tabs pause by default, overridable" (2026-11-20).
+- **PT-1.3, the override:** a composition setting that keeps it running while hidden,
+  in the composition settings menu.
+- **PT-1.4, fixed-step steppers:** accumulators step at a fixed length, several steps
+  a frame if needed, so a result does not depend on the frame rate. Gallery pages'
+  `min(dt, 0.03)` clamps then go.
+- **PT-1.5, `now()` and `clock()` in formulas:** the composition's time as a
+  dependency the graph tracks (spec §10.1).
+- **Moved to PT-10:**
+  - UI transitions on unscaled time: nothing scales time until rate operators exist.
+  - Replacing `ROOTED`'s facet-kind list: once a paused clock holds a composition's
+    state still, what `ROOTED` keeps needed does not change, so it costs nothing.
 - **Exit:**
   - a hidden tab with the Lorenz plot costs no evaluations per frame;
   - on return, the plot resumes from where it was;
@@ -183,6 +204,8 @@ Each gets a section here, with tasks and an exit, once its spec is approved.
   - The free-running to scripted UX.
 - **PT-10. Clock operators** (rate, offset, loop with `n`, ping-pong, gate, hold, remap),
   then ghosts, coverage shading and checkpoints.
+  Also UI transitions on unscaled time, and `ROOTED`'s facet-kind list replaced
+  (both moved from PT-1).
 - **PT-11. Storage and the server.**
   - Chunked snapshots.
   - Loading a view's point; prefetching the arrow.

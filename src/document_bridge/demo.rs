@@ -1737,6 +1737,35 @@ pub fn template_snapshot(kind: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    /// PT-1's diagnosis (handoff-patches.md): with one page shown, the
+    /// hidden Lorenz page's accumulators hold still.
+    #[test]
+    fn a_hidden_lorenz_page_holds_still() {
+        use iron_document::{Interest, Store, composition, narrative};
+        let text = super::template_snapshot("demo").unwrap();
+        let mut store = Store::load(&text).unwrap();
+        let (main, lorenz, x) = {
+            let doc = store.tree();
+            let comps = composition::compositions(doc);
+            let named = |n: &str| comps.iter().copied().find(|&c| narrative::name(doc, c) == n).unwrap_or_else(|| panic!("no {n}: {:?}", comps.iter().map(|&c| narrative::name(doc, c)).collect::<Vec<_>>()));
+            let lorenz = named("lorenz");
+            let x = doc.descendants(lorenz).into_iter().find(|&n| narrative::name(doc, n) == "x state").unwrap();
+            (comps.iter().copied().find(|&c| c != lorenz).unwrap(), lorenz, x)
+        };
+        store.set_observe_all(false);
+        store.set_motion(true);
+        store.observe(Interest::Region { composition: main, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
+        let at = |s: &Store| s.resolved(x, "accumulate.value".parse::<iron_document::LeafPath>().unwrap()).unwrap().as_f64().unwrap();
+        store.advance(0.0);
+        let start = at(&store);
+        for i in 1..30 {
+            let out = store.advance(i as f64 / 60.0);
+            assert!(!out.wake.live.contains(&lorenz), "the hidden Lorenz page is reported moving at frame {i}");
+        }
+        println!("shown {}: x state {start} -> {}", narrative::name(store.tree(), main), at(&store));
+        assert_eq!(at(&store), start, "the hidden Lorenz page stepped");
+    }
+
     /// Baseline (reactive-engine handoff §4.1, task 1): loading the demo
     /// document, the demo scene and the showcase as a first visit gets.
     /// Ignored; run with

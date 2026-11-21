@@ -1052,6 +1052,24 @@ fn a_pulse_from_an_unobserved_laser_reaches_an_observed_meter_on_time() {
     assert!(store.reactive().stale_count() > 0, "the hidden fiber's light rests");
 }
 
+/// A placed instance's entity is outside every composition, but it runs
+/// only where it is pictured (handoff-patches.md, PT-1): a plot on a hidden
+/// page reading that page's accumulator leaves it held, as the demo's
+/// Lorenz page; the same plot placed on the shown page sets it going.
+#[test]
+fn a_hidden_page_s_own_placed_plot_does_not_keep_it_running() {
+    let acc = r#"<accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/>"#;
+    let plot = |into: &str| format!(r#"<place def="std:plot" in="{into}" x="0" y="0" w="200" h="100" xs="{{= range(0, 1, 3)}}" ys="{{= range(0, $acc.accumulate.value, 3)}}"/>"#);
+    for (into, runs) in [("$b", false), ("$a", true)] {
+        let (mut store, _all, _p, n) = split(&format!(r#"<composition id="$a" name="a" dims="2d"/><composition id="$b" name="b" dims="2d">{acc}</composition>{}"#, plot(into)));
+        let at = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
+        for k in 0..=6 {
+            store.advance(k as f64 * 0.05);
+        }
+        assert_eq!(at(&store) > 0.0, runs, "plot placed in {into}");
+    }
+}
+
 /// §8.7's idle sweep: at rest, an unobserved composition's stale pictures
 /// are brought up to date a few at a time, and then nothing is woken.
 #[test]

@@ -2845,21 +2845,48 @@ impl StoreCore {
         if still.is_empty() {
             return still;
         }
-        // A composition read from one that runs, or from outside every
-        // composition, runs too, accumulators and all: a meter in view
-        // reading a simulation in a hidden tab, directly, through a trace or
-        // through a stack's placements. Decided per composition, until no
+        // A composition read from one that runs runs too, accumulators and
+        // all: a meter in view reading a simulation in a hidden tab,
+        // directly, through a trace or through a stack's placements. A
+        // reader outside every composition is a model node, such as a
+        // placed instance's entity reading its arguments: it runs where it
+        // is pictured, when something running reads it, or always when
+        // nothing pictures it (the timeline, loose roots). Decided until no
         // more join (one hidden tab read through another).
         let shown = composition::shown(doc, &self.observed_compositions());
         let mut live: BTreeSet<NodeId> = shown.difference(&still).copied().collect();
         let hidden: Vec<NodeId> = composition::compositions(doc).into_iter().filter(|c| !live.contains(c)).collect();
+        let mut pictured: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
+        for r in doc.relations().filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.is_live(r.to)) {
+            if let Some(c) = composition::composition_of(doc, r.from) {
+                pictured.entry(r.to).or_default().insert(c);
+            }
+        }
+        // The pictured entity a model node belongs to: itself or its
+        // nearest such ancestor.
+        let entity_of = |n: NodeId| {
+            let mut cur = Some(n);
+            while let Some(node) = cur.and_then(|c| doc.live(c)) {
+                if pictured.contains_key(&node.id) {
+                    return Some(node.id);
+                }
+                cur = node.parent;
+            }
+            None
+        };
+        let mut entities: BTreeSet<NodeId> = pictured.iter().filter(|(_, cs)| cs.iter().any(|c| live.contains(c))).map(|(&e, _)| e).collect();
         loop {
-            let reads = |n: NodeId| composition::composition_of(doc, n).is_none_or(|c| live.contains(&c));
+            let reads = |n: NodeId| match composition::composition_of(doc, n) {
+                Some(c) => live.contains(&c),
+                None => entity_of(n).is_none_or(|e| entities.contains(&e)),
+            };
             let joined: Vec<NodeId> = hidden.iter().copied().filter(|c| !live.contains(c) && self.reactive.read_by(std::iter::once(*c).chain(doc.descendants(*c)), &reads)).collect();
-            if joined.is_empty() {
+            let joined_entities: Vec<NodeId> = pictured.iter().filter(|(e, cs)| !entities.contains(e) && (cs.iter().any(|c| live.contains(c) || joined.contains(c)) || self.reactive.read_by(std::iter::once(**e).chain(doc.descendants(**e)), &reads))).map(|(&e, _)| e).collect();
+            if joined.is_empty() && joined_entities.is_empty() {
                 break;
             }
             live.extend(joined);
+            entities.extend(joined_entities);
         }
         still.difference(&live).copied().collect()
     }

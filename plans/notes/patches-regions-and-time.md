@@ -293,6 +293,48 @@ A definition is a base, and its placements are the points of an **instance axis*
   holds state. Whether outside patches may reach a part's fields is a policy per
   definition: Figma allows it, and a definition could declare which fields it exposes.
 
+### 4.2 Search, introspection and analysis
+
+A region is a **selector**: a condition on a point, like a CSS selector. The axes are
+the facts a selector can test: which slide, which mode, which object (and which class),
+what time. OLAP names the operations:
+- **slice:** fix one axis;
+- **dice:** a region;
+- **roll-up:** aggregate over an axis;
+- **drill-down:** the reverse of roll-up;
+- **pivot:** choose which axes are a grid's rows and columns.
+
+**Regions are unions of boxes.** A box is a set or interval per axis. Unions of boxes
+are closed under intersection, union and difference, so every question below is answered
+by region arithmetic, without enumerating points.
+
+**The winning region.** For a patch and one field, the winning region is its region
+minus the regions of stronger patches that set the same field. "Which objects are blue
+in state A after slide i" is then: for every patch, or base value, that sets a fill to
+blue, its winning region ∩ (mode = A, slide > i). The answer is regions per node: "A's
+bob: slides 4–5", not a list of points.
+
+| Question | Operation |
+|---|---|
+| Find: what matches this condition, and where | winning regions ∩ the query |
+| Why is this value what it is here? | the patches whose regions contain the point, strongest first, the losers struck through (browser devtools' computed-styles pane) |
+| What would this edit change? | the patch's winning region (the blast radius) |
+| What changes between these two points? | the arrow: patches entering and leaving |
+| On which slides is anything blue? | roll-up over every axis but the slide |
+| First slide where X holds; is X true on every slide after 3? | queries over an ordered axis, as in temporal logic. A narrative goal (narrative note §3.4, "a condition on states") is one of these |
+| Lint | incomparable overlaps (law 5), dead patches (a winning region that is empty), stale entries |
+
+- **One grammar** writes a patch's "Applies to" and a search, so a search result can
+  become a patch's region: "make all of those red" is one op.
+- **The agent** reads patches with their regions instead of every point's copy. It
+  answers in regions, explains a value by its patch stack, and states an edit's blast
+  radius and overlaps before making it.
+- **Where symbolic answers stop:**
+  - A bound value (a formula) is evaluated at the points in question, which slices
+    allow when it is seekable (reactive-engine.md §10.5).
+  - Values with history are "not seekable", and the answer says so.
+  - "Blue" should match theme tokens as well as literal colours.
+
 ## 5. Editing
 
 - **Each view has an edit region.** Its default comes from the notation:

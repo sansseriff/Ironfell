@@ -148,7 +148,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress** (§4.8): a cluster solved only when something of it changed; the per-transaction scans measured and the dominant ones removed. The cells are next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells are planned as RE-5.3 to RE-5.6 (§4.10); RE-5.3 is next |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -2674,6 +2674,109 @@ Tests: `a_tracked_wake_two_hops_down_finds_no_false_cycle`,
 Verified: differential suite (478) with IRON_ATOMICITY and IRON_OWNER_CHECK, plain,
 app lib tests, build, 10,000 random scripts, the 1,000-seed observation property;
 smoke, regression (the pendulum's last digits only), fiber, pulses and idle scripts.
+
+### 4.10 Phase 5's cells (plan, 2026-11-20)
+
+What is left of §17's phase 5, now that RE-5.1 (§4.8, a cluster solved only when
+something of it changed) and RE-5.2 (§4.8, the scans) are done: the network, the
+solver and layout as cells. Today all three run outside the graph's height order.
+`resolve_physics` runs them in a fixed order (repeats, state, network, theme, layout,
+contexts), `pipeline_from` repeats that up to four rounds while something read a stale
+cell, and the solver runs from `resolve_clusters_live` (two callers: `drag_to` and
+`derive`) and from `post_apply`. Measured before (`solve_cost`, native release,
+2026-11-20): a drag step 0.20 ms with one pendulum and 0.60 ms with 100; an
+unrelated constant edit 0.19 ms with one and **2.82 ms with 100**. That is §15's one
+target this phase still misses: `rebuild_clusters` regroups every constraint on
+every transaction, and `unmoved` builds every cluster's `Posed` to compare.
+
+**Not in this plan:**
+- clips as cells (PT-9);
+- `fits`: no fitting layout mode exists (`iron_layout::Mode` is `StackX`, `StackY`,
+  `Grid`), and wrapping is layout-engine work (§9.2, "Reaching CSS"). It comes with
+  the first such mode;
+- one-axis containment (§9.2 puts it after phase 5);
+- the live simulation, and `pause` and `coarse` for clusters (D11).
+
+**RE-5.3: computed cells, with the network as the first.** The graph gains a second
+kind of cell beside a binding: a computed cell, keyed by a `CellId`, that the store
+evaluates with a tracked read and that writes several output leaves into its
+producer's layer.
+- Its height is one above the highest leaf it read last time, its outputs sit at its
+  height, and what reads an output sits above it, so a reader runs once per pass.
+- A pass that reaches a computed cell's height hands it to the store (the graph
+  cannot call layout or the solver, which read the store). The store computes it,
+  and `Reactive` takes the reads and outputs back, compares each output with what it
+  held (equality cutoff) and goes on.
+- Necessity: a computed cell is needed when an output is needed or it is rooted (a
+  Solve cell always is, D11). Errors are per cell, on a node.
+- Host producers (`publish`) are unchanged.
+- Tests: a reader of an output evaluates once per pass; a diamond through a computed
+  cell; a tracked read that reaches further raises the cell; a cycle through one is
+  an error.
+
+**The network per island.** Each island is the unknowns joined by any equation they
+share (§9.1), keyed by its lowest unknown, with its own warm start. The islands are
+made again only when an op touches a port, a connection or an equation (§7.2); today
+the network is made again whenever `docs.edits()` moves. `physics_error` becomes
+per island. Test: an edit in one circuit solves no other. The `ports`, `schematic`
+and `signals` suites stay green. `solve_network` goes.
+
+**RE-5.4: the solver as cells** (§9.4; the measured win).
+- A Clusters cell per composition regroups only when its constraints, their
+  relations or `enabled`, the connections that imply mates, or which operand leaves
+  are free changed.
+- A Solve cell per cluster, keyed by its lowest constraint, is a computed cell whose
+  reads are tracked. That replaces `Posed`, `unmoved`, `pose` and `posed`, which go.
+- Its outputs are a solved layer between the overlay and the binding.
+- Drivers and fingers are Input cells. The pose is state, adopted at the end of each
+  public `&mut` call outside a transaction and at step 7 (§11.2). An op that writes a
+  variable's constant sets its pose. Rolling back restores the output. The commit
+  writes `derived_ops` as `post_apply` does now.
+- `resolve_clusters_live` and `rebuild_clusters` go, and so does the `solved` set in
+  `necessity` (Solve cells are rooted).
+- Tests:
+  - `a_drag_in_one_cluster_solves_no_other` stays.
+  - The random scripts gain constraints (today they build none). Under
+    `IRON_OWNER_CHECK`, a Solve cell left current is solved anyway and must agree,
+    as `check_unmoved` does now.
+  - The `constraints`, `frame_constraints`, `gestures` and `handles` suites stay
+    green.
+- Target (`solve_cost`): with 100 pendulums at rest, a drag step and an unrelated
+  edit each within 2× of one pendulum's.
+
+**RE-5.5: layout cells.**
+- First, a test of §17's exit, which today's rounds may already pass: a repeat whose
+  count reads a contained box's width adds items during a resize drag. What it
+  shows decides how much of the step below is needed for the exit. The rest is for
+  cost and for the write-time rule.
+- A Layout cell per outermost container (`layout::compute`'s unit), cut at contained
+  boxes. Each contained box has an allocation cell (the outer run, which treats the
+  box as a leaf of known size) and an interior cell (a run rooted at it).
+- `layout.contain` (`none`, `both`) is declared on groups; a sized `use` and a group
+  with a fixed size are contained without it. Schema bump.
+- A structural input that reads an uncontained box's size is refused at write time,
+  or reported as a cycle on the Collection (D6).
+- Pins move into their frame's Layout cell. Table tracks become outputs, reported as
+  a mark when they move. Glides stay presentation over the target.
+- `resolve_layout` and `relayout` go.
+- Risk: structure between the two cells in height means a Collection's settle must
+  run inside the pass, but `settle_repeats` runs outside it today. If the exit needs
+  that, stop and report its size before building it (§5).
+- The `layout`, `table` and `sized` suites stay green.
+
+**RE-5.6: phase end.**
+- §15's rows are measured: the solver, constant and structural edits at 700 and
+  1,000 meters, and the plot pan.
+- Whatever still runs in `pipeline_from`'s rounds is named, with why.
+- A council, then the roadmap.
+- Then this file closes: RE-4.3 moves to `handoff-render.md`, and the file moves to
+  `archive/`.
+
+**Order.** The network comes first because it is the smallest cell: pure, with no
+state beyond its warm start, so the graph's new kind of cell lands with one real
+user. The solver comes next because it is the one §15 target still unmet. Layout
+comes last because it is the largest: containment needs a schema change and a
+write-time rule.
 
 ## 5. Rules, and when to stop
 

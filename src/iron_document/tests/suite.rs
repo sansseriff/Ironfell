@@ -11,6 +11,7 @@ mod anchors;
 mod appearance;
 mod atomicity;
 mod authoring;
+mod cells_demo;
 mod clients;
 mod clock;
 mod compose;

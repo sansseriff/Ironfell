@@ -238,6 +238,15 @@ impl Drop for Rollback {
 /// Stale cells an idle `advance` brings up to date (§8.7).
 const IDLE_SWEEP: usize = 256;
 
+/// Settles that read every drawn repeat's inputs, since the process
+/// started: what RE-5.4's demonstrations count.
+static SETTLE_SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[doc(hidden)]
+pub fn settle_scan_count() -> u64 {
+    SETTLE_SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// How many times `resolve_physics` settles repeats again after layout
 /// before a repeat whose items keep changing is a problem (decision D6).
 const LAYOUT_ROUNDS: usize = 4;
@@ -887,9 +896,23 @@ impl StoreCore {
         StoreCore::build(doc, false)
     }
 
+    /// An empty store that solves the network, lays out and settles repeats
+    /// in the old pipeline, as the differential reference does: for
+    /// measuring the native cells against it (reactive-engine handoff
+    /// §4.10, RE-5.4's demonstrations). Not for anything else.
+    #[doc(hidden)]
+    pub fn with_old_pipeline() -> StoreCore {
+        StoreCore::build_with(Document::new(), true, true)
+    }
+
     /// A store over `doc`, keeping copies apart from it or not (handoff
-    /// §4.6).
+    /// §4.6). The reference, which keeps them in it, keeps the old pipeline
+    /// too.
     pub(crate) fn build(doc: Document, apart: bool) -> StoreCore {
+        StoreCore::build_with(doc, apart, !apart)
+    }
+
+    fn build_with(doc: Document, apart: bool, old_pipeline: bool) -> StoreCore {
         let mut store = StoreCore {
             docs: tree::Docs::new(doc, apart),
             owners: Default::default(),
@@ -931,7 +954,7 @@ impl StoreCore {
             repeat_inputs: None,
             item_memo: BTreeMap::new(),
             network: None,
-            old_pipeline: !apart,
+            old_pipeline,
             layout_at: None,
             repeats_at: None,
             session_state: BTreeMap::new(),
@@ -1959,6 +1982,7 @@ impl StoreCore {
                 return Vec::new();
             }
         }
+        SETTLE_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut applied = Vec::new();
         let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
         let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");

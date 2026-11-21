@@ -384,6 +384,7 @@ pub fn compute(store: &dyn Reads) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
 /// tree), deepest first. Shared by `compute` and the layout natives, so the
 /// two agree to the bit.
 pub(crate) fn lay_out(store: &dyn Reads, root: NodeId) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
+    LAY_OUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut out = BTreeMap::new();
     let mut grids = BTreeMap::new();
     let doc = store.tree();
@@ -675,6 +676,16 @@ pub fn add_ops(doc: DocTree<'_>, extent: &dyn Fn(NodeId) -> Option<Rect>, select
         }
     }
     Ok((ops, id))
+}
+
+/// Structural roots laid out since the process started, in the old pipeline
+/// and in natives alike: what RE-5.4's demonstrations count
+/// (`tests/cells_demo.rs`).
+static LAY_OUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[doc(hidden)]
+pub fn lay_out_count() -> u64 {
+    LAY_OUTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The leaves layout may write on a node: its place, and the sizes a layout

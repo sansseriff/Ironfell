@@ -3168,6 +3168,47 @@ cited by member and number.
   - `gestures.txt` was not run: it takes about 2.5 min and needs a check-in, and the
     user was away.
 
+**RE-5.4 step 5, as done (2026-11-21): repeats as natives** (`45099d3`).
+- A `RepeatNative` per drawn repeat or conditional reads what `settle_repeats`
+  compares (`each`, `count`, `key`, `when`) and writes nothing.
+- `settle_repeats` returns at once when none ran and `repeat_inputs` stands. It is
+  exact by construction: presence clears `repeat_inputs`, and that still forces a
+  full settle.
+- Native runs no longer count in `evaluations`, which counts expressions.
+- Clock gating counts a native at the nodes it writes, or at its own node when it
+  writes none. Only an island counts everywhere.
+
+**The demonstrations, as measured (2026-11-21).** `tests/cells_demo.rs`
+(`cells_demo`, ignored, release), against `StoreCore::with_old_pipeline()`. The
+counters are structural roots laid out (`layout::lay_out_count`) and settles that read
+every repeat's inputs (`settle_scan_count`). Times are p50 / p95 per change.
+
+| Case | Old pipeline | Cells |
+|---|---|---|
+| 10 containers, edit one | 0.061 / 0.078 ms, 10 lay-outs, 3 scans | 0.024 / 0.029 ms, 1 lay-out, 1 scan |
+| 100 containers, edit one | 0.823 / 0.889 ms, 100 lay-outs | **0.133** / 0.155 ms, 1 lay-out |
+| 1,000 containers, edit one | 9.240 / 9.476 ms, 1,000 lay-outs | **1.371** / 1.577 ms, 1 lay-out |
+| 100 containers, preview a width in one | 0.810 / 0.872 ms, 100 lay-outs, 2 scans | **0.012** / 0.015 ms, 1 lay-out, 0 scans |
+| Chain of 4 (layout → binding → layout) | 0.076 / 0.090 ms, 16 lay-outs, 6 scans | 0.044 / 0.059 ms, 4 lay-outs, 1 scan |
+| Chain of 8 | 0.194 / 0.204 ms, 40 lay-outs | 0.091 / 0.107 ms, 8 lay-outs |
+| 200 repeats, an edit none reads | 0.371 / 0.428 ms, 3 scans | 0.361 / 0.426 ms, 1 scan: no faster, since scans are cheap |
+| One container of 1,000 items, edit one | 1.752 / 1.781 ms | **3.632** / 3.680 ms: slower |
+| Building 100 containers (best of 5) | 3.868 ms | **7.079** ms: slower |
+
+- **Where cells win:** an edit or preview in one container among many is laid out
+  once, not once per container. The cost becomes the one container's, which is
+  6.7× faster at 100 containers and 67× faster for a preview.
+- **The chain:** the old pipeline lays everything out in each round. The cells lay
+  out each link once, in height order.
+- **Where cells lose:**
+  - one big container: every value is read through `Cx`, which records it, and the
+    claims are diffed;
+  - building: each native is made, then run twice by R5.
+
+  Both are candidates for later work (deduplicating reads, a native's first height
+  taken from its structure). Neither is built.
+- The chains of 4 and 8 end in the same places in both.
+
 **The demonstrations** (the user's request, 2026-11-21: show the design's efficiency
 with simple cases), in release, against the old pipeline as step 2 leaves it. Each
 reports:

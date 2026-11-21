@@ -37,7 +37,7 @@ iron_text = { path = "../iron_text" }
 iron_layout = { path = "../iron_layout" }
 
 [features]
-# The differential harness (plans/handoff-reactive-structure.md §4.1): `Store`
+# The differential harness (plans/archive/handoff-reactive-structure.md §4.1): `Store`
 # becomes a facade over two stores compared after every call, so every test
 # is a differential script. Test-only; the app never enables it.
 differential = []

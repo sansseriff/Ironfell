@@ -6,7 +6,7 @@ Revised 2026-11-16 after a third review; phases 0 to 2 are ready to build, and p
 **Nothing of the engine is built** except a reference model of the core pass
 (`src/iron_engine_kernel`, §6); phase 0 (baselines and the differential harness) is
 done. Work order, the current task and the rules for whoever
-builds it: [`../handoff-reactive-structure.md`](../handoff-reactive-structure.md).
+builds it: [`../archive/handoff-reactive-structure.md`](../archive/handoff-reactive-structure.md) (closed 2026-11-21).
 What is assumed and not yet verified: §14. How the design was reached:
 [`reactive-engine-review.md`](reactive-engine-review.md).
 

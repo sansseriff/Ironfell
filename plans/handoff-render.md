@@ -98,7 +98,7 @@ it is cheap: encode 0.19 ms and render 0.18 ms p50 (`bench-large-svg.txt`,
   drag's worst frame went 96.6 → 18.7 ms. A hidden page's plot still expands its ticks
   because it is stateful (its trace) and §8.3 keeps what a repeat's count reads
   necessary; reactive engine phase 4 skips only pure pictures. Making it Dormant or
-  parked is the deferred parking design (handoff-reactive-structure.md, phase 4 step 4),
+  parked is the deferred parking design (archive/handoff-reactive-structure.md, RE-4.4, now PT-11),
   which no phase schedules yet.
 - **Open: a frame floor of about 3 ms with nothing to draw** (idle frame p50 2.9 ms).
   Of that, `pick` is 0.65 ms every frame and about 2 ms is unattributed. Item 8 above
@@ -361,3 +361,24 @@ retained overlay targets and measured dense-outline policy. Then decide
 chunks/bakes or a newer/Classic renderer experiment from remaining costs. The
 probe is a separate diagnostic workspace crate; no Vello/Bevy version upgrade
 or new application runtime dependency was made.
+
+## 10. RE-4.3: Dormant by view rectangle
+
+Moved here from the reactive-engine plan when it closed (2026-11-21;
+[`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) §4.9).
+It is about view rectangles, so it belongs with the rendering track. Not started. As
+the engine plan recorded it:
+
+**Deferred 2026-11-19 (the builder's decision).** The § numbers are
+[`specs/reactive-engine.md`](specs/reactive-engine.md)'s. Bounds must stay right (§8.5), so a picture outside the view still
+needs every leaf its extent reads (`geom::effect_of` other than `None`: placement,
+size, geometry, handles, stroke, text, trim). Counted over five lasers, fibers,
+meters and readouts and a plot: of the pictures' bound leaves, 176 feed the extent
+and 56 do not (fill 31, appearance 23, group clip 2; anchors, lets, repeats and
+writes are kept for other reasons). What moves in a frame (a needle's rotation, a
+fiber's light, a plot's paths) is extent, so step 3 would save little for the host
+work it needs (each view's rectangle in composition space, margins, and noticing a
+bound that moves into view). §8.5's way out is what makes it pay: an owner that
+clips to a declared size has that size as its extent and nothing inside needed.
+Step 3 is built when standard components clip; until then a shown composition is
+observed whole, which satisfies §17's "something moving into the view appears".

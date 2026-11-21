@@ -1,15 +1,20 @@
 # Handoff: building the new reactive engine
 
 **Date:** 2026-11-19 · **Branch:** `master` · **Keys:** `RE-n`, `RE-n.m` for a
-phase's step (plans/README.md, "Work keys") · **Status:** the design
-([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
+phase's step (plans/README.md, "Work keys") · **Closed 2026-11-21 and archived:**
+phases 0 to 5 are done as §2 says, each with named items deferred or not met and
+the reasons where each phase is (phase 5's in §4.10, "RE-5.6: phase end"). RE-4.3 is in
+[`handoff-render.md`](../handoff-render.md) §10; the rest moved to
+[`handoff-patches.md`](../handoff-patches.md) §1. Nothing here is open work.
+**Status when open:** the design
+([`specs/reactive-engine.md`](../specs/reactive-engine.md), "the spec" below) is approved
 and its decisions settled. **Phases 0 to 4 are done** as §2's table says (2b's swap
 removed the old engine; 2c, 3 and 4 each left named steps deferred, with the reasons
 recorded where each phase is). **Phase 5** is in progress: its first step (§4.8) and
 its scan measurements (§4.8, step 2) are done; its cells are not built. **This plan
 ends with phase 5's layout, network and solver cells** (2026-11-20): its clock
 providers, clips as cells, parking and phase 6 move to
-[`handoff-patches.md`](handoff-patches.md) §1. RE-4.3 (Dormant by view) goes to
+[`handoff-patches.md`](../handoff-patches.md) §1. RE-4.3 (Dormant by view) goes to
 `handoff-render.md` then, and this file to `archive/`.
 This file is for whoever builds next: what to read, the order of work, the phases as tasks, and
 the rules.
@@ -25,15 +30,15 @@ the rules.
    `lib.rs` says what it simplifies. It is a model to learn the
    algorithm from, not code to extend: the real engine is a new module,
    `iron_document::engine`, written in phase 2b.
-4. [`specs/reactivity.md`](specs/reactivity.md) §3 and §13: the behaviour that must
+4. [`specs/reactivity.md`](../specs/reactivity.md) §3 and §13: the behaviour that must
    survive.
 5. The code being replaced, enough to recognise it: `Store::settle_repeats`,
    `Store::run`, `after_transaction`, `post_apply` and `resolve_physics` in
    `src/iron_document/src/lib.rs`; `graph.rs`; `expand.rs`.
-6. The run-iron skill ([`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md))
+6. The run-iron skill ([`.claude/skills/run-iron/SKILL.md`](../../.claude/skills/run-iron/SKILL.md))
    for building, the smoke and timings.
 
-[`specs/reactive-engine-review.md`](specs/reactive-engine-review.md) is the design's
+[`specs/reactive-engine-review.md`](../specs/reactive-engine-review.md) is the design's
 history (three council rounds, what each found). It is not needed to build.
 
 **The change in one paragraph.** Today any change to a repeat's items, and any
@@ -148,7 +153,7 @@ The spec's §17 has each phase's contents and exit. In order:
 | RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
 | RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
 | RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
-| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress**: RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). **RE-5.4 done 2026-11-21** (layout and repeats as natives, containment); **RE-5.5 done 2026-11-21** (grouping, validation and each cluster's change test as natives; §4.10); RE-5.6 (phase end) is next |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **Done 2026-11-21** (RE-5.6, §4.10's "RE-5.6: phase end"): RE-5.1 (a cluster solved only when something of it changed) and RE-5.2 (the scans) done (§4.8). The cells, on one general cell (the user's decision, 2026-11-20), are planned as RE-5.3 to RE-5.6 (§4.10). **RE-5.3 done 2026-11-20** (natives in the graph; the network per island on them). **RE-5.4 done 2026-11-21** (layout and repeats as natives, containment); **RE-5.5 done 2026-11-21** (grouping, validation and each cluster's change test as natives; §4.10); **RE-5.6 done 2026-11-21** (the old pipeline deleted; layout natives unheld; the phase's exits, met and not) |
 | RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
@@ -1021,7 +1026,7 @@ the old behaviour is a quirk, the new engine does the reasonable, expected thing
   - **The changed frame's fixed cost (fix 2):** a paused, unchanged frame is about
     1.2 ms on the worker, and `?bevy=empty` (Bevy's default plugins, no Iron
     systems) is 1.17 of it. So it is the host's schedule, not the store's polling,
-    and goes to the rendering track: [`handoff-render.md`](handoff-render.md) §3,
+    and goes to the rendering track: [`handoff-render.md`](../handoff-render.md) §3,
     finding 8, with the per-schedule numbers. Phase 3 does not take it.
 
   Then deleted: `Engine` (`Old`, `InPlace`, `New`), `with_engine`, `load_with`, the
@@ -2509,19 +2514,9 @@ Verified: differential suite (461) with IRON_ATOMICITY and IRON_OWNER_CHECK, pla
 app lib tests, build, 10,000 random scripts; smoke, regression (the pendulum's last
 digits only), fiber, pulses and idle scripts.
 
-**Phase 4, step 3 deferred (2026-11-19, the builder's decision): Dormant by view
-rectangle.** Bounds must stay right (§8.5), so a picture outside the view still
-needs every leaf its extent reads (`geom::effect_of` other than `None`: placement,
-size, geometry, handles, stroke, text, trim). Counted over five lasers, fibers,
-meters and readouts and a plot: of the pictures' bound leaves, 176 feed the extent
-and 56 do not (fill 31, appearance 23, group clip 2; anchors, lets, repeats and
-writes are kept for other reasons). What moves in a frame (a needle's rotation, a
-fiber's light, a plot's paths) is extent, so step 3 would save little for the host
-work it needs (each view's rectangle in composition space, margins, and noticing a
-bound that moves into view). §8.5's way out is what makes it pay: an owner that
-clips to a declared size has that size as its extent and nothing inside needed.
-Step 3 is built when standard components clip; until then a shown composition is
-observed whole, which satisfies §17's "something moving into the view appears".
+**Phase 4, step 3 (RE-4.3) deferred (2026-11-19): Dormant by view rectangle.** Moved to
+[`handoff-render.md`](../handoff-render.md) §10 when this plan closed (2026-11-21), with
+the reasons.
 
 **Phase 4, step 4 deferred (2026-11-19, the builder's decision): Unloaded owners and
 lazy slots.** This plan's own rule (above) unloads only pure pictures, never a
@@ -3431,46 +3426,83 @@ that fail before (three checked):
     above. On today's code an edit in one of 1,000 containers is 0.063 ms, where
     RE-5.4 measured 1.37 ms before `sync_layout` was keyed on structure.
   - All suites pass; the build and the scripts pass.
-- **The hold and the rooting, dropped (step 1).**
+- **The hold, dropped (step 1).**
   - `hold_layout`, `holding`, `release_later`, `layout_pending` and the store's
     `resolve_layout` are deleted. Layout natives run in any pass, in height order,
     with what they read. `relayout` flushes what waits and settles escaped reads;
     `scratch` flushes only when glides were in flight.
-  - A layout claim that moves clears the errors on every leaf layout holds at once,
-    in `claim`, as the release of the hold did.
-  - Layout natives are made unrooted: a composition nothing shows is not laid out
-    until it shows (`a_hidden_composition_is_laid_out_once_shown`, which fails on
-    the held version).
+  - A layout claim that moves clears layout's claim errors, in `claim`, as the
+    release of the hold did. It walks the errors (few), not the placements.
   - **The feedback bound.** With layout inside the settle's own passes, a count that
     reads its own items' layout grew to `repeat.max` in one settle (1,002 items,
-    67 s in debug). Now a repeat whose items change `REPEAT_CHANGES` (5) times in one
-    `resolve_physics` settles no further there and is the `feedback` problem.
-    `moved_repeats` is replaced by the per-repeat count. A pipeline derives at most
-    six times, so the test's repeat stops at 20 items; it asserts at most 32.
-  - `cells_demo` is unchanged (edit one of 1,000 containers 0.063 ms; preview
-    0.015 ms; chain of 8 0.087 ms; one container of 1,000 items 3.16 ms; build 100
-    containers 7.8 ms). The hold cost nothing measurable.
+    67 s in debug). Now, when a repeat's items change `REPEAT_CHANGES` (5) times in
+    one `resolve_physics`, the store asks the graph whether the repeat reads its
+    own items (`Reactive::reaches_into`, a walk up what it reads). One that does is
+    `restless`: its items are held as they are, and it is the `feedback` problem,
+    until the next transaction lets it try again. Every other repeat goes on
+    settling. One that reads a chain of others changes once per link and settles
+    (`a_repeat_reading_a_chain_of_eight_settles`).
+  - **Gestures set aside around a transaction** (`apply`) no longer restart glides:
+    `Reactive::glide_keep` restores a transition whose target came back to where it
+    was (`a_refused_edit_mid_drag_does_not_restart_a_glide`).
+- **The rooting stays (step 1, not met).** Layout natives were made unrooted, so that
+  a composition nothing shows is not laid out. The council found two failures, so
+  they are rooted again:
+  - a native that has not run claims nothing, so a host's publish could take a
+    placement in a hidden stack first, and keep it once shown (it was refused
+    before);
+  - a capture (`document_bridge/capture.rs`) draws a composition no observer shows,
+    so it could read a hidden table's stale grid.
+
+  Unrooting waits on natives reserving their outputs before they first run, and on
+  captures observing what they draw.
 - **What still runs in `pipeline_from`'s rounds (step 2).** The rounds re-derive when
-  the store's own code, between the natives, read an unneeded cell that was stale:
-  the repeat scan in `settle_repeats`, `network_now`'s structure, the live cluster
-  solve (`resolve_clusters_live`, §17's unmet item), `publish_state` and the glide
-  specs. Natives read through `Cx`, so their reads are edges and never escape.
-  Counted over the whole differential suite, with each escape tagged by stage
-  (temporary instrumentation, not committed): **one** stale escaped read, from
-  `current` (an action's or a handle's computation), and none from any stage of a
-  derivation. The rounds stay as the guard for that code, which is not yet cells;
-  removing them waits on the cluster solve moving in.
+  the store's own code, between the natives, reads an unneeded cell that was stale.
+  The code that reads cells directly is the repeat scan in `settle_repeats` and the
+  live cluster solve (`resolve_clusters_live`, §17's unmet item); `network_now`,
+  `publish_state` and the glide specs read structure, session state and contexts.
+  Natives read through `Cx`, so their reads are edges and never escape. Counted over
+  the whole differential suite, with each escape tagged by stage (temporary
+  instrumentation, not committed): **one** stale escaped read, from `current` (an
+  action's or a handle's computation, which settles its own reads), and none from
+  any stage of a derivation. Only four test files turn `observe_all` off, so the
+  count covers little. The rounds stay as the guard; removing them waits on the
+  cluster solve moving in.
+- **`cells_demo` after step 1** (release, p50): edit one of 1,000 containers
+  0.030 ms; a preview 0.012 ms; a chain of 8 0.084 ms; one container of 1,000 items
+  3.16 ms; 1,000 containers all re-laid out by one edit 49.4 ms (a new case, the
+  council's: 142.7 ms while each claim walked every placement); building 100
+  containers 7.5 ms.
+- **The differential's reference** has been natives since the old pipeline went
+  (2862265): it compares copies kept apart against copies in the document, so it no
+  longer checks the natives' semantics against an independent oracle. The tests
+  above are the check for this step's changes.
 - **Measured on the way:** `observing_part_of_the_time_changes_nothing_once_all_is_observed`
   takes about 3.5 min in debug, and did before this step (seed 2 is 22 s either
   way). The run-iron durations row and the iteration skip list now name it.
-- **Left for RE-5.6:**
-  3. A council, then the roadmap.
-  4. Close this file: RE-4.3 moves to `handoff-render.md`, and the file moves to
-     `archive/`.
+- **Council on RE-5.6** (2862265 and 24367eb): Opus 6.5/10, Sol 5/10. Found and
+  fixed: the feedback bound stopping a valid chain of repeats, and stopping every
+  repeat; the claim-error walk (quadratic in re-laid-out roots); glides restarted
+  by a refused edit mid-drag; stale comments naming deleted code. The unrooting's
+  two failures are above. Ruled out by Opus: claims released at once when a native
+  is dropped (passed on through `incoming`), unrooted stale reads by transactions,
+  plans and the agent API (`exact`, `scratch`).
 
-  Then PT-2 to PT-4b. Building from PT-5 waits on the user.
+**RE-5.6: phase end (2026-11-21).** Spec §17's exits for phase 5:
 
-**RE-5.6: phase end.** As before.
+| Exit | State |
+|---|---|
+| A repeat whose count reads a contained box's width adds items during a resize drag | **Met** (RE-5.4: `layout.contain`, schema 15; the probe test and the contained-box tests) |
+| Solving only dirty clusters agrees with solving all on every script; a drag in one cluster solves no other | **Met** (RE-5.1) |
+| `resolve_clusters_live` has no callers | **Not met** (RE-5.5): solving stays in `post_apply` and the live solve; grouping, validation and each cluster's change test are natives |
+| `layout`, `table`, `ports`, `schematic`, `constraints`, `gestures` and `handles` suites green | **Met** |
+| The meter targets of §15 | Measured in "RE-5.6 so far" above (700 meters: placing 0.62 ms, a structural edit 0.35 ms, a constant edit 0.17 ms) |
+
+Not built, with the reasons above: `fits`; one-axis containment; the solver's Solve
+cells, solved layer and commit step (RE-5.5); layout natives unrooted (RE-5.6, the
+council's two failures); deduplicated reads for one big container and a native's
+first height from its structure (`cells_demo`'s two slower cases). Clips as cells
+are PT-9.
 
 **Not in this plan:**
 - clips and steppers (PT-9, PT-10);

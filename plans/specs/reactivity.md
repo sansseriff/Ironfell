@@ -582,4 +582,4 @@ pointer.
 - Next: a new engine in which a change to one owner's items costs that owner, not the
   document: [`reactive-engine.md`](reactive-engine.md) (proposed 2026-11-15; it calls
   this spec's scopes "owners"), ordered in
-  [`handoff-reactive-structure.md`](../handoff-reactive-structure.md).
+  [`handoff-reactive-structure.md`](../archive/handoff-reactive-structure.md).

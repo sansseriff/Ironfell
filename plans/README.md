@@ -15,17 +15,19 @@ finishes, or is superseded.
    - **Rendering performance** (stage H): [`handoff-render.md`](handoff-render.md) §4.
    - **The new reactive engine** (owners, demand-driven evaluation, instances as
      references, a time scheduler; it began as the `std:plot` pan/zoom frame drops):
-     [`handoff-reactive-structure.md`](handoff-reactive-structure.md), with the design
-     in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
+     **closed 2026-11-21**, its handoff archived as
+     [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md),
+     with the design in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
      phases 0 (baselines, the harnesses), 1 (the read contract: `Tree`,
      `take_changes()`) and 2a (transactions in place, a document journal) done
      2026-11-16; 2b (owners, the graph updated in place: the plot fix) done and
      swapped in 2026-11-17, the old engine deleted; 2c (copies leave the document),
      3 (time) and 4 (observation) done 2026-11-19, each with named steps deferred.
-     Now: phase 5 (the pipeline as cells), its first two steps done; the handoff's
-     §2 has the state of each phase. The plan ends with phase 5's layout, network and
-     solver cells; its clock providers, clips, parking and phase 6 move to the
-     patches track.
+     Phase 5 (the pipeline as cells: layout, the network per island, constraint
+     grouping and change tests as native cells on one general cell) done
+     2026-11-21. The handoff's §2 has the state of each phase and what each left
+     deferred or not met. Its clock providers, clips, parking and phase 6 moved to the
+     patches track, and RE-4.3 (Dormant by view) to `handoff-render.md` §10.
    - **Patches, regions and time** (one algebra for instances, variants, machine
      states, slides, takes, clips and narrative extents; composition clocks):
      [`handoff-patches.md`](handoff-patches.md). The design is a note,
@@ -53,7 +55,7 @@ work under a plan gets the next free number.
 
 | Prefix | Plan | Numbering |
 |---|---|---|
-| `RE` | [`handoff-reactive-structure.md`](handoff-reactive-structure.md) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
+| `RE` | [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) (closed; `RE-4.3` is now in `handoff-render.md` §10) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
 | `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
@@ -143,6 +145,7 @@ that orders them gives them a key.
 | Document | Superseded by |
 |---|---|
 | [`handoff-2026-10-11.md`](archive/handoff-2026-10-11.md) | `handoff-product.md` (tasks done) |
+| [`handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) | Finished 2026-11-21: the reactive engine's phases 0 to 5. Open items moved to `handoff-patches.md` §1 and `handoff-render.md` §10 |
 | [`vello-hybrid-migration-scope.md`](archive/vello-hybrid-migration-scope.md), [`vello-retention-and-render-plan.md`](archive/vello-retention-and-render-plan.md), [`vello-retained-subtree-renderer-proposal.md`](archive/vello-retained-subtree-renderer-proposal.md) | `rendering/architecture.md`; still the place for their source citations and Zulip quotes |
 | [`bevy-vello-hybrid-design.md`](archive/bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](archive/bevy-vello-hybrid-open-questions.md) | The migration happened; see `rendering/architecture.md` |
 | [`deferred-3d-image-target.md`](archive/deferred-3d-image-target.md) | `specs/view-textures.md` |

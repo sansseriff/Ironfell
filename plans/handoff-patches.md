@@ -15,7 +15,7 @@ specs PT-4a and PT-4b write.** PT-1 started 2026-11-20.
    §2.2 the six laws, §4 where each existing mechanism lands, §9 what is open.
 3. [`specs/reactive-engine.md`](specs/reactive-engine.md) §8.3 (what stays necessary),
    §10 (time, clocks, slices), §13 (partial loading), §17 (phases).
-4. [`handoff-reactive-structure.md`](handoff-reactive-structure.md) §2 (the state of
+4. [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) §2 (the state of
    each engine phase) and §5 (its rules, which apply here too).
 5. For PT-4b and PT-11: [`specs/scopes.md`](specs/scopes.md) §8, and iron-platform's
    `README.md` and `server/migrations/0001_init.sql`
@@ -45,8 +45,8 @@ These items move here:
 | RE-6 | value slices (spec §10.5) | PT-5: evaluation at a point; a slice fixes a point on every axis, not only the clocks |
 | RE-4.4 (deferred) | Unloaded owners, lazy slots, parking stateful owners | PT-11: loading by point |
 
-RE-4.3 (Dormant by view rectangle) stays with the engine plan. It is about
-view rectangles, not this.
+RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render.md)
+§10 when the engine plan closed (2026-11-21). It is about view rectangles, not this.
 
 ## 2. Work order
 

@@ -507,6 +507,8 @@ pub struct StoreCore {
     old_pipeline: bool,
     /// The count of document writes the layout natives were made for.
     layout_at: Option<u64>,
+    /// The count of document writes the repeat natives were made for.
+    repeats_at: Option<u64>,
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
     /// before doing any work. `None` after structure changed, until the
@@ -657,6 +659,7 @@ impl StoreCore {
             network: self.network.clone(),
             old_pipeline: self.old_pipeline,
             layout_at: self.layout_at,
+            repeats_at: self.repeats_at,
             repeat_inputs: self.repeat_inputs.clone(),
             session_state: self.session_state.clone(),
             emitted: Vec::new(),
@@ -798,6 +801,7 @@ impl StoreCore {
                 self.sync_islands(&net, false);
             }
             self.sync_layout(false);
+            self.sync_repeats(false);
             self.prime_layout(&shaped);
         }
         self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
@@ -929,6 +933,7 @@ impl StoreCore {
             network: None,
             old_pipeline: !apart,
             layout_at: None,
+            repeats_at: None,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
@@ -1944,6 +1949,16 @@ impl StoreCore {
         }
         self.settling = true;
         self.moved_repeats.clear();
+        // Nothing to settle when no repeat's inputs changed (their natives
+        // did not run) and the last settle's inputs stand: the scan of every
+        // drawn repeat's inputs is the old pipeline's (handoff §4.10, RE-5.4).
+        if !self.old_pipeline {
+            self.sync_repeats(true);
+            if !self.reactive.take_ran_repeats() && self.repeat_inputs.is_some() {
+                self.settling = false;
+                return Vec::new();
+            }
+        }
         let mut applied = Vec::new();
         let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
         let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");
@@ -3418,6 +3433,32 @@ impl StoreCore {
         self.prime_layout(&shaped);
     }
 
+    /// Make a repeat native for each drawn repeat and conditional, and drop
+    /// the rest, when the document's structure changed.
+    fn sync_repeats(&mut self, run: bool) {
+        let edits = self.docs.edits();
+        if self.repeats_at == Some(edits) {
+            return;
+        }
+        self.repeats_at = Some(edits);
+        let drawn: BTreeSet<NodeId> = expand::drawn_repeats(Tree::of(&self.docs)).into_iter().collect();
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
+            .reactive
+            .native_keys()
+            .filter(|k| matches!(k, graph::NativeKey::Repeat(r) if !drawn.contains(r)))
+            .map(|k| (k, None))
+            .collect();
+        for r in drawn {
+            let k = graph::NativeKey::Repeat(r);
+            if self.reactive.native(k).is_none() {
+                batch.push((k, Some((std::sync::Arc::new(RepeatNative::new(r)), true))));
+            }
+        }
+        if !batch.is_empty() {
+            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
+        }
+    }
+
     /// Run the layouts whose subtree holds one of `shaped`, and the pins.
     fn prime_layout(&mut self, shaped: &BTreeSet<NodeId>) {
         if shaped.is_empty() {
@@ -4316,6 +4357,43 @@ struct Present {
 /// dropped), and one wanted again while leaving turns back from where it
 /// is. Answers the keys to expand, the wanted ones first, with each one's
 /// element.
+/// A drawn repeat or conditional as a native cell (reactive-engine handoff
+/// §4.10, RE-5.4): it reads what `settle_repeats` compares (`each`, `count`,
+/// `key`, `when`) and writes nothing. That it ran says its inputs changed, so
+/// a settle with none run looks at no repeat.
+#[derive(Debug)]
+struct RepeatNative {
+    leaves: [Leaf; 4],
+    outputs: BTreeSet<Leaf>,
+}
+
+impl RepeatNative {
+    fn new(r: NodeId) -> RepeatNative {
+        let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
+        let when = LeafPath::new(facet::FacetKind::When, "is").expect("declared leaf");
+        let leaves = [path("each"), path("count"), path("key"), when].map(|p| Leaf { node: r, path: p });
+        RepeatNative { leaves, outputs: BTreeSet::new() }
+    }
+}
+
+impl graph::Native for RepeatNative {
+    fn producer(&self) -> ProducerId {
+        ProducerId::ITEMS
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, graph::Failure> {
+        for l in self.leaves {
+            let _ = cx.read(l);
+        }
+        Ok(BTreeMap::new())
+    }
+}
+
 /// One repeat's or conditional's settled items: their keys, the item values
 /// it publishes, and its problems (`settle_repeats`).
 #[derive(Clone, Debug, PartialEq)]

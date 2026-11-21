@@ -99,6 +99,9 @@ pub enum NativeKey {
     /// The parts pinned in resized pictures (`layout::constrained`), for
     /// the whole document.
     Pins,
+    /// A drawn repeat or conditional: what its items are settled from
+    /// (`Store::settle_repeats`).
+    Repeat(NodeId),
     /// A native for the graph's own tests.
     #[cfg(test)]
     Test(NodeId, u32),
@@ -108,7 +111,7 @@ impl NativeKey {
     fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
-            NativeKey::Layout(n) => n,
+            NativeKey::Layout(n) | NativeKey::Repeat(n) => n,
             NativeKey::Pins => NodeId::from_raw(0),
             #[cfg(test)]
             NativeKey::Test(n, _) => n,
@@ -496,6 +499,9 @@ pub struct Reactive {
     inputs: BTreeMap<InputKey, Held>,
     /// The natives that read each input.
     input_readers: BTreeMap<InputKey, BTreeSet<NativeKey>>,
+    /// Repeat natives that ran since the store last took them: the repeats
+    /// whose inputs changed.
+    ran: BTreeSet<NativeKey>,
     /// Glides, while the host runs transitions (`None`: it does not).
     pub(crate) glide: Option<Glide>,
     /// While set, layout natives wait in `pending` instead of running: the
@@ -729,10 +735,13 @@ impl Reactive {
 
     /// Whether a cell on a node `by` names reads a leaf of `nodes`.
     pub(crate) fn read_by(&self, nodes: impl IntoIterator<Item = NodeId>, by: &dyn Fn(NodeId) -> bool) -> bool {
-        // A native runs where any node it writes is, and a rooted one always.
+        // A native runs where a node it writes is, or its own when it
+        // writes none; a rooted island always (the network integrates).
         let runs_at = |d: &CellId| match d {
             CellId::Leaf(l) => by(l.node),
-            CellId::Native(k) => self.natives.get(k).is_some_and(|n| n.rooted || n.rule.outputs().iter().any(|o| by(o.node))),
+            CellId::Native(k) => self.natives.get(k).is_some_and(|n| {
+                (n.rooted && matches!(k, NativeKey::Island(_))) || n.rule.outputs().iter().any(|o| by(o.node)) || (n.rule.outputs().is_empty() && by(k.node()))
+            }),
         };
         nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(runs_at)))
     }
@@ -1682,8 +1691,11 @@ impl Reactive {
     fn run_native(&mut self, doc: Tree<'_>, k: NativeKey, pass: &mut Pass<'_>) -> usize {
         let cell = CellId::Native(k);
         let rule = self.natives[&k].rule.clone();
-        self.evaluations += 1;
+        // `evaluations` counts expressions; a native counts its own runs.
         self.natives.get_mut(&k).expect("native").runs += 1;
+        if matches!(k, NativeKey::Repeat(_)) {
+            self.ran.insert(k);
+        }
         let (result, reads, base, reached, inputs, marks, extra) = {
             let mut cx = Cx {
                 doc,
@@ -2061,6 +2073,14 @@ impl Reactive {
         }
     }
 
+    /// Whether a repeat native ran since the last take: a repeat's inputs
+    /// changed.
+    pub(crate) fn take_ran_repeats(&mut self) -> bool {
+        let any = !self.ran.is_empty();
+        self.ran.clear();
+        any
+    }
+
     /// The native cells' keys.
     pub(crate) fn native_keys(&self) -> impl Iterator<Item = NativeKey> + '_ {
         self.natives.keys().copied()
@@ -2398,7 +2418,7 @@ mod tests {
         assert_eq!(num(&s, leaf(b, "size.h")), Some(7.0));
         assert_eq!(num(&s, leaf(c, "size.w")), Some(14.0));
         assert_eq!(runs.load(Ordering::SeqCst) - r0, 1, "the native runs once");
-        assert_eq!(s.reactive.evaluations - e0, 2, "the native and c, once each");
+        assert_eq!(s.reactive.evaluations - e0, 1, "c once (a native counts its own runs)");
     }
 
     #[test]
@@ -2418,7 +2438,7 @@ mod tests {
         let e0 = s.reactive.evaluations;
         set(&mut s, leaf(z, "size.w"), Slot::Const(Value::Number(8.0)));
         assert_eq!(num(&s, leaf(c, "size.w")), Some(9.0));
-        assert_eq!(s.reactive.evaluations - e0, 2, "the native and c.w");
+        assert_eq!(s.reactive.evaluations - e0, 1, "c.w (a native counts its own runs)");
         // It no longer reads a: a change there does not run it.
         let e0 = s.reactive.evaluations;
         set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(4.0)));
@@ -2585,7 +2605,7 @@ mod tests {
         let e0 = s.reactive.evaluations;
         set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(7.0)));
         assert_eq!(num(&s, leaf(c, "size.w")), Some(14.0));
-        assert_eq!(s.reactive.evaluations - e0, 2, "the native and c, once each");
+        assert_eq!(s.reactive.evaluations - e0, 1, "c once (a native counts its own runs)");
     }
 
     #[test]

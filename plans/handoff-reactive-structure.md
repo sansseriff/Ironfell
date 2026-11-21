@@ -2711,186 +2711,176 @@ sees only what it publishes.
   with 100 at rest**. Every transaction regroups every cluster, and `unmoved` builds
   every cluster's `Posed`.
 
-#### The design
+#### The design (revised after the council, 2026-11-20)
+
+The first draft scored 6/10 from both members (Opus 5.5, Sol 6.2); their findings
+are below. Three changes come from them: outputs are claims in the runtime layer, not
+cells keyed by leaf; output sets and indexes are fixed by structure; and every read a
+native makes is tracked, its non-value inputs included. `Env`, native state and index
+natives that make cells inside the pass are dropped or deferred.
 
 **A cell** is keyed by a `CellId`:
-- `Leaf(Leaf)`: a value cell;
-- `Native(NativeKey)`: an engine computation, keyed by what it computes for (a
-  container, an island's lowest unknown, a cluster's lowest constraint, a repeat).
-
-A read is always of a `CellId`. A leaf with no cell (an unbound constant) is still
-read as `Leaf(l)`, so `dependents: BTreeMap<CellId, BTreeSet<CellId>>` covers
-constants, as it does today with `Leaf`.
+- `Leaf(Leaf)`: a Formula, today's `BoundNode`. Leaf-keyed cells stay Formula-only, so
+  `restructure`, `rebuild`, `is_bound`, `expr_of`, `contexts` and `transitive_deps`
+  keep their meaning (Opus 1).
+- `Native(NativeKey)`: an engine computation keyed by what it computes for. It has a
+  `ProducerId`, a fixed output set, and the leaves it read last time.
+- `Input(InputKey)`: a source with a revision the store bumps, for what a native
+  consults that is not a leaf. In RE-5.3 there is none; RE-5.4 adds the font generation
+  and the layout preview per container, and RE-5.5 the fingers and drivers. So no
+  call site has to "prime every layout" by hand (Opus 3, Sol 4).
 
 ```rust
-struct Cell { rule: Rule, deps: BTreeSet<CellId>, tracked: BTreeSet<CellId>, height: u32 }
-enum Rule {
-    Formula { expr: Arc<Expr>, ctx: BTreeMap<String, Leaf>, tracks: bool }, // today's BoundNode
-    Native(Arc<dyn Native>),            // reads tracked, output a bundle
-    Pick { from: NativeKey, producer: ProducerId }, // one leaf of a native's bundle
-}
 trait Native: Send + Sync {
-    fn compute(&self, env: &Env, cx: &mut Cx) -> Result<Bundle, String>;
-    fn memory(&self) -> Memory;         // Pure | Integrating (spec §10.4)
-    fn on_failure(&self) -> Failure;    // Error | KeepLast
+    fn outputs(&self) -> &BTreeSet<Leaf>;                    // fixed at structure time
+    fn compute(&self, cx: &mut Cx) -> Result<BTreeMap<Leaf, Value>, Failure>;
 }
+enum Failure { Error(String), KeepLast(String) }            // KeepLast: did not converge
 ```
 
-The properties:
-- **Rule:**
-  - Formula (author or engine expressions: bindings, connection signals, anchor
-    positions);
-  - Native;
-  - Pick.
+**Outputs are claims in the runtime layer** (Opus 1, Sol 6). A native's result is
+written inside the pass with `publish`'s rules, under its `ProducerId`:
+- first claim wins and a second is reported in `signal_errors`;
+- a leaf a Formula binds is refused;
+- the overlay still reads first;
+- an output left out of the result is released and reads through to what is beneath.
 
-  Sources need no rule: a leaf with no cell reads through the layers as now
-  (overlay, runtime, constant), so host producers, selection, session state and
-  events keep publishing into `runtime` unchanged.
-- **Output:**
-  - a Formula has one value (`resolved`, as now);
-  - a Native has a `Bundle` (`BTreeMap<Leaf, Value>`), held on the cell;
-  - a Pick reads one leaf of it.
+`signal`, `driven_by`, `published_by`, `signals()` and `handle.rs`'s messages are
+unchanged. The cutoff is `publish`'s per-leaf diff, released leaves included, so the
+readers of a leaf that did not move do not run. An index `owned: BTreeMap<Leaf,
+NativeKey>` takes a read of an output to its native, for heights (a reader of an output
+sits above the native), priming, `behind`, wakes and necessity.
 
-  The equality cutoff is per Pick, so when layout runs again and one child moved,
-  only that child's readers wake.
-- **Memory:** Pure, or Integrating (the network's warm start, the solver's pose), held
-  in the cell as `state: Option<Box<dyn Any + Send + Sync>>`. Logged and Presentation
-  come with PT-9 and PT-10.
-- **When it runs:** on a change of what it read, in height order. Clock-driven rules
-  are PT-10's.
-- **On failure:**
-  - **Error**, like a Formula: the readers fail too, "depends on …";
-  - **KeepLast**: the bundle stands, and the failure is a problem on the key's node.
-    This is a solve that did not converge.
+**The output set is fixed by structure, as a superset** (Opus 2): every leaf the native
+could write. Layout chooses what to write from sizing words and fills, but a value
+change never adds a claim, so a reader is never found below a native mid-pass. The
+network's unknowns are structural already.
 
-**Reads are tracked through `Cx`**, which a Native gets in place of the store:
-- `cx.read(leaf)` reads through the layers and records `Leaf(leaf)`.
-- `cx.beneath(leaf)` reads without the native's own Picks, as `layout::base` does
-  now.
-- `cx.children(node)`, `cx.facets(node)` and `cx.nodes_of_type(ty)` record a
-  **structure read** of the node, or of the type. `restructure(nodes)` primes every
-  native that structure-read one of them. Today layout and the network read
-  structure directly. Without structure reads, a child added to a laid-out group
-  would not re-run its layout.
-- The Native's height is one above the highest cell it read. A Pick's is one above
-  that, and readers sit above the Pick. A read that reaches its own Picks is a
-  cycle, reported as for a tracked read today.
+**Reads go through `Cx`, and every one is tracked** (Opus 3, Sol 1, Sol 4).
+- `cx.read(leaf)` reads through the layers and records the leaf, constants included.
+  So a transaction that only sets a constant re-runs the native through `invalidate`.
+  `port::network`'s inlined literals, `solve::is_free`'s `constant()` and
+  `layout::constrained`'s template reads change to read through `cx`.
+- **Beneath.** `cx.read` of a leaf that the native itself owns records a separate
+  identity, `Base(leaf)`: the authored constant or the facet's default, as
+  `layout::base` reads now. A change of that constant primes the `Base` readers. So
+  a layout reading a width it also writes is no cycle, and it still sees the
+  author's change.
+- Structure reads (children in order, parent and liveness, membership by type,
+  relations) are recorded as such. `regraph` reports both the old and the new parent
+  of a create, delete, reorder and reparent, and the ends of a link and an unlink, so
+  `restructure` primes the natives that read them. Layout needs this, so it is built
+  in RE-5.4, not before.
+- A native gets no raw `Tree` and no `&StoreCore`. The network reads through
+  `port::network(Tree)` plus `cx` now. Layout's ~50 helpers that take `&StoreCore`
+  move onto a `Reads` trait that `StoreCore` and `Cx` both implement, as RE-5.4's
+  first, mechanical step (Opus 9).
 
-**`Env`** is what a native may consult besides values, borrowed from `StoreCore`'s
-fields other than `reactive`:
-- the `Tree`;
-- the contexts library;
-- fingers and drivers (from RE-5.5);
-- the layout preview;
-- the text engine, which is global.
+**Indexes are computed in `restructure`, not by cells** (Opus 5, Sol 5). Islands (and,
+in RE-5.5, clusters) change only when the document is written. So `restructure` works
+them out next to `derived_signals`, under the `rederive` flag, diffs them by their
+full description (not only by key), and makes and drops the natives as one batch
+before the pass. Making cells inside a pass is needed only by repeats (RE-5.4).
 
-Every `Reactive` method that evaluates takes `&Env` where it takes `Tree` today.
-There are about 35 call sites in `lib.rs`. So the graph never calls back into the
-store, and the borrow is disjoint.
+**No native state** (Opus 6, Sol 3). The network's warm start is the current value of
+its own outputs, by leaf, as `x0` is today (`signal`). It survives islands merging
+and splitting, and it is read outside the cycle rule (`cx.previous(leaf)`). The
+solver's pose (RE-5.5) is designed there: an immutable `Arc` staged and adopted at the
+public call's boundary, so `Saved` and `scratch` clones stay cheap and rollback
+restores it with the rest.
 
-**Index natives make and drop natives.** "Which islands exist" is a Native whose
-output is a set of keys: the Islands index, which structure-reads ports,
-connections and equations. The graph makes and drops the corresponding natives in
-the same pass, at heights above the index. Later cells of the same shape:
-- the Clusters index per composition (RE-5.5);
-- the containers per composition (RE-5.4).
+**The pass** (Sol 2, Opus 8) takes two of the kernel's rules (`iron_engine_kernel`,
+`engine.rs`):
+- **R5:** a cell whose new reads raise it is queued again if anything queued sits
+  below its new height. Today only a directly primed new read requeues it, and a
+  native reads too much for that.
+- **R6:** a cell blocked on a cycle is run again in any pass that removes an edge.
+  Today only `restructure` retries it.
 
-This is structure inside the graph. A repeat's structure is the document's, so it
-waits for RE-5.4 (below).
+Each rule comes with a test that fails before it. A raise uses `raise(&[cell])`, not
+the global `compute_heights`.
 
-**Necessity.** A native is a candidate when its key's node is hidden, and needed when
-a needed cell reads one of its Picks or it is rooted. A Solve cell is always rooted
-(D11), which replaces `necessity`'s `solved` set. A hidden composition's layout is
-then not run, and the pipeline's reads stop being pinned through `escaped`.
+**Necessity** (Opus 7, Sol 7). Natives are found by node through an index, since
+`CellId::Native` sorts outside the per-node leaf range. A native is a candidate only
+when every node it writes is hidden. Islands are rooted (D1: the network integrates
+from its warm start), as the network always runs today. Native failures live in their
+own map: an Error native's outputs carry its error in `errors[leaf]`, so readers
+fail as from a binding, and a KeepLast keeps its claims and reports a problem.
+`errors` stays as it is.
 
-**Producers stay where they are not yet cells.** `signal`, `driven_by`,
-`published_by` and `is_driven` answer for a Pick from its `producer`, so `handle.rs`
-("placed by its group's layout"), `view.rs` and the inspector see what they see
-today. A Pick on a leaf that a Formula binds is refused and reported as now
-("is bound; producer … cannot drive it").
-
-**Verification.**
-- The differential facade's reference keeps the old pipeline (`solve_network`,
-  `resolve_layout`, `rebuild_clusters`) while the subject runs the cells, as 2b's
-  reference kept the old engine. Each step is exact against it, except where a step
-  fixes ordering (RE-5.4's probe), which is listed in `INTENDED` with its test.
-- The random scripts, the 1,000-seed §8.8 property and the suites run as for every
-  phase.
-- When RE-5.5 ends, the old pipeline is deleted from the reference.
+**Verification** (Opus 4, 10, 11; Sol 8).
+- Each move onto cells is preceded by the same change in the old pipeline, on both
+  sides of the facade, exact. RE-5.1 was done that way. Then the move itself is exact
+  against a reference that keeps the old pipeline behind a mode flag on `StoreCore`.
+  A snapshot `INTENDED` entry stops comparing a script at its first difference, so
+  none is used for these steps.
+- `evaluations` is compared only by unit tests (the snapshot leaves it out), as the
+  step says.
 
 #### Steps
 
-**RE-5.3: the general cell, then the network on it.**
-1. `CellId`, `Cell` and `Rule::Formula` replace `BoundNode`. Every mechanism is keyed
-   by `CellId`: heights, `raise`, necessity, `stale`, `escaped`, `behind`, the sweep,
-   cycles and `blocked`. `&Env` replaces `Tree` in the evaluating methods. No
-   behaviour change: the suites, the random scripts and the §8.8 property pass
-   unchanged, and `evaluations` counts stay the same.
-2. `Rule::Native` and `Rule::Pick`, `Cx` with tracked and structure reads, bundles,
-   state, KeepLast, and index natives. Unit tests in `graph.rs`, with test natives:
-   - a reader of a Pick runs once per pass;
+**RE-5.3: the cell, the pass's rules, the network.**
+1. **Rekey.** The queue, heights, primed, `unneeded`, `stale`, `escaped`, `pinned`,
+   `candidates` and `blocked` are keyed by `CellId`, with `Leaf` only, and
+   `dependents` maps a `Leaf` to `CellId`s. No behaviour change: the suites, the random
+   scripts, §8.8's property and the `evaluations` assertions in the unit tests are
+   unchanged.
+2. **Natives in the graph.** `Native`, `Cx` (tracked reads, `Base`, `previous`), outputs
+   as claims, `owned`, the native index for necessity, failures, and R5 and R6. Unit
+   tests in `graph.rs` with test natives:
+   - a reader of an output runs once per pass;
    - a diamond through a native;
-   - a cutoff per Pick;
-   - a structure read re-runs on a new child;
-   - a cycle through a native is an error;
-   - a hidden native is not run, and is run when read.
-3. The network: an Islands index and an Island native per island (unknowns joined by
-   any shared equation, keyed by the lowest unknown), each with its own warm start
-   (Integrating) and `physics_error` per island (KeepLast). `solve_network` goes from
-   the subject.
+   - per-leaf cutoff and release;
+   - `Base` is no cycle and still sees a constant change;
+   - a constant-only transaction re-runs a native;
+   - a cycle through a native is an error, and recovers when its edge goes (R6);
+   - R5's requeue;
+   - a hidden native is not run, and is run when read;
+   - host-first and native-first claims.
+3. **Islands in the old pipeline.** `solve_network` solves each island separately:
+   unknowns joined by any shared equation, with any equation holding a `deref` joining
+   all of its possible unknowns into one conservative island. Its warm start is by
+   leaf and `physics_error` is per island. On both sides, exact.
    - Test: an edit in one circuit solves no other.
-   - The `ports`, `schematic` and `signals` suites stay green.
+4. **The network on natives.** Islands are computed in `restructure` (above), with
+   one native per island, rooted, KeepLast. `solve_network` stays only in the
+   reference's mode, exact against it. The `ports`, `schematic` and `signals` suites
+   stay green.
 
-**RE-5.4: repeats and layout.** Each container per composition is a Layout native
-(today's unit, `layout::compute`'s roots), cut at contained boxes into allocation and
-interior (§9.2). Pins are in their frame's Layout native. Table tracks are outputs,
-reported as a mark. Glides stay presentation over the target, so cells read the
-target (§9.1). That is a change: today readers read the glide.
+**RE-5.4: repeats and layout.** Its first steps:
+1. Fix the lag in the old pipeline on both sides: run the rounds again when a stage
+   read a published leaf that a later stage then moved, bounded as now. The probe
+   test passes from here on, in both. It is run at load and after each resize call,
+   with a true feedback case that keeps its last items and reports a cycle.
+2. The `Reads` trait, mechanical and exact.
+3. Structure reads, and `regraph`'s parents.
 
-A repeat becomes a native whose output is structure: its items are made inside the
-pass, then the pass goes on in height order. This is the step's hard part. It joins
-the owners (`engine/owners.rs`) and the document journal to the pass. **It is
-designed before it is built:** a sub-plan here, and a council on it.
-- `layout.contain` is declared on groups (schema bump). A structural input that reads
-  an uncontained box's size is refused at write time, or reported as a cycle on the
-  Collection (D6).
-- The probe is a test, `#[ignore]`d until this step.
-- `resolve_layout`, `relayout` and `settle_repeats` go.
-- The `layout`, `table` and `sized` suites stay green.
+Then Layout natives per container, cut at contained boxes (§9.2). Repeats as natives
+whose output is structure, made inside the pass: the kernel's R4 is the worked example
+of that. Glides are presentation over the target. `layout.contain` comes with a schema
+bump. **This step's structure part gets a sub-plan and a council before it is built.**
 
-**RE-5.5: the solver** (§9.4).
-- A Clusters index per composition, and a Solve native per cluster: Integrating (the
-  pose) and KeepLast. Its reads are tracked, which replaces `Posed`, `unmoved`, `pose`
-  and `posed`.
-- The solved layer is its Picks. Drivers and fingers are in `Env`.
-- The pose is adopted outside the pass, and an op writing a variable's constant sets
-  it. Rolling back restores the output. The commit writes `derived_ops`.
-- `resolve_clusters_live` and `rebuild_clusters` go.
-- Tests:
-  - `a_drag_in_one_cluster_solves_no_other`;
-  - the random scripts gain constraints;
-  - the `constraints`, `frame_constraints`, `gestures` and `handles` suites.
+**RE-5.5: the solver** (§9.4). Clusters are computed in `restructure`, with one Solve
+native per cluster: rooted, KeepLast, its pose staged and adopted as above, and its
+outputs in a solved layer. `resolve_clusters_live`, `rebuild_clusters`, `Posed` and
+`unmoved` go.
 - Target (`solve_cost`): with 100 pendulums at rest, a drag step and an unrelated edit
   each within 2× of one pendulum's.
+- The suites listed in §17. The random scripts gain constraints.
 
-**RE-5.6: phase end.**
-- §15's rows are measured.
-- What still runs in `pipeline_from`'s rounds is named (the theme, contexts, and the
-  producers PT-9 and PT-10 move), with why.
-- The old pipeline is deleted from the reference.
-- A council, then the roadmap. Then this file closes: RE-4.3 moves to
-  `handoff-render.md`, and the file moves to `archive/`.
+**RE-5.6: phase end.** As before.
 
 **Not in this plan:**
-- clips (PT-9) and steppers (PT-10), which are later rules on the same cell;
-- `fits`: no fitting layout mode exists, and wrapping is layout-engine work (§9.2);
+- clips and steppers (PT-9, PT-10);
+- `fits`;
 - one-axis containment;
-- dense arrays for cells (§5.1's layout in memory), a performance change of its own;
-- the live simulation, and `pause` and `coarse`;
-- native rules written by authors.
+- dense arrays;
+- the live simulation;
+- native rules written by authors;
+- native state beyond a value (PT-10 adds it if it needs to).
 
-**Councils:** on this design before step 1; on RE-5.4's structure sub-plan; at the
-end of each step.
+**Councils:** the design (done, 6/10 from both; revised as above); RE-5.4's structure
+sub-plan; the end of each step.
 
 ## 5. Rules, and when to stop
 

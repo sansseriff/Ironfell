@@ -1,6 +1,7 @@
 # Handoff: building the new reactive engine
 
-**Date:** 2026-11-19 · **Branch:** `master` · **Status:** the design
+**Date:** 2026-11-19 · **Branch:** `master` · **Keys:** `RE-n`, `RE-n.m` for a
+phase's step (plans/README.md, "Work keys") · **Status:** the design
 ([`specs/reactive-engine.md`](specs/reactive-engine.md), "the spec" below) is approved
 and its decisions settled. **Phases 0 to 4 are done** as §2's table says (2b's swap
 removed the old engine; 2c, 3 and 4 each left named steps deferred, with the reasons
@@ -8,7 +9,8 @@ recorded where each phase is). **Phase 5** is in progress: its first step (§4.8
 its scan measurements (§4.8, step 2) are done; its cells are not built. **This plan
 ends with phase 5's layout, network and solver cells** (2026-11-20): its clock
 providers, clips as cells, parking and phase 6 move to
-[`handoff-patches.md`](handoff-patches.md) §1. Then this file goes to `archive/`.
+[`handoff-patches.md`](handoff-patches.md) §1. RE-4.3 (Dormant by view) goes to
+`handoff-render.md` then, and this file to `archive/`.
 This file is for whoever builds next: what to read, the order of work, the phases as tasks, and
 the rules.
 
@@ -137,17 +139,17 @@ decision stands until they choose.
 
 The spec's §17 has each phase's contents and exit. In order:
 
-| | Phase | State |
+| Key | Phase | State |
 |---|---|---|
-| 0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
-| 1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
-| 2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
-| 2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Done 2026-11-17** (§4.4; swap `9f4ac59`) |
-| 2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
-| 3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now `handoff-patches.md` step 1 |
-| 4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. Step 4 is now `handoff-patches.md` step 11 |
-| 5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to `handoff-patches.md` step 9 (2026-11-20) | **In progress** (§4.8): a cluster solved only when something of it changed; the per-transaction scans measured and the dominant ones removed. The cells are next |
-| 6 | Value slices | Moved to `handoff-patches.md` step 5 (2026-11-20): evaluation at a point |
+| RE-0 | Baselines and the differential harness, run old against old | **Done 2026-11-16** (below) |
+| RE-1 | The read contract (`Tree`, `take_changes()`) on the old engine; every caller moved | **Done 2026-11-16** (below) |
+| RE-2a | Transactions in place on the old engine: the document journal | **Done 2026-11-16** (below; tasks in §4.3) |
+| RE-2b | The new cell graph and owners, copies still stored. **This is the plot fix**; it closes the roadmap's "Plot pan and zoom performance" row | **Done 2026-11-17** (§4.4; swap `9f4ac59`) |
+| RE-2c | Copies leave the document: instances as references | **Done 2026-11-19** as far as its exit (§4.6, "Where phase 2c ends"); lazy slots and validation from templates moved to phase 4 |
+| RE-3 | Time: clocks, the scheduler, steppers as cells, recorded events | **Done 2026-11-19** (§4.7): one `advance`; step 4 (`now()`, clock providers) deferred, now PT-1 (`handoff-patches.md`) |
+| RE-4 | Observation: Dormant, Unloaded, parking, extents | **Done 2026-11-19** (§4.9): observers, necessity, the idle sweep, three council rounds; steps 3 (Dormant by view) and 4 (Unloaded, lazy slots) deferred with the reasons. RE-4.4 is now PT-11 |
+| RE-5 | The pipeline as cells: layout, the network solve, the constraint solver. Does not depend on 3 or 4; closes instance-cache.md's "Open" at 1,000 meters. Clips as cells moved to PT-9 (2026-11-20) | **In progress** (§4.8): a cluster solved only when something of it changed; the per-transaction scans measured and the dominant ones removed. The cells are next |
+| RE-6 | Value slices | Moved to PT-5 (2026-11-20): evaluation at a point |
 
 After 2c, on the rendering track: **render-cache phase 3** (vector retention for live
 layers, with GPU upload bytes measured), which the user wants built (2026-11-18;

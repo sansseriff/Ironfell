@@ -511,10 +511,4 @@ Each is a projection of the algebra, not a separate feature.
 ## 10. A building order
 
 Moved to [`../handoff-patches.md`](../handoff-patches.md) §2 (2026-11-20), the one place
-that orders this work. In short:
-1. composition clocks;
-2. a council on this note;
-3. the algebra as a crate with property tests;
-4. the algebra spec, then the storage-and-query spec;
-5. after the user approves both, patches in the store;
-6. then machines, instances, search, decks and takes, clock operators, and storage.
+that orders this work, as keys PT-1 to PT-11 (plans/README.md, "Work keys").

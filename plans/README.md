@@ -30,9 +30,9 @@ finishes, or is superseded.
      states, slides, takes, clips and narrative extents; composition clocks):
      [`handoff-patches.md`](handoff-patches.md). The design is a note,
      [`notes/patches-regions-and-time.md`](notes/patches-regions-and-time.md), not
-     adopted. Step 1 (composition clocks) can be built now. Steps 2 to 4 are a
-     council, a pure crate with property tests, and two specs. Building from step 5
-     on waits for the user to approve those specs.
+     adopted. PT-1 (composition clocks) is in progress. PT-2 to PT-4b are a council,
+     a pure crate with property tests, and two specs. Building from PT-5 on waits for
+     the user to approve those specs.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
@@ -41,6 +41,25 @@ finishes, or is superseded.
 
 Where documents disagree, the higher one in this list wins: roadmap Status, then the
 handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `archive/`.
+
+## Work keys
+
+Every phase or step a handoff orders has a **key**: the plan's prefix, a dash and its
+number, with a dot for a step inside a phase. Keys are unique across all plans, so
+"RE-4.3" always means the same thing in a commit, a chat or another document. **Refer
+to work by key only, never by a bare "step 1" or "phase 5".** A key is never reused or
+renumbered. Work that moves keeps its key and gains a line saying where it went. New
+work under a plan gets the next free number.
+
+| Prefix | Plan | Numbering |
+|---|---|---|
+| `RE` | [`handoff-reactive-structure.md`](handoff-reactive-structure.md) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
+| `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
+| `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
+| `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
+
+A spec's own phase numbers ("ECM phase 4") stay as they are inside that spec; a handoff
+that orders them gives them a key.
 
 ## 2. Layout
 
@@ -98,7 +117,7 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 | [`agent-streaming.md`](specs/agent-streaming.md) | Live agent progress: one event stream from provider to chat (phases, reasoning summaries, streamed prose, Stop, idle timeout), a T3-style work log, and partial-edit previews through provisional store transactions | Phases 1–2 built 2026-11-06 (§6: live work log, Stop, streamed prose and forming edit, idle timeouts); 3–4 (partial-edit previews) proposed |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
 | [`plot.md`](specs/plot.md) | Series values (numbers with a unit), broadcasting floor functions and lambdas (`x => …`); paths bound to SVG path data (`points`, `circles`, `segments`); instances with their own size that reflow on a corner drag; the `std:plot` standard component | Phases 1–3 built 2026-11-08 (§12); `std:plot` is markup (`std/plot.xml`) since 2026-11-09 |
-| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; built in part (`roadmap.md`). **To be replaced** by the patches spec: states become points on an axis, poses patches ([`handoff-patches.md`](handoff-patches.md) step 6) |
+| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; built in part (`roadmap.md`). **To be replaced** by the patches spec: states become points on an axis, poses patches ([`handoff-patches.md`](handoff-patches.md) PT-6) |
 | [`wires-and-formulas.md`](specs/wires-and-formulas.md) | The node graph Iron already has, shown on demand: formulas as the source of truth, purple wires only around the selection, modifier chips on wires (Easy Ease, Map range, Window…) that are calls in the formula, components for depth, no free node canvas; `ease()`, `window()`, `cubic-bezier`, Trim Paths | Proposed 2026-11-08; phase 1 next |
 | [`frame-constraints.md`](specs/frame-constraints.md) | Figma's resizing model for people: a `pin` facet per child (left, right, stretch, center, scale) interpreted by the layout step, the Resizable toggle, the constraints widget, an auto-layout section | Proposed 2026-11-08; phases 1–2 (minimal) built 2026-11-08 (§7) |
 | [`repeat.md`](specs/repeat.md) | A repeat (a `repeat` facet on a group): one derived copy of its children per element of a series or count, keyed by index or value, entering and exiting through machines; `let` named values; node markup, in which the standard components are written | Phase 1, `let` and node markup built 2026-11-09 (§9): `std:plot` and the other standard components are markup; reworked the same day onto item nodes and live settling (reactivity.md); value keys, enter/exit open |

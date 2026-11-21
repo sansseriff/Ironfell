@@ -402,7 +402,7 @@ pub const EMBED_3D_SIZE: (f64, f64) = (320.0, 240.0);
 /// view), and `size` (default [`EMBED_3D_SIZE`]); with a camera, the height
 /// follows the camera's aspect. `None` unless the embed shows a live 3D
 /// composition.
-pub fn embed_3d_extent(store: &crate::StoreCore, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
+pub fn embed_3d_extent(store: &dyn crate::reads::Reads, embed: NodeId) -> Option<(NodeId, Option<NodeId>, f64, f64)> {
     let doc = store.tree();
     let source = embedded(doc, embed)?;
     if dims(doc, source) != Some(Dims::Three) {

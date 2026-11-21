@@ -2966,9 +2966,11 @@ fixed points (RE-5.5) if a document needs it. No document does today.
   Both fail before the change.
 - Cost: `plot_pan_and_zoom_cost` (release), values-only pan p50 0.050 ms, against 0.077
   ms without the change in the same run: no slower.
-- `regression.txt`: the pendulum's last digits moved (x 323.714905573 →
-  323.714909407), the same on every run. SKILL.md is updated. A finger's solves
-  depend on how many calls a drag makes (§9.4), which this changes.
+- `regression.txt`: the pendulum ball's last digits came out as 323.714909407 twice,
+  so SKILL.md was updated. That was chance: in step 2 runs they were 323.714908166
+  and then 323.714905573 (the old value). They vary from run to run with frame
+  timing, as SKILL.md says: a finger's solves depend on how many calls a drag makes
+  (§9.4).
 
 #### RE-5.4's sub-plan: layout and repeats as cells (plan, 2026-11-21)
 
@@ -3101,6 +3103,24 @@ cited by member and number.
    - the same in a hugging group is the `feedback` problem.
 7. **The demonstrations** (below). The reference's old layout and repeats go. A
    council, then the roadmap.
+
+**RE-5.4 step 2a, as done (2026-11-21): the old pipeline's two lags, and `Reads`.**
+- **`Reads`** (`reads.rs`): `tree`, `resolved`, `layout_base` (beneath any LAYOUT
+  claim, which is `layout::base`) and `layout_preview`.
+  - `StoreCore` and the differential facade implement it.
+  - `layout.rs` and what it calls take `&dyn Reads`: `geom`'s local bounds and paint
+    padding, `text`, `contour`, `shape`, `composition::embed_3d_extent`, `table`.
+  - Callers passing `&StoreCore` are unchanged.
+- **Nested roots:** `layout::compute` lays out the deepest roots first, and later
+  roots read what the run has placed (`Fresh`, over the store).
+  - Test: `an_outer_layout_reads_a_nested_one_through_a_plain_group_at_once`. It was
+    wrong even at load: 20 where 30 was right.
+- **Layout → binding → layout:** `resolve_layout` says whether a placement that a cell
+  reads moved, and `resolve_physics` (and `relayout`) lay out again while one did, up
+  to `LAYOUT_ROUNDS`.
+  - Test: `a_layout_reading_a_binding_over_another_layout_follows_it_at_once`.
+- Both tests fail before; both run on each side of the facade.
+- `resolve_layout` is private now; the facade forwarded it and nothing called it.
 
 **The demonstrations** (the user's request, 2026-11-21: show the design's efficiency
 with simple cases), in release, against the old pipeline as step 2 leaves it. Each

@@ -19,7 +19,6 @@ use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::shape::Anchor;
 use crate::value::{Slot, Value};
-use crate::StoreCore;
 use kurbo::{Point, Vec2};
 use std::sync::Arc;
 
@@ -61,7 +60,7 @@ pub fn bound(doc: Tree<'_>, path: NodeId) -> bool {
 /// previews a packed path's `d`): its `path.d` when packed, shared, with its
 /// outlines cached; built from its `contour` and `point` children when
 /// expanded.
-pub fn geometry(store: &StoreCore, path: NodeId) -> Arc<Geometry> {
+pub fn geometry(store: &dyn crate::reads::Reads, path: NodeId) -> Arc<Geometry> {
     if let Some(Value::Geometry(g)) = store.resolved(path, "path.d".parse().expect("declared leaf"))
         && !g.is_empty()
     {
@@ -74,7 +73,7 @@ pub fn geometry(store: &StoreCore, path: NodeId) -> Arc<Geometry> {
 /// addressed one by one (packed-paths.md §4): `path.d` emptied, and a
 /// `contour` per packed contour with a `point` per anchor. Empty when the
 /// path is not packed.
-pub fn expand_points(store: &StoreCore, path: NodeId) -> Vec<Op> {
+pub fn expand_points(store: &dyn crate::reads::Reads, path: NodeId) -> Vec<Op> {
     let doc = store.tree();
     let Some(g) = packed(doc, path) else { return Vec::new() };
     let runs: Vec<(Vec<Anchor>, bool)> = g.contours().iter().map(|c| (c.anchors.clone(), c.closed)).collect();
@@ -86,7 +85,7 @@ pub fn expand_points(store: &StoreCore, path: NodeId) -> Vec<Op> {
 
 /// `path`'s contours in order, each with its points: an expanded path's,
 /// none for a packed one (see [`expand_points`]).
-pub fn contours(store: &StoreCore, path: NodeId) -> Vec<Contour> {
+pub fn contours(store: &dyn crate::reads::Reads, path: NodeId) -> Vec<Contour> {
     let doc = store.tree();
     let num = |n: NodeId, leaf: &str| store.resolved(n, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).unwrap_or(0.0);
     doc.children(path)
@@ -112,7 +111,7 @@ pub fn contours(store: &StoreCore, path: NodeId) -> Vec<Contour> {
         .collect()
 }
 
-pub fn fill_rule(store: &StoreCore, path: NodeId) -> FillRule {
+pub fn fill_rule(store: &dyn crate::reads::Reads, path: NodeId) -> FillRule {
     match store.resolved(path, "path.fill_rule".parse().expect("declared")) {
         Some(Value::Enum(r)) if r == "evenodd" => FillRule::EvenOdd,
         _ => FillRule::NonZero,

@@ -22,10 +22,10 @@ use kurbo::Rect;
 
 use crate::expr::Leaf;
 use crate::facet::{FacetKind, LeafPath};
-use crate::graph::ProducerId;
 use crate::id::NodeId;
 use crate::text::{self, Sizing};
-use crate::{StoreCore, TypeId, Value};
+use crate::reads::Reads;
+use crate::{TypeId, Value};
 
 fn path(leaf: &str) -> LeafPath {
     leaf.parse().expect("declared leaf")
@@ -33,22 +33,15 @@ fn path(leaf: &str) -> LeafPath {
 
 /// A leaf as layout must read it: beneath its own published value (the
 /// authored constant, or the facet's default when the node lacks it).
-pub fn base(store: &StoreCore, id: NodeId, leaf: &str) -> Option<Value> {
-    let p = path(leaf);
-    match store.reactive.signal(Leaf { node: id, path: p }) {
-        Some(s) if s.producer == ProducerId::LAYOUT => match DocTree::of(&store.docs).leaf(id, p) {
-            Some(slot) => slot.constant().cloned(),
-            None => p.facet.default_facet().get(p.field).and_then(|s| s.constant().cloned()),
-        },
-        _ => store.resolved(id, p),
-    }
+pub fn base(store: &dyn Reads, id: NodeId, leaf: &str) -> Option<Value> {
+    store.layout_base(id, path(leaf))
 }
 
-fn num(store: &StoreCore, id: NodeId, leaf: &str, default: f64) -> f64 {
+fn num(store: &dyn Reads, id: NodeId, leaf: &str, default: f64) -> f64 {
     base(store, id, leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default)
 }
 
-fn word(store: &StoreCore, id: NodeId, leaf: &str) -> String {
+fn word(store: &dyn Reads, id: NodeId, leaf: &str) -> String {
     base(store, id, leaf).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
@@ -64,8 +57,8 @@ pub struct Preview {
 }
 
 /// The container a group's `layout` facet describes, if it lays out.
-fn container(store: &StoreCore, id: NodeId) -> Option<Container> {
-    DocTree::of(&store.docs).facet(id, FacetKind::Layout)?;
+fn container(store: &dyn Reads, id: NodeId) -> Option<Container> {
+    store.tree().facet(id, FacetKind::Layout)?;
     let mode = match word(store, id, "layout.mode").as_str() {
         "stack_x" => Mode::StackX,
         "stack_y" => Mode::StackY,
@@ -145,8 +138,8 @@ struct Entry {
 }
 
 /// Whether a node takes part in its parent's layout.
-fn is_item(store: &StoreCore, id: NodeId) -> bool {
-    let doc = DocTree::of(&store.docs);
+fn is_item(store: &dyn Reads, id: NodeId) -> bool {
+    let doc = store.tree();
     let Some(n) = doc.live(id) else { return false };
     if !n.ty.spec().allows(FacetKind::Transform2d) || n.ty.name() == "empty" || n.ty.name() == "point" {
         return false;
@@ -156,15 +149,15 @@ fn is_item(store: &StoreCore, id: NodeId) -> bool {
 
 /// A node's content box in its own local space: its geometry, or for a
 /// group or `use`, its children's, through their transforms.
-fn content_bounds(store: &StoreCore, id: NodeId) -> Option<Rect> {
+fn content_bounds(store: &dyn Reads, id: NodeId) -> Option<Rect> {
     if let Some(b) = crate::geom::local_bounds(store, id) {
         return Some(b.geometry);
     }
     let read = |l: Leaf| store.resolved(l.node, l.path);
     let mut out: Option<Rect> = None;
-    for &c in DocTree::of(&store.docs).children(id).iter() {
+    for &c in store.tree().children(id).iter() {
         let Some(r) = content_bounds(store, c) else { continue };
-        let a = crate::geom::local_affine(DocTree::of(&store.docs), &read, c);
+        let a = crate::geom::local_affine(store.tree(), &read, c);
         let pts = [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]].map(|p| a.apply(p));
         let (x0, x1) = pts.iter().map(|p| p[0]).fold((f64::MAX, f64::MIN), |(lo, hi), x| (lo.min(x), hi.max(x)));
         let (y0, y1) = pts.iter().map(|p| p[1]).fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
@@ -176,7 +169,7 @@ fn content_bounds(store: &StoreCore, id: NodeId) -> Option<Rect> {
 
 /// A fixed-size item's box under its own rotation and scale (translation
 /// left out): its size, and where its top-left sits from its origin.
-fn placed_box(store: &StoreCore, id: NodeId, local: Rect) -> ([f64; 2], [f64; 2]) {
+fn placed_box(store: &dyn Reads, id: NodeId, local: Rect) -> ([f64; 2], [f64; 2]) {
     let t = |f: &str, d: f64| num(store, id, &format!("transform2d.{f}"), d);
     let a = crate::geom::Affine2::from_trs(0.0, 0.0, t("rot", 0.0), t("sx", 1.0), t("sy", 1.0));
     let pts = [[local.x0, local.y0], [local.x1, local.y0], [local.x0, local.y1], [local.x1, local.y1]].map(|p| a.apply(p));
@@ -186,16 +179,16 @@ fn placed_box(store: &StoreCore, id: NodeId, local: Rect) -> ([f64; 2], [f64; 2]
 }
 
 /// Lay a text out at `width` (`None`: unwrapped), as `text::measure` would.
-fn text_layout(store: &StoreCore, id: NodeId, width: Option<f64>) -> std::sync::Arc<iron_text::TextLayout> {
+fn text_layout(store: &dyn Reads, id: NodeId, width: Option<f64>) -> std::sync::Arc<iron_text::TextLayout> {
     iron_text::engine().layout(&text::content(store, id), &text::style(store, id), &text::runs(store, id), width)
 }
 
-fn sizing(store: &StoreCore, id: NodeId) -> Sizing {
+fn sizing(store: &dyn Reads, id: NodeId) -> Sizing {
     Sizing::parse(&word(store, id, "text.sizing"))
 }
 
 struct Builder<'s> {
-    store: &'s StoreCore,
+    store: &'s dyn Reads,
     tree: Tree,
     entries: Vec<Entry>,
     /// Each table's cell areas, from `table::place`.
@@ -209,7 +202,7 @@ impl Builder<'_> {
         let fill = |leaf: &str| word(store, id, leaf) == "fill";
         let mut item = Item { align_self: align(&word(store, id, "layout_item.align")), ..Item::default() };
         let mut fills = [fill("layout_item.w"), fill("layout_item.h")];
-        if DocTree::of(&store.docs).facet(id, FacetKind::LayoutItem).is_some() {
+        if store.tree().facet(id, FacetKind::LayoutItem).is_some() {
             let place = |start: &str, span: &str| {
                 let s = num(store, id, start, 0.0).round();
                 (s >= 1.0).then(|| Area { start: s as u16 - 1, span: num(store, id, span, 1.0).round().max(1.0) as u16 })
@@ -277,7 +270,7 @@ impl Builder<'_> {
         self.tree.nodes.push(Node { key: id.raw(), item, container: container_spec, children: Vec::new(), measured });
         self.entries.push(Entry { id, kind, offset, fill: fills });
         if kind == Kind::Container {
-            let mut kids: Vec<NodeId> = DocTree::of(&store.docs).children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
+            let mut kids: Vec<NodeId> = store.tree().children(id).iter().copied().filter(|&c| is_item(store, c)).collect();
             if let Some(p) = store.layout_preview().filter(|p| p.container == id) {
                 kids.sort_by_key(|k| p.order.iter().position(|o| o == k).unwrap_or(usize::MAX));
             }
@@ -303,8 +296,8 @@ impl Builder<'_> {
     }
 }
 
-fn kind_of(store: &StoreCore, id: NodeId) -> Kind {
-    match DocTree::of(&store.docs).live(id).map(|n| n.ty.name()) {
+fn kind_of(store: &dyn Reads, id: NodeId) -> Kind {
+    match store.tree().live(id).map(|n| n.ty.name()) {
         Some("group") if container(store, id).is_some() => Kind::Container,
         Some("table") => Kind::Table,
         Some("text") => Kind::Text,
@@ -316,10 +309,34 @@ fn kind_of(store: &StoreCore, id: NodeId) -> Kind {
 
 /// Every laid-out group's and table's placements, as the layout producer
 /// publishes them, and every table's grid.
-pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
+/// What layout reads while it runs: what this run has placed already, over
+/// the store. A root nested in a plain group inside another root is laid out
+/// first, and the outer one reads its placements through the group's bounds
+/// in the same run (reactive-engine handoff §4.10, RE-5.4 step 2).
+struct Fresh<'a> {
+    store: &'a dyn Reads,
+    out: &'a BTreeMap<Leaf, Value>,
+}
+
+impl Reads for Fresh<'_> {
+    fn tree(&self) -> DocTree<'_> {
+        self.store.tree()
+    }
+    fn resolved(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        self.out.get(&Leaf { node: id, path }).cloned().or_else(|| self.store.resolved(id, path))
+    }
+    fn layout_base(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        self.store.layout_base(id, path)
+    }
+    fn layout_preview(&self) -> Option<&Preview> {
+        self.store.layout_preview()
+    }
+}
+
+pub fn compute(store: &dyn Reads) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
     let mut out = BTreeMap::new();
     let mut grids = BTreeMap::new();
-    let doc = DocTree::of(&store.docs);
+    let doc = store.tree();
     let group = TypeId::lookup("group").expect("registered");
     let table = TypeId::lookup("table").expect("registered");
     let is_container = |k: Kind| matches!(k, Kind::Container | Kind::Table);
@@ -332,7 +349,14 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
         .chain(doc.nodes_of_type(table).filter(|&t| doc.is_live(t)).map(|t| (t, Kind::Table)))
         .filter(|&(g, _)| !(doc.live(g).and_then(|n| n.parent).is_some_and(|p| is_container(kind_of(store, p))) && is_item(store, g)))
         .collect();
+    // Deepest first: an outer root reads an inner one's placements.
+    let depth = |n: NodeId| std::iter::successors(doc.live(n).and_then(|x| x.parent), |p| doc.live(*p).and_then(|x| x.parent)).count();
+    let mut roots = roots;
+    roots.sort_by_key(|&(r, _)| std::cmp::Reverse(depth(r)));
     for (root, kind) in roots {
+        let mut mine: BTreeMap<Leaf, Value> = BTreeMap::new();
+        let fresh = Fresh { store, out: &out };
+        let store: &dyn Reads = &fresh;
         let mut b = Builder { store, tree: Tree::default(), entries: Vec::new(), tables: BTreeMap::new() };
         b.tree.root = b.add(root, kind);
         let by_key: BTreeMap<u64, (NodeId, [f64; 2])> = b.entries.iter().map(|e| (e.id.raw(), (e.id, if e.kind == Kind::Cell { text::cell_pad(store, e.id) } else { [0.0, 0.0] }))).collect();
@@ -355,7 +379,7 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
             let Some(p) = result.placed.get(&e.id.raw()) else { continue };
             let (x, y, w, h) = (p.x as f64, p.y as f64, p.w as f64, p.h as f64);
             let mut put = |leaf: &str, v: f64| {
-                out.insert(Leaf { node: e.id, path: path(leaf) }, Value::Number(v));
+                mine.insert(Leaf { node: e.id, path: path(leaf) }, Value::Number(v));
             };
             if i != b.tree.root {
                 let off = match (e.kind, e.fill) {
@@ -380,9 +404,9 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
                     put("size.h", h);
                 }
                 Kind::Cell => {
-                    out.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("fixed".into()));
-                    out.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
-                    out.insert(Leaf { node: e.id, path: path("size.h") }, Value::Number(h));
+                    mine.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("fixed".into()));
+                    mine.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
+                    mine.insert(Leaf { node: e.id, path: path("size.h") }, Value::Number(h));
                 }
                 Kind::Container => {
                     if word(store, e.id, "layout.sizing_w") != "fixed" || e.fill[0] {
@@ -418,19 +442,20 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
                         Sizing::Fixed => e.fill[0] || e.fill[1],
                     };
                     if e.fill[1] {
-                        out.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("fixed".into()));
-                        out.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
-                        out.insert(Leaf { node: e.id, path: path("size.h") }, Value::Number(h));
+                        mine.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("fixed".into()));
+                        mine.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
+                        mine.insert(Leaf { node: e.id, path: path("size.h") }, Value::Number(h));
                     } else if chosen {
                         if authored != Sizing::AutoHeight {
-                            out.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("auto_height".into()));
+                            mine.insert(Leaf { node: e.id, path: path("text.sizing") }, Value::Enum("auto_height".into()));
                         }
-                        out.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
+                        mine.insert(Leaf { node: e.id, path: path("size.w") }, Value::Number(w));
                     }
                 }
                 Kind::Other => {}
             }
         }
+        out.extend(mine);
     }
     out.extend(constrained(store));
     (out, grids)
@@ -441,9 +466,9 @@ pub fn compute(store: &StoreCore) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, cr
 /// with a `constraints` facet placed for the new box. Read from the
 /// picture's own copy (so an instance's overrides count) and published on
 /// it; a bound leaf keeps its binding (one writer, F5).
-fn constrained(store: &StoreCore) -> BTreeMap<Leaf, Value> {
+fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
     use crate::facet::Constraints;
-    let doc = DocTree::of(&store.docs);
+    let doc = store.tree();
     let mut out = BTreeMap::new();
     let use_ty = TypeId::lookup("use").expect("registered");
     for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {

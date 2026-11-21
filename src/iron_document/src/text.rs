@@ -52,7 +52,7 @@ pub fn display(v: &Value) -> String {
 }
 
 /// The node's `font` leaves as a style.
-pub fn style(store: &StoreCore, id: NodeId) -> TextStyle {
+pub fn style(store: &dyn crate::reads::Reads, id: NodeId) -> TextStyle {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, d: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(d);
     let word = |leaf: &str| read(leaf).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
@@ -72,24 +72,24 @@ pub fn style(store: &StoreCore, id: NodeId) -> TextStyle {
 }
 
 /// The node's text as it should read now.
-pub fn content(store: &StoreCore, id: NodeId) -> String {
+pub fn content(store: &dyn crate::reads::Reads, id: NodeId) -> String {
     store.resolved(id, "text.content".parse().expect("declared leaf")).map(|v| display(&v)).unwrap_or_default()
 }
 
 /// The node's style runs (`text.runs`), valid for its current content.
-pub fn runs(store: &StoreCore, id: NodeId) -> Vec<StyleRun> {
+pub fn runs(store: &dyn crate::reads::Reads, id: NodeId) -> Vec<StyleRun> {
     let json = store.resolved(id, "text.runs".parse().expect("declared leaf")).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
     iron_text::runs::normalize(&content(store, id), iron_text::runs::parse(&json))
 }
 
 /// Lay out a text node with its current content and style.
-pub fn measure(store: &StoreCore, id: NodeId) -> Measured {
+pub fn measure(store: &dyn crate::reads::Reads, id: NodeId) -> Measured {
     measure_with(store, id, &content(store, id), &runs(store, id))
 }
 
 /// Lay out a text node as if its content were `text` styled by `runs` (the
 /// editor's draft).
-pub fn measure_with(store: &StoreCore, id: NodeId, text: &str, runs: &[StyleRun]) -> Measured {
+pub fn measure_with(store: &dyn crate::reads::Reads, id: NodeId, text: &str, runs: &[StyleRun]) -> Measured {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, d: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(d);
     let sizing = Sizing::parse(read("text.sizing").and_then(|v| v.as_str().map(str::to_owned)).as_deref().unwrap_or("auto_width"));
@@ -111,7 +111,7 @@ pub fn measure_with(store: &StoreCore, id: NodeId, text: &str, runs: &[StyleRun]
 
 /// How far a text's words sit inside its box: a table's cell padding, or
 /// nothing for any other text.
-pub fn cell_pad(store: &StoreCore, id: NodeId) -> [f64; 2] {
+pub fn cell_pad(store: &dyn crate::reads::Reads, id: NodeId) -> [f64; 2] {
     let doc = store.tree();
     let row = doc.live(id).and_then(|n| n.parent).filter(|&p| doc.live(p).is_some_and(|n| n.ty.name() == "row"));
     match row.and_then(|r| crate::table::table_of(doc, r)) {

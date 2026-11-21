@@ -17,6 +17,7 @@
 //! ```
 
 pub mod facet;
+pub mod reads;
 mod engine;
 mod clocks;
 pub mod analysis;
@@ -2457,9 +2458,12 @@ impl StoreCore {
         // RE-5.4). A count that reads its own items' layout never rests: it
         // is a problem on the repeat (decision D6).
         self.feedback.clear();
+        // Likewise a layout that reads, through a binding, what another
+        // placed (a gap bound to a laid-out width): it lays out again.
+        let mut moved = false;
         for round in 0..=LAYOUT_ROUNDS {
             let derived = self.settle_repeats();
-            if round > 0 && derived.is_empty() {
+            if round > 0 && derived.is_empty() && !moved {
                 break;
             }
             self.note_changes(derived.iter(), &[]);
@@ -2471,7 +2475,7 @@ impl StoreCore {
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
-            self.resolve_layout();
+            moved = self.resolve_layout();
         }
         self.resolve_contexts();
     }
@@ -2495,8 +2499,9 @@ impl StoreCore {
 
     /// Publish every laid-out group's placements (layout-and-tables.md §2.3)
     /// under `ProducerId::LAYOUT`: derived, never stored, locked against
-    /// direct edits like any published leaf.
-    pub fn resolve_layout(&mut self) {
+    /// direct edits like any published leaf. Whether a placement that a
+    /// cell reads moved, so that layout may read it back through a binding.
+    fn resolve_layout(&mut self) -> bool {
         let (mut values, grids) = layout::compute(self);
         if self.motion.enabled {
             self.start_motion(&values);
@@ -2514,13 +2519,13 @@ impl StoreCore {
                 self.reactive.mark(leaf, value);
             }
         }
-        if values.is_empty() && self.reactive.published_by(ProducerId::LAYOUT).is_empty() {
-            return;
+        let published = self.reactive.published_by(ProducerId::LAYOUT);
+        if values == published {
+            return false;
         }
-        if values == self.reactive.published_by(ProducerId::LAYOUT) {
-            return;
-        }
+        let read = values.iter().any(|(l, v)| published.get(l) != Some(v) && self.reactive.is_read(*l)) || published.keys().any(|l| !values.contains_key(l) && self.reactive.is_read(*l));
         self.reactive.publish(Tree::of(&self.docs), ProducerId::LAYOUT, values);
+        read
     }
 
     /// A resolver over this document's contexts that sees nodes'
@@ -2818,7 +2823,12 @@ impl StoreCore {
     /// layout reads outside the graph like `pipeline`.
     fn relayout(&mut self) {
         self.settle_reads();
-        self.recorded(|s| s.resolve_layout());
+        // Again while it moved what a binding it reads reads (`resolve_physics`).
+        for _ in 0..LAYOUT_ROUNDS {
+            if !self.recorded(|s| s.resolve_layout()) {
+                break;
+            }
+        }
         if self.settle_reads() {
             self.pipeline();
         }

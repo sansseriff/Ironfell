@@ -363,10 +363,6 @@ impl Store {
         self.call("resolve_physics", |s| s.resolve_physics())
     }
 
-    pub fn resolve_layout(&mut self) {
-        self.call("resolve_layout", |s| s.resolve_layout())
-    }
-
     pub fn set_interaction(&mut self, states: BTreeMap<NodeId, Vec<&'static str>>) -> bool {
         self.call("set_interaction", |s| s.set_interaction(states.clone()))
     }
@@ -461,5 +457,22 @@ impl Store {
 
     pub fn place_standard(&mut self, key: &str, composition: NodeId, at: [f64; 2], actor: crate::Actor) -> Result<NodeId, String> {
         self.call("place_standard", |s| s.place_standard(key, composition, at, actor))
+    }
+}
+
+/// Layout and the bounds it measures read the subject, as every `&self` call
+/// does.
+impl crate::reads::Reads for Store {
+    fn tree(&self) -> Tree<'_> {
+        crate::reads::Reads::tree(&self.subject)
+    }
+    fn resolved(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        crate::reads::Reads::resolved(&self.subject, id, path)
+    }
+    fn layout_base(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        crate::reads::Reads::layout_base(&self.subject, id, path)
+    }
+    fn layout_preview(&self) -> Option<&crate::layout::Preview> {
+        crate::reads::Reads::layout_preview(&self.subject)
     }
 }

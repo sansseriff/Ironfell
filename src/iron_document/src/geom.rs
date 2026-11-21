@@ -22,7 +22,6 @@ use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::op::Op;
 use crate::value::Value;
-use crate::StoreCore;
 use kurbo::{Rect, Shape as _};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -232,7 +231,7 @@ pub const PATH_HIT: f64 = 5.0;
 /// a frame boundary; the miter limit also covers round and bevel joins and
 /// square and round caps; a shadow reaches its offset plus three standard
 /// deviations (half the authored blur radius each).
-pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
+pub fn paint_padding(store: &dyn crate::reads::Reads, id: NodeId) -> f64 {
     let read = |leaf: &str| store.resolved(id, leaf.parse().expect("declared leaf"));
     let num = |leaf: &str, default: f64| read(leaf).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);
     let mut pad = if read("stroke.color").is_some() { num("stroke.width", 1.0) * 0.5 * num("stroke.miter", 4.0).max(4.0) } else { 0.0 };
@@ -249,7 +248,7 @@ pub fn paint_padding(store: &StoreCore, id: NodeId) -> f64 {
 /// `path`, `text`), or of a 3D embed's on-screen frame. `None` for a group, an
 /// embed of a 2D composition (its region is the source's content, which a
 /// spatial scene knows), and anything else.
-pub fn local_bounds(store: &StoreCore, id: NodeId) -> Option<LocalBounds> {
+pub fn local_bounds(store: &dyn crate::reads::Reads, id: NodeId) -> Option<LocalBounds> {
     let doc = store.tree();
     let node = doc.live(id)?;
     let num = |leaf: &str, default: f64| store.resolved(id, leaf.parse().expect("declared leaf")).and_then(|v| v.as_f64()).filter(|v| v.is_finite()).unwrap_or(default);

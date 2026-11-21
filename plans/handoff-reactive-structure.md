@@ -2872,12 +2872,11 @@ fail as from a binding, and a KeepLast keeps its claims and reports a problem.
    - The network's structure is still found again on any document write
      (`docs.edits()`), as before, and only islands whose unknowns or equations
      changed are made again.
-   - Not done:
-     - an equation's constant inlined as a literal is structure, so editing it
-       remakes its island;
-     - a `deref` in an equation that reads one of its own island's unknowns reads it
-       beneath the claim (its constant), where the old pipeline read the last
-       solution. No document does that today.
+   - Not done: a `deref` in an equation that reads one of its own island's unknowns
+     reads it beneath the claim (its constant), where the old pipeline read the
+     last solution. No document does that today. (An equation's constant side was
+     inlined as a literal, so editing it remade its island; the council round below
+     fixed it.)
 
    Verified:
    - the differential suite (488) with `IRON_ATOMICITY` and `IRON_OWNER_CHECK`, and the
@@ -2885,6 +2884,64 @@ fail as from a binding, and a KeepLast keeps its claims and reports a problem.
    - the app's lib tests and the build;
    - the smoke, pulses and fiber scripts, and regression, the same as expected once
      line numbers and timings are stripped.
+
+**Council on RE-5.3 (2026-11-20): Claude Opus 5.5 7/10, GPT Sol 6.2 6/10.** Fixed,
+each with a test that fails with its fix undone (checked for three):
+- **A native's cycle check came after its edges** (both). The closing read was
+  installed, which left a cycle in the graph that every height repair then ran
+  into. The check now runs first:
+  - on the new reads only, except after cells were made or remade (`structure`),
+    when it checks all of them, since a binding made over a native's output closes
+    a cycle through a read the native already had;
+  - a native that drops a closing read is put back above what it still reads.
+  (`a_native_closing_a_cycle_fails_and_leaves_no_cycle_in_the_graph`)
+- **R5 left raised cells at their old place in the queue** (Sol): a reader queued by
+  its own input ran before the native. `raise` returns what it moved, and the
+  queue is re-keyed (`a_reader_queued_on_its_own_runs_after_a_native_its_input_raised`).
+  The scan stops at the native's height.
+- **A binding made after a native took a height that ignored it** (Opus): `set_cell`
+  reads heights through `cell_of` (`a_binding_made_after_a_native_sits_above_it`).
+- **A structural transaction skipped `base_readers`** (both): `restructure` primes the
+  natives that read a touched node's leaves beneath their claim
+  (`a_structural_transaction_reaches_what_a_native_reads_beneath_its_claim`).
+- **A host releasing a leaf left the native that may write it unclaimed** (Sol):
+  `invalidate` primes the native of a changed leaf it does not hold
+  (`a_native_claims_a_leaf_again_when_a_host_releases_it`).
+- **Dropping a native cleared a binding's own error, and Error → KeepLast left the
+  error** (Sol): a native clears only the errors it wrote (`errored`)
+  (`a_native_clears_only_the_errors_it_wrote`).
+- **Islands were made after the pass, not before** (Opus): `regraph` makes them first
+  and the pass runs them (`set_natives` without `run` leaves them `pending` for it).
+  `solve_network` still catches a write that reached no `regraph`.
+- **An equation's constant side was a literal**: it is now read where it is
+  (`Expr::Ref` to `equation.lhs`/`rhs`), so editing it re-solves the island.
+- **R6 retries:** they run while a retry frees something, not a fixed four. Dropping
+  a native counts as an edge going.
+- **Clock gating** (`read_by`): a native counts at every node it writes, and a rooted
+  one always (Sol).
+- **Run counts** carry across a native remade under the same key.
+- A native's readers are walked lazily.
+- `ports::a_circuit_that_cannot_settle_does_not_hold_back_another` now undoes across
+  the merge.
+
+**Decided, and recorded as a behaviour change:** an equation that reads a binding
+over an unknown of its own island is a cycle. The island fails with "a cycle", and so
+does what reads it. The old pipeline solved it one step behind. Substituting the
+binding's expression into the island is the alternative; it belongs with the solver's
+fixed points (RE-5.5) if a document needs it. No document does today.
+
+**For RE-5.4's sub-plan, not done here:**
+- `Cx::read` beneath a claim ignores the overlay; without a claim it reads it. Layout
+  must settle which it wants.
+- `Cx::read` takes a failed binding's last good value, as the old pipeline did, not
+  "depends on" (reactivity.md §4.1).
+- `Cx::previous` reads only the native's own producer.
+- R5 solves a new native twice when its first run raises it (every island at load and
+  after a sync that remakes it).
+- R6 re-runs every blocked cell when any edge goes, including the "did not settle"
+  ones.
+- A clock-gating fixture with an island across a shown and a hidden composition is
+  not written.
 
 **RE-5.4: repeats and layout.** Its first steps:
 1. Fix the lag in the old pipeline on both sides: run the rounds again when a stage

@@ -736,7 +736,15 @@ impl StoreCore {
                 .collect();
             nodes.extend(naming);
         }
-        self.reactive.restructure(doc, &nodes, rescope, rederive);
+        // The network's islands first, so that this pass runs the new ones
+        // and not the old against the new structure (handoff §4.10).
+        if !self.old_network {
+            let (net, fresh) = self.network_now();
+            if fresh {
+                self.sync_islands(&net, false);
+            }
+        }
+        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
     }
 
     /// Store what an accepted expansion found.
@@ -3109,23 +3117,29 @@ impl StoreCore {
     /// solution in the graph's physics layer: derived, never stored, read by
     /// bindings like any value. A network that does not converge keeps its
     /// previous solution and says why.
-    fn solve_network(&mut self) {
-        // What the network is depends only on structure and slots: it is
-        // kept until the document is written again.
+    /// The across/through network, and whether it was found again: what it
+    /// is depends only on structure and slots, so it is kept until the
+    /// document is written again.
+    fn network_now(&mut self) -> (std::sync::Arc<crate::port::Network>, bool) {
         let edits = self.docs.edits();
-        let (net, fresh) = match &self.network {
+        match &self.network {
             Some((at, net)) if *at == edits => (net.clone(), false),
             _ => {
                 let net = std::sync::Arc::new(crate::port::network(Tree::of(&self.docs)));
                 self.network = Some((edits, net.clone()));
                 (net, true)
             }
-        };
+        }
+    }
+
+    fn solve_network(&mut self) {
+        let (net, fresh) = self.network_now();
         if !self.old_network {
-            // Its islands are native cells (handoff §4.10): made again
-            // where the network changed; they solve in the graph's pass.
+            // Its islands are native cells (handoff §4.10), made where the
+            // structure changes (`regraph`); this catches a write that
+            // reached none (a session edit's constant).
             if fresh {
-                self.sync_islands(&net);
+                self.sync_islands(&net, true);
             }
             return;
         }
@@ -3178,7 +3192,7 @@ impl StoreCore {
 
     /// Make the network's islands native cells, keeping each one whose
     /// unknowns and equations did not change, and dropping the rest.
-    fn sync_islands(&mut self, net: &crate::port::Network) {
+    fn sync_islands(&mut self, net: &crate::port::Network, run: bool) {
         let want: std::collections::BTreeMap<graph::NativeKey, crate::port::IslandNative> = net.island_natives().into_iter().collect();
         let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = Vec::new();
         for k in self.reactive.native_keys() {
@@ -3193,7 +3207,7 @@ impl StoreCore {
             }
         }
         if !batch.is_empty() {
-            self.reactive.set_natives(Tree::of(&self.docs), batch);
+            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
     }
 

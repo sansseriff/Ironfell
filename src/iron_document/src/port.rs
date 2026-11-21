@@ -471,8 +471,10 @@ pub fn network(doc: Tree<'_>) -> Network {
             continue;
         }
         let Some(eq) = doc.get::<crate::facet::Equation>(e) else { continue };
-        let side = |s: &crate::value::Slot| s.expr().cloned().or_else(|| s.constant().map(|v| Expr::Lit(v.clone())));
-        if let (Some(lhs), Some(rhs)) = (side(&eq.lhs), side(&eq.rhs)) {
+        // A constant side is read where it is, not inlined: editing it is a
+        // value change the island's native follows, not a new network.
+        let side = |s: &crate::value::Slot, field: &str| s.expr().cloned().or_else(|| s.constant().map(|_| Expr::Ref(Leaf { node: e, path: LeafPath::new(FacetKind::Equation, field).expect("declared") })));
+        if let (Some(lhs), Some(rhs)) = (side(&eq.lhs, "lhs"), side(&eq.rhs, "rhs")) {
             equations.push(Equation::Expr { node: e, lhs, rhs });
         }
     }

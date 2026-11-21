@@ -146,6 +146,11 @@ struct NativeCell {
     rooted: bool,
     /// How many times it has run.
     runs: u64,
+    /// Whether its last run failed with `Failure::Error`: its outputs carry
+    /// the error in `errors`.
+    errored: bool,
+    /// The `structure` it last checked all its reads for a cycle at.
+    checked: u64,
 }
 
 /// What a native reads through: every read is recorded.
@@ -190,11 +195,11 @@ impl Cx<'_> {
     }
 }
 
-/// The readers of a cell: of one leaf without allocating, or of a native's
-/// outputs, gathered.
+/// The readers of a cell: of one leaf, or of each of a native's outputs (a
+/// reader of two outputs comes twice).
 enum Readers<'a> {
     One(Option<std::collections::btree_set::Iter<'a, CellId>>),
-    Many(std::collections::btree_set::IntoIter<CellId>),
+    Many(Box<dyn Iterator<Item = CellId> + 'a>),
 }
 
 impl Iterator for Readers<'_> {
@@ -325,6 +330,15 @@ pub struct Reactive {
     base_readers: BTreeMap<Leaf, BTreeSet<NativeKey>>,
     /// Natives whose last run kept their claims and why (`Failure::KeepLast`).
     pub native_problems: BTreeMap<NativeKey, String>,
+    /// Cells made since the last pass that the next one runs
+    /// (`set_natives` without `run`).
+    pending: BTreeSet<CellId>,
+    /// Whether an edge went outside a pass (a native dropped): the next
+    /// pass retries what is blocked on a cycle (R6).
+    edge_gone: bool,
+    /// Counts the times cells were made or remade: a binding made since a
+    /// native last ran may close a cycle through what it already read.
+    structure: u64,
 }
 
 /// The unneeded cells read from outside the graph since the store last
@@ -411,16 +425,14 @@ impl Reactive {
     fn readers_of(&self, c: CellId) -> Readers<'_> {
         match c {
             CellId::Leaf(l) => Readers::One(self.dependents.get(&l).map(|ds| ds.iter())),
-            CellId::Native(k) => Readers::Many(
+            CellId::Native(k) => Readers::Many(Box::new(
                 self.natives
                     .get(&k)
                     .into_iter()
                     .flat_map(|n| n.rule.outputs().iter())
                     .flat_map(|o| self.dependents.get(o).into_iter().flatten().copied())
-                    .filter(|d| *d != c)
-                    .collect::<BTreeSet<CellId>>()
-                    .into_iter(),
-            ),
+                    .filter(move |d| *d != c),
+            )),
         }
     }
 
@@ -554,7 +566,12 @@ impl Reactive {
 
     /// Whether a cell on a node `by` names reads a leaf of `nodes`.
     pub(crate) fn read_by(&self, nodes: impl IntoIterator<Item = NodeId>, by: &dyn Fn(NodeId) -> bool) -> bool {
-        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(|d| by(d.node()))))
+        // A native runs where any node it writes is, and a rooted one always.
+        let runs_at = |d: &CellId| match d {
+            CellId::Leaf(l) => by(l.node),
+            CellId::Native(k) => self.natives.get(k).is_some_and(|n| n.rooted || n.rule.outputs().iter().any(|o| by(o.node))),
+        };
+        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(runs_at)))
     }
 
     /// Need every cell again, bringing the stale ones up to date: what a
@@ -778,6 +795,7 @@ impl Reactive {
         }
         self.pinned.clear();
         self.candidates.clear();
+        self.structure += 1;
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -979,6 +997,9 @@ impl Reactive {
             primed.extend(own.into_iter().map(CellId::Leaf));
             let readers: Vec<CellId> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
             primed.extend(readers);
+            // Natives that read one of its leaves beneath their own claim.
+            let beneath: Vec<CellId> = self.base_readers.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, ks)| ks.iter().map(|k| CellId::Native(*k))).collect();
+            primed.extend(beneath);
         }
         primed.extend(self.blocked.iter().copied());
         primed.retain(|c| self.exists(*c));
@@ -998,7 +1019,7 @@ impl Reactive {
                 }
             }
         }
-        if !self.raise(&made) {
+        if self.raise(&made).is_none() {
             self.compute_heights();
         }
         let dirty = self.readers(&primed);
@@ -1008,6 +1029,7 @@ impl Reactive {
     /// Make or replace the cell for `leaf`, reading `expr`.
     fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: Expr, tokens: &BTreeMap<String, Leaf>) {
         self.drop_cell(leaf);
+        self.structure += 1;
         let mut deps = expr.deps();
         let names = expr.tokens();
         if !names.is_empty() {
@@ -1019,7 +1041,7 @@ impl Reactive {
             self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
         }
         let tracks = tracks_reads(doc, leaf, &expr);
-        let height = 1 + deps.iter().filter_map(|d| self.nodes.get(d).map(|n| n.height)).max().unwrap_or(0);
+        let height = 1 + deps.iter().filter_map(|d| self.cell_of(*d)).map(|c| self.height_of(c)).max().unwrap_or(0);
         self.nodes.insert(leaf, BoundNode { expr: std::sync::Arc::new(expr), deps, ctx, tracks, tracked: BTreeSet::new(), height });
     }
 
@@ -1046,8 +1068,9 @@ impl Reactive {
     /// Raise the readers of `made` until every edge goes upward (spec
     /// §6.3). `false` when that would not end: the caller relaxes the whole
     /// graph instead.
-    fn raise(&mut self, made: &[CellId]) -> bool {
+    fn raise(&mut self, made: &[CellId]) -> Option<Vec<(CellId, u32)>> {
         let mut stack: Vec<CellId> = made.to_vec();
+        let mut raised: Vec<(CellId, u32)> = Vec::new();
         let mut budget = (self.nodes.len() + self.natives.len()).saturating_mul(2) + 64;
         while let Some(c) = stack.pop() {
             if !self.exists(c) {
@@ -1058,15 +1081,16 @@ impl Reactive {
             for r in readers {
                 if self.exists(r) && self.height_of(r) <= h {
                     if budget == 0 {
-                        return false;
+                        return None;
                     }
                     budget -= 1;
+                    raised.push((r, self.height_of(r)));
                     self.set_height(r, h + 1);
                     stack.push(r);
                 }
             }
         }
-        true
+        Some(raised)
     }
 
     /// The values of `changed` leaves moved (a constant was set, or the
@@ -1082,6 +1106,13 @@ impl Reactive {
             // A native that reads it beneath its own claim.
             if let Some(ns) = self.base_readers.get(l) {
                 primed.extend(ns.iter().map(|k| CellId::Native(*k)));
+            }
+            // The native that may write it: a claim another producer held
+            // may have been released, and it claims the leaf again.
+            if let Some(k) = self.owned.get(l)
+                && !self.claims.get(k).is_some_and(|c| c.contains(l))
+            {
+                primed.insert(CellId::Native(*k));
             }
         }
         let mut stack: Vec<CellId> = primed.iter().copied().collect();
@@ -1198,6 +1229,36 @@ impl Reactive {
         }
     }
 
+    /// The leaves of `reads` whose cells read `target`, directly or through
+    /// others: the reads that would close a cycle. One walk, with what it
+    /// has seen not reach `target` shared between them.
+    fn closing(&self, reads: impl Iterator<Item = Leaf>, target: CellId) -> Vec<Leaf> {
+        let mut clear: BTreeSet<CellId> = BTreeSet::new();
+        let mut out = Vec::new();
+        for l in reads {
+            let Some(start) = self.cell_of(l) else { continue };
+            let mut seen = BTreeSet::new();
+            let mut stack = vec![start];
+            let mut found = false;
+            while let Some(c) = stack.pop() {
+                if c == target {
+                    found = true;
+                    break;
+                }
+                if clear.contains(&c) || !seen.insert(c) {
+                    continue;
+                }
+                stack.extend(self.reads_of(c));
+            }
+            if found {
+                out.push(l);
+            } else {
+                clear.extend(seen);
+            }
+        }
+        out
+    }
+
     /// Whether the cell `from` reads `target`, directly or through others.
     fn reaches(&self, from: CellId, target: CellId) -> bool {
         let mut seen = BTreeSet::new();
@@ -1220,6 +1281,12 @@ impl Reactive {
     fn evaluate(&mut self, doc: Tree<'_>, dirty: &BTreeSet<CellId>, primed: &BTreeSet<CellId>) {
         self.propagations += 1;
         let mut primed = primed.clone();
+        let mut dirty = dirty.clone();
+        let pending: BTreeSet<CellId> = std::mem::take(&mut self.pending).into_iter().filter(|c| self.exists(*c)).collect();
+        if !pending.is_empty() {
+            dirty.extend(self.readers(&pending));
+            primed.extend(pending);
+        }
         let mut queue: BTreeSet<(u32, CellId)> = dirty.iter().map(|c| (self.height_of(*c), *c)).collect();
         // Static dependencies never queue a node twice; tracked ones may, a
         // bounded number of times in an acyclic graph. The limit is a guard.
@@ -1228,8 +1295,10 @@ impl Reactive {
         let mut deferred: BTreeSet<CellId> = BTreeSet::new();
         // Whether an edge went in this pass: a cell blocked on a cycle may
         // be free of it now (the kernel's R6; handoff §4.10).
-        let mut edge_removed = false;
-        let mut retries = 0;
+        let mut edge_removed = std::mem::take(&mut self.edge_gone);
+        // How many were blocked before the last retry: retries go on while
+        // one frees something.
+        let mut last_blocked: Option<usize> = None;
         loop {
         while let Some((_, cell)) = queue.pop_first() {
             if !primed.remove(&cell) {
@@ -1424,9 +1493,9 @@ impl Reactive {
                 }
             }
         }
-        if edge_removed && !self.blocked.is_empty() && retries < 4 {
+        if edge_removed && !self.blocked.is_empty() && last_blocked.is_none_or(|n| self.blocked.len() < n) {
             edge_removed = false;
-            retries += 1;
+            last_blocked = Some(self.blocked.len());
             let blocked: Vec<CellId> = self.blocked.iter().copied().filter(|c| self.exists(*c)).collect();
             for c in blocked {
                 primed.insert(c);
@@ -1469,6 +1538,37 @@ impl Reactive {
                 return taken.saturating_mul(4);
             }
         }
+        // A read that reaches this native back would close a cycle. It is
+        // checked before any edge is made, as a binding's is (the read that
+        // closes a cycle is never an edge, spec §6.3), and only for reads
+        // that are new. It may run through an edge a cell still queued
+        // drops, so it waits once.
+        let mut result = result;
+        let mut reads = reads;
+        let old = self.natives[&k].reads.clone();
+        // All of them when cells were made since it last checked (a binding
+        // reading its output closes a cycle through an old read), else the
+        // new ones.
+        let closing = if self.natives[&k].checked == self.structure {
+            self.closing(reads.difference(&old).copied(), cell)
+        } else {
+            self.natives.get_mut(&k).expect("native").checked = self.structure;
+            self.closing(reads.iter().copied(), cell)
+        };
+        if !closing.is_empty() {
+            if pass.primed.iter().any(|t| *t != cell && self.exists(*t)) && pass.deferred.insert(cell) {
+                pass.primed.insert(cell);
+                let last = pass.queue.last().map_or(0, |(h, _)| *h);
+                pass.queue.insert((last.max(self.height_of(cell)) + 1, cell));
+                return 0;
+            }
+            let own = closing.first().copied().expect("one");
+            result = Err(Failure::Error(format!("reads {own}, which depends on this: a cycle")));
+            self.blocked.insert(cell);
+            for l in &closing {
+                reads.remove(l);
+            }
+        }
         // Its edges: what it read this time.
         let old = std::mem::take(&mut self.natives.get_mut(&k).expect("native").reads);
         for gone in old.difference(&reads) {
@@ -1504,29 +1604,44 @@ impl Reactive {
         let native = self.natives.get_mut(&k).expect("native");
         native.reads = reads;
         native.base = base;
-        // A read that reaches this native back is a cycle; it may run
-        // through an edge a cell still queued drops, so it waits once.
-        let mut result = result;
-        if let Some(own) = self.natives[&k].reads.iter().find(|t| self.cell_of(**t).is_some_and(|tc| self.reaches(tc, cell))).copied() {
-            if pass.primed.iter().any(|t| *t != cell && self.exists(*t)) && pass.deferred.insert(cell) {
-                pass.primed.insert(cell);
-                let last = pass.queue.last().map_or(0, |(h, _)| *h);
-                pass.queue.insert((last.max(self.height_of(cell)) + 1, cell));
-                return 0;
+        if !closing.is_empty() {
+            // Raised over the read it dropped (a binding made over its output
+            // raises what read it): back to above what it reads now, with
+            // its readers above it.
+            let need = 1 + self.reads_of(cell).into_iter().map(|d| self.height_of(d)).max().unwrap_or(0);
+            let was = self.height_of(cell);
+            self.set_height(cell, need);
+            let mut moved = vec![(cell, was)];
+            match self.raise(&[cell]) {
+                Some(raised) => moved.extend(raised),
+                None => self.compute_heights(),
             }
-            result = Err(Failure::Error(format!("reads {own}, which depends on this: a cycle")));
-            self.blocked.insert(cell);
+            for (c, was) in moved {
+                if pass.queue.remove(&(was, c)) {
+                    pass.queue.insert((self.height_of(c), c));
+                }
+            }
         } else {
             // Above everything it reads now; if that raised it over a cell
             // still waiting in this pass, it runs again after it (R5).
             let need = 1 + self.reads_of(cell).into_iter().map(|d| self.height_of(d)).max().unwrap_or(0);
             if need > self.height_of(cell) {
+                let was = self.height_of(cell);
                 self.set_height(cell, need);
-                if !self.raise(&[cell]) {
-                    self.compute_heights();
+                let mut moved = vec![(cell, was)];
+                match self.raise(&[cell]) {
+                    Some(raised) => moved.extend(raised),
+                    None => self.compute_heights(),
+                }
+                // What it raised keeps its place in the queue by its new
+                // height, so a reader queued on its own runs after it.
+                for (c, was) in moved {
+                    if pass.queue.remove(&(was, c)) {
+                        pass.queue.insert((self.height_of(c), c));
+                    }
                 }
                 let h = self.height_of(cell);
-                if pass.queue.iter().any(|(qh, qc)| *qh < h && pass.primed.contains(qc)) {
+                if pass.queue.iter().take_while(|(qh, _)| *qh < h).any(|(_, qc)| pass.primed.contains(qc)) {
                     pass.primed.insert(cell);
                     pass.queue.insert((h, cell));
                     return 0;
@@ -1536,15 +1651,19 @@ impl Reactive {
         // Its result: claims, or a failure.
         let outputs: Vec<Leaf> = rule.outputs().iter().copied().filter(|o| !self.nodes.contains_key(o)).collect();
         let mut changed: Vec<Leaf> = Vec::new();
+        let errored = std::mem::replace(&mut self.natives.get_mut(&k).expect("native").errored, matches!(result, Err(Failure::Error(_))));
+        if errored && !matches!(result, Err(Failure::Error(_))) {
+            // Out of error: its outputs no longer carry it.
+            for o in &outputs {
+                if self.errors.remove(o).is_some() {
+                    changed.push(*o);
+                }
+            }
+        }
         match result {
             Ok(values) => {
                 self.blocked.remove(&cell);
                 self.native_problems.remove(&k);
-                for o in &outputs {
-                    if self.errors.remove(o).is_some() {
-                        changed.push(*o);
-                    }
-                }
                 changed.extend(self.claim(doc, k, values));
             }
             Err(Failure::Error(e)) => {
@@ -1652,8 +1771,10 @@ impl Reactive {
     /// run the ones made and what read what was dropped (handoff §4.10:
     /// natives are made where structure changes, not inside a pass). A
     /// native kept with the same rule is left as it is; `rooted` ones run
-    /// whether or not anything observed needs them.
-    pub(crate) fn set_natives(&mut self, doc: Tree<'_>, batch: Vec<(NativeKey, Option<(std::sync::Arc<dyn Native>, bool)>)>) {
+    /// whether or not anything observed needs them. Without `run` they wait
+    /// for the next pass: one about to run over the same change
+    /// (`restructure`).
+    pub(crate) fn set_natives(&mut self, doc: Tree<'_>, batch: Vec<(NativeKey, Option<(std::sync::Arc<dyn Native>, bool)>)>, run: bool) {
         let mut primed: BTreeSet<CellId> = BTreeSet::new();
         let mut made: Vec<CellId> = Vec::new();
         // The leaves the natives made in this batch will write: a claim a
@@ -1664,6 +1785,8 @@ impl Reactive {
             batch.iter().filter_map(|(k, n)| n.as_ref().map(|(r, _)| (*k, r))).flat_map(|(k, r)| r.outputs().iter().map(move |o| (*o, (k, r.producer())))).collect();
         let mut passed: BTreeMap<NativeKey, BTreeSet<Leaf>> = BTreeMap::new();
         let mut released: Vec<Leaf> = Vec::new();
+        let mut runs_of: BTreeMap<NativeKey, u64> = BTreeMap::new();
+        self.structure += 1;
         for (k, _) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
             let cell = CellId::Native(*k);
@@ -1687,9 +1810,14 @@ impl Reactive {
                 if self.owned.get(o) == Some(k) {
                     self.owned.remove(o);
                 }
-                if self.errors.remove(o).is_some() {
+                // Only an error it wrote: a binding's own stays.
+                if old.errored && !self.nodes.contains_key(o) && self.errors.remove(o).is_some() {
                     primed.extend(self.dependents.get(o).into_iter().flatten().copied());
                 }
+            }
+            runs_of.insert(*k, old.runs);
+            if !old.reads.is_empty() {
+                self.edge_gone = true;
             }
             let producer = old.rule.producer();
             for l in self.claims.remove(k).unwrap_or_default() {
@@ -1728,7 +1856,8 @@ impl Reactive {
             if let Some(ls) = passed.remove(&k) {
                 self.claims.insert(k, ls);
             }
-            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs: 0 });
+            let runs = runs_of.get(&k).copied().unwrap_or(0);
+            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0 });
             made.push(cell);
             primed.insert(cell);
             // Readers of its outputs now read through it.
@@ -1745,12 +1874,16 @@ impl Reactive {
             primed.extend(self.dependents.get(&l).into_iter().flatten().copied());
         }
         // Readers of a native's outputs sit above it.
-        if !self.raise(&made) {
+        if self.raise(&made).is_none() {
             self.compute_heights();
         }
         primed.retain(|c| self.exists(*c));
-        let dirty = self.readers(&primed);
-        self.evaluate(doc, &dirty, &primed);
+        if run {
+            let dirty = self.readers(&primed);
+            self.evaluate(doc, &dirty, &primed);
+        } else {
+            self.pending.extend(primed);
+        }
     }
 }
 
@@ -1883,6 +2016,8 @@ mod tests {
         Fail(bool),
         /// The first output only, from the second `from` alone.
         Partial,
+        /// The sum, failing with Error at 10 or more and KeepLast below 0.
+        Cond,
     }
 
     impl Native for Test {
@@ -1913,6 +2048,16 @@ mod tests {
                     Err(if keep { Failure::KeepLast("did not converge".into()) } else { Failure::Error("broken".into()) })
                 }
                 Mode::Partial => Ok(BTreeMap::from([(self.to[0], Value::Number(n(cx.read(self.from[1]))))])),
+                Mode::Cond => {
+                    let sum: f64 = self.from.iter().map(|l| n(cx.read(*l))).sum();
+                    if sum >= 10.0 {
+                        Err(Failure::Error("too big".into()))
+                    } else if sum < 0.0 {
+                        Err(Failure::KeepLast("below zero".into()))
+                    } else {
+                        Ok(self.to.iter().map(|l| (*l, Value::Number(sum))).collect())
+                    }
+                }
             }
         }
     }
@@ -1924,7 +2069,7 @@ mod tests {
         let runs = Arc::new(AtomicUsize::new(0));
         let rule = Arc::new(Test { outputs: to.iter().copied().collect(), from, to: to.clone(), runs: runs.clone(), mode });
         let k = NativeKey::Test(to[0].node, key);
-        store.reactive.set_natives(Tree::of(&store.docs), vec![(k, Some((rule as Arc<dyn Native>, rooted)))]);
+        store.reactive.set_natives(Tree::of(&store.docs), vec![(k, Some((rule as Arc<dyn Native>, rooted)))], true);
         runs
     }
 
@@ -1970,7 +2115,7 @@ mod tests {
         set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(4.0)));
         assert_eq!(s.reactive.evaluations - e0, 0, "its reads are what it read last");
         // Dropped, its claim goes and b.w reads its constant.
-        s.reactive.set_natives(Tree::of(&s.docs), vec![(NativeKey::Test(b, 0), None)]);
+        s.reactive.set_natives(Tree::of(&s.docs), vec![(NativeKey::Test(b, 0), None)], true);
         assert_eq!(num(&s, leaf(c, "size.w")), Some(6.0));
         assert!(s.reactive.published_by(TEST).is_empty());
     }
@@ -2087,6 +2232,105 @@ mod tests {
         assert!(s.reactive.errors.get(&leaf(c, "size.w")).is_some_and(|e| e.contains("depends on")), "{:?}", s.reactive.errors);
         let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, true);
         assert!(s.reactive.errors.is_empty(), "{:?}", s.reactive.errors);
+    }
+
+    #[test]
+    fn a_native_claims_a_leaf_again_when_a_host_releases_it() {
+        let (mut s, n) = doc(r#"<rect id="$a" w="3" h="1"/><rect id="$b" w="1" h="1"/>"#);
+        let (a, b) = (n["$a"], n["$b"]);
+        let host = s.register_producer("host");
+        s.publish(host, BTreeMap::from([(leaf(b, "size.h"), Value::Number(9.0))]));
+        let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, true);
+        assert_eq!(num(&s, leaf(b, "size.h")), Some(9.0));
+        s.publish(host, BTreeMap::new());
+        assert_eq!(num(&s, leaf(b, "size.h")), Some(3.0), "the native's claim, once the host's is gone");
+        assert!(s.reactive.driven_by(leaf(b, "size.h"), TEST));
+    }
+
+    #[test]
+    fn a_reader_queued_on_its_own_runs_after_a_native_its_input_raised() {
+        // As in the R5 test, the native is raised over the chain; its reader
+        // is also queued by an input of its own and must wait for it.
+        let (mut s, n) = doc(r#"<rect id="$sel" w="0" h="1"/><rect id="$a" w="1" h="1"/><rect id="$p" w="{= $a.size.w + 1}" h="1"/><rect id="$q" w="{= $p.size.w + 1}" h="1"/><rect id="$r" w="{= $q.size.w + 1}" h="1"/><rect id="$x" w="0" h="1"/><rect id="$out" w="0" h="1"/>"#);
+        let (sel, a, r, x, out) = (n["$sel"], n["$a"], n["$r"], n["$x"], n["$out"]);
+        let _ = native(&mut s, 0, vec![leaf(sel, "size.w"), leaf(a, "size.w"), leaf(r, "size.w")], vec![leaf(out, "size.w")], Mode::Pick, true);
+        let reader = native(&mut s, 1, vec![leaf(x, "size.w"), leaf(out, "size.w")], vec![leaf(out, "size.h")], Mode::Sum, true);
+        let r0 = reader.load(Ordering::SeqCst);
+        s.apply(tx(vec![
+            Op::Set { id: sel, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(1.0)) },
+            Op::Set { id: a, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(10.0)) },
+            Op::Set { id: x, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(100.0)) },
+        ]))
+        .expect("applies");
+        assert_eq!(num(&s, leaf(out, "size.h")), Some(113.0));
+        assert_eq!(reader.load(Ordering::SeqCst) - r0, 1, "its reader ran once, on the final value");
+    }
+
+    #[test]
+    fn a_binding_made_after_a_native_sits_above_it() {
+        let (mut s, n) = doc(r#"<rect id="$a" w="10" h="1"/><rect id="$b" w="1" h="1"/><rect id="$c" w="0" h="1"/>"#);
+        let (a, b, c) = (n["$a"], n["$b"], n["$c"]);
+        let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, true);
+        set(&mut s, leaf(c, "size.w"), Slot::Bound(crate::expr::Expr::parse(&format!("{b}.size.h + {a}.size.w")).unwrap()));
+        assert!(s.reactive.height(leaf(c, "size.w")).unwrap() > s.reactive.natives[&NativeKey::Test(b, 0)].height);
+        let e0 = s.reactive.evaluations;
+        set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(7.0)));
+        assert_eq!(num(&s, leaf(c, "size.w")), Some(14.0));
+        assert_eq!(s.reactive.evaluations - e0, 2, "the native and c, once each");
+    }
+
+    #[test]
+    fn a_structural_transaction_reaches_what_a_native_reads_beneath_its_claim() {
+        let (mut s, n) = doc(r#"<rect id="$a" w="2" h="1"/><rect id="$b" w="10" h="1"/>"#);
+        let (a, b) = (n["$a"], n["$b"]);
+        let _ = native(&mut s, 0, vec![leaf(b, "size.w"), leaf(a, "size.w")], vec![leaf(b, "size.w")], Mode::Sum, true);
+        assert_eq!(num(&s, leaf(b, "size.w")), Some(12.0));
+        // The constant beneath the claim, and a node made: one transaction
+        // that restructures.
+        let fresh = s.authored().next_ids(1)[0];
+        let comp = s.tree().live(b).and_then(|x| x.parent).expect("in a composition");
+        s.apply(tx(vec![
+            Op::Set { id: b, path: "size.w".parse().unwrap(), slot: Slot::Const(Value::Number(20.0)) },
+            Op::Create { id: fresh, ty: crate::TypeId::lookup("group").unwrap(), parent: Some(comp), order: crate::OrderKey::first(), facets: vec![crate::facet::LeafStruct::wrap(crate::facet::Transform2d::default())] },
+        ]))
+        .expect("applies");
+        assert_eq!(num(&s, leaf(b, "size.w")), Some(22.0));
+    }
+
+    #[test]
+    fn a_native_closing_a_cycle_fails_and_leaves_no_cycle_in_the_graph() {
+        let (mut s, n) = doc(r#"<rect id="$a" w="1" h="1"/><rect id="$b" w="1" h="1"/>"#);
+        let (a, b) = (n["$a"], n["$b"]);
+        let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, true);
+        set(&mut s, leaf(a, "size.w"), Slot::Bound(crate::expr::Expr::parse(&format!("{b}.size.h + 1")).unwrap()));
+        assert!(s.reactive.errors.get(&leaf(b, "size.h")).is_some_and(|e| e.contains("cycle")), "{:?}", s.reactive.errors);
+        assert!(s.reactive.errors.get(&leaf(a, "size.w")).is_some_and(|e| e.contains("depends on")), "{:?}", s.reactive.errors);
+        // The read that closed it is no edge: heights are in order.
+        let native_h = s.reactive.natives[&NativeKey::Test(b, 0)].height;
+        assert!(s.reactive.height(leaf(a, "size.w")).unwrap() > native_h);
+        assert!(!s.reactive.natives[&NativeKey::Test(b, 0)].reads.contains(&leaf(a, "size.w")));
+    }
+
+    #[test]
+    fn a_native_clears_only_the_errors_it_wrote() {
+        let (mut s, n) = doc(r#"<rect id="$a" w="1" h="1"/><rect id="$b" w="1" h="1"/><rect id="$c" w="{= $b.size.h + 1}" h="1"/>"#);
+        let (a, b, c) = (n["$a"], n["$b"], n["$c"]);
+        let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Cond, true);
+        assert_eq!(num(&s, leaf(c, "size.w")), Some(2.0));
+        // Error, then KeepLast in the same rule: the error goes, the last
+        // good claim stands.
+        set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(20.0)));
+        assert!(s.reactive.errors.contains_key(&leaf(b, "size.h")));
+        set(&mut s, leaf(a, "size.w"), Slot::Const(Value::Number(-1.0)));
+        assert!(s.reactive.errors.is_empty(), "{:?}", s.reactive.errors);
+        assert_eq!(num(&s, leaf(c, "size.w")), Some(2.0));
+        // A binding of its own on an output: dropping the native keeps the
+        // binding's error.
+        set(&mut s, leaf(b, "size.h"), Slot::Bound(crate::expr::Expr::parse("1 + 'x'").unwrap()));
+        let own = s.reactive.errors.get(&leaf(b, "size.h")).cloned();
+        assert!(own.is_some(), "the binding fails on its own");
+        s.reactive.set_natives(Tree::of(&s.docs), vec![(NativeKey::Test(b, 0), None)], true);
+        assert_eq!(s.reactive.errors.get(&leaf(b, "size.h")).cloned(), own);
     }
 
     #[test]

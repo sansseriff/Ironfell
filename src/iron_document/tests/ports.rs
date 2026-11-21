@@ -340,6 +340,12 @@ fn a_circuit_that_cannot_settle_does_not_hold_back_another() {
     // The heater's circuit still follows its power.
     lab.store.apply(tx("10 W", vec![Op::Set { id: h, path: path("args.power"), slot: Slot::Const(q("10 W")) }])).unwrap();
     assert!((across(&lab.store, h_out) - 313.15).abs() < 1e-6, "{}", across(&lab.store, h_out));
+    // Undone, the power and the joint: the islands split again and settle.
+    lab.store.undo(0).unwrap().unwrap();
+    lab.store.undo(0).unwrap().unwrap();
+    assert_eq!(lab.store.physics_error(), None);
+    assert!((across(&lab.store, h_out) - 303.15).abs() < 1e-6, "{}", across(&lab.store, h_out));
+    assert!((across(&lab.store, p2) - 250.0).abs() < 1e-6, "{}", across(&lab.store, p2));
 }
 
 /// Each island is a native cell (reactive-engine handoff §4.10, RE-5.3):

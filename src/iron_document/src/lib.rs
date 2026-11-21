@@ -247,9 +247,16 @@ pub fn settle_scan_count() -> u64 {
     SETTLE_SCANS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// How many times `resolve_physics` settles repeats again after layout
-/// before a repeat whose items keep changing is a problem (decision D6).
+/// How many times `resolve_physics` settles repeats again after what the
+/// rest of the derivation published.
 const LAYOUT_ROUNDS: usize = 4;
+
+/// How many times one repeat's items may change in one `resolve_physics`
+/// before they are a problem, settling no further (decision D6): a repeat
+/// that reads its own items' layout would otherwise grow to `repeat.max`,
+/// since layout runs in the settle's own passes (handoff §4.10, RE-5.6). One
+/// that reads another's changes once per repeat in the chain.
+const REPEAT_CHANGES: usize = LAYOUT_ROUNDS + 1;
 
 /// Facets whose nodes' cells the store reads besides drawing them, so they
 /// stay needed whatever is observed (reactive-engine.md §8.3): state
@@ -545,8 +552,9 @@ pub struct StoreCore {
     /// when it is taken.
     pending: Changes,
     settling: bool,
-    /// The repeats whose items the last `settle_repeats` changed.
-    moved_repeats: Vec<NodeId>,
+    /// How many times each repeat's items changed in this `resolve_physics`
+    /// (`REPEAT_CHANGES`).
+    repeat_changes: BTreeMap<NodeId, usize>,
     /// The gesture whose previews are in the overlay (`gesture`).
     gesture: Option<gesture::ActiveGesture>,
     /// How the last gesture ended, for its tool to find out.
@@ -642,7 +650,7 @@ impl StoreCore {
             feedback: self.feedback.clone(),
             pending: Changes::default(),
             settling: false,
-            moved_repeats: Vec::new(),
+            repeat_changes: BTreeMap::new(),
             gesture: None,
             ended: None,
             next_gesture: self.next_gesture,
@@ -667,8 +675,8 @@ impl StoreCore {
         }
         if relaxed {
             scratch.pipeline();
-        } else if glided || self.layout_preview.is_some() || self.gesture.is_some() {
-            scratch.resolve_layout();
+        } else if glided {
+            scratch.reactive.flush(Tree::of(&scratch.docs));
         }
         scratch
     }
@@ -926,7 +934,7 @@ impl StoreCore {
             feedback: Vec::new(),
             pending: Changes::default(),
             settling: false,
-            moved_repeats: Vec::new(),
+            repeat_changes: BTreeMap::new(),
             gesture: None,
             ended: None,
             next_gesture: 1,
@@ -945,7 +953,6 @@ impl StoreCore {
         store.pending = Changes::default();
         store.docs.gone.clear();
         store.rebuild_clusters();
-        store.reactive.hold_layout(Tree::of(&store.docs), true);
         store.resolve_physics();
         store
     }
@@ -2005,8 +2012,11 @@ impl StoreCore {
         if self.settling {
             return Vec::new();
         }
+        // A repeat that keeps changing settles no further here.
+        if self.repeat_changes.values().any(|&n| n >= REPEAT_CHANGES) {
+            return Vec::new();
+        }
         self.settling = true;
-        self.moved_repeats.clear();
         // Nothing to settle when no repeat's inputs changed (their natives
         // did not run) and the last settle's inputs stand: the scan of every
         // drawn repeat's inputs is the old pipeline's (handoff §4.10, RE-5.4).
@@ -2149,7 +2159,17 @@ impl StoreCore {
                     .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
                     .collect();
                 let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
-                self.moved_repeats.extend(changed_repeats.iter().copied());
+                let mut restless: Option<NodeId> = None;
+                for &r in &changed_repeats {
+                    let n = self.repeat_changes.entry(r).or_default();
+                    *n += 1;
+                    if *n >= REPEAT_CHANGES && restless.is_none() {
+                        restless = Some(r);
+                    }
+                }
+                if let Some(node) = restless {
+                    self.feedback.push(expand::Problem { node, kind: "feedback", message: "its items keep changing: what it repeats over reads their own layout".into() });
+                }
                 self.repeats = counts;
                 let stamp = self.docs.authored.version();
                 // Only the items that changed, where that matches a whole
@@ -2183,6 +2203,9 @@ impl StoreCore {
                 self.regraph(these.iter());
                 self.resample();
                 self.publish_state();
+            }
+            if self.repeat_changes.values().any(|&n| n >= REPEAT_CHANGES) {
+                break;
             }
         }
         self.settling = false;
@@ -2570,39 +2593,33 @@ impl StoreCore {
         out
     }
 
-/// Recompute what the store derives after every change: the
-    /// across/through network's solution, then the layouts that place
-    /// groups' children (`layout.rs`), which may read it.
+    /// Recompute what the store derives after every change: structure, the
+    /// across/through network's solution, and what the graph's natives
+    /// derive from them (layout, `layout.rs`).
     pub fn resolve_physics(&mut self) {
         // Structure first: what follows places and styles the new items.
         self.publish_selection();
-        // Layout may move what a repeat's inputs read (a count from a
-        // laid-out width): the repeats settle again after it, and what they
-        // made is laid out, until they rest (reactive-engine handoff §4.10,
-        // RE-5.4). A count that reads its own items' layout never rests: it
-        // is a problem on the repeat (decision D6).
+        // Layout natives run in the graph's passes, in height order, with
+        // what they read (handoff §4.10, RE-5.6), so a repeat's natives see a
+        // laid-out width its count reads in the same pass. A round settles
+        // the structure that made, until it rests. A count that reads its
+        // own items' layout never rests: it is a problem on the repeat
+        // (decision D6, `REPEAT_CHANGES`).
         self.feedback.clear();
-        // Likewise a layout that reads, through a binding, what another
-        // placed (a gap bound to a laid-out width): it lays out again.
-        let mut moved = false;
+        self.repeat_changes.clear();
         for round in 0..=LAYOUT_ROUNDS {
             let derived = self.settle_repeats();
-            // A settle that only moved values may have woken a held layout.
-            if round > 0 && derived.is_empty() && !moved && !self.reactive.layout_pending() {
+            if round > 0 && derived.is_empty() {
                 break;
             }
             self.note_changes(derived.iter(), &[]);
-            if round == LAYOUT_ROUNDS
-                && let Some(&node) = self.moved_repeats.first()
-            {
-                self.feedback.push(expand::Problem { node, kind: "feedback", message: "its items keep changing: what it repeats over reads their own layout".into() });
-            }
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
             self.sync_layout(true);
-            moved = self.resolve_layout();
+            self.reactive.flush(Tree::of(&self.docs));
         }
+        self.repeat_changes.clear();
         self.resolve_contexts();
     }
 
@@ -2626,19 +2643,6 @@ impl StoreCore {
             self.contexts = Some((markups, lib));
             self.glide_specs();
         }
-    }
-
-    /// Publish every laid-out group's placements (layout-and-tables.md §2.3)
-    /// under `ProducerId::LAYOUT`: derived, never stored, locked against
-    /// direct edits like any published leaf. Whether a placement that a
-    /// cell reads moved, so that layout may read it back through a binding.
-    fn resolve_layout(&mut self) -> bool {
-        // Layout natives wait until here, where the old pipeline laid out,
-        // and then run the ones whose inputs changed (handoff §4.10, RE-5.4):
-        // a chain through bindings settles in that one pass.
-        self.reactive.hold_layout(Tree::of(&self.docs), false);
-        self.reactive.hold_layout(Tree::of(&self.docs), true);
-        false
     }
 
     /// A resolver over this document's contexts that sees nodes'
@@ -2937,9 +2941,12 @@ impl StoreCore {
     }
 
     /// What follows values that moved outside a transaction, as after a
-    /// publish: live solves, then what the store derives. Layout, the
-    /// network's solver and the rest read cells the graph's edges do not
-    /// show; if one was stale, they run again with it up to date.
+    /// publish: live solves, then what the store derives. Natives read
+    /// through the graph; the store's own code between them reads leaves
+    /// directly (the repeat scan, the network's structure, the live
+    /// cluster solve, session state). If one was stale, the derivation runs
+    /// again with it up to date (handoff §4.10, RE-5.6: in the suite only
+    /// `current`'s callers still read one).
     fn pipeline(&mut self) {
         self.pipeline_from(true);
     }
@@ -2969,11 +2976,11 @@ impl StoreCore {
         });
     }
 
-    /// Lay out again (a theme, a font, a gap previewed), recording what
-    /// layout reads outside the graph like `pipeline`.
+    /// After a change outside the document that layout reads (a theme, a
+    /// font, a gap previewed), which its natives took in that pass: what
+    /// read a stale cell runs again, like `pipeline`.
     fn relayout(&mut self) {
-        self.settle_reads();
-        self.recorded(|s| s.resolve_layout());
+        self.reactive.flush(Tree::of(&self.docs));
         if self.settle_reads() {
             self.pipeline();
         }
@@ -3347,8 +3354,9 @@ impl StoreCore {
             })
             .map(|k| (k, None))
             .collect();
-        // Rooted, so a hidden composition stays laid out (RE-5.6 decides).
-        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
+        // Not rooted: a hidden composition is not laid out until it shows
+        // (handoff §4.10, RE-5.6).
+        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, false)))));
         if !batch.is_empty() {
             self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }

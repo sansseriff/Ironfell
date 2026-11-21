@@ -3431,11 +3431,39 @@ that fail before (three checked):
     above. On today's code an edit in one of 1,000 containers is 0.063 ms, where
     RE-5.4 measured 1.37 ms before `sync_layout` was keyed on structure.
   - All suites pass; the build and the scripts pass.
+- **The hold and the rooting, dropped (step 1).**
+  - `hold_layout`, `holding`, `release_later`, `layout_pending` and the store's
+    `resolve_layout` are deleted. Layout natives run in any pass, in height order,
+    with what they read. `relayout` flushes what waits and settles escaped reads;
+    `scratch` flushes only when glides were in flight.
+  - A layout claim that moves clears the errors on every leaf layout holds at once,
+    in `claim`, as the release of the hold did.
+  - Layout natives are made unrooted: a composition nothing shows is not laid out
+    until it shows (`a_hidden_composition_is_laid_out_once_shown`, which fails on
+    the held version).
+  - **The feedback bound.** With layout inside the settle's own passes, a count that
+    reads its own items' layout grew to `repeat.max` in one settle (1,002 items,
+    67 s in debug). Now a repeat whose items change `REPEAT_CHANGES` (5) times in one
+    `resolve_physics` settles no further there and is the `feedback` problem.
+    `moved_repeats` is replaced by the per-repeat count. A pipeline derives at most
+    six times, so the test's repeat stops at 20 items; it asserts at most 32.
+  - `cells_demo` is unchanged (edit one of 1,000 containers 0.063 ms; preview
+    0.015 ms; chain of 8 0.087 ms; one container of 1,000 items 3.16 ms; build 100
+    containers 7.8 ms). The hold cost nothing measurable.
+- **What still runs in `pipeline_from`'s rounds (step 2).** The rounds re-derive when
+  the store's own code, between the natives, read an unneeded cell that was stale:
+  the repeat scan in `settle_repeats`, `network_now`'s structure, the live cluster
+  solve (`resolve_clusters_live`, §17's unmet item), `publish_state` and the glide
+  specs. Natives read through `Cx`, so their reads are edges and never escape.
+  Counted over the whole differential suite, with each escape tagged by stage
+  (temporary instrumentation, not committed): **one** stale escaped read, from
+  `current` (an action's or a handle's computation), and none from any stage of a
+  derivation. The rounds stay as the guard for that code, which is not yet cells;
+  removing them waits on the cluster solve moving in.
+- **Measured on the way:** `observing_part_of_the_time_changes_nothing_once_all_is_observed`
+  takes about 3.5 min in debug, and did before this step (seed 2 is 22 s either
+  way). The run-iron durations row and the iteration skip list now name it.
 - **Left for RE-5.6:**
-  1. Drop the layout natives' hold and rooting. Then a pass lays out in height order
-     and a hidden composition is not laid out. The feedback test needs a new bound,
-     since layout now runs inside a settle.
-  2. Name what still runs in `pipeline_from`'s rounds.
   3. A council, then the roadmap.
   4. Close this file: RE-4.3 moves to `handoff-render.md`, and the file moves to
      `archive/`.

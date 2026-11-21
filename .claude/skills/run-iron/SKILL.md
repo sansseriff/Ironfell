@@ -55,7 +55,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `snapping.txt` | ~30 s |
 | `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
-| ⏱ `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~2.5–3 min warm, debug (2m 38s, 2m 44s, 2026-11-18): four tests of 45–55 s each bound it; skipping them (`--skip two_hundred_random_scripts --skip every_page_builds_in_one_transaction --skip a_plot_s_new_tick_writes_nothing_outside_it --skip sibling_order_survives_many_inserts`) leaves 16 s of tests |
+| ⏱ `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6 min warm, debug (5m 58s, 2026-11-21; 2m 38s, 2m 44s, 2026-11-18): `observing_part_of_the_time_changes_nothing_once_all_is_observed` alone takes ~3.5 min since the native cells (RE-5.3 on; one seed is up to 22 s), and four tests take 45–55 s each; skipping all five (`--skip observing_part_of_the_time_changes_nothing --skip two_hundred_random_scripts --skip every_page_builds_in_one_transaction --skip a_plot_s_new_tick_writes_nothing_outside_it --skip sibling_order_survives_many_inserts`) leaves about 20 s of tests |
 | `cargo test -p iron_document --release --features differential --target aarch64-apple-darwin --test suite differential_random::ten_thousand -- --ignored` | ~4.5 min (4m 33s, 2026-11-18) |
 | ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
 | ⏱ `differential_random::observing_part_of_the_time_over_a_thousand_seeds` (release, `--features differential`, `--ignored`): §8.8 over 1,000 seeds, one test so one thread | ~9 min (537 s at load average 16, 2026-11-20) |
@@ -2100,19 +2100,19 @@ and `ready` lines:
 {"enabled":false,"guides":[]}
 1
 "slide"
-"<applied version=\"3\">\n  <table id=\"#3w\"/>\n</applied>"
-["<table id=\"#3w\" name=\"table\" x=\"0\" x.by=\"#3u\" y=\"24.51953125\" y.by=\"#3u\" preset=\"light\" header=\"1\" columns=\"auto auto auto auto\" label-col=\"true\" emphasis=\"3\">","PI per side (µm) | 75  | 100 | 125","S (µm)           | 85  | 113 | 140","Gap W (µm)       | 153 | 138 | 125"]
-[true,"<cells>#40 #41 #42 #43 / #44 #45 #46 #47 / #48 #49 #4A #4B</cells>"]
-"<edit-failed applied=\"none\" version=\"4\">\n  <error op=\"0\" verb=\"table #3x\" kind=\"table\">the merge at row 1 column 1 is not a rectangle</error>\n</edit-failed>"
-["#3u"]
-"<applied version=\"5\">\n  <table id=\"#4C\"/>\n</applied>"
-["#4C"]
+"<applied version=\"3\">\n  <table id=\"#5q\"/>\n</applied>"
+["<table id=\"#5q\" name=\"table\" x=\"0\" x.by=\"#5o\" y=\"24.51953125\" y.by=\"#5o\" preset=\"light\" header=\"1\" columns=\"auto auto auto auto\" label-col=\"true\" emphasis=\"3\">","PI per side (µm) | 75  | 100 | 125","S (µm)           | 85  | 113 | 140","Gap W (µm)       | 153 | 138 | 125"]
+[true,"<cells>#5u #5v #5w #5x / #5y #5z #60 #61 / #62 #63 #64 #65</cells>"]
+"<edit-failed applied=\"none\" version=\"4\">\n  <error op=\"0\" verb=\"table #5n\" kind=\"table\">the merge at row 1 column 1 is not a rectangle</error>\n</edit-failed>"
+["#5o"]
+"<applied version=\"5\">\n  <table id=\"#66\"/>\n</applied>"
+["#66"]
 ["Table","Position"]
 clicked button[title="Add a row at the bottom"]
 ["113","138"]
 clicked button[title="Merge the selected cells into one"]
-["#4C"]
-["#4K"]
+["#66"]
+["#6E"]
 undefined
 ["PI per side (µm) | 75 | 100      | 125","A                | B  | 113\\n138 | 140","C                | D  | ^        | 125","|    |          |"]
 undefined
@@ -2120,16 +2120,16 @@ undefined
 clicked button[title="Shape tools"]
 clicked [role="menuitem"]:has-text("Table")
 4
-applied "open demo scene" (282 ops, System) -> v1
-applied "model edit" (1 ops, Model) -> v2
-applied "add table" (18 ops, Model) -> v3
-applied "replace table" (1 ops, Model) -> v4
-applied "add table" (16 ops, Model) -> v5
-applied "add row" (5 ops, Human) -> v6
-applied "merge cells" (3 ops, Human) -> v7
-applied "paste into table" (4 ops, Human) -> v8
-applied "paste table" (9 ops, Human) -> v9
-applied "add table" (13 ops, Human) -> v10
+DEBUG src/document_bridge/mod.rs:550 applied "open demo scene" (301 ops, System) -> v1
+DEBUG src/document_bridge/mod.rs:550 applied "model edit" (1 ops, Model) -> v2
+DEBUG src/document_bridge/mod.rs:550 applied "model edit" (18 ops, Model) -> v3
+DEBUG src/document_bridge/mod.rs:550 applied "model edit" (1 ops, Model) -> v4
+DEBUG src/document_bridge/mod.rs:550 applied "model edit" (16 ops, Model) -> v5
+DEBUG src/document_bridge/mod.rs:550 applied "add row" (5 ops, Human) -> v6
+DEBUG src/document_bridge/mod.rs:550 applied "merge cells" (3 ops, Human) -> v7
+DEBUG src/document_bridge/mod.rs:550 applied "paste into table" (4 ops, Human) -> v8
+DEBUG src/document_bridge/mod.rs:550 applied "paste table" (9 ops, Human) -> v9
+DEBUG src/document_bridge/mod.rs:550 applied "add table" (13 ops, Human) -> v10
 (no page errors)
 ```
 

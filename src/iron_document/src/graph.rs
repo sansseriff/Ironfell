@@ -549,15 +549,6 @@ pub struct Reactive {
     ran: BTreeSet<NativeKey>,
     /// Glides, while the host runs transitions (`None`: it does not).
     pub(crate) glide: Option<Glide>,
-    /// Claims of dropped layout natives, released when layout is let go.
-    release_later: Vec<(Leaf, ProducerId)>,
-    /// Whether a layout claim moved since layout was last let go: the old
-    /// pipeline then published every placement, which cleared their errors.
-    layout_published: bool,
-    /// While set, layout natives wait in `pending` instead of running: the
-    /// store settles repeats before it lays out, as the old pipeline did
-    /// (`hold_layout`).
-    holding: bool,
 }
 
 /// The unneeded cells read from outside the graph since the store last
@@ -1511,13 +1502,7 @@ impl Reactive {
         self.propagations += 1;
         let mut primed = primed.clone();
         let mut dirty = dirty.clone();
-        let mut pending: BTreeSet<CellId> = std::mem::take(&mut self.pending).into_iter().filter(|c| self.exists(*c)).collect();
-        if self.holding {
-            // Held layout natives wait on, their readers untouched.
-            let held: BTreeSet<CellId> = pending.iter().filter(|c| matches!(c, CellId::Native(NativeKey::Layout(_) | NativeKey::Pins))).copied().collect();
-            pending.retain(|c| !held.contains(c));
-            self.pending = held;
-        }
+        let pending: BTreeSet<CellId> = std::mem::take(&mut self.pending).into_iter().filter(|c| self.exists(*c)).collect();
         if !pending.is_empty() {
             dirty.extend(self.readers(&pending));
             primed.extend(pending);
@@ -1545,10 +1530,6 @@ impl Reactive {
             }
             let leaf = match cell {
                 CellId::Leaf(l) => l,
-                CellId::Native(k @ (NativeKey::Layout(_) | NativeKey::Pins)) if self.holding => {
-                    self.pending.insert(CellId::Native(k));
-                    continue;
-                }
                 CellId::Native(k) => {
                     if budget == 0 {
                         self.native_problems.insert(k, "did not settle: tracked reads keep changing each other".into());
@@ -2026,8 +2007,8 @@ impl Reactive {
                     changed.push(leaf);
                 }
             }
-            // Layout's claims clear their leaves' errors all at once, where
-            // the old pipeline published every placement (`hold_layout`).
+            // Layout's claims clear the errors on every leaf layout holds,
+            // below.
             if producer != ProducerId::LAYOUT {
                 self.signal_errors.remove(&leaf);
             }
@@ -2040,9 +2021,7 @@ impl Reactive {
                 changed.push(*leaf);
             }
         }
-        if producer == ProducerId::LAYOUT && (!changed.is_empty() || was != now) {
-            self.layout_published = true;
-        }
+        let laid_out = producer == ProducerId::LAYOUT && (!changed.is_empty() || was != now);
         let held = self.held.entry(producer).or_default();
         for l in &was {
             held.remove(l);
@@ -2053,6 +2032,9 @@ impl Reactive {
         }
         if !now.is_empty() {
             self.claims.insert(k, now);
+        }
+        if laid_out {
+            self.clear_layout_errors();
         }
         for &l in &changed {
             if !self.overlay.contains_key(&l)
@@ -2178,46 +2160,8 @@ impl Reactive {
         self.pending.extend(cells);
     }
 
-    /// Hold layout natives back (`true`), or let them go and run the ones
-    /// waiting (`false`).
-    pub(crate) fn hold_layout(&mut self, doc: Tree<'_>, hold: bool) {
-        self.holding = hold;
-        if hold {
-            return;
-        }
-        let mut primed: BTreeSet<CellId> = BTreeSet::new();
-        for (l, producer) in std::mem::take(&mut self.release_later) {
-            let claimed = self.claims.values().any(|c| c.contains(&l));
-            if claimed || !self.runtime.get(&l).is_some_and(|s| s.producer == producer) {
-                continue;
-            }
-            self.runtime.remove(&l);
-            self.claim_came_or_went(l);
-            if let Some(h) = self.held.get_mut(&producer) {
-                h.remove(&l);
-                if h.is_empty() {
-                    self.held.remove(&producer);
-                }
-            }
-            if !self.overlay.contains_key(&l)
-                && let Some(v) = self.read(doc, l)
-            {
-                self.note(l, v);
-            }
-            primed.extend(self.dependents.get(&l).into_iter().flatten().copied());
-        }
-        if !self.pending.is_empty() || !primed.is_empty() {
-            primed.retain(|c| self.exists(*c));
-            let dirty = self.readers(&primed);
-            self.evaluate(doc, &dirty, &primed);
-        }
-        if std::mem::take(&mut self.layout_published) {
-            self.clear_layout_errors();
-        }
-    }
-
-    /// Clear the claim errors on every leaf layout holds, as a publish of
-    /// all of them did.
+    /// Clear the claim errors on every leaf layout holds, when a layout
+    /// claim moved: as a publish of every placement does.
     fn clear_layout_errors(&mut self) {
         let leaves: Vec<Leaf> = self.held.get(&ProducerId::LAYOUT).into_iter().flatten().copied().collect();
         for l in leaves {
@@ -2234,16 +2178,11 @@ impl Reactive {
         }
     }
 
-    /// Run what waits in `pending` (but held layout natives).
+    /// Run what waits in `pending`.
     pub(crate) fn flush(&mut self, doc: Tree<'_>) {
-        if self.pending.iter().any(|c| !(self.holding && matches!(c, CellId::Native(NativeKey::Layout(_) | NativeKey::Pins)))) {
+        if !self.pending.is_empty() {
             self.evaluate(doc, &BTreeSet::new(), &BTreeSet::new());
         }
-    }
-
-    /// Whether a layout native waits to run.
-    pub(crate) fn layout_pending(&self) -> bool {
-        self.pending.iter().any(|c| matches!(c, CellId::Native(NativeKey::Layout(_) | NativeKey::Pins)))
     }
 
     /// Turn glides off. What is in flight stays where it is drawn until its
@@ -2341,11 +2280,6 @@ impl Reactive {
                 match incoming.get(&l) {
                     Some(&(to, p)) if p == producer => {
                         passed.entry(to).or_default().insert(l);
-                    }
-                    _ if self.holding && matches!(k, NativeKey::Layout(_) | NativeKey::Pins) => {
-                        // Released where layout runs, as the old pipeline
-                        // published its placements there.
-                        self.release_later.push((l, producer));
                     }
                     _ => {
                         if self.runtime.get(&l).is_some_and(|s| s.producer == producer) {

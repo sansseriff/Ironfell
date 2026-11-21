@@ -248,6 +248,37 @@ fn a_count_that_reads_its_own_items_layout_is_a_problem() {
     let many = plan.aliases["$many"];
     store.apply(tx("feedback", plan.ops)).unwrap();
     assert!(store.problems().iter().any(|p| p.kind == "feedback" && p.node == many), "{:?}", store.problems());
+    // Layout runs in the settle's passes (handoff §4.10, RE-5.6): it stops
+    // after a few changes in each derivation (a pipeline derives at most
+    // six times), not at repeat.max.
+    let items = store.tree().children(many).iter().filter(|c| c.is_item_scope() && store.tree().is_live(**c)).count();
+    assert!(items <= 2 + 6 * 5, "{items} items");
+}
+
+/// Layout natives are not rooted (handoff §4.10, RE-5.6): a container in a
+/// composition nothing shows is not laid out on a drag frame, and is laid
+/// out once something shows it.
+#[test]
+fn a_hidden_composition_is_laid_out_once_shown() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition id="$a" name="shown" dims="2d">
+        <group name="row" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x"><rect id="$one" name="one" w="10" h="10"/><rect name="two" w="10" h="10"/></group>
+      </composition>
+      <composition id="$b" name="hidden" dims="2d">
+        <group name="row" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x"><rect id="$grow" name="grow" w="10" h="10"/><rect id="$next" name="next" w="10" h="10"/></group>
+      </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (a, b, grow, next) = (plan.aliases["$a"], plan.aliases["$b"], plan.aliases["$grow"], plan.aliases["$next"]);
+    store.apply(tx("two", plan.ops)).unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let runs = |s: &Store| s.reactive().native_runs(Leaf { node: next, path: path("transform2d.x") }).expect("laid out by a native");
+    let before = runs(&store);
+    store.preview(grow, path("size.w"), Value::Number(40.0));
+    assert_eq!(runs(&store), before, "hidden: not laid out");
+    store.observe(Interest::Region { composition: b, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    assert!(runs(&store) > before, "shown: laid out");
+    assert_eq!(num(&store, next, "transform2d.x"), 40.0);
 }
 
 /// A container inside a plain group inside another: the outer run reads the

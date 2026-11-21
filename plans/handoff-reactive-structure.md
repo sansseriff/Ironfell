@@ -2785,7 +2785,7 @@ fields other than `reactive`:
 - the text engine, which is global.
 
 Every `Reactive` method that evaluates takes `&Env` where it takes `Tree` today.
-There are about 25 call sites in `lib.rs`. So the graph never calls back into the
+There are about 35 call sites in `lib.rs`. So the graph never calls back into the
 store, and the borrow is disjoint.
 
 **Index natives make and drop natives.** "Which islands exist" is a Native whose

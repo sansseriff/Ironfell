@@ -49,6 +49,17 @@ with firm laws.
 
 ### 2.1 Terms
 
+The vocabulary, fixed after the user found "axis" used for two things (2026-11-20):
+
+| Word | Means | Example |
+|---|---|---|
+| **Axis** | a whole degree of freedom, never one position on it | "slide", "mode", "loop iteration" |
+| **Value** | one position on one axis | slide 3; `swinging`; iteration 3 |
+| **Point** | one value on every axis in play | (slide 3, swinging, pendulum A) |
+| **Region** | a set of points: what a patch applies to | "slide 3 on, any mode, this pendulum" |
+
+The interface says **"Applies to"** for a region and never shows these four words.
+
 - **An axis** is something that varies:
   - a deck's slide index;
   - a machine's state;

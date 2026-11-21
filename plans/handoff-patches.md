@@ -55,8 +55,8 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
-| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council next, then the user |
-| PT-4b | The storage-and-query spec | Design | PT-4a written | |
+| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model; the spec's revision next (§2, PT-4a "Left") |
+| PT-4b | The storage-and-query spec | Design | PT-4a written | **Drafted 2026-11-21** (`specs/patch-storage.md`); council after PT-4a's |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
 | PT-6 | Machines rebuilt on axes | Build | PT-5 | |
 | PT-7 | Instances on the instance axis | Build | PT-5 | |
@@ -255,6 +255,67 @@ measured).
 - phases with exits.
 
 Council it, then give it to the user.
+
+**Council round 1 on the draft (2026-11-21): Opus 5.5/10, Sol 5/10.** The central
+finding (Opus): the model compared regions over the axis values that exist now, so
+`[C, ∞)` equalled `{C}` while C was the last slide, `*/o1/j` equalled `bench/o1/j`
+while one bench was placed, and drags, merges and default ranks changed when an axis
+grew. **Fixed in the model** (`src/iron_patch`, 19 properties and 13 examples, all
+green):
+- Regions are compared **as written**, over values yet to come: `Sel::within`,
+  `void`, `meets`, `Product::within`, `same`. Queries keep the extensional `subset`,
+  `minus` and `points`. A set's values count as written, deleted ones too.
+- Keys come from the selection, not its members (`axis_key`): intervals by their
+  cuts (open and closed ends compare, so continuous time needs nothing more); a
+  finite set before an interval or a cofinite set; on the instance axis more steps
+  fixed, a class before a pattern of its length, and only exclusions that remove
+  something counted.
+- **Strength is (layer, rank).** `Patch::layer` is where a patch is written, outer
+  stronger: outermost-wins by structure, whatever order patches were made in, and an
+  import's ranks never interleave with a document's. Default ranks are within a
+  layer; where earlier edits leave no consistent slot, above wins.
+- The drag (`edit::drag`, now with the view's layer): refused where an outer layer
+  sets the value; reuses only the weakest qualifying patch, and only with no patch
+  between it and the winner setting the field there; region checks as written.
+- Merge refuses a patch with itself, a read-only patch and two layers.
+- Lints: `dead` (entries that win nowhere; a rank against inclusion shows here),
+  `ties` (equal keys in one layer, different regions that meet, a shared field),
+  `stale` (a removal is never stale), `contradictions`.
+- New properties: `growing_an_axis_changes_no_decision` (a slide appended and one
+  inserted: values at old points, the drag's ops, default ranks, every merge and the
+  lints unchanged); `values_agree_with_a_reference_written_apart`; the drag's blast
+  radius equals its entry's winning region where the value differs; PutPut applies
+  the second drag and equals one drag. New examples: outermost-wins in either order,
+  one placement against the hover pose, the tie flag, a removal not stale and an
+  entry returning with its node.
+
+**Left for PT-4a** (the spec's text, then a second council round, then the user):
+1. §6.1 and law 5: the stored (layer, rank) is strength; the keys only give a new
+   patch's rank. Ties as `ties()` defines them. P15: layers.
+2. §4: regions compared as written; P10's key table as `axis_key` has it.
+3. §6.1's lint: contradictions are dead entries; offer drop as well as reorder.
+4. §7.2: the drag as `edit::drag` now runs it, with the layer; a clip drag writes a key
+   (the outside-E guarantee is for the key; interpolation changes between its
+   neighbours), and with autokey off follows timeline.md (keys move by the delta).
+5. §7.1: merge's refusals, stated as conservative.
+6. §5.3: a removal is never stale; staleness names its reason (absent node, no such
+   field); "not loaded" is not stale (PT-4b).
+7. Law 3: entry locality is for fields; a presence or hiding edit's radius is its
+   winning region times the subtree, and bound readers follow.
+8. One place for take axes (sequences, wherever declared); the session as the
+   strongest layer (scratch below preview), not an axis; the picture axis after
+   instances.
+9. §11: channels survive (poses set channels, tweens unchanged); M7 kept (clips key
+   the state); M2's state set by its driver (clip keys and narrative overrides set the
+   argument); transitions and tweens are nodes a class adds or removes; a variant's
+   added nodes belong to the scope writing the patch; pattern steps are qualified by
+   their definition and anchored where written; `use.notation` is resolved with
+   structure, before fields; `ROOTED`'s demand role stays until PT-10; a narrative
+   hold retimed is re-ranked; an arrow that jumps is the endpoint diff; structure per
+   point is supported, history slices stay values only (D10, for PT-10's ghosts).
+10. PT-5's exit gains the axis-growth properties, and ranks are order keys, not `f64`.
+11. What PT-3 does not cover, said plainly: shrinking, child order, a canonical form
+    (not needed: "same" is mutual inclusion as written).
 
 ### PT-4b: the storage-and-query spec
 

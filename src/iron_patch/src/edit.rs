@@ -105,7 +105,8 @@ pub fn set_region(p: PatchId, region: Product) -> Vec<Op> {
 }
 
 /// Widen by moving entries (Opus's first repair, §11.1): `keys` leave `p`
-/// for the patch whose region is `region`, made if there is none.
+/// for the patch of its layer whose region is `region`, made if there is
+/// none.
 pub fn widen_by_move(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
     let Some(src) = w.patch(p) else {
         return Vec::new();
@@ -122,26 +123,29 @@ pub fn widen_by_move(w: &World, p: PatchId, keys: &[Key], region: Product) -> Ve
             value: None,
         })
         .collect();
-    match w
+    let target = w
         .patches
         .iter()
-        .find(|q| q.id != p && q.writable && q.region.same(&region, &w.space))
-    {
+        .filter(|q| {
+            q.id != p && q.layer == src.layer && q.writable && q.region.same(&region, &w.space)
+        })
+        .min_by(|a, b| w.cmp(a, b));
+    match target {
         Some(q) => ops.extend(moving.iter().map(|(k, v)| Op::Entry {
             patch: q.id,
             key: *k,
             value: Some(*v),
         })),
         None => ops.push(Op::Add {
-            patch: w.make(region, moving),
+            patch: w.make(region, moving, src.layer),
             at: w.patches.len(),
         }),
     }
     ops
 }
 
-/// Split: `keys` leave `p` for a new patch on `region`. On `p`'s own region
-/// the new patch sits just above `p`, so every value stays.
+/// Split: `keys` leave `p` for a new patch on `region`, in `p`'s layer. On
+/// `p`'s own region the new patch sits just above `p`, so every value stays.
 pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
     let Some(src) = w.patch(p) else {
         return Vec::new();
@@ -150,9 +154,9 @@ pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
         .iter()
         .filter_map(|k| src.entries.get(k).map(|v| (*k, *v)))
         .collect();
-    let mut new = w.make(region.clone(), moving.clone());
+    let mut new = w.make(region.clone(), moving.clone(), src.layer);
     if region.same(&src.region, &w.space) {
-        new.rank = w.rank_above(src.rank);
+        new.rank = w.rank_above(src.layer, src.rank);
     }
     let mut ops: Vec<Op> = moving
         .keys()
@@ -169,15 +173,24 @@ pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
     ops
 }
 
-/// Merge two patches on the same region into the stronger. Refused where a
-/// third patch, between them in strength and overlapping them, sets a key
-/// the weaker sets: one patch with one rank cannot keep both results
-/// (Sol's counterexample, §11.2).
+/// Merge two patches of one layer on the same region (as written) into the
+/// stronger. Refused for a patch with itself, a patch that may not be
+/// written, and where a third patch, between them in strength and meeting
+/// them, sets a field the weaker sets and the stronger does not: one rank
+/// cannot keep both results (Sol's counterexample, §11.2). The refusal is
+/// conservative: it does not look at whether the third patch's value is the
+/// same, or whether a fourth hides the overlap.
 pub fn merge(w: &World, a: PatchId, b: PatchId) -> Result<Vec<Op>, String> {
+    if a == b {
+        return Err("a patch with itself".into());
+    }
     let (Some(pa), Some(pb)) = (w.patch(a), w.patch(b)) else {
         return Err("no such patch".into());
     };
-    if !pa.region.same(&pb.region, &w.space) {
+    if !pa.writable || !pb.writable {
+        return Err("a patch that may not be written".into());
+    }
+    if pa.layer != pb.layer || !pa.region.same(&pb.region, &w.space) {
         return Err("their regions differ".into());
     }
     let (strong, weak) = if w.cmp(pa, pb) == Ordering::Greater {
@@ -194,10 +207,7 @@ pub fn merge(w: &World, a: PatchId, b: PatchId) -> Result<Vec<Op>, String> {
     for r in &w.patches {
         let between = w.cmp(r, weak) == Ordering::Greater && w.cmp(strong, r) == Ordering::Greater;
         if between
-            && !r
-                .region
-                .intersect(&weak.region, &w.space)
-                .is_empty(&w.space)
+            && r.region.meets(&weak.region, &w.space)
             && moving.iter().any(|(k, _)| r.entries.contains_key(k))
         {
             return Err(format!(
@@ -218,23 +228,32 @@ pub fn merge(w: &World, a: PatchId, b: PatchId) -> Result<Vec<Op>, String> {
     Ok(ops)
 }
 
-/// Reorder: the tie-break of law 5, as a stored rank.
+/// Reorder: change a rank within its layer.
 pub fn reorder(p: PatchId, rank: f64) -> Vec<Op> {
     vec![Op::Rank { patch: p, rank }]
 }
 
-/// A drag at `point`, in a view whose edit region is `edit`, setting `key`
-/// to `value` (§11.2). The drag always shows, and never reaches outside
-/// `edit`:
-/// - nothing sets `key` here: the patch on `edit` takes it (made if need be);
-/// - the winner lies inside `edit` and can be written: the winner takes it;
-/// - otherwise a patch on `edit ∩ winner`, just above the winner, takes it.
+/// A drag at `point`, from a view writing in `layer` whose edit region is
+/// `edit`, setting `key` to `value` (§11.2, patches.md §7.2). It shows what it
+/// set, never reaches outside `edit` (as written: not on values the axes do
+/// not have yet), and never writes a patch that may not be written:
+/// - the value is already shown: nothing;
+/// - the winner is of an outer layer: refused, the view cannot override it;
+/// - nothing sets `key` here: the weakest writable patch of `layer` on
+///   exactly `edit` takes it, made at the default rank if there is none;
+/// - the winner is of `layer`, may be written and lies within `edit`: the
+///   winner takes it;
+/// - otherwise a patch of `layer` on `edit ∩ winner` takes it: the weakest
+///   one stronger than the winner with no patch between them setting `key`
+///   where it applies, else a new one just above the winner (or at the
+///   default rank, when the winner is of an inner layer).
 pub fn drag(
     w: &World,
     point: &Point,
     edit: &Product,
     key: Key,
     value: i64,
+    layer: u32,
 ) -> Result<Vec<Op>, String> {
     if !w.present(point, key.node) {
         return Err("nothing to drag here".into());
@@ -252,34 +271,58 @@ pub fn drag(
             value: Some(value),
         }]
     };
-    let Some(win) = w.winner(point, key) else {
-        return Ok(
-            match w
-                .patches
-                .iter()
-                .find(|q| q.writable && q.region.same(edit, &w.space))
-            {
-                Some(q) => entry(q.id),
-                None => vec![Op::Add {
-                    patch: w.make(edit.clone(), BTreeMap::from([(key, value)])),
-                    at: w.patches.len(),
-                }],
-            },
-        );
+    let add = |region: Product, rank: Option<f64>| {
+        let mut new = w.make(region, BTreeMap::from([(key, value)]), layer);
+        if let Some(r) = rank {
+            new.rank = r;
+        }
+        vec![Op::Add {
+            patch: new,
+            at: w.patches.len(),
+        }]
     };
-    if win.writable && win.region.subset(edit, &w.space) {
+    let Some(win) = w.winner(point, key) else {
+        let q = w
+            .patches
+            .iter()
+            .filter(|q| q.layer == layer && q.writable && q.region.same(edit, &w.space))
+            .min_by(|a, b| w.cmp(a, b));
+        return Ok(match q {
+            Some(q) => entry(q.id),
+            None => add(edit.clone(), None),
+        });
+    };
+    if win.layer > layer {
+        return Err("an outer scope sets it here".into());
+    }
+    if win.layer == layer && win.writable && win.region.within(edit, &w.space) {
         return Ok(entry(win.id));
     }
     let target = edit.intersect(&win.region, &w.space);
-    if let Some(q) = w.patches.iter().find(|q| {
-        q.writable && q.region.same(&target, &w.space) && w.cmp(q, win) == Ordering::Greater
-    }) {
-        return Ok(entry(q.id));
-    }
-    let mut new = w.make(target, BTreeMap::from([(key, value)]));
-    new.rank = w.rank_above(win.rank);
-    Ok(vec![Op::Add {
-        patch: new,
-        at: w.patches.len(),
-    }])
+    let clear = |q: &Patch| {
+        !w.patches.iter().any(|r| {
+            r.id != q.id
+                && r.id != win.id
+                && r.entries.contains_key(&key)
+                && w.cmp(r, win) == Ordering::Greater
+                && w.cmp(q, r) == Ordering::Greater
+                && r.region.meets(&target, &w.space)
+        })
+    };
+    let reuse = w
+        .patches
+        .iter()
+        .filter(|q| {
+            q.layer == layer
+                && q.writable
+                && q.region.same(&target, &w.space)
+                && w.cmp(q, win) == Ordering::Greater
+                && clear(q)
+        })
+        .min_by(|a, b| w.cmp(a, b));
+    Ok(match reuse {
+        Some(q) => entry(q.id),
+        None if win.layer == layer => add(target, Some(w.rank_above(layer, win.rank))),
+        None => add(target, None),
+    })
 }

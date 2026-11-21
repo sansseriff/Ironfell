@@ -35,7 +35,12 @@ fn ordered(n: u32) -> Axis {
 }
 
 fn add(w: &mut World, region: Product, entries: &[(Key, i64)]) -> PatchId {
-    let p = w.make(region, entries.iter().copied().collect());
+    add_in(w, 0, region, entries)
+}
+
+/// A patch written in `layer`: 0 a definition's own, higher further out.
+fn add_in(w: &mut World, layer: u32, region: Product, entries: &[(Key, i64)]) -> PatchId {
+    let p = w.make(region, entries.iter().copied().collect(), layer);
     let id = p.id;
     let at = w.patches.len();
     w.apply(&Op::Add { patch: p, at });
@@ -99,7 +104,7 @@ fn a_deck_that_builds_on_itself() {
             [[0, 0, 0], [1, 0, 0], [1, 2, 9], [1, 2, 0]],
             "{strength:?}"
         );
-        let ops = edit::drag(&w, &at(&[(SLIDE, A)]), &from(A), colour, 5).unwrap();
+        let ops = edit::drag(&w, &at(&[(SLIDE, A)]), &from(A), colour, 5, 0).unwrap();
         w.apply_all(&ops);
         assert_eq!(
             [A, B, C, D].map(|s| row(&w, s)[1]),
@@ -174,16 +179,27 @@ fn two_levels_of_nesting_outermost_wins() {
             INST,
             instances(&[(20, vec![bench, o1, j]), (21, vec![o2, j])]),
         );
-        let mut w = World::new(s, doc(1, &[(colour, 0)]), strength);
-        add(&mut w, suffix(&[j]), &[(colour, 1)]);
-        let bench_s = add(&mut w, suffix(&[o1, j]), &[(colour, 2)]);
-        let doc_s = add(&mut w, suffix(&[bench, o1, j]), &[(colour, 3)]);
-        let colours = |w: &World| [20, 21].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap());
-        assert_eq!(colours(&w), [3, 1], "{strength:?}");
-        w.apply(&Op::Remove(doc_s));
-        assert_eq!(colours(&w), [2, 1], "{strength:?}: the bench's opinion");
-        w.apply(&Op::Remove(bench_s));
-        assert_eq!(colours(&w), [1, 1], "{strength:?}: the definition's");
+        // Written in either order: where each is written decides (its
+        // layer), not when (the council's probe made the document's first).
+        for outer_first in [false, true] {
+            let mut w = World::new(s.clone(), doc(1, &[(colour, 0)]), strength);
+            let (bench_s, doc_s);
+            if outer_first {
+                doc_s = add_in(&mut w, 2, suffix(&[bench, o1, j]), &[(colour, 3)]);
+                bench_s = add_in(&mut w, 1, suffix(&[o1, j]), &[(colour, 2)]);
+                add_in(&mut w, 0, suffix(&[j]), &[(colour, 1)]);
+            } else {
+                add_in(&mut w, 0, suffix(&[j]), &[(colour, 1)]);
+                bench_s = add_in(&mut w, 1, suffix(&[o1, j]), &[(colour, 2)]);
+                doc_s = add_in(&mut w, 2, suffix(&[bench, o1, j]), &[(colour, 3)]);
+            }
+            let colours = |w: &World| [20, 21].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap());
+            assert_eq!(colours(&w), [3, 1], "{strength:?}");
+            w.apply(&Op::Remove(doc_s));
+            assert_eq!(colours(&w), [2, 1], "{strength:?}: the bench's opinion");
+            w.apply(&Op::Remove(bench_s));
+            assert_eq!(colours(&w), [1, 1], "{strength:?}: the definition's");
+        }
     }
 }
 
@@ -241,10 +257,9 @@ fn an_instance_override_beats_the_definition_s_pose_by_axis_order() {
 }
 
 /// A class (instances named one by one) against a nesting pattern on the
-/// same axis. The path key counts trailing steps every selected instance
-/// shares: a class across contexts shares none, so `*/j` beats it; a class
-/// whose members all end in `j` ties with `*/j` on the key, and the rank
-/// decides (the newer). PT-4a must say whether that tie is a lint.
+/// same axis. A class holds only the instances it names, never one placed
+/// later, so it is more specific than a pattern no longer than its members'
+/// paths: it wins where both apply, across contexts or not.
 #[test]
 fn a_class_against_a_nesting_pattern() {
     let colour = key(0, 2);
@@ -255,30 +270,20 @@ fn a_class_against_a_nesting_pattern() {
             INST,
             instances(&[(m1, vec![5, 1]), (m2, vec![6, 1]), (m3, vec![7, 9])]),
         );
-        let mut w = World::new(s.clone(), doc(1, &[(colour, 0)]), strength);
-        add(&mut w, suffix(&[1]), &[(colour, 1)]);
-        add(
-            &mut w,
-            Product::all().with(INST, Sel::Set([m1, m2, m3].map(ValueId).into())),
-            &[(colour, 2)],
-        );
-        assert_eq!(
-            [m1, m2, m3].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap()),
-            [1, 1, 2],
-            "{strength:?}: across contexts"
-        );
-        let mut w = World::new(s, doc(1, &[(colour, 0)]), strength);
-        add(&mut w, suffix(&[1]), &[(colour, 1)]);
-        add(
-            &mut w,
-            Product::all().with(INST, Sel::Set([m1, m2].map(ValueId).into())),
-            &[(colour, 2)],
-        );
-        assert_eq!(
-            [m1, m2].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap()),
-            [2, 2],
-            "{strength:?}: a tie, the newer"
-        );
+        for class in [vec![m1, m2, m3], vec![m1, m2]] {
+            let mut w = World::new(s.clone(), doc(1, &[(colour, 0)]), strength);
+            add(&mut w, suffix(&[1]), &[(colour, 1)]);
+            add(
+                &mut w,
+                Product::all().with(INST, Sel::Set(class.iter().map(|v| ValueId(*v)).collect())),
+                &[(colour, 2)],
+            );
+            assert_eq!(
+                [m1, m2, m3].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap()),
+                [2, 2, if class.len() == 3 { 2 } else { 0 }],
+                "{strength:?}, {class:?}"
+            );
+        }
     }
 }
 
@@ -294,7 +299,7 @@ fn apply_from_b_on_and_the_widening_flaw() {
     for strength in BOTH {
         let mut w = deck(strength, 4);
         add(&mut w, from(B), &[(colour, 7)]);
-        let ops = edit::drag(&w, &at(&[(SLIDE, C)]), &only(C), colour, 5).unwrap();
+        let ops = edit::drag(&w, &at(&[(SLIDE, C)]), &only(C), colour, 5, 0).unwrap();
         w.apply_all(&ops);
         let Some(Op::Add { patch, .. }) = ops.first() else {
             panic!("a new patch on {{C}}")
@@ -314,7 +319,7 @@ fn apply_from_b_on_and_the_widening_flaw() {
 
         let mut w = deck(strength, 5);
         add(&mut w, span(C, D), &[(colour, 6)]);
-        let ops = edit::drag(&w, &at(&[(SLIDE, C)]), &only(C), colour, 5).unwrap();
+        let ops = edit::drag(&w, &at(&[(SLIDE, C)]), &only(C), colour, 5, 0).unwrap();
         w.apply_all(&ops);
         let Some(Op::Add { patch, .. }) = ops.first() else {
             panic!()
@@ -426,4 +431,83 @@ fn an_entry_on_an_added_node_applies_where_it_is_added() {
         );
         assert_eq!(w.stale(), vec![(weak, key(2, 2))], "{strength:?}");
     }
+}
+
+/// With one placement, "this placement" and "every placement" select the
+/// same instance today, yet "this placement" is the more specific as
+/// written (Sol's case): the instance's override still beats the hover
+/// pose.
+#[test]
+fn one_placement_still_overrides_the_hover_pose() {
+    const STATE: AxisId = AxisId(1);
+    let fill = key(0, 2);
+    for strength in BOTH {
+        let mut s = Space::default();
+        s.axes.insert(INST, instances(&[(20, vec![1])]));
+        let mut st = Axis::new(Kind::Unordered);
+        st.push(ValueId(10), Vec::new());
+        st.push(ValueId(11), Vec::new());
+        s.axes.insert(STATE, st);
+        s.order = vec![INST, STATE];
+        let mut w = World::new(s, doc(1, &[(fill, 0)]), strength);
+        add(&mut w, suffix(&[1]), &[(fill, 3)]);
+        add(
+            &mut w,
+            Product::all().with(STATE, Sel::Set(BTreeSet::from([ValueId(11)]))),
+            &[(fill, 2)],
+        );
+        assert_eq!(
+            w.value(&at(&[(INST, 20), (STATE, 11)]), fill),
+            Some(3),
+            "{strength:?}"
+        );
+    }
+}
+
+/// Law 5's flag: `{a, b}` and `{b, c}` on one axis tie on specificity and
+/// meet at b (the note's own cycle example), so the rank alone decides, and
+/// the pair is listed. Two patches on one region are a deliberate order,
+/// and are not.
+#[test]
+fn a_tie_of_specificity_is_flagged_and_one_region_is_not() {
+    const STATE: AxisId = AxisId(1);
+    let colour = key(0, 2);
+    let set =
+        |vs: &[u32]| Product::all().with(STATE, Sel::Set(vs.iter().map(|v| ValueId(*v)).collect()));
+    let mut s = Space::default();
+    let mut st = Axis::new(Kind::Unordered);
+    for v in [10, 11, 12] {
+        st.push(ValueId(v), Vec::new());
+    }
+    s.axes.insert(STATE, st);
+    let mut w = World::new(s, doc(1, &[(colour, 0)]), Strength::Stored);
+    let ab = add(&mut w, set(&[10, 11]), &[(colour, 1)]);
+    add(&mut w, set(&[10, 11]), &[(colour, 2)]);
+    assert_eq!(w.ties(), Vec::new(), "one region");
+    let bc = add(&mut w, set(&[11, 12]), &[(colour, 3)]);
+    assert!(w.ties().contains(&(ab, bc)), "{:?}", w.ties());
+}
+
+/// A removal is never stale: its node is absent because it worked. An
+/// entry on an absent node is inert, and applies again when the node
+/// returns.
+#[test]
+fn a_removal_is_not_stale_and_an_entry_returns_with_its_node() {
+    let mut d = doc(2, &[]);
+    d.parent.insert(2, Some(0));
+    d.base.insert(key(2, PRESENT), 0);
+    let mut s = Space::default();
+    s.axes.insert(SLIDE, ordered(2));
+    let mut w = World::new(s, d, Strength::Stored);
+    let removal = add(&mut w, Product::all(), &[(key(1, PRESENT), 0)]);
+    let waiting = add(&mut w, Product::all(), &[(key(2, 2), 7)]);
+    assert_eq!(
+        w.stale(),
+        vec![(waiting, key(2, 2))],
+        "{removal:?} is not listed"
+    );
+    assert_eq!(w.value(&at(&[(SLIDE, A)]), key(2, 2)), None);
+    w.doc.base.insert(key(2, PRESENT), 1);
+    assert_eq!(w.value(&at(&[(SLIDE, A)]), key(2, 2)), Some(7));
+    assert!(w.stale().is_empty());
 }

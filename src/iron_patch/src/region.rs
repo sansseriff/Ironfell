@@ -299,10 +299,6 @@ impl Product {
         self.minus(other, space).is_empty()
     }
 
-    pub fn same(&self, other: &Product, space: &Space) -> bool {
-        self.subset(other, space) && other.subset(self, space)
-    }
-
     pub fn points(&self, space: &Space) -> Vec<Point> {
         space
             .points()
@@ -335,5 +331,108 @@ impl Region {
             .into_iter()
             .filter(|p| self.contains(space, p))
             .collect()
+    }
+}
+
+/// Relations as written: over every value an axis may ever have, not only
+/// the values it has now (the PT-4a council, 2026-11-21). `[C, ∞)` holds
+/// slides yet to be added, so it is never the same as `{C}`, even while C is
+/// the last slide; `*/o1/j` holds placements yet to be made. Strength's
+/// defaults, the drag, merge and the lints decide by these, so no decision
+/// changes when an axis grows. Queries, which are about the points that
+/// exist, use `Product::subset`, `minus` and `points`.
+impl Sel {
+    /// The ids it names that a point can still take: a tombstone is never
+    /// taken again.
+    fn live_ids(set: &BTreeSet<ValueId>, axis: &Axis) -> BTreeSet<ValueId> {
+        set.iter()
+            .copied()
+            .filter(|v| axis.live().any(|l| l == *v) || axis.position(*v).is_none())
+            .collect()
+    }
+
+    /// Whether no value, now or later, can be in it.
+    pub fn void(&self, axis: &Axis) -> bool {
+        match self.normal(axis) {
+            Sel::Range(lo, hi) => lower_cut(axis, &lo) > upper_cut(axis, &hi),
+            Sel::Set(s) => Sel::live_ids(&s, axis).is_empty(),
+            Sel::Not(_) | Sel::All => false,
+            Sel::Suffix { tail, not } => not.iter().any(|m| ends_with(&tail, m)),
+        }
+    }
+
+    /// Whether every value it may ever hold is in `outer`. A set's values
+    /// count as written, deleted ones too, as its key counts them.
+    pub fn within(&self, outer: &Sel, axis: &Axis) -> bool {
+        if *outer == Sel::All || self.void(axis) {
+            return true;
+        }
+        match (self.normal(axis), outer.normal(axis)) {
+            (Sel::Range(a0, a1), Sel::Range(b0, b1)) => {
+                lower_cut(axis, &a0) >= lower_cut(axis, &b0)
+                    && upper_cut(axis, &a1) <= upper_cut(axis, &b1)
+            }
+            (Sel::Range(a0, a1), Sel::Set(t)) => {
+                // Only a single closed value lies in a finite set.
+                let (lo, hi) = (lower_cut(axis, &a0), upper_cut(axis, &a1));
+                lo == hi
+                    && lo % 2 == 0
+                    && axis
+                        .all()
+                        .nth((lo / 2) as usize)
+                        .is_some_and(|v| t.contains(&v))
+            }
+            (Sel::Set(s), o @ Sel::Range(..)) => s.iter().all(|v| o.contains(axis, *v)),
+            (Sel::Set(s), Sel::Set(t)) => s.is_subset(&t),
+            (Sel::Set(s), Sel::Not(t)) => s.is_disjoint(&t),
+            (Sel::Not(s), Sel::Not(t)) => t.is_subset(&s),
+            (Sel::Suffix { tail: a, not: an }, Sel::Suffix { tail: b, not: bn }) => {
+                ends_with(&a, &b)
+                    && bn.iter().all(|n| {
+                        if ends_with(&a, n) {
+                            false
+                        } else if ends_with(n, &a) {
+                            an.iter().any(|m| ends_with(n, m))
+                        } else {
+                            true
+                        }
+                    })
+            }
+            (Sel::Set(s), o @ Sel::Suffix { .. }) => s.iter().all(|v| o.contains(axis, *v)),
+            // A cofinite set, an interval of a dense order or a pattern is
+            // never inside a finite set; other mixtures do not occur.
+            _ => false,
+        }
+    }
+
+    /// Whether a value, now or later, may be in both.
+    pub fn meets(&self, other: &Sel, axis: &Axis) -> bool {
+        !self.intersect(other, axis).void(axis)
+    }
+}
+
+impl Product {
+    pub fn void(&self, space: &Space) -> bool {
+        self.sels
+            .iter()
+            .any(|(a, s)| space.axes.get(a).is_none_or(|axis| s.void(axis)))
+    }
+
+    /// Whether every point it may ever hold is in `outer`, as written.
+    pub fn within(&self, outer: &Product, space: &Space) -> bool {
+        self.void(space)
+            || space
+                .axes
+                .iter()
+                .all(|(a, axis)| self.sel(*a).within(outer.sel(*a), axis))
+    }
+
+    /// The same region as written: each within the other.
+    pub fn same(&self, other: &Product, space: &Space) -> bool {
+        self.within(other, space) && other.within(self, space)
+    }
+
+    pub fn meets(&self, other: &Product, space: &Space) -> bool {
+        !self.intersect(other, space).void(space)
     }
 }

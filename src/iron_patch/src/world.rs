@@ -2,7 +2,9 @@
 //! (`value(x) = base ⊕ p₁ ⊕ p₂ ⊕ …`, the note's §2.1).
 
 use crate::axis::{Point, Space};
-use crate::patch::{Doc, Field, HIDDEN, Key, Node, PRESENT, Patch, PatchId, Strength, compare};
+use crate::patch::{
+    Doc, Field, HIDDEN, Key, Node, PRESENT, Patch, PatchId, Strength, compare, keys,
+};
 use crate::region::{Product, Region};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -166,11 +168,15 @@ impl World {
 
     /// The entries that do nothing anywhere they would win: their node is
     /// absent at every point of a non-empty winning region (§11.1: one
-    /// absent at some points only is normal, and not listed).
+    /// absent at some points only is normal, and not listed). A removal
+    /// (`PRESENT` 0) is never stale: its node is absent because it worked.
     pub fn stale(&self) -> Vec<(PatchId, Key)> {
         let mut out = Vec::new();
         for p in &self.patches {
-            for &key in p.entries.keys() {
+            for (&key, &v) in &p.entries {
+                if key.field == PRESENT && v == 0 {
+                    continue;
+                }
                 let points = self.winning(p.id, key).points(&self.space);
                 if !points.is_empty() && points.iter().all(|x| !self.present(x, key.node)) {
                     out.push((p.id, key));
@@ -180,20 +186,57 @@ impl World {
         out
     }
 
-    /// Pairs where a patch whose region is strictly inside another's, and
-    /// that sets a key the other sets, is the weaker: possible under
-    /// `Stored` after a region edit, and a lint (§11.1).
+    /// The entries that win nowhere: a stronger patch sets the field
+    /// everywhere they apply. A rank that contradicts inclusion shows up
+    /// here, as the inner patch's dead entries.
+    pub fn dead(&self) -> Vec<(PatchId, Key)> {
+        let mut out = Vec::new();
+        for p in &self.patches {
+            if p.region.is_empty(&self.space) {
+                continue;
+            }
+            for &key in p.entries.keys() {
+                if self.winning(p.id, key).is_empty(&self.space) {
+                    out.push((p.id, key));
+                }
+            }
+        }
+        out
+    }
+
+    /// Pairs whose order the rank alone decided where specificity tied
+    /// (law 5's flag): one layer, equal keys, regions that differ and
+    /// meet, and a field both set. Two patches on the same region are a
+    /// deliberate order, and not listed.
+    pub fn ties(&self) -> Vec<(PatchId, PatchId)> {
+        let mut out = Vec::new();
+        for (i, p) in self.patches.iter().enumerate() {
+            for q in &self.patches[i + 1..] {
+                if p.layer == q.layer
+                    && keys(&self.space, &p.region) == keys(&self.space, &q.region)
+                    && !p.region.same(&q.region, &self.space)
+                    && p.region.meets(&q.region, &self.space)
+                    && p.entries.keys().any(|k| q.entries.contains_key(k))
+                {
+                    out.push((p.id.min(q.id), p.id.max(q.id)));
+                }
+            }
+        }
+        out
+    }
+
+    /// Pairs where a patch whose region is strictly within another's, in
+    /// its layer, is the weaker: possible after a region edit or a reorder.
     pub fn contradictions(&self) -> Vec<(PatchId, PatchId)> {
         let mut out = Vec::new();
         for p in &self.patches {
             for q in &self.patches {
-                let inside = p.region.subset(&q.region, &self.space)
-                    && !q.region.subset(&p.region, &self.space);
-                let shared = p.entries.keys().any(|k| q.entries.contains_key(k));
+                let inside = p.region.within(&q.region, &self.space)
+                    && !q.region.within(&p.region, &self.space);
                 if p.id != q.id
+                    && p.layer == q.layer
                     && inside
-                    && shared
-                    && !p.region.is_empty(&self.space)
+                    && !p.region.void(&self.space)
                     && self.cmp(p, q) == Ordering::Less
                 {
                     out.push((p.id, q.id));
@@ -208,34 +251,39 @@ impl World {
         PatchId(self.patches.iter().map(|p| p.id.0 + 1).max().unwrap_or(0))
     }
 
-    /// A rank for a new patch on `region`: just above every patch whose
-    /// region is no more specific (`AxisKeys`' keys), and below the next
-    /// rank above those. A newer patch on an equal region is stronger.
-    pub fn default_rank(&self, region: &Product) -> f64 {
-        let mine = crate::patch::keys(&self.space, region);
+    /// A rank for a new patch on `region` in `layer`: just above every patch
+    /// of the layer whose region is no more specific (the axis keys), below
+    /// the next rank above those. Where earlier edits put ranks out of key
+    /// order, no slot is below every more specific patch: above wins, and
+    /// the inner patch's entries show as dead (`dead`). A newer patch on an
+    /// equal region is stronger.
+    pub fn default_rank(&self, region: &Product, layer: u32) -> f64 {
+        let mine = keys(&self.space, region);
         let below = self
             .patches
             .iter()
-            .filter(|p| crate::patch::keys(&self.space, &p.region) <= mine)
+            .filter(|p| p.layer == layer && keys(&self.space, &p.region) <= mine)
             .map(|p| p.rank)
             .fold(f64::NEG_INFINITY, f64::max);
         if below == f64::NEG_INFINITY {
             return self
                 .patches
                 .iter()
+                .filter(|p| p.layer == layer)
                 .map(|p| p.rank)
                 .fold(f64::INFINITY, f64::min)
                 .min(1.0)
                 - 1.0;
         }
-        self.rank_above(below)
+        self.rank_above(layer, below)
     }
 
-    /// A rank between `r` and the next rank above it.
-    pub fn rank_above(&self, r: f64) -> f64 {
+    /// A rank in `layer` between `r` and the next rank above it.
+    pub fn rank_above(&self, layer: u32, r: f64) -> f64 {
         let next = self
             .patches
             .iter()
+            .filter(|p| p.layer == layer)
             .map(|p| p.rank)
             .filter(|&x| x > r)
             .fold(f64::INFINITY, f64::min);
@@ -246,11 +294,12 @@ impl World {
         }
     }
 
-    /// A new patch, not yet added: `Op::Add` adds it.
-    pub fn make(&self, region: Product, entries: BTreeMap<Key, i64>) -> Patch {
+    /// A new patch in `layer`, not yet added: `Op::Add` adds it.
+    pub fn make(&self, region: Product, entries: BTreeMap<Key, i64>, layer: u32) -> Patch {
         Patch {
             id: self.fresh_id(),
-            rank: self.default_rank(&region),
+            layer,
+            rank: self.default_rank(&region, layer),
             region,
             entries,
             writable: true,

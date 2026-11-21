@@ -190,12 +190,21 @@ fn entries(r: &mut Rng) -> BTreeMap<Key, i64> {
     e
 }
 
+/// The layer views in these scripts write in: the outermost, so nothing
+/// they meet is set by an outer scope.
+const VIEW: u32 = 2;
+
+fn layer(r: &mut Rng) -> u32 {
+    if r.chance(70) { 0 } else { r.below(3) as u32 }
+}
+
 /// Up to five patches, each made as a new patch is (`World::make`: a rank
-/// from specificity), some read-only.
+/// from specificity), most in one layer, some read-only.
 fn world(r: &mut Rng, strength: Strength) -> World {
     let mut w = World::new(space(r), doc(), strength);
     for _ in 0..r.below(6) {
-        let mut p = w.make(product(r, &w.space), entries(r));
+        let l = layer(r);
+        let mut p = w.make(product(r, &w.space), entries(r), l);
         p.writable = !r.chance(10);
         let at = w.patches.len();
         w.apply(&Op::Add { patch: p, at });
@@ -233,9 +242,10 @@ fn order_failure(w: &World, inclusion: bool) -> Option<String> {
             if a.id != b.id && w.cmp(a, b) != w.cmp(b, a).reverse() {
                 return Some(format!("not antisymmetric: {:?} {:?}", a.id, b.id));
             }
-            let strictly_inside = a.region.subset(&b.region, &w.space)
-                && !b.region.subset(&a.region, &w.space)
-                && !a.region.is_empty(&w.space);
+            let strictly_inside = a.layer == b.layer
+                && a.region.within(&b.region, &w.space)
+                && !b.region.within(&a.region, &w.space)
+                && !a.region.void(&w.space);
             if inclusion && a.id != b.id && strictly_inside && w.cmp(a, b) != Ordering::Greater {
                 return Some(format!("{:?} is inside {:?} and not stronger", a.id, b.id));
             }
@@ -314,7 +324,7 @@ fn an_empty_patch_changes_nothing() {
             let mut r = Rng::new(seed);
             let mut w = world(&mut r, strength);
             let before = w.snapshot();
-            let empty = w.make(product(&mut r, &w.space), BTreeMap::new());
+            let empty = w.make(product(&mut r, &w.space), BTreeMap::new(), 0);
             w.apply(&Op::Add {
                 patch: empty,
                 at: 0,
@@ -322,6 +332,7 @@ fn an_empty_patch_changes_nothing() {
             let nowhere = w.make(
                 Product::all().with(SLIDES, Sel::Set(BTreeSet::new())),
                 entries(&mut r),
+                0,
             );
             w.apply(&Op::Add {
                 patch: nowhere,
@@ -343,12 +354,10 @@ fn reordering_patches_with_disjoint_keys_changes_nothing() {
     for seed in 0..SCRIPTS {
         let mut w = world(&mut Rng::new(seed), Strength::Stored);
         let mut by: Vec<&Patch> = w.patches.iter().collect();
-        by.sort_by(|a, b| a.rank.total_cmp(&b.rank));
-        let Some((a, b)) = by
-            .windows(2)
-            .map(|p| (p[0], p[1]))
-            .find(|(a, b)| a.entries.keys().all(|k| !b.entries.contains_key(k)))
-        else {
+        by.sort_by(|a, b| (a.layer, a.rank).partial_cmp(&(b.layer, b.rank)).unwrap());
+        let Some((a, b)) = by.windows(2).map(|p| (p[0], p[1])).find(|(a, b)| {
+            a.layer == b.layer && a.entries.keys().all(|k| !b.entries.contains_key(k))
+        }) else {
             continue;
         };
         let (ida, idb, ra, rb) = (a.id, b.id, a.rank, b.rank);
@@ -564,15 +573,16 @@ fn a_drag_obeys_the_lens_laws() {
             let e = edit_region(&mut r, &w, &x);
             if let Some(now) = w.raw(&x, key) {
                 assert_eq!(
-                    edit::drag(&w, &x, &e, key, now),
+                    edit::drag(&w, &x, &e, key, now, VIEW),
                     Ok(Vec::new()),
                     "{strength:?}, seed {seed}: GetPut"
                 );
             }
             let v = 10 + r.below(5) as i64;
             let before = w.snapshot();
-            let ops = edit::drag(&w, &x, &e, key, v)
+            let ops = edit::drag(&w, &x, &e, key, v, VIEW)
                 .unwrap_or_else(|f| panic!("{strength:?}, seed {seed}: {f}"));
+            let original = w.clone();
             for op in &ops {
                 if let Op::Entry { patch, .. } = op {
                     assert!(
@@ -593,10 +603,47 @@ fn a_drag_obeys_the_lens_laws() {
                     "{strength:?}, seed {seed}: {k:?} changed at {y:?}, outside the edit region"
                 );
             }
-            let again = edit::drag(&w, &x, &e, key, v + 1).unwrap();
+            // The blast radius: exactly the written entry's winning region,
+            // where the value was another.
+            let target = match ops.first() {
+                Some(Op::Entry { patch, .. }) => *patch,
+                Some(Op::Add { patch, .. }) => patch.id,
+                _ => unreachable!("a drag that writes"),
+            };
+            let radius = w.winning(target, key);
+            let expected: BTreeSet<(Point, Key)> = before
+                .iter()
+                .filter(|(y, st)| {
+                    let was = st.get(&key).copied().flatten();
+                    radius.contains(&w.space, y) && w.present(y, key.node) && was != Some(v)
+                })
+                .map(|(y, _)| (y.clone(), key))
+                .collect();
+            assert_eq!(
+                changed(&before, &w.snapshot()),
+                expected,
+                "{strength:?}, seed {seed}: blast radius"
+            );
+            // PutPut: a second drag writes what the first made, and the two
+            // equal one drag to the second value.
+            let again = edit::drag(&w, &x, &e, key, v + 1, VIEW).unwrap();
             assert!(
                 !again.iter().any(|o| matches!(o, Op::Add { .. })),
                 "{strength:?}, seed {seed}: PutPut added a patch"
+            );
+            w.apply_all(&again);
+            let mut once = original.clone();
+            let single = edit::drag(&once, &x, &e, key, v + 1, VIEW).unwrap();
+            once.apply_all(&single);
+            assert_eq!(
+                once.snapshot(),
+                w.snapshot(),
+                "{strength:?}, seed {seed}: PutPut"
+            );
+            assert_eq!(
+                once.patches.len(),
+                w.patches.len(),
+                "{strength:?}, seed {seed}: PutPut"
             );
         }
     }
@@ -657,12 +704,17 @@ fn undo_restores_everything() {
             for _ in 0..6 {
                 let ops: Vec<Op> = match (r.below(8), w.patches.is_empty()) {
                     (_, true) | (0, _) => vec![Op::Add {
-                        patch: w.make(product(&mut r, &w.space), entries(&mut r)),
+                        patch: {
+                            let l = layer(&mut r);
+                            w.make(product(&mut r, &w.space), entries(&mut r), l)
+                        },
                         at: r.below(w.patches.len() + 1),
                     }],
                     (1, _) => vec![Op::Remove(r.pick(&w.patches).id)],
                     (2, _) => edit::set_region(r.pick(&w.patches).id, product(&mut r, &w.space)),
-                    (3, _) => edit::reorder(r.pick(&w.patches).id, r.below(10) as f64 - 5.0),
+                    (3, _) => {
+                        edit::reorder(r.pick(&w.patches).id, r.below(1000) as f64 / 7.0 - 70.0)
+                    }
                     (4, _) => {
                         let p = r.pick(&w.patches);
                         let keys: Vec<Key> = p.entries.keys().copied().collect();
@@ -673,8 +725,15 @@ fn undo_restores_everything() {
                     (6, _) => {
                         let x = r.pick(&w.space.points());
                         let e = edit_region(&mut r, &w, &x);
-                        edit::drag(&w, &x, &e, Key { node: 0, field: 2 }, r.below(9) as i64)
-                            .unwrap_or_default()
+                        edit::drag(
+                            &w,
+                            &x,
+                            &e,
+                            Key { node: 0, field: 2 },
+                            r.below(9) as i64,
+                            VIEW,
+                        )
+                        .unwrap_or_default()
                     }
                     _ => {
                         let p = r.pick(&w.patches);
@@ -707,7 +766,10 @@ fn stale_entries_are_inert_and_listed_only_when_absent_wherever_they_win() {
             let w = world(&mut Rng::new(seed), strength);
             let mut expected = Vec::new();
             for p in &w.patches {
-                for &key in p.entries.keys() {
+                for (&key, &v) in &p.entries {
+                    if key.field == PRESENT && v == 0 {
+                        continue;
+                    }
                     let wins: Vec<Point> = w
                         .space
                         .points()
@@ -755,6 +817,139 @@ fn structure_is_resolved_before_fields_and_hiding_cascades() {
                     };
                     assert_eq!(w.value(&x, k), expect, "seed {seed}");
                 }
+            }
+        }
+    }
+}
+
+/// No decision depends on values an axis does not have yet (the PT-4a
+/// council): appending a slide and inserting one leaves every value at the
+/// old points, a drag's ops, a new patch's rank, every merge's outcome and
+/// the lints as they were.
+#[test]
+fn growing_an_axis_changes_no_decision() {
+    for strength in [Strength::AxisKeys, Strength::Stored] {
+        for seed in 0..SCRIPTS {
+            let mut r = Rng::new(seed);
+            let w = world(&mut r, strength);
+            let mut g = w.clone();
+            let slides = g.space.axes.get_mut(&SLIDES).unwrap();
+            slides.push(ValueId(9), Vec::new());
+            let at = r.below(6);
+            slides.insert(at, ValueId(8));
+            let old: BTreeSet<Point> = w.space.points().into_iter().collect();
+            for ((x, a), (_, b)) in w
+                .snapshot()
+                .iter()
+                .zip(g.snapshot().iter().filter(|(x, _)| old.contains(x)))
+            {
+                assert_eq!(
+                    changed(&[(x.clone(), a.clone())], &[(x.clone(), b.clone())]),
+                    BTreeSet::new(),
+                    "{strength:?}, seed {seed}: values"
+                );
+            }
+            let x = r.pick(&w.space.points());
+            let e = edit_region(&mut r, &w, &x);
+            let key = Key {
+                node: r.below(5) as Node,
+                field: r.pick(&FIELDS),
+            };
+            let v = 10 + r.below(5) as i64;
+            assert_eq!(
+                edit::drag(&w, &x, &e, key, v, VIEW),
+                edit::drag(&g, &x, &e, key, v, VIEW),
+                "{strength:?}, seed {seed}: drag"
+            );
+            let region = product(&mut r, &w.space);
+            assert_eq!(
+                w.default_rank(&region, 0),
+                g.default_rank(&region, 0),
+                "{strength:?}, seed {seed}: default rank"
+            );
+            for a in &w.patches {
+                for b in &w.patches {
+                    assert_eq!(
+                        edit::merge(&w, a.id, b.id),
+                        edit::merge(&g, a.id, b.id),
+                        "{strength:?}, seed {seed}: merge"
+                    );
+                }
+            }
+            assert_eq!(w.ties(), g.ties(), "{strength:?}, seed {seed}: ties");
+            assert_eq!(
+                w.contradictions(),
+                g.contradictions(),
+                "{strength:?}, seed {seed}: contradictions"
+            );
+        }
+    }
+}
+
+/// An evaluator written apart from `World`: the patches holding the point
+/// that set the field, strongest by (layer, rank, id), over the base, with
+/// presence decided first up the tree.
+fn reference(w: &World, x: &Point, key: Key) -> Option<i64> {
+    let raw = |k: Key| {
+        let mut setters: Vec<&Patch> = w
+            .patches
+            .iter()
+            .filter(|p| {
+                p.entries.contains_key(&k)
+                    && p.region
+                        .sels
+                        .iter()
+                        .all(|(a, s)| s.contains(&w.space.axes[a], x[a]))
+            })
+            .collect();
+        setters.sort_by(|a, b| {
+            (a.layer, a.rank, a.id)
+                .partial_cmp(&(b.layer, b.rank, b.id))
+                .unwrap()
+        });
+        setters
+            .last()
+            .map(|p| p.entries[&k])
+            .or(w.doc.base.get(&k).copied())
+    };
+    let mut n = Some(key.node);
+    while let Some(m) = n {
+        if raw(Key {
+            node: m,
+            field: PRESENT,
+        }) != Some(1)
+        {
+            return None;
+        }
+        n = w.doc.parent[&m];
+    }
+    match key.field {
+        PRESENT => Some(1),
+        HIDDEN => {
+            let mut n = Some(key.node);
+            while let Some(m) = n {
+                if raw(Key {
+                    node: m,
+                    field: HIDDEN,
+                }) == Some(1)
+                {
+                    return Some(1);
+                }
+                n = w.doc.parent[&m];
+            }
+            Some(0)
+        }
+        _ => raw(key),
+    }
+}
+
+#[test]
+fn values_agree_with_a_reference_written_apart() {
+    for seed in 0..SCRIPTS {
+        let w = world(&mut Rng::new(seed), Strength::Stored);
+        for (x, state) in w.snapshot() {
+            for (k, v) in state {
+                assert_eq!(v, reference(&w, &x, k), "seed {seed}: {k:?} at {x:?}");
             }
         }
     }

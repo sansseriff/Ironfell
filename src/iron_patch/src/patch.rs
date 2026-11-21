@@ -1,7 +1,7 @@
 //! Patches, the base they apply over, and strength (laws 4 and 5).
 
 use crate::axis::{AxisId, Kind, Space};
-use crate::region::{Product, Sel};
+use crate::region::{Bound, Product, Sel};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -31,8 +31,16 @@ pub struct PatchId(pub u32);
 pub struct Patch {
     pub id: PatchId,
     pub region: Product,
-    /// Stored strength (`Strength::Stored`), given from specificity when the
-    /// patch is made.
+    /// Where the patch is written, outermost largest: a definition's own
+    /// patches are layer 0, an enclosing definition's 1, the document's
+    /// above. Every patch of an outer layer is stronger than every patch of
+    /// an inner one (component-model.md §5.3's outermost-wins, by
+    /// structure), and ranks compare only within a layer, so an imported
+    /// definition's ranks never interleave with a document's.
+    pub layer: u32,
+    /// Stored strength within the layer (`Strength::Stored`), given from
+    /// specificity when the patch is made. A model artefact: `f64` halves
+    /// gaps, where the spec's rank is an order key that never runs out.
     pub rank: f64,
     pub entries: BTreeMap<Key, i64>,
     /// A recorded move's patch, or an imported definition's: never written
@@ -66,42 +74,65 @@ pub enum Strength {
     Stored,
 }
 
-/// One axis's key for a selection: larger is stronger, and a selection
-/// strictly inside another has a larger key.
-/// - ordered: a later first value, then an earlier last ("a later start
-///   wins", which is "builds on");
-/// - path: more trailing steps shared by every instance it selects;
-/// - then, on every kind, fewer values.
+/// One axis's key for a selection, from the selection as written (so it
+/// does not change as the axis grows): larger is more specific, and a
+/// selection strictly within another (`Sel::within`) has a larger key.
+/// - ordered: a later lower end, then an earlier upper end, then a finite
+///   set before an interval (an interval of a dense order holds values yet
+///   to be inserted), fewer values first;
+/// - unordered: a finite set before a cofinite one; fewer values in a set,
+///   more excluded from a cofinite one;
+/// - instance: more steps fixed; a named set (a class) before a pattern of
+///   the same length; fewer members; more patterns excluded.
 pub fn axis_key(space: &Space, axis: AxisId, sel: &Sel) -> (i64, i64, i64) {
     let Some(ax) = space.axes.get(&axis) else {
         return (i64::MIN, i64::MIN, i64::MIN);
     };
-    let members = sel.members(ax);
-    if members.is_empty() {
-        return (i64::MIN, i64::MIN, i64::MIN);
+    if sel.void(ax) {
+        return (i64::MAX, i64::MAX, i64::MAX);
     }
-    let count = -(members.len() as i64);
-    match ax.kind {
-        Kind::Ordered => {
-            let first = ax.position(members[0]).unwrap_or(0) as i64;
-            let last = ax
-                .position(*members.last().expect("non-empty"))
-                .unwrap_or(0) as i64;
-            (first, -last, count)
+    let cut = |v: crate::axis::ValueId| 2 * ax.position(v).map_or(i64::MAX / 4, |p| p as i64);
+    match (ax.kind, sel) {
+        (Kind::Ordered, Sel::All) => (i64::MIN, -i64::MAX, i64::MIN / 2),
+        (Kind::Ordered, Sel::Range(lo, hi)) => {
+            let lo = match lo {
+                Bound::Open => i64::MIN,
+                Bound::Incl(v) => cut(*v),
+                Bound::Excl(v) => cut(*v) + 1,
+            };
+            let hi = match hi {
+                Bound::Open => i64::MAX,
+                Bound::Incl(v) => cut(*v),
+                Bound::Excl(v) => cut(*v) - 1,
+            };
+            (lo, -hi, if lo == hi { -1 } else { i64::MIN / 2 })
         }
-        Kind::Unordered => (0, 0, count),
-        Kind::Path => {
-            let paths: Vec<&[u32]> = members.iter().map(|v| ax.path(*v)).collect();
-            let shortest = paths.iter().map(|p| p.len()).min().unwrap_or(0);
-            let shared = (0..shortest)
-                .take_while(|&k| {
-                    paths
-                        .iter()
-                        .all(|p| p[p.len() - 1 - k] == paths[0][paths[0].len() - 1 - k])
-                })
-                .count();
-            (shared as i64, 0, count)
+        (Kind::Ordered, Sel::Set(s)) => {
+            let cuts: Vec<i64> = s.iter().map(|v| cut(*v)).collect();
+            (
+                cuts.iter().copied().min().unwrap_or(0),
+                -cuts.iter().copied().max().unwrap_or(0),
+                -(s.len() as i64),
+            )
         }
+        (Kind::Unordered, Sel::Set(s)) => (1, -(s.len() as i64), 0),
+        (Kind::Unordered, Sel::Not(t)) => (0, t.len() as i64, 0),
+        (Kind::Unordered, Sel::All) => (0, 0, 0),
+        // Only an excluded pattern that extends the tail removes anything.
+        (Kind::Path, Sel::Suffix { tail, not }) => (
+            tail.len() as i64,
+            0,
+            not.iter()
+                .filter(|n| n.len() > tail.len() && n[n.len() - tail.len()..] == tail[..])
+                .count() as i64,
+        ),
+        (Kind::Path, Sel::Set(s)) => {
+            let shortest = s.iter().map(|v| ax.path(*v).len()).min().unwrap_or(0);
+            (shortest as i64, 1, -(s.len() as i64))
+        }
+        (Kind::Path, Sel::All) => (0, 0, 0),
+        // Forms an axis of this kind does not take.
+        _ => (i64::MIN, i64::MIN, i64::MIN),
     }
 }
 
@@ -114,21 +145,22 @@ pub fn keys(space: &Space, region: &Product) -> Vec<(i64, i64, i64)> {
         .collect()
 }
 
-/// Whether `p` is stronger than `q` (`Greater`) where both apply.
+/// Whether `p` is stronger than `q` (`Greater`) where both apply. An outer
+/// layer first, always; then the rule; then, for equal ranks, the later id.
 pub fn compare(space: &Space, strength: Strength, p: &Patch, q: &Patch) -> Ordering {
     if p.id == q.id {
         return Ordering::Equal;
     }
     let tie = || p.rank.total_cmp(&q.rank).then(p.id.cmp(&q.id));
-    match strength {
+    p.layer.cmp(&q.layer).then_with(|| match strength {
         Strength::Stored => tie(),
         Strength::AxisKeys => keys(space, &p.region)
             .cmp(&keys(space, &q.region))
             .then_with(tie),
         Strength::AsWritten => {
             let (pq, qp) = (
-                p.region.subset(&q.region, space),
-                q.region.subset(&p.region, space),
+                p.region.within(&q.region, space),
+                q.region.within(&p.region, space),
             );
             if pq && !qp {
                 return Ordering::Greater;
@@ -138,18 +170,16 @@ pub fn compare(space: &Space, strength: Strength, p: &Patch, q: &Patch) -> Order
             }
             for a in space.deciding() {
                 let ax = &space.axes[&a];
-                let (sp, sq) = (p.region.sel(a).members(ax), q.region.sel(a).members(ax));
-                let inside = |x: &[crate::axis::ValueId], y: &[crate::axis::ValueId]| {
-                    x.len() < y.len() && x.iter().all(|v| y.contains(v))
-                };
-                if inside(&sp, &sq) {
+                let (sp, sq) = (p.region.sel(a), q.region.sel(a));
+                let (inp, inq) = (sp.within(sq, ax), sq.within(sp, ax));
+                if inp && !inq {
                     return Ordering::Greater;
                 }
-                if inside(&sq, &sp) {
+                if inq && !inp {
                     return Ordering::Less;
                 }
             }
             tie()
         }
-    }
+    })
 }

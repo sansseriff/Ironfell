@@ -53,7 +53,7 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | Key | Step | Kind | Gate before it | State |
 |---|---|---|---|---|
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
-| PT-2 | Council on the note | Design, read-only | none | |
+| PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | |
 | PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | |
 | PT-4b | The storage-and-query spec | Design | PT-4a written | |
@@ -180,6 +180,11 @@ A pure crate, `src/iron_patch`, with no dependency on `iron_document`. It holds:
 
 Property tests over random scripts, as the store's tests already are, check each of
 the six laws, then the editing rule ("a drag always changes what you see", note §5).
+**What it must test** is the note's §11.5 (PT-2's council): a brute-force reference that
+enumerates every point, thirteen properties, and the worked examples there, which add
+to the three below. It tries the repairs in §11.1 against each other: derived or
+stored strength, per-axis keys, one box per patch.
+
 PT-3 settles two open items: **law 5's axis order** and **structure in patches**
 (note §9). It is kept, not thrown away: PT-5 builds on it.
 

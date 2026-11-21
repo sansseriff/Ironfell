@@ -96,6 +96,9 @@ colour from A" when the patch was authored while editing A.
 
 ### 2.2 The laws
 
+*As written, laws 2 to 5 do not all hold; the council's counterexamples and proposed
+repairs are in §11 (PT-2, 2026-11-21). PT-3 decides between the repairs.*
+
 1. **Identity and associativity.** An empty patch changes nothing, and
    `(p ⊕ q) ⊕ r = p ⊕ (q ⊕ r)`: overrides are a monoid.
 2. **Disjoint patches commute.** Order matters only where two patches set the same
@@ -508,7 +511,186 @@ Each is a projection of the algebra, not a separate feature.
 - **What persists per point:** simulation state per placed point, and whether takes
   share a checkpoint at their start.
 
+- **From the council (§11), for PT-3 to settle:** a strength order that is total and
+  extends inclusion (§11.1), whether strength is derived or stored (§11.1), a single
+  box per patch or unions (§11.1), the drag's write contract (§11.2), stable ids for
+  axis values (§11.3), relative regions such as "each instance in its own state"
+  (§11.4), coordinates set by patches (§11.4), and what a clip's region is (§11.4).
+
 ## 10. A building order
 
 Moved to [`../handoff-patches.md`](../handoff-patches.md) §2 (2026-11-20), the one place
 that orders this work, as keys PT-1 to PT-11 (plans/README.md, "Work keys").
+
+## 11. Council review (PT-2, 2026-11-21)
+
+Both members read this note whole, read-only: Opus 5.5 and Sol 6.2, each **6/10** as a
+basis for specs. Both say the direction is right (one region-indexed override store;
+history-carrying values outside the algebra; clocks as their own concern), and that
+the laws as written do not hold. Nothing here is adopted; PT-3 tests the repairs and
+PT-4a writes the ones that pass.
+
+### 11.1 The laws
+
+- **Strength from inclusion makes region edits non-local (Opus; the central flaw).**
+  `{C}` sets red and `[C, D]` sets blue: C is red. Widen `{C}` to `[C, ∞)` and now
+  `[C, D]` is inside it, so **C turns blue**, though C was in the region throughout.
+  §5's own flow ("Apply from B on?") can tie the edited patch with B's. So law 3 fails
+  for widen and narrow. Repairs, to be tested against each other in PT-3:
+  - widen moves an entry into the patch whose region is the new one, rather than
+    growing a patch's region;
+  - or each patch stores its strength, defaulted from specificity when it is made,
+    with a lint when it contradicts inclusion.
+- **Laws 4 and 5 together can cycle (both).** An order that applies inclusion and then
+  falls back for incomparable pairs is not transitive. With `A = {0,1}`,
+  `B = {0,1,2}`, `C = {0,3}` and a fallback `B > C > A`: `A > B` by inclusion, so
+  `A > B > C > A` (Sol). Comparing axis by axis is not transitive either (Opus's three
+  patches over two axes). And overlaps on **one** axis (`[B, D]` against `[C, ∞)`;
+  `{A,B}` against `{B,C}`; two clips) have no axis to order them by.
+- **A repair that works (Opus):** give each axis a key that is a total preorder and a
+  strict extension of inclusion, then compare lexicographically in the declared axis
+  order, then by a stored rank:
+  - an ordered axis: start descending, then end ascending ("a later start wins",
+    which is "builds on" and the narrative's hold);
+  - a finite or cofinite set: its size;
+  - the instance axis: how many path steps it fixes.
+
+  This extends product inclusion for single boxes, not for unions. Two unions can have
+  equal projections on every axis while one is inside the other (both found this). So
+  **a patch's region is one box**, and unions appear only in queries and winning
+  regions.
+- **Law 2 is ambiguous.** "Disjoint" regions make it trivial. Disjoint (node, field)
+  sets need an order of application, which strength-by-region does not have. Restate
+  it as: reordering patches with disjoint key sets changes no value.
+- **Law 3's blast radius is a bound, not the changed set (both).** `[B, ∞)` sets red and
+  `{C}` sets blue; changing red to green leaves C as it was. §4.2's winning region is
+  the right measure, not the region. Path-dependent values (§2.5) escape it too: an
+  edit on `t ∈ [2, 4]` changes an integrator at every later `t`, and a blast-radius
+  display must say so.
+- **Structure needs a shared definition (Sol).** `Set(child.x, 7)` and `Add(child)` touch
+  different entries, yet their order matters. Say what `⊕` produces, when staleness is
+  checked, whether a hidden node stays readable, and how a missing target differs from
+  an unloaded one. Opus's candidates: presence resolved before fields, so a weak
+  patch's entry on a node a stronger patch adds applies; hidden as a cascaded field,
+  so a stronger patch can un-hide.
+- **Law 6 covers stale nodes, not stale axis values (Opus).** Deleting slide C leaves
+  `[C, ∞)` without a start; reordering slides can invert `[B, D]`; renaming a state
+  leaves `{S}` dangling. Ordered axes need stable value ids, intervals by endpoint
+  ids, and a rule for a deleted endpoint. List as stale only an entry absent at every
+  point of its winning region; one absent at some points (a whole-axis entry on a part
+  that only take 3 adds) is normal.
+
+### 11.2 Editing (§5)
+
+- **The drag rule needs a write contract (both).** "Edit the winner" covers only a more
+  specific winner. When `{hover}` wins over the edit region `[C, ∞)` by axis order,
+  editing it changes hover on every slide, far outside "Editing: C → end". Opus's rule:
+  write into `R_edit ∩ R_winner`. If that is the winner's whole region, the edit goes
+  into the winning patch; otherwise it makes a patch strictly inside the winner,
+  which under §11.1's key beats it, so the drag shows by construction.
+- **Some winners cannot be written:** a recorded move's patch (§2.4) and an imported or
+  `std:` definition. The rule then takes the strictly-inside case.
+- **A clip's value is a function of `t`.** Writing a constant over it would replace the
+  clip; the write is per value kind (a key, as autokey does).
+- **Lens laws to hold:** a drag shows the requested value after the preview is
+  removed (PutGet); a drag to the current value writes nothing (GetPut); two drags equal
+  one and add no patch (PutPut); a drag never changes a point outside the edit region.
+- **Merge is not always value-preserving (Sol).** Two equal-region patches on opposite
+  sides of a third in strength, each winning a different field, cannot become one patch
+  with one rank. Say which merges keep every value and refuse or flag the rest.
+
+### 11.3 Arrows and sessions
+
+- **An arrow is every patch with a boundary between its ends (both).** `B → C` enters
+  `[C, ∞)`, `{C}` and `[C, D]` and leaves `{B}` and `[A, B]`. It is one patch only in a
+  deck built from rays alone (§2.4's "coincide" holds only there). A clip's patch can
+  give different values at 2.5 s and 3 s, so entering and leaving alone do not give
+  the arrow's value diff.
+- **A session patch on the current point vanishes while playing (Opus):** a preview
+  with region `{x}` stops applying once `t` moves. A session patch is the whole region
+  on a session axis, first in the axis order.
+
+### 11.4 Mechanisms that do not map as written (§4)
+
+- **Relative regions are not boxes (Opus).** "Each instance in its own hover state" is
+  a union over `i` of `{i} × {stateᵢ = hover}`, a diagonal that grows with instances.
+  "Every meter that is part `j` of some oscilloscope" is a suffix pattern. Regions need
+  relative coordinates (`self.state`) and pattern sets, and §4.2's closure and §4.3's
+  index assume otherwise.
+- **Instance overrides against a definition's pose (Opus).** At (`i`, hover), the
+  definition's `{all} × {hover}` and the instance's `{i} × {all}` are incomparable.
+  Today the instance wins (its constant replaces the channel binding), as an id beats
+  `:hover` in CSS. The axis order must say so; it is the first test case for law 5.
+- **Classes against nesting on one axis (Opus).** `{m1, m2, m3}` and `*/j` are
+  incomparable on the instance axis. A variant axis and classes are two mechanisms for
+  one thing: keep classes.
+- **Nested templates (Sol).** `use.notation` can replace a nested template's children,
+  so resolving every target against the original base uses the wrong tree.
+- **Machines (Sol).** An interrupted `hidden → shown` at fade 0.4 reverses from 0.4; a
+  fresh `shown → hidden` starts at 1. Same endpoints and progress, different values: the
+  transition's identity and start values stay in the driver. A mid-transition value is
+  an interpolation of two points, not a point (Opus).
+- **Patches that set coordinates (both).** A patch on `{state = A}` that sets the state
+  to B activates and deactivates itself. The axis-dependency graph must be acyclic,
+  with cycles refused.
+- **Clips (both).** A clip holds before its first key and after its last (`time.rs`), so
+  its region is `[k₀, ∞)`, not an interval; a second target staggered by 1 s needs
+  applicability per target. machines.md's M7 ("one writer per leaf") contradicts a
+  cascade of writers: delete it or make it a refusal rule.
+- **Narrative extents (both).** A hold that ends at the next override moves when one is
+  inserted between, so its end is derived from the sequence. Named ranges `[2, 5]` and
+  `[4, 7]` overlap without nesting; "inner wins" does not decide.
+- **Variants (both).** If `D extends C`, a C-only selector loses C's changes at D, so C's
+  region must cover its descendants. A variant that adds a state (`compare`) and a
+  transition adds axis values, which works only if states are nodes, so that "added
+  nodes" covers them.
+- **The picture axis (Opus).** A `use` carries its own overrides, so points differ in
+  more than projection. A region narrowed on the picture axis may set picture-side
+  fields only, or the body computes per picture (reactive-engine.md §8.4, §10.1).
+- **Time is many axes (Opus).** Each placed instance has its own clock (§3.1), so a time
+  region names its clock, and "a view shows one point" means one coordinate per clock
+  in view. Ghosts of takes that add parts need structure per slice, which
+  reactive-engine.md §10.5 does not build (D10); PT-5 inherits that limit.
+- **Takes (Sol).** A take-3 speed change alters later simulated values in that take
+  after the speed patch stops applying: replay state (§2.5), not the algebra.
+
+### 11.5 What PT-3 must test
+
+A brute-force reference that enumerates every point of small mixed axes (at most
+three; a continuous axis sampled at endpoints and between them, open and closed ends),
+and generators aimed at the failures above. Each property over 10,000 scripts, with
+shrinking:
+1. **Strength** is a strict total order among the patches containing any point, and
+   extends inclusion. Each candidate law-5 rule is run; the cyclic readings must fail.
+   Adding a patch on an unrelated field, or outside the point, changes no winner.
+2. **Determinism:** values do not depend on storage or insertion order.
+3. **Identity:** an empty patch, or one with an empty region, changes nothing.
+4. **Law 2** as restated in §11.1.
+5. **Entry locality:** an edit changes exactly the points of the entry's winning region
+   where the value differs.
+6. **Region-edit locality:** a widen or narrow changes only points in the symmetric
+   difference of the regions. Expected to fail under law 4 as written; it decides
+   between derived and stored strength.
+7. **Region arithmetic:** symbolic `∩`, `∪`, `\` and winning regions equal the
+   enumerated sets, with a unique canonical form (Merge's "same region" and §4.3's
+   hashes depend on it). Include crossing stripes whose subtraction makes a product of
+   disjoint boxes.
+8. **The lens laws** of §11.2, and the blast radius shown equal to the points changed.
+9. **Split and Merge** keep every value, or Merge refuses (§11.2).
+10. **Undo:** an inverse script restores every value and the exact patches, ranks
+    included.
+11. **Stale:** inert, restored when the node returns, listed only when absent across the
+    winning region; the deleted-endpoint rule (§11.1).
+12. **Structure:** presence before fields; hiding cascades; an added node's child order
+    is deterministic; an addition under a parent absent at a point is stale there.
+    Count lookups, allocations and region fragments as nodes and points grow.
+13. **Stratification**, if patches set coordinates: evaluation ends, or the cycle is
+    refused.
+
+Worked examples, with expected values written before the code: the handoff's three
+(`vis`, a three-slide deck, two-level nesting with outermost-wins), each with a failure
+case as well (a one-slide exception restored on the next slide; an override removed
+and falling through); `[B, D]` against `[C, ∞)`; the instance override against the
+definition's hover pose; a class against a nesting patch; and §5's "Apply from B on"
+with B's own patch present.
+

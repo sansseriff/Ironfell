@@ -336,7 +336,6 @@ struct Saved {
     clusters: solve::Clusters,
     /// What each cluster's last converged solve could read, by its key: a
     /// cluster that would read the same is not solved again (§9.4, A6).
-    posed: BTreeMap<NodeId, solve::Posed>,
     committed: BTreeSet<NodeId>,
     /// The grouping native's run count when its result was last taken
     /// (`grouped`), and the error it gave then.
@@ -351,12 +350,10 @@ struct Saved {
     expansion_problems: Vec<expand::Problem>,
     owners: engine::owners::Owners,
     session_state: BTreeMap<Leaf, Value>,
-    tables: BTreeMap<NodeId, table::Grid>,
     motion: Motion,
     contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
     layout_preview: Option<layout::Preview>,
     time_errors: BTreeMap<NodeId, String>,
-    physics_error: Option<String>,
     machines_unsettled: Option<expand::Problem>,
     pending: Changes,
 }
@@ -366,7 +363,6 @@ impl Saved {
         Saved {
             reactive: s.reactive.clone(),
             clusters: s.clusters.clone(),
-            posed: s.posed.clone(),
             committed: s.committed.clone(),
             grouped_at: s.grouped_at,
             grouping_error: s.grouping_error.clone(),
@@ -379,12 +375,10 @@ impl Saved {
             expansion_problems: s.expansion_problems.clone(),
             owners: s.owners.clone(),
             session_state: s.session_state.clone(),
-            tables: s.tables.clone(),
             motion: s.motion.clone(),
             contexts: s.contexts.clone(),
             layout_preview: s.layout_preview.clone(),
             time_errors: s.time_errors.clone(),
-            physics_error: s.physics_error.clone(),
             machines_unsettled: s.machines_unsettled.clone(),
             pending: s.pending.clone(),
         }
@@ -393,7 +387,6 @@ impl Saved {
     fn restore(self, s: &mut StoreCore) {
         s.reactive = self.reactive;
         s.clusters = self.clusters;
-        s.posed = self.posed;
         s.committed = self.committed;
         s.grouped_at = self.grouped_at;
         s.grouping_error = self.grouping_error;
@@ -406,12 +399,10 @@ impl Saved {
         s.expansion_problems = self.expansion_problems;
         s.owners = self.owners;
         s.session_state = self.session_state;
-        s.tables = self.tables;
         s.motion = self.motion;
         s.contexts = self.contexts;
         s.layout_preview = self.layout_preview;
         s.time_errors = self.time_errors;
-        s.physics_error = self.physics_error;
         s.machines_unsettled = self.machines_unsettled;
         s.pending = self.pending;
     }
@@ -453,7 +444,6 @@ pub struct StoreCore {
     clusters: solve::Clusters,
     /// What each cluster's last converged solve could read, by its key: a
     /// cluster that would read the same is not solved again (§9.4, A6).
-    posed: BTreeMap<NodeId, solve::Posed>,
     committed: BTreeSet<NodeId>,
     /// The grouping native's run count when its result was last taken
     /// (`grouped`), and the error it gave then.
@@ -467,10 +457,8 @@ pub struct StoreCore {
     /// Bumped by every session-tier change (`apply_session`), which leaves
     /// the document's version alone.
     session_version: u64,
-    physics_error: Option<String>,
     machines_unsettled: Option<expand::Problem>,
     /// Each table's grid from the last layout (`layout.rs`, `table.rs`).
-    tables: std::collections::BTreeMap<NodeId, table::Grid>,
     /// The built-in contexts with this document's `context` nodes over
     /// them, and the markups they were made from; `None` while it has none.
     contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
@@ -526,10 +514,6 @@ pub struct StoreCore {
     /// The across/through network as of a count of document
     /// writes (`Document::edits`): a cache.
     network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
-    /// Solve the network and lay out in the pipeline (`solve_network`,
-    /// `resolve_layout`) instead of as native cells: the differential
-    /// reference, until phase 5 ends (reactive-engine handoff §4.10).
-    old_pipeline: bool,
     /// Counts structural changes (`regraph`): the layout and repeat natives
     /// are made again only when it moved.
     structure_gen: u64,
@@ -591,44 +575,7 @@ struct Motion {
     enabled: bool,
     /// The host's clock, seconds, as of its last frame.
     clock: f64,
-    anims: BTreeMap<NodeId, Anim>,
     values: BTreeMap<Leaf, presentation::Tween>,
-    /// What layout last asked for: where the transitions are heading.
-    targets: BTreeMap<Leaf, Value>,
-}
-
-#[derive(Clone)]
-struct Anim {
-    from: [f64; 2],
-    to: [f64; 2],
-    t0: f64,
-    ms: f64,
-    ease: &'static str,
-}
-
-impl Motion {
-    /// Put each node in flight where its transition has got to; drop the
-    /// finished ones (they rest where layout put them).
-    fn apply(&mut self, values: &mut BTreeMap<Leaf, Value>) {
-        let (xp, yp): (LeafPath, LeafPath) = ("transform2d.x".parse().expect("declared leaf"), "transform2d.y".parse().expect("declared leaf"));
-        let clock = self.clock;
-        self.anims.retain(|&node, a| {
-            let u = ((clock - a.t0) * 1000.0 / a.ms).clamp(0.0, 1.0);
-            if u >= 1.0 {
-                return false;
-            }
-            let name = match a.ease {
-                "in" => "ease_in",
-                "out" => "ease_out",
-                "in_out" => "ease_in_out",
-                _ => "linear",
-            };
-            let e = time::ease(name, u);
-            values.insert(Leaf { node, path: xp }, Value::Number(a.from[0] + (a.to[0] - a.from[0]) * e));
-            values.insert(Leaf { node, path: yp }, Value::Number(a.from[1] + (a.to[1] - a.from[1]) * e));
-            true
-        });
-    }
 }
 
 const DEFAULT_HORIZON: usize = 200;
@@ -657,16 +604,13 @@ impl StoreCore {
             time: self.time,
             time_errors: self.time_errors.clone(),
             clusters: self.clusters.clone(),
-            posed: self.posed.clone(),
             committed: self.committed.clone(),
             grouped_at: self.grouped_at,
             grouping_error: self.grouping_error.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
-            physics_error: self.physics_error.clone(),
             machines_unsettled: self.machines_unsettled.clone(),
-            tables: self.tables.clone(),
             contexts: self.contexts.clone(),
             layout_preview: None,
             dark: self.dark,
@@ -688,7 +632,6 @@ impl StoreCore {
             repeats: self.repeats.clone(),
             item_memo: self.item_memo.clone(),
             network: self.network.clone(),
-            old_pipeline: self.old_pipeline,
             layout_at: self.layout_at,
             structure_gen: self.structure_gen,
             repeats_at: self.repeats_at,
@@ -710,24 +653,21 @@ impl StoreCore {
         // What this store published for layout is eased while a transition
         // runs, previewed, or computed from a gesture's previews (cleared
         // above); the scratch publishes the targets then.
-        let mut glided = false;
-        if !self.old_pipeline {
-            if self.layout_preview.is_some() {
-                scratch.reactive.set_input(Tree::of(&scratch.docs), graph::InputKey::LayoutPreview, None);
-            }
-            // No glides: what is in flight is put at its target.
-            glided = scratch.reactive.gliding();
-            if glided {
-                scratch.reactive.glide = None;
-                let keys: Vec<graph::NativeKey> = scratch.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Layout(_))).collect();
-                scratch.reactive.prime_natives(keys);
-            } else {
-                scratch.reactive.glide = None;
-            }
+        if self.layout_preview.is_some() {
+            scratch.reactive.set_input(Tree::of(&scratch.docs), graph::InputKey::LayoutPreview, None);
+        }
+        // No glides: what is in flight is put at its target.
+        let glided = scratch.reactive.gliding();
+        if glided {
+            scratch.reactive.glide = None;
+            let keys: Vec<graph::NativeKey> = scratch.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Layout(_))).collect();
+            scratch.reactive.prime_natives(keys);
+        } else {
+            scratch.reactive.glide = None;
         }
         if relaxed {
             scratch.pipeline();
-        } else if !self.motion.anims.is_empty() || glided || self.layout_preview.is_some() || self.gesture.is_some() {
+        } else if glided || self.layout_preview.is_some() || self.gesture.is_some() {
             scratch.resolve_layout();
         }
         scratch
@@ -834,23 +774,21 @@ impl StoreCore {
         // The network's islands and the layout natives first, so that this
         // pass runs the new ones and not the old against the new structure
         // (handoff §4.10); and the layouts whose structure changed run.
-        if !self.old_pipeline {
-            let (net, fresh) = self.network_now();
-            if fresh {
-                self.sync_islands(&net, false);
-            }
-            self.sync_layout(false);
-            self.sync_repeats(false);
-            self.prime_layout(&shaped);
-            // Constraints and their operands are structure to the grouping
-            // and to validation; a reparent can move an operand's ancestry
-            // without touching it (a wrapper swapped), so every cluster
-            // looks again.
-            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
-            if reparented {
-                let keys: Vec<graph::NativeKey> = self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect();
-                self.reactive.prime_natives(keys);
-            }
+        let (net, fresh) = self.network_now();
+        if fresh {
+            self.sync_islands(&net, false);
+        }
+        self.sync_layout(false);
+        self.sync_repeats(false);
+        self.prime_layout(&shaped);
+        // Constraints and their operands are structure to the grouping
+        // and to validation; a reparent can move an operand's ancestry
+        // without touching it (a wrapper swapped), so every cluster
+        // looks again.
+        self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+        if reparented {
+            let keys: Vec<graph::NativeKey> = self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect();
+            self.reactive.prime_natives(keys);
         }
         self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
     }
@@ -935,23 +873,9 @@ impl StoreCore {
         StoreCore::build(doc, false)
     }
 
-    /// An empty store that solves the network, lays out and settles repeats
-    /// in the old pipeline, as the differential reference does: for
-    /// measuring the native cells against it (reactive-engine handoff
-    /// §4.10, RE-5.4's demonstrations). Not for anything else.
-    #[doc(hidden)]
-    pub fn with_old_pipeline() -> StoreCore {
-        StoreCore::build_with(Document::new(), true, true)
-    }
-
     /// A store over `doc`, keeping copies apart from it or not (handoff
-    /// §4.6). The reference, which keeps them in it, keeps the old pipeline
-    /// too.
+    /// §4.6).
     pub(crate) fn build(doc: Document, apart: bool) -> StoreCore {
-        StoreCore::build_with(doc, apart, !apart)
-    }
-
-    fn build_with(doc: Document, apart: bool, old_pipeline: bool) -> StoreCore {
         let mut store = StoreCore {
             docs: tree::Docs::new(doc, apart),
             owners: Default::default(),
@@ -964,16 +888,13 @@ impl StoreCore {
             time: 0.0,
             time_errors: Default::default(),
             clusters: Default::default(),
-            posed: BTreeMap::new(),
             committed: BTreeSet::new(),
             grouped_at: None,
             grouping_error: None,
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
-            physics_error: None,
             machines_unsettled: None,
-            tables: Default::default(),
             contexts: None,
             layout_preview: None,
             dark: false,
@@ -996,7 +917,6 @@ impl StoreCore {
             repeat_inputs: None,
             item_memo: BTreeMap::new(),
             network: None,
-            old_pipeline,
             layout_at: None,
             structure_gen: 0,
             repeats_at: None,
@@ -1025,9 +945,7 @@ impl StoreCore {
         store.pending = Changes::default();
         store.docs.gone.clear();
         store.rebuild_clusters();
-        if !store.old_pipeline {
-            store.reactive.hold_layout(Tree::of(&store.docs), true);
-        }
+        store.reactive.hold_layout(Tree::of(&store.docs), true);
         store.resolve_physics();
         store
     }
@@ -1040,24 +958,17 @@ impl StoreCore {
     fn rebuild_clusters(&mut self) {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
-        if !self.old_pipeline {
-            if self.reactive.native(graph::NativeKey::Clusters).is_some() {
-                // Nothing to take when the grouping did not run since.
-                self.reactive.flush(Tree::of(&self.docs));
-                if self.reactive.runs_of(graph::NativeKey::Clusters) == self.grouped_at {
-                    return;
-                }
+        if self.reactive.native(graph::NativeKey::Clusters).is_some() {
+            // Nothing to take when the grouping did not run since.
+            self.reactive.flush(Tree::of(&self.docs));
+            if self.reactive.runs_of(graph::NativeKey::Clusters) == self.grouped_at {
+                return;
             }
-            if let Ok(c) = self.grouped() {
-                self.owners.hold(c.copies());
-                self.clusters = c;
-                self.sync_cluster_natives();
-            }
-            return;
         }
-        if let Ok(c) = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()) {
+        if let Ok(c) = self.grouped() {
             self.owners.hold(c.copies());
             self.clusters = c;
+            self.sync_cluster_natives();
         }
     }
 
@@ -1065,9 +976,6 @@ impl StoreCore {
     /// result, made again only when what it read changed (handoff §4.10,
     /// RE-5.5).
     fn grouped(&mut self) -> Result<solve::Clusters, String> {
-        if self.old_pipeline {
-            return solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts());
-        }
         if self.reactive.native(graph::NativeKey::Clusters).is_none() {
             self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
         }
@@ -1102,9 +1010,6 @@ impl StoreCore {
             let read = |l: Leaf| s.reactive.read(Tree::of(&s.docs), l);
             constraint::validate_all(Tree::of(&s.docs), &read)
         };
-        if self.old_pipeline {
-            return read_now(self);
-        }
         if self.reactive.native(graph::NativeKey::Validate).is_none() {
             self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Validate, Some((std::sync::Arc::new(solve::ValidateNative::default()), true)))], true);
         }
@@ -1183,20 +1088,9 @@ impl StoreCore {
         if drivers.iter().any(|d| c.vars.contains(&d.leaf)) || self.fingers.iter().any(|f| c.nodes.contains(&f.node)) {
             return false;
         }
-        if !self.old_pipeline {
-            // Its watching native ran since its last committed solve:
-            // something of it changed (RE-5.5).
-            if !self.committed.contains(&c.key()) || self.reactive.ran(graph::NativeKey::Cluster(c.key())) {
-                return false;
-            }
-            #[cfg(feature = "differential")]
-            self.check_unmoved(c);
-            return true;
-        }
-        let Some(was) = self.posed.get(&c.key()) else { return false };
-        let doc = Tree::of(&self.docs);
-        let read = |l: Leaf| self.reactive.read(doc, l);
-        if *was != c.posed(doc, &read) {
+        // Its watching native ran since its last committed solve:
+        // something of it changed (RE-5.5).
+        if !self.committed.contains(&c.key()) || self.reactive.ran(graph::NativeKey::Cluster(c.key())) {
             return false;
         }
         #[cfg(feature = "differential")]
@@ -1207,14 +1101,8 @@ impl StoreCore {
     /// Record what cluster `c`'s converged solve left for its next one to
     /// compare with (`unmoved`).
     fn pose(&mut self, c: &solve::Cluster) {
-        if !self.old_pipeline {
-            self.committed.insert(c.key());
-            self.reactive.clear_ran(graph::NativeKey::Cluster(c.key()));
-            return;
-        }
-        let doc = Tree::of(&self.docs);
-        let read = |l: Leaf| self.reactive.read(doc, l);
-        self.posed.insert(c.key(), c.posed(doc, &read));
+        self.committed.insert(c.key());
+        self.reactive.clear_ran(graph::NativeKey::Cluster(c.key()));
     }
 
     /// Under the owners' check: a cluster left unsolved solves to where it is.
@@ -1713,9 +1601,7 @@ impl StoreCore {
             self.reactive.mark(leaf, value);
         }
         // New faces measure differently: layouts holding text reflow.
-        if !self.old_pipeline {
-            self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Fonts, Some(std::sync::Arc::new(generation)));
-        }
+        self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Fonts, Some(std::sync::Arc::new(generation)));
         self.relayout();
         !ids.is_empty()
     }
@@ -2124,12 +2010,10 @@ impl StoreCore {
         // Nothing to settle when no repeat's inputs changed (their natives
         // did not run) and the last settle's inputs stand: the scan of every
         // drawn repeat's inputs is the old pipeline's (handoff §4.10, RE-5.4).
-        if !self.old_pipeline {
-            self.sync_repeats(true);
-            if !self.reactive.take_ran_repeats() && self.repeat_inputs.is_some() {
-                self.settling = false;
-                return Vec::new();
-            }
+        self.sync_repeats(true);
+        if !self.reactive.take_ran_repeats() && self.repeat_inputs.is_some() {
+            self.settling = false;
+            return Vec::new();
         }
         SETTLE_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut applied = Vec::new();
@@ -2716,9 +2600,7 @@ impl StoreCore {
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
-            if !self.old_pipeline {
-                self.sync_layout(true);
-            }
+            self.sync_layout(true);
             moved = self.resolve_layout();
         }
         self.resolve_contexts();
@@ -2736,15 +2618,11 @@ impl StoreCore {
         if markups.is_empty() {
             if self.contexts.take().is_some() {
                 self.glide_specs();
-                if !self.old_pipeline {
-                    self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, None);
-                }
+                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, None);
             }
         } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
             let lib = contexts::Library::with_document(&markups);
-            if !self.old_pipeline {
-                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, Some(std::sync::Arc::new(lib.clone())));
-            }
+            self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, Some(std::sync::Arc::new(lib.clone())));
             self.contexts = Some((markups, lib));
             self.glide_specs();
         }
@@ -2758,35 +2636,9 @@ impl StoreCore {
         // Layout natives wait until here, where the old pipeline laid out,
         // and then run the ones whose inputs changed (handoff §4.10, RE-5.4):
         // a chain through bindings settles in that one pass.
-        if !self.old_pipeline {
-            self.reactive.hold_layout(Tree::of(&self.docs), false);
-            self.reactive.hold_layout(Tree::of(&self.docs), true);
-            return false;
-        }
-        let (mut values, grids) = layout::compute(self);
-        if self.motion.enabled {
-            self.start_motion(&values);
-            self.motion.targets = values.clone();
-            self.motion.apply(&mut values);
-        }
-        // A table whose tracks moved redraws its lines: report it changed.
-        if grids != self.tables {
-            let columns: LeafPath = "table.columns".parse().expect("declared leaf");
-            let moved: Vec<NodeId> = grids.iter().filter(|(t, g)| self.tables.get(t) != Some(g)).map(|(t, _)| *t).collect();
-            self.tables = grids;
-            for t in moved {
-                let leaf = Leaf { node: t, path: columns };
-                let value = self.reactive.read(Tree::of(&self.docs), leaf).unwrap_or(Value::Str(String::new()));
-                self.reactive.mark(leaf, value);
-            }
-        }
-        let published = self.reactive.published_by(ProducerId::LAYOUT);
-        if values == published {
-            return false;
-        }
-        let read = values.iter().any(|(l, v)| published.get(l) != Some(v) && self.reactive.is_read(*l)) || published.keys().any(|l| !values.contains_key(l) && self.reactive.is_read(*l));
-        self.reactive.publish(Tree::of(&self.docs), ProducerId::LAYOUT, values);
-        read
+        self.reactive.hold_layout(Tree::of(&self.docs), false);
+        self.reactive.hold_layout(Tree::of(&self.docs), true);
+        false
     }
 
     /// A resolver over this document's contexts that sees nodes'
@@ -2817,16 +2669,13 @@ impl StoreCore {
     pub fn set_motion(&mut self, enabled: bool) {
         self.motion.enabled = enabled;
         if !enabled {
-            self.motion.anims.clear();
             self.clear_presentation();
         }
-        if !self.old_pipeline {
-            if !enabled {
-                self.reactive.glide_off();
-            } else if self.reactive.glide.is_none() {
-                self.reactive.glide = Some(graph::Glide::new(self.motion.clock, self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n)));
-                self.glide_specs();
-            }
+        if !enabled {
+            self.reactive.glide_off();
+        } else if self.reactive.glide.is_none() {
+            self.reactive.glide = Some(graph::Glide::new(self.motion.clock, self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n)));
+            self.glide_specs();
         }
     }
 
@@ -3123,21 +2972,8 @@ impl StoreCore {
     /// Lay out again (a theme, a font, a gap previewed), recording what
     /// layout reads outside the graph like `pipeline`.
     fn relayout(&mut self) {
-        if !self.old_pipeline {
-            self.settle_reads();
-            self.recorded(|s| s.resolve_layout());
-            if self.settle_reads() {
-                self.pipeline();
-            }
-            return;
-        }
         self.settle_reads();
-        // Again while it moved what a binding it reads reads (`resolve_physics`).
-        for _ in 0..LAYOUT_ROUNDS {
-            if !self.recorded(|s| s.resolve_layout()) {
-                break;
-            }
-        }
+        self.recorded(|s| s.resolve_layout());
         if self.settle_reads() {
             self.pipeline();
         }
@@ -3375,46 +3211,8 @@ impl StoreCore {
     pub fn advance_motion(&mut self, now: f64) -> Vec<NodeId> {
         self.motion.clock = now;
         let mut moving = self.advance_presentation();
-        if !self.old_pipeline {
-            moving.extend(self.reactive.glide_to(Tree::of(&self.docs), now));
-            return moving;
-        }
-        if self.motion.anims.is_empty() {
-            return moving;
-        }
-        moving.extend(self.motion.anims.keys().copied());
-        let mut values = self.motion.targets.clone();
-        self.motion.apply(&mut values);
-        if values != self.reactive.published_by(ProducerId::LAYOUT) {
-            self.reactive.publish(Tree::of(&self.docs), ProducerId::LAYOUT, values);
-        }
+        moving.extend(self.reactive.glide_to(Tree::of(&self.docs), now));
         moving
-    }
-
-    /// Start a transition for each node layout moved whose context declares
-    /// one for its placement: from where it is drawn to where layout puts
-    /// it. A dragged item floating at the pointer does not ease.
-    fn start_motion(&mut self, values: &BTreeMap<Leaf, Value>) {
-        let (xp, yp): (LeafPath, LeafPath) = ("transform2d.x".parse().expect("declared leaf"), "transform2d.y".parse().expect("declared leaf"));
-        let shown = self.reactive.published_by(ProducerId::LAYOUT);
-        let num = |m: &BTreeMap<Leaf, Value>, node: NodeId, path: LeafPath| m.get(&Leaf { node, path }).and_then(|v| v.as_f64());
-        let floating = self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n);
-        let nodes: Vec<NodeId> = values.keys().filter(|l| l.path == xp).map(|l| l.node).collect();
-        for node in nodes {
-            let (Some(tx), Some(ty)) = (num(values, node, xp), num(values, node, yp)) else { continue };
-            let before = (num(&self.motion.targets, node, xp), num(&self.motion.targets, node, yp));
-            if before == (Some(tx), Some(ty)) || Some(node) == floating {
-                continue;
-            }
-            let (Some(sx), Some(sy)) = (num(&shown, node, xp), num(&shown, node, yp)) else { continue };
-            let chain = contexts::chain_of(Tree::of(&self.docs), node);
-            if chain.is_empty() {
-                continue;
-            }
-            let declared = contexts::Resolver::new(Tree::of(&self.docs), self.contexts()).get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
-            let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) else { continue };
-            self.motion.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: self.motion.clock, ms: m.ms, ease: m.ease });
-        }
     }
 
     /// The theme colour tokens resolve for: `dark` or light (the host's,
@@ -3445,13 +3243,11 @@ impl StoreCore {
     pub fn set_layout_preview(&mut self, preview: Option<layout::Preview>) {
         if self.layout_preview != preview {
             self.layout_preview = preview;
-            if !self.old_pipeline {
-                if let Some(g) = self.reactive.glide.as_mut() {
-                    g.floating = self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n);
-                }
-                let value = self.layout_preview.clone().map(|p| std::sync::Arc::new(p) as std::sync::Arc<dyn std::any::Any + Send + Sync>);
-                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::LayoutPreview, value);
+            if let Some(g) = self.reactive.glide.as_mut() {
+                g.floating = self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n);
             }
+            let value = self.layout_preview.clone().map(|p| std::sync::Arc::new(p) as std::sync::Arc<dyn std::any::Any + Send + Sync>);
+            self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::LayoutPreview, value);
             self.relayout();
         }
     }
@@ -3472,9 +3268,6 @@ impl StoreCore {
 
     /// Where a table's cells fell, as of the last layout (`table::Grid`).
     pub fn table_grid(&self, table: NodeId) -> Option<&table::Grid> {
-        if self.old_pipeline {
-            return self.tables.get(&table);
-        }
         // The layout native of the structural root holding it.
         let doc = Tree::of(&self.docs);
         let mut at = Some(table);
@@ -3508,60 +3301,12 @@ impl StoreCore {
 
     fn solve_network(&mut self) {
         let (net, fresh) = self.network_now();
-        if !self.old_pipeline {
-            // Its islands are native cells (handoff §4.10), made where the
-            // structure changes (`regraph`); this catches a write that
-            // reached none (a session edit's constant).
-            if fresh {
-                self.sync_islands(&net, true);
-            }
-            return;
+        // Its islands are native cells (handoff §4.10), made where the
+        // structure changes (`regraph`); this catches a write that
+        // reached none (a session edit's constant).
+        if fresh {
+            self.sync_islands(&net, true);
         }
-        if net.unknowns.is_empty() {
-            if !self.reactive.published_by(ProducerId::NETWORK).is_empty() {
-                self.reactive.retract(Tree::of(&self.docs), ProducerId::NETWORK);
-            }
-            self.physics_error = None;
-            return;
-        }
-        let magnitude = |v: &Value| match v {
-            Value::Number(n) => Some(*n),
-            Value::Quantity { si, .. } => Some(*si),
-            _ => None,
-        };
-        // Each island alone, from its own warm start (handoff §4.10,
-        // RE-5.3): one that does not settle keeps its last solution, and
-        // the others still solve.
-        let held = self.reactive.published_by(ProducerId::NETWORK);
-        let mut values: std::collections::BTreeMap<Leaf, Value> = std::collections::BTreeMap::new();
-        // The unsettled island with the lowest unknown, as a native reports.
-        let mut first: Option<(Leaf, String)> = None;
-        for island in net.islands() {
-            let (unknowns, equations) = net.localise(&island);
-            let x0: Vec<f64> = unknowns.iter().map(|(l, _)| self.reactive.signal(*l).map(|s| &s.value).and_then(magnitude).unwrap_or(0.0)).collect();
-            let solution = {
-                let doc = Tree::of(&self.docs);
-                let reactive = &self.reactive;
-                crate::port::solve_island(&unknowns, &equations, x0, &|l| reactive.read(doc, l))
-            };
-            let key = unknowns.iter().map(|(l, _)| *l).min().expect("an island has an unknown");
-            if solution.status != iron_solve::Status::Converged {
-                if first.as_ref().is_none_or(|(k, _)| key < *k) {
-                    first = Some((key, crate::port::unsettled(solution.max_required_residual)));
-                }
-                for (leaf, _) in &unknowns {
-                    if let Some(v) = held.get(leaf) {
-                        values.insert(*leaf, v.clone());
-                    }
-                }
-                continue;
-            }
-            for ((leaf, dim), x) in unknowns.iter().zip(&solution.vars) {
-                values.insert(*leaf, Value::quantity(*x, *dim));
-            }
-        }
-        self.physics_error = first.map(|(_, why)| why);
-        self.reactive.publish(Tree::of(&self.docs), ProducerId::NETWORK, values);
     }
 
     /// Make the layout natives (handoff §4.10, RE-5.4): one per structural
@@ -3602,8 +3347,7 @@ impl StoreCore {
             })
             .map(|k| (k, None))
             .collect();
-        // Rooted while the differential reference lays out every
-        // composition (`old_pipeline`): a hidden one's layout stays current.
+        // Rooted, so a hidden composition stays laid out (RE-5.6 decides).
         batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
         if !batch.is_empty() {
             self.reactive.set_natives(Tree::of(&self.docs), batch, run);
@@ -3616,9 +3360,6 @@ impl StoreCore {
     /// and a session link or unlink: grouping and validation look again
     /// (RE-5.5).
     fn prime_grouping<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        if self.old_pipeline {
-            return;
-        }
         let touches = |op: &Op| match op {
             Op::Set { path, .. } => matches!(path.facet, FacetKind::Composition | FacetKind::Template | FacetKind::Use | FacetKind::ContextOf | FacetKind::Affords | FacetKind::ContextDef),
             Op::Link { .. } | Op::Unlink { .. } => true,
@@ -3632,9 +3373,6 @@ impl StoreCore {
     /// A reorder that moved nothing else (not structural to the graph)
     /// still changes how its parent lays out.
     fn prime_reorders<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        if self.old_pipeline {
-            return;
-        }
         let doc = Tree::of(&self.docs);
         let shaped: BTreeSet<NodeId> = ops.filter_map(|op| match op { Op::Reorder { id, .. } => Some(*id), _ => None }).flat_map(|id| std::iter::once(id).chain(doc.live(id).and_then(|n| n.parent))).collect();
         self.prime_layout(&shaped);
@@ -3740,9 +3478,6 @@ impl StoreCore {
     }
 
     pub fn physics_error(&self) -> Option<&str> {
-        if self.old_pipeline {
-            return self.physics_error.as_deref();
-        }
         // The island with the lowest unknown that kept its last solution.
         self.reactive.native_problems.iter().find(|(k, _)| matches!(k, graph::NativeKey::Island(_))).map(|(_, why)| why.as_str())
     }
@@ -4154,14 +3889,13 @@ impl StoreCore {
         self.validated().map_err(|m| err(ErrorKind::BadConstraint, m))?;
         let clusters = self.grouped().map_err(|m| err(ErrorKind::Cycle, m))?;
         let keys: BTreeSet<NodeId> = clusters.list.iter().map(solve::Cluster::key).collect();
-        self.posed.retain(|k, _| keys.contains(k));
         self.committed.retain(|k| keys.contains(k));
         let now = clusters.copies();
         self.release(tx, held, &now, last).map_err(|e| vec![e])?;
         self.owners.hold(now);
         let regrouped = self.clusters != clusters;
         self.clusters = clusters.clone();
-        if !self.old_pipeline && regrouped {
+        if regrouped {
             self.sync_cluster_natives();
         }
         if clusters.list.is_empty() {

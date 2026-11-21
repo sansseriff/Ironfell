@@ -1,8 +1,8 @@
-//! Demonstrations of the native cells' efficiency against the old pipeline
-//! (reactive-engine handoff §4.10, RE-5.4; the user's request,
-//! 2026-11-21): the same documents in a store with natives
-//! (`StoreCore::new`) and in one with the old pipeline
-//! (`StoreCore::with_old_pipeline`). Each reports p50 and p95 per change,
+//! Demonstrations of the native cells' efficiency (reactive-engine handoff
+//! §4.10, RE-5.4; the user's request, 2026-11-21). Measured against the old
+//! pipeline while it was the differential reference (the handoff has that
+//! table); since RE-5.6 removed it, this reports the cells alone, for a
+//! later change to compare with. Each case reports p50 and p95 per change,
 //! structural roots laid out, expressions evaluated, and settles that read
 //! every repeat's inputs. Run in release:
 //! `cargo test --release -p iron_document --target aarch64-apple-darwin --test suite -- --ignored --nocapture cells_demo`
@@ -45,21 +45,16 @@ fn measure(store: &mut StoreCore, n: usize, mut change: impl FnMut(&mut StoreCor
     Run { p50: times[n / 2], p95: times[(n * 95 / 100).min(n - 1)], lay_outs: per(layout::lay_out_count() - l0), evaluations: per(store.reactive().evaluations - e0), scans: per(settle_scan_count() - s0) }
 }
 
-fn report(case: &str, old: &Run, new: &Run) {
-    println!(
-        "{case:<44} old {:>8.3} / {:>8.3} ms, {:>6.1} lay-outs, {:>7.1} evals, {:>4.1} scans | cells {:>8.3} / {:>8.3} ms, {:>6.1} lay-outs, {:>7.1} evals, {:>4.1} scans",
-        old.p50, old.p95, old.lay_outs, old.evaluations, old.scans, new.p50, new.p95, new.lay_outs, new.evaluations, new.scans
-    );
+fn report(case: &str, new: &Run) {
+    println!("{case:<44} {:>8.3} / {:>8.3} ms, {:>6.1} lay-outs, {:>7.1} evals, {:>4.1} scans", new.p50, new.p95, new.lay_outs, new.evaluations, new.scans);
 }
 
-fn both(case: &str, body: &str, n: usize, change: impl Fn(&mut StoreCore, &std::collections::BTreeMap<String, NodeId>, usize)) -> (StoreCore, StoreCore) {
-    let (mut old, mut new) = (StoreCore::with_old_pipeline(), StoreCore::new());
-    let names_old = build(&mut old, body);
-    let names_new = build(&mut new, body);
-    let a = measure(&mut old, n, |s, i| change(s, &names_old, i));
-    let b = measure(&mut new, n, |s, i| change(s, &names_new, i));
-    report(case, &a, &b);
-    (old, new)
+fn both(case: &str, body: &str, n: usize, change: impl Fn(&mut StoreCore, &std::collections::BTreeMap<String, NodeId>, usize)) -> StoreCore {
+    let mut new = StoreCore::new();
+    let names = build(&mut new, body);
+    let b = measure(&mut new, n, |s, i| change(s, &names, i));
+    report(case, &b);
+    new
 }
 
 fn set_w(s: &mut StoreCore, id: NodeId, w: f64) {
@@ -94,30 +89,26 @@ fn cells_demo() {
         both(&format!("{n} containers, preview a width in one"), &containers(n), 40, |s, names, i| s.preview(names["$r0"], "size.w".parse().unwrap(), Value::Number(10.0 + (i % 7) as f64)));
     }
     for k in [4, 8] {
-        let (old, new) = both(&format!("a chain of {k} layout -> binding -> layout"), &chain(k), 40, |s, names, i| set_w(s, names["$r0"], if i % 2 == 0 { 30.0 } else { 10.0 }));
+        let new = both(&format!("a chain of {k} layout -> binding -> layout"), &chain(k), 40, |s, names, i| set_w(s, names["$r0"], if i % 2 == 0 { 30.0 } else { 10.0 }));
         // Where the last link's second rect ends up, after an edit making the
         // first wider: the chain followed to its end, or not.
         let last = |s: &StoreCore| {
             let names: Vec<NodeId> = s.tree().nodes().filter(|n| n.is_live()).map(|n| n.id).collect();
             names.into_iter().filter_map(|id| s.resolved(id, "transform2d.x".parse().unwrap()).and_then(|v| v.as_f64())).fold(0.0f64, f64::max)
         };
-        println!("    furthest placement after the last change: old {:.3}, cells {:.3}", last(&old), last(&new));
+        println!("    furthest placement after the last change: {:.3}", last(&new));
     }
     let big = format!(r#"<group x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y"><rect id="$r0" w="10" h="10"/>{}</group>"#, (0..999).map(|_| r#"<rect w="10" h="10"/>"#).collect::<String>());
     both("one container of 1,000 items, edit one", &big, 40, |s, names, i| set_w(s, names["$r0"], if i % 2 == 0 { 30.0 } else { 10.0 }));
     let repeats: String = (0..200).map(|i| format!(r#"<group y="{y}" repeat.count="3"><rect w="5" h="5"/></group>"#, y = i * 10)).collect::<String>() + r#"<rect id="$lone" w="10" h="10"/>"#;
     both("200 repeats, an edit none of them reads", &repeats, 40, |s, names, i| set_w(s, names["$lone"], if i % 2 == 0 { 30.0 } else { 10.0 }));
-    // Load: the same 100 containers built from nothing, once per store.
-    let mut times = Vec::new();
-    for old_pipeline in [true, false] {
-        let mut best = f64::MAX;
-        for _ in 0..5 {
-            let mut s = if old_pipeline { StoreCore::with_old_pipeline() } else { StoreCore::new() };
-            let t = Instant::now();
-            build(&mut s, &containers(100));
-            best = best.min(t.elapsed().as_secs_f64() * 1000.0);
-        }
-        times.push(best);
+    // Load: 100 containers built from nothing.
+    let mut best = f64::MAX;
+    for _ in 0..5 {
+        let mut s = StoreCore::new();
+        let t = Instant::now();
+        build(&mut s, &containers(100));
+        best = best.min(t.elapsed().as_secs_f64() * 1000.0);
     }
-    println!("{:<44} old {:>8.3} ms | cells {:>8.3} ms (best of 5)", "building 100 containers", times[0], times[1]);
+    println!("{:<44} {:>8.3} ms (best of 5)", "building 100 containers", best);
 }

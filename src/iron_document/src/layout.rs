@@ -400,23 +400,6 @@ fn depth(doc: DocTree<'_>, n: NodeId) -> usize {
     std::iter::successors(doc.live(n).and_then(|x| x.parent), |p| doc.live(*p).and_then(|x| x.parent)).count()
 }
 
-pub fn compute(store: &dyn Reads) -> (BTreeMap<Leaf, Value>, BTreeMap<NodeId, crate::table::Grid>) {
-    let mut out = BTreeMap::new();
-    let mut grids = BTreeMap::new();
-    let doc = store.tree();
-    // Deepest first: an outer root reads an inner one's placements through
-    // a plain group's bounds.
-    let mut roots = structural_roots(doc);
-    roots.sort_by_key(|&r| std::cmp::Reverse(depth(doc, r)));
-    for root in roots {
-        let (values, g) = lay_out(&Fresh { store, out: &out }, root);
-        out.extend(values);
-        grids.extend(g);
-    }
-    out.extend(constrained(store));
-    (out, grids)
-}
-
 /// Lay out structural root `root`: each container in it that a run lays out
 /// from its top (one inside another's layout is laid out in its parent's
 /// tree), deepest first. Shared by `compute` and the layout natives, so the

@@ -3408,6 +3408,40 @@ that fail before (three checked):
 - A context's `for` selector reading an arbitrary leaf is not tracked.
 - `solve_cost` after: 100 pendulums, drag step 0.155 ms, unrelated edit 0.84 ms.
 
+**RE-5.6 so far (2026-11-21).**
+- **§15 measured** (native release):
+
+  | Measure | Result |
+  |---|---|
+  | 700 meters | place 0.62 ms, structural edit 0.35 ms, constant edit 0.17 ms |
+  | 1,000 meters | structural edit 21.7 ms: the node budget, the user's accepted limit (§4.8) |
+  | Plot pan, values only | p50 0.060 ms |
+  | Solver, 100 pendulums at rest | drag 0.155 ms, unrelated edit 0.84 ms |
+  | Memory per meter | **114.7 KiB**, against 113.5 before phase 3's commits on 2026-11-20 (`b04c2e5`) |
+
+  The 217 KiB seen once was both `instance_cost` tests running in one process,
+  sharing the allocator's count. `memory_per_meter` must run alone.
+- **The old pipeline is gone from the differential reference.**
+  - `old_pipeline`, `with_old_pipeline`, the old `solve_network` body, `resolve_layout`'s
+    `compute` path, `layout::compute`, the old glides (`Motion`'s transitions,
+    `start_motion`), the `Posed` comparison in `unmoved` and the `posed`,
+    `physics_error` and `tables` fields are all deleted.
+  - The reference is now natives too, with copies kept in its document.
+  - `cells_demo` reports the cells alone; the old pipeline's numbers stay in the table
+    above. On today's code an edit in one of 1,000 containers is 0.063 ms, where
+    RE-5.4 measured 1.37 ms before `sync_layout` was keyed on structure.
+  - All suites pass; the build and the scripts pass.
+- **Left for RE-5.6:**
+  1. Drop the layout natives' hold and rooting. Then a pass lays out in height order
+     and a hidden composition is not laid out. The feedback test needs a new bound,
+     since layout now runs inside a settle.
+  2. Name what still runs in `pipeline_from`'s rounds.
+  3. A council, then the roadmap.
+  4. Close this file: RE-4.3 moves to `handoff-render.md`, and the file moves to
+     `archive/`.
+
+  Then PT-2 to PT-4b. Building from PT-5 waits on the user.
+
 **RE-5.6: phase end.** As before.
 
 **Not in this plan:**

@@ -15,6 +15,10 @@ pub trait Reads {
     /// so its own output never feeds back into it.
     fn layout_base(&self, id: NodeId, path: LeafPath) -> Option<Value>;
     fn layout_preview(&self) -> Option<&crate::layout::Preview>;
+    /// A leaf's authored constant, or its facet's default.
+    fn constant(&self, id: NodeId, path: LeafPath) -> Option<Value> {
+        constant_or_default(self.tree(), id, path)
+    }
 }
 
 /// Beneath every claim and binding: the authored constant, or the facet's

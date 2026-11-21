@@ -501,10 +501,12 @@ pub struct StoreCore {
     /// The across/through network as of a count of document
     /// writes (`Document::edits`): a cache.
     network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
-    /// Solve the network in the pipeline (`solve_network`) instead of as
-    /// native cells: the differential reference, until phase 5 ends
-    /// (reactive-engine handoff §4.10).
-    old_network: bool,
+    /// Solve the network and lay out in the pipeline (`solve_network`,
+    /// `resolve_layout`) instead of as native cells: the differential
+    /// reference, until phase 5 ends (reactive-engine handoff §4.10).
+    old_pipeline: bool,
+    /// The count of document writes the layout natives were made for.
+    layout_at: Option<u64>,
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
     /// before doing any work. `None` after structure changed, until the
@@ -653,7 +655,8 @@ impl StoreCore {
             repeats: self.repeats.clone(),
             item_memo: self.item_memo.clone(),
             network: self.network.clone(),
-            old_network: self.old_network,
+            old_pipeline: self.old_pipeline,
+            layout_at: self.layout_at,
             repeat_inputs: self.repeat_inputs.clone(),
             session_state: self.session_state.clone(),
             emitted: Vec::new(),
@@ -672,9 +675,24 @@ impl StoreCore {
         // What this store published for layout is eased while a transition
         // runs, previewed, or computed from a gesture's previews (cleared
         // above); the scratch publishes the targets then.
+        let mut glided = false;
+        if !self.old_pipeline {
+            if self.layout_preview.is_some() {
+                scratch.reactive.set_input(Tree::of(&scratch.docs), graph::InputKey::LayoutPreview, None);
+            }
+            // No glides: what is in flight is put at its target.
+            glided = scratch.reactive.gliding();
+            if glided {
+                scratch.reactive.glide = None;
+                let keys: Vec<graph::NativeKey> = scratch.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Layout(_))).collect();
+                scratch.reactive.prime_natives(keys);
+            } else {
+                scratch.reactive.glide = None;
+            }
+        }
         if relaxed {
             scratch.pipeline();
-        } else if !self.motion.anims.is_empty() || self.layout_preview.is_some() || self.gesture.is_some() {
+        } else if !self.motion.anims.is_empty() || glided || self.layout_preview.is_some() || self.gesture.is_some() {
             scratch.resolve_layout();
         }
         scratch
@@ -684,6 +702,10 @@ impl StoreCore {
     /// update what the ops touched (reactive-engine handoff §4.4, stage 3a).
     fn regraph<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
+        // The nodes a structural op made, moved, removed or reshaped, and
+        // their parents (the inverse ops name the old ones): what a layout
+        // whose subtree holds one must lay out again.
+        let mut shaped: BTreeSet<NodeId> = BTreeSet::new();
         let mut rescope = false;
         let mut rederive = false;
         let doc = Tree::of(&self.docs);
@@ -699,6 +721,25 @@ impl StoreCore {
             None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
         };
         for op in ops {
+            match op {
+                Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
+                    shaped.insert(*id);
+                    shaped.extend(*parent);
+                }
+                Op::Delete { id } => {
+                    shaped.insert(*id);
+                    shaped.extend(gone.get(id).and_then(|w| w.parent).or_else(|| doc.live(*id).and_then(|n| n.parent)));
+                }
+                Op::Reorder { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
+                    shaped.insert(*id);
+                    shaped.extend(doc.live(*id).and_then(|n| n.parent));
+                }
+                Op::Link { rel } => {
+                    shaped.insert(rel.from);
+                    shaped.insert(rel.to);
+                }
+                Op::Unlink { .. } | Op::Set { .. } => {}
+            }
             rederive |= match op {
                 Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
                 Op::AddFacet { facet, .. } => derives(facet.kind()),
@@ -748,13 +789,16 @@ impl StoreCore {
                 .collect();
             nodes.extend(naming);
         }
-        // The network's islands first, so that this pass runs the new ones
-        // and not the old against the new structure (handoff §4.10).
-        if !self.old_network {
+        // The network's islands and the layout natives first, so that this
+        // pass runs the new ones and not the old against the new structure
+        // (handoff §4.10); and the layouts whose structure changed run.
+        if !self.old_pipeline {
             let (net, fresh) = self.network_now();
             if fresh {
                 self.sync_islands(&net, false);
             }
+            self.sync_layout(false);
+            self.prime_layout(&shaped);
         }
         self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
     }
@@ -883,7 +927,8 @@ impl StoreCore {
             repeat_inputs: None,
             item_memo: BTreeMap::new(),
             network: None,
-            old_network: !apart,
+            old_pipeline: !apart,
+            layout_at: None,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
@@ -909,6 +954,9 @@ impl StoreCore {
         store.pending = Changes::default();
         store.docs.gone.clear();
         store.rebuild_clusters();
+        if !store.old_pipeline {
+            store.reactive.hold_layout(Tree::of(&store.docs), true);
+        }
         store.resolve_physics();
         store
     }
@@ -1489,6 +1537,9 @@ impl StoreCore {
             self.reactive.mark(leaf, value);
         }
         // New faces measure differently: layouts holding text reflow.
+        if !self.old_pipeline {
+            self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Fonts, Some(std::sync::Arc::new(generation)));
+        }
         self.relayout();
         !ids.is_empty()
     }
@@ -1854,6 +1905,7 @@ impl StoreCore {
             self.repeat_inputs = None;
             self.regraph(ops.iter().chain(&undo));
         } else {
+            self.prime_reorders(ops.iter());
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
             if !changed.is_empty() {
                 // Report each written leaf as changed, as a preview does, so
@@ -2475,6 +2527,9 @@ impl StoreCore {
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
+            if !self.old_pipeline {
+                self.sync_layout(true);
+            }
             moved = self.resolve_layout();
         }
         self.resolve_contexts();
@@ -2494,6 +2549,7 @@ impl StoreCore {
         } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
             let lib = contexts::Library::with_document(&markups);
             self.contexts = Some((markups, lib));
+            self.glide_specs();
         }
     }
 
@@ -2502,6 +2558,14 @@ impl StoreCore {
     /// direct edits like any published leaf. Whether a placement that a
     /// cell reads moved, so that layout may read it back through a binding.
     fn resolve_layout(&mut self) -> bool {
+        // Layout natives wait until here, where the old pipeline laid out,
+        // and then run the ones whose inputs changed (handoff §4.10, RE-5.4):
+        // a chain through bindings settles in that one pass.
+        if !self.old_pipeline {
+            self.reactive.hold_layout(Tree::of(&self.docs), false);
+            self.reactive.hold_layout(Tree::of(&self.docs), true);
+            return false;
+        }
         let (mut values, grids) = layout::compute(self);
         if self.motion.enabled {
             self.start_motion(&values);
@@ -2558,6 +2622,42 @@ impl StoreCore {
         if !enabled {
             self.motion.anims.clear();
             self.clear_presentation();
+        }
+        if !self.old_pipeline {
+            self.reactive.glide = enabled.then(|| graph::Glide::new(self.motion.clock, self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n)));
+            self.glide_specs();
+        }
+    }
+
+    /// What each laid-out node may glide by, as its placement's context
+    /// declares: kept with the glides while they run (handoff §4.10).
+    fn glide_specs(&mut self) {
+        if self.reactive.glide.is_none() {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let x: LeafPath = "transform2d.x".parse().expect("declared leaf");
+        let nodes: BTreeSet<NodeId> = self
+            .reactive
+            .native_keys()
+            .filter(|k| matches!(k, graph::NativeKey::Layout(_)))
+            .filter_map(|k| self.reactive.native(k))
+            .flat_map(|n| n.outputs().iter().filter(|l| l.path == x).map(|l| l.node).collect::<Vec<_>>())
+            .collect();
+        let resolver = contexts::Resolver::new(doc, self.contexts());
+        let mut specs = BTreeMap::new();
+        for node in nodes {
+            let chain = contexts::chain_of(doc, node);
+            if chain.is_empty() {
+                continue;
+            }
+            let declared = resolver.get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
+            if let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) {
+                specs.insert(node, (m.ms, m.ease));
+            }
+        }
+        if let Some(g) = self.reactive.glide.as_mut() {
+            g.specs = specs;
         }
     }
 
@@ -2822,6 +2922,14 @@ impl StoreCore {
     /// Lay out again (a theme, a font, a gap previewed), recording what
     /// layout reads outside the graph like `pipeline`.
     fn relayout(&mut self) {
+        if !self.old_pipeline {
+            self.settle_reads();
+            self.recorded(|s| s.resolve_layout());
+            if self.settle_reads() {
+                self.pipeline();
+            }
+            return;
+        }
         self.settle_reads();
         // Again while it moved what a binding it reads reads (`resolve_physics`).
         for _ in 0..LAYOUT_ROUNDS {
@@ -3066,6 +3174,10 @@ impl StoreCore {
     pub fn advance_motion(&mut self, now: f64) -> Vec<NodeId> {
         self.motion.clock = now;
         let mut moving = self.advance_presentation();
+        if !self.old_pipeline {
+            moving.extend(self.reactive.glide_to(Tree::of(&self.docs), now));
+            return moving;
+        }
         if self.motion.anims.is_empty() {
             return moving;
         }
@@ -3132,6 +3244,13 @@ impl StoreCore {
     pub fn set_layout_preview(&mut self, preview: Option<layout::Preview>) {
         if self.layout_preview != preview {
             self.layout_preview = preview;
+            if !self.old_pipeline {
+                if let Some(g) = self.reactive.glide.as_mut() {
+                    g.floating = self.layout_preview.as_ref().and_then(|p| p.floating).map(|(n, _)| n);
+                }
+                let value = self.layout_preview.clone().map(|p| std::sync::Arc::new(p) as std::sync::Arc<dyn std::any::Any + Send + Sync>);
+                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::LayoutPreview, value);
+            }
             self.relayout();
         }
     }
@@ -3152,7 +3271,19 @@ impl StoreCore {
 
     /// Where a table's cells fell, as of the last layout (`table::Grid`).
     pub fn table_grid(&self, table: NodeId) -> Option<&table::Grid> {
-        self.tables.get(&table)
+        if self.old_pipeline {
+            return self.tables.get(&table);
+        }
+        // The layout native of the structural root holding it.
+        let doc = Tree::of(&self.docs);
+        let mut at = Some(table);
+        while let Some(x) = at {
+            if let Some(g) = self.reactive.native_extra(graph::NativeKey::Layout(x)).and_then(|e| e.downcast_ref::<BTreeMap<NodeId, table::Grid>>()).and_then(|m| m.get(&table)) {
+                return Some(g);
+            }
+            at = doc.live(x).and_then(|l| l.parent);
+        }
+        None
     }
 
     /// Solve the across/through network (ECM §6.1, step 3) and put its
@@ -3176,7 +3307,7 @@ impl StoreCore {
 
     fn solve_network(&mut self) {
         let (net, fresh) = self.network_now();
-        if !self.old_network {
+        if !self.old_pipeline {
             // Its islands are native cells (handoff §4.10), made where the
             // structure changes (`regraph`); this catches a write that
             // reached none (a session edit's constant).
@@ -3230,6 +3361,79 @@ impl StoreCore {
         }
         self.physics_error = first.map(|(_, why)| why);
         self.reactive.publish(Tree::of(&self.docs), ProducerId::NETWORK, values);
+    }
+
+    /// Make the layout natives (handoff §4.10, RE-5.4): one per structural
+    /// root, and the pins, keeping each that is as it would be made now.
+    fn sync_layout(&mut self, run: bool) {
+        let edits = self.docs.edits();
+        if self.layout_at == Some(edits) {
+            return;
+        }
+        self.layout_at = Some(edits);
+        let doc = Tree::of(&self.docs);
+        let pinned = layout::pinned_parts(doc);
+        let mut want: Vec<(graph::NativeKey, std::sync::Arc<dyn graph::Native>)> = Vec::new();
+        for root in layout::structural_roots(doc) {
+            let k = graph::NativeKey::Layout(root);
+            let n = layout::LayoutNative::new(doc, root, &pinned);
+            if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<layout::LayoutNative>()) != Some(&n) {
+                want.push((k, std::sync::Arc::new(n)));
+            }
+        }
+        let pins = layout::PinsNative::new(&pinned);
+        let keep_pins = !pinned.is_empty();
+        if keep_pins && self.reactive.native(graph::NativeKey::Pins).and_then(|x| x.as_any().downcast_ref::<layout::PinsNative>()) != Some(&pins) {
+            want.push((graph::NativeKey::Pins, std::sync::Arc::new(pins)));
+        }
+        let made: BTreeSet<graph::NativeKey> = want.iter().map(|(k, _)| *k).collect();
+        let roots: BTreeSet<NodeId> = layout::structural_roots(doc).into_iter().collect();
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
+            .reactive
+            .native_keys()
+            .filter(|k| match k {
+                graph::NativeKey::Layout(r) => !roots.contains(r) && !made.contains(k),
+                graph::NativeKey::Pins => !keep_pins,
+                _ => false,
+            })
+            .map(|k| (k, None))
+            .collect();
+        // Rooted while the differential reference lays out every
+        // composition (`old_pipeline`): a hidden one's layout stays current.
+        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
+        if !batch.is_empty() {
+            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
+        }
+        self.glide_specs();
+    }
+
+    /// A reorder that moved nothing else (not structural to the graph)
+    /// still changes how its parent lays out.
+    fn prime_reorders<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        if self.old_pipeline {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let shaped: BTreeSet<NodeId> = ops.filter_map(|op| match op { Op::Reorder { id, .. } => Some(*id), _ => None }).flat_map(|id| std::iter::once(id).chain(doc.live(id).and_then(|n| n.parent))).collect();
+        self.prime_layout(&shaped);
+    }
+
+    /// Run the layouts whose subtree holds one of `shaped`, and the pins.
+    fn prime_layout(&mut self, shaped: &BTreeSet<NodeId>) {
+        if shaped.is_empty() {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let gone = &self.docs.gone;
+        let mut keys: BTreeSet<graph::NativeKey> = BTreeSet::from([graph::NativeKey::Pins]);
+        for &n in shaped {
+            let mut at = Some(n);
+            while let Some(x) = at {
+                keys.insert(graph::NativeKey::Layout(x));
+                at = doc.live(x).and_then(|l| l.parent).or_else(|| gone.get(&x).and_then(|w| w.parent));
+            }
+        }
+        self.reactive.prime_natives(keys);
     }
 
     /// Make the network's islands native cells, keeping each one whose
@@ -3289,7 +3493,7 @@ impl StoreCore {
     }
 
     pub fn physics_error(&self) -> Option<&str> {
-        if self.old_network {
+        if self.old_pipeline {
             return self.physics_error.as_deref();
         }
         // The island with the lowest unknown that kept its last solution.
@@ -3391,6 +3595,7 @@ impl StoreCore {
                     _ => None,
                 })
                 .collect();
+            self.prime_reorders(tx.ops.iter().chain(expanded.iter()));
             self.reactive.invalidate(Tree::of(&self.docs), changed);
             // A set on a clip's timing, or a link, changes the sample too.
             // Cheap enough to do unconditionally: clips are few.

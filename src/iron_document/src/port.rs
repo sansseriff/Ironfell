@@ -375,8 +375,7 @@ impl crate::graph::Native for IslandNative {
     }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         let x0: Vec<f64> = self.unknowns.iter().map(|(l, _)| cx.previous(*l).as_ref().and_then(magnitude).unwrap_or(0.0)).collect();
-        let cx = std::cell::RefCell::new(cx);
-        let solution = solve_island(&self.unknowns, &self.equations, x0, &|l| cx.borrow_mut().read(l));
+        let solution = solve_island(&self.unknowns, &self.equations, x0, &|l| cx.read(l));
         if solution.status != iron_solve::Status::Converged {
             return Err(crate::graph::Failure::KeepLast(unsettled(solution.max_required_residual)));
         }

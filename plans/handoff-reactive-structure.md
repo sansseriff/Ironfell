@@ -3122,6 +3122,52 @@ cited by member and number.
 - Both tests fail before; both run on each side of the facade.
 - `resolve_layout` is private now; the facade forwarded it and nothing called it.
 
+**RE-5.4 steps 2b to 4, as done (2026-11-21): layout natives.**
+- `layout::lay_out(reads, root)` lays out one structural root. `compute` (the old
+  pipeline) and the natives share it.
+- `LayoutNative` (one per structural root) and `PinsNative` (`constrained`, one for
+  the document) are natives with producer LAYOUT.
+  - Their outputs are fixed by structure: the placing nodes and their children, a
+    table's rows and cells, and the pinned parts for the pins.
+  - Values and constants are read through `Cx`, which implements `Reads`; template
+    constants go through the tracked `Reads::constant`.
+  - Table grids are the native's extra (`table_grid` reads them), and a grid that
+    moved marks `table.columns`.
+- **Inputs:** `InputKey::Fonts` (`refresh_text`) and `InputKey::LayoutPreview`
+  (`set_layout_preview`), with `Reactive::set_input`.
+- **Structure:** `regraph` collects the nodes a structural op touched, and their old
+  and new parents, and primes the layouts whose subtree holds one (`prime_layout`).
+  A plain reorder, which is not structural to the graph, primes them too
+  (`prime_reorders`). `sync_layout` makes and drops natives when the document's
+  structure changed (`layout_at`).
+- **Glides** live in the graph (`Glide`). A LAYOUT claim starts a transition for each
+  node whose target moved and claims the eased place. `advance_motion` moves them
+  (`glide_to`). The store keeps each node's declared glide (`glide_specs`). The
+  `contexts` glide test is exact against the reference.
+- **Held until `resolve_layout`.** Layout natives wait in `pending` and run only
+  where the old pipeline laid out: `resolve_layout`, `relayout`, and `scratch`.
+  - Running them in every pass made a repeat reading its own items' layout grow
+    faster than in the reference, so they are held to stay exact.
+  - They are also rooted, so a hidden composition stays laid out, as the reference
+    does it.
+  - Both go when the reference's old layout does (step 7): then a pass lays out in
+    height order, and a hidden composition is not laid out.
+- What is incremental now: a native runs only when what it read, its structure, or
+  an input changed.
+  - Test: `an_edit_in_one_container_lays_out_no_other`.
+- Not yet: the layout preview is one input, so a reorder drag runs every layout. Per
+  container is planned.
+- Verified:
+  - the differential (484) and `fonts` (27) suites, exact against `old_pipeline`
+    (renamed from `old_network`), with `IRON_ATOMICITY` and `IRON_OWNER_CHECK`;
+  - the plain suite and the app's lib tests;
+  - `plot_pan_and_zoom_cost`: pan p50 0.060 ms;
+  - the build;
+  - the smoke, pulses, fiber, idle and plot-view scripts, and regression (as
+    expected, pendulum digits aside);
+  - `gestures.txt` was not run: it takes about 2.5 min and needs a check-in, and the
+    user was away.
+
 **The demonstrations** (the user's request, 2026-11-21: show the design's efficiency
 with simple cases), in release, against the old pipeline as step 2 leaves it. Each
 reports:

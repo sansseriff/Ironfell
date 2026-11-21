@@ -94,6 +94,11 @@ impl CellId {
 pub enum NativeKey {
     /// An island of the across/through network, by its lowest unknown.
     Island(Leaf),
+    /// The layout of a structural root (`layout::structural_roots`).
+    Layout(NodeId),
+    /// The parts pinned in resized pictures (`layout::constrained`), for
+    /// the whole document.
+    Pins,
     /// A native for the graph's own tests.
     #[cfg(test)]
     Test(NodeId, u32),
@@ -103,6 +108,8 @@ impl NativeKey {
     fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
+            NativeKey::Layout(n) => n,
+            NativeKey::Pins => NodeId::from_raw(0),
             #[cfg(test)]
             NativeKey::Test(n, _) => n,
         }
@@ -151,6 +158,31 @@ struct NativeCell {
     errored: bool,
     /// The `structure` it last checked all its reads for a cycle at.
     checked: u64,
+    /// The inputs it read at its last run.
+    inputs: BTreeSet<InputKey>,
+    /// What it handed the store at its last run (`Cx::set_extra`).
+    extra: Option<Held>,
+}
+
+/// Something a native consults that is not a leaf (handoff §4.10): the
+/// store sets it, and the natives that read it run again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InputKey {
+    /// The text engine's font generation: text measures again when a font
+    /// arrives.
+    Fonts,
+    /// The container laid out in a previewed order (`layout::Preview`).
+    LayoutPreview,
+}
+
+/// An input's value, or a native's side output, shared and immutable.
+#[derive(Clone)]
+pub(crate) struct Held(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Held(..)")
+    }
 }
 
 /// What a native reads through: every read is recorded.
@@ -158,40 +190,161 @@ pub(crate) struct Cx<'a> {
     doc: Tree<'a>,
     graph: &'a Reactive,
     me: NativeKey,
-    reads: BTreeSet<Leaf>,
-    base: BTreeSet<Leaf>,
+    reads: std::cell::RefCell<BTreeSet<Leaf>>,
+    base: std::cell::RefCell<BTreeSet<Leaf>>,
     /// Cells nothing needed that a read reached.
-    reached: BTreeSet<CellId>,
+    reached: std::cell::RefCell<BTreeSet<CellId>>,
+    inputs: std::cell::RefCell<BTreeSet<InputKey>>,
+    /// Leaves to report changed with no change of value (`Reactive::mark`).
+    marks: std::cell::RefCell<Vec<Leaf>>,
+    /// What it hands the store beside its claims (a table's grid).
+    extra: std::cell::RefCell<Option<Held>>,
 }
 
 impl Cx<'_> {
     /// A leaf as any reader sees it. One this native owns reads beneath
     /// its own claim: the authored constant, or the facet's default (as
     /// `layout::base` reads), recorded apart so that it is no cycle.
-    pub fn read(&mut self, leaf: Leaf) -> Option<Value> {
+    pub fn read(&self, leaf: Leaf) -> Option<Value> {
         if self.graph.owned.get(&leaf) == Some(&self.me) && !self.graph.nodes.contains_key(&leaf) {
             // Beneath its own claim; where it holds none, the leaf reads
             // as it would without this native (an overlay, a constant).
-            self.base.insert(leaf);
+            self.base.borrow_mut().insert(leaf);
             let producer = self.graph.natives[&self.me].rule.producer();
             if self.graph.runtime.get(&leaf).is_some_and(|s| s.producer == producer) {
                 return beneath(self.doc, leaf);
             }
             return read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf);
         }
-        self.reads.insert(leaf);
+        self.reads.borrow_mut().insert(leaf);
         if let Some(c) = self.graph.cell_of(leaf)
             && self.graph.unneeded.contains(&c)
         {
-            self.reached.insert(c);
+            self.reached.borrow_mut().insert(c);
         }
         read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf)
+    }
+
+    /// A leaf's authored constant, or its facet's default, beneath every
+    /// claim and binding; tracked, so a change of it runs this again.
+    pub fn constant(&self, leaf: Leaf) -> Option<Value> {
+        self.base.borrow_mut().insert(leaf);
+        beneath(self.doc, leaf)
     }
 
     /// What this native last wrote on `leaf`, if it holds it: a warm start
     /// (handoff §4.10), read outside the cycle rule and not tracked.
     pub fn previous(&self, leaf: Leaf) -> Option<Value> {
         self.graph.runtime.get(&leaf).filter(|s| s.producer == self.graph.natives[&self.me].rule.producer()).map(|s| s.value.clone())
+    }
+
+    /// An input's value, if the store set one; tracked.
+    pub fn input<T: 'static>(&self, key: InputKey) -> Option<&T> {
+        self.inputs.borrow_mut().insert(key);
+        self.graph.inputs.get(&key).and_then(|h| h.0.downcast_ref::<T>())
+    }
+
+    /// Report `leaf` changed with no change of value, once this run is kept.
+    pub fn mark(&self, leaf: Leaf) {
+        self.marks.borrow_mut().push(leaf);
+    }
+
+    /// What it handed the store at its last run.
+    pub fn previous_extra<T: 'static>(&self) -> Option<&T> {
+        self.graph.natives[&self.me].extra.as_ref().and_then(|h| h.0.downcast_ref::<T>())
+    }
+
+    /// Hand the store `extra` beside its claims.
+    pub fn set_extra(&self, extra: std::sync::Arc<dyn std::any::Any + Send + Sync>) {
+        *self.extra.borrow_mut() = Some(Held(extra));
+    }
+}
+
+/// Layout reads through a native's `Cx` as through the store, every value
+/// tracked (handoff §4.10, RE-5.4).
+impl crate::reads::Reads for Cx<'_> {
+    fn tree(&self) -> Tree<'_> {
+        self.doc
+    }
+    fn resolved(&self, id: NodeId, path: crate::facet::LeafPath) -> Option<Value> {
+        self.read(Leaf { node: id, path })
+    }
+    fn layout_base(&self, id: NodeId, path: crate::facet::LeafPath) -> Option<Value> {
+        let leaf = Leaf { node: id, path };
+        match self.graph.runtime.get(&leaf) {
+            Some(s) if s.producer == ProducerId::LAYOUT => self.constant(leaf),
+            _ => self.read(leaf),
+        }
+    }
+    fn layout_preview(&self) -> Option<&crate::layout::Preview> {
+        self.input::<crate::layout::Preview>(InputKey::LayoutPreview)
+    }
+    fn constant(&self, id: NodeId, path: crate::facet::LeafPath) -> Option<Value> {
+        Cx::constant(self, Leaf { node: id, path })
+    }
+}
+
+/// Glides (reactive-engine handoff §4.10, RE-5.4): where layout's
+/// placements are drawn while a declared transition runs. A layout native's
+/// claim starts a transition for each node whose target moved and then
+/// claims the eased place, so what reads it sees what is drawn, as when the
+/// store eased layout's values before publishing them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Glide {
+    /// The host's clock, seconds.
+    pub clock: f64,
+    /// What each node may glide by (milliseconds, easing), as its
+    /// placement's context declares; the store keeps it current.
+    pub specs: BTreeMap<NodeId, (f64, &'static str)>,
+    /// A dragged item floating at the pointer: it does not ease.
+    pub floating: Option<NodeId>,
+    /// Where layout last put each placement.
+    targets: BTreeMap<Leaf, Value>,
+    anims: BTreeMap<NodeId, Anim>,
+}
+
+#[derive(Clone, Debug)]
+struct Anim {
+    from: [f64; 2],
+    to: [f64; 2],
+    t0: f64,
+    ms: f64,
+    ease: &'static str,
+}
+
+fn xy() -> (crate::facet::LeafPath, crate::facet::LeafPath) {
+    ("transform2d.x".parse().expect("declared leaf"), "transform2d.y".parse().expect("declared leaf"))
+}
+
+impl Glide {
+    pub(crate) fn new(clock: f64, floating: Option<NodeId>) -> Glide {
+        Glide { clock, floating, ..Default::default() }
+    }
+
+    /// Put each node of `values` in flight where its transition has got to;
+    /// drop the finished ones.
+    fn apply(&mut self, values: &mut BTreeMap<Leaf, Value>, only: &dyn Fn(NodeId) -> bool) {
+        let (xp, yp) = xy();
+        let clock = self.clock;
+        self.anims.retain(|&node, a| {
+            if !only(node) {
+                return true;
+            }
+            let u = ((clock - a.t0) * 1000.0 / a.ms).clamp(0.0, 1.0);
+            if u >= 1.0 {
+                return false;
+            }
+            let name = match a.ease {
+                "in" => "ease_in",
+                "out" => "ease_out",
+                "in_out" => "ease_in_out",
+                _ => "linear",
+            };
+            let e = crate::time::ease(name, u);
+            values.insert(Leaf { node, path: xp }, Value::Number(a.from[0] + (a.to[0] - a.from[0]) * e));
+            values.insert(Leaf { node, path: yp }, Value::Number(a.from[1] + (a.to[1] - a.from[1]) * e));
+            true
+        });
     }
 }
 
@@ -339,6 +492,16 @@ pub struct Reactive {
     /// Counts the times cells were made or remade: a binding made since a
     /// native last ran may close a cycle through what it already read.
     structure: u64,
+    /// The inputs the store set (`set_input`).
+    inputs: BTreeMap<InputKey, Held>,
+    /// The natives that read each input.
+    input_readers: BTreeMap<InputKey, BTreeSet<NativeKey>>,
+    /// Glides, while the host runs transitions (`None`: it does not).
+    pub(crate) glide: Option<Glide>,
+    /// While set, layout natives wait in `pending` instead of running: the
+    /// store settles repeats before it lays out, as the old pipeline did
+    /// (`hold_layout`).
+    holding: bool,
 }
 
 /// The unneeded cells read from outside the graph since the store last
@@ -1310,6 +1473,10 @@ impl Reactive {
             }
             let leaf = match cell {
                 CellId::Leaf(l) => l,
+                CellId::Native(k @ (NativeKey::Layout(_) | NativeKey::Pins)) if self.holding => {
+                    self.pending.insert(CellId::Native(k));
+                    continue;
+                }
                 CellId::Native(k) => {
                     if budget == 0 {
                         self.native_problems.insert(k, "did not settle: tracked reads keep changing each other".into());
@@ -1517,10 +1684,20 @@ impl Reactive {
         let rule = self.natives[&k].rule.clone();
         self.evaluations += 1;
         self.natives.get_mut(&k).expect("native").runs += 1;
-        let (result, reads, base, reached) = {
-            let mut cx = Cx { doc, graph: &*self, me: k, reads: BTreeSet::new(), base: BTreeSet::new(), reached: BTreeSet::new() };
+        let (result, reads, base, reached, inputs, marks, extra) = {
+            let mut cx = Cx {
+                doc,
+                graph: &*self,
+                me: k,
+                reads: Default::default(),
+                base: Default::default(),
+                reached: Default::default(),
+                inputs: Default::default(),
+                marks: Default::default(),
+                extra: Default::default(),
+            };
             let result = rule.compute(&mut cx);
-            (result, cx.reads, cx.base, cx.reached)
+            (result, cx.reads.into_inner(), cx.base.into_inner(), cx.reached.into_inner(), cx.inputs.into_inner(), cx.marks.into_inner(), cx.extra.into_inner())
         };
         // What it read that nothing needed is needed now: evaluated first,
         // this after it.
@@ -1601,9 +1778,19 @@ impl Reactive {
         for new in base.difference(&old_base) {
             self.base_readers.entry(*new).or_default().insert(k);
         }
+        let old_inputs = std::mem::take(&mut self.natives.get_mut(&k).expect("native").inputs);
+        for gone in old_inputs.difference(&inputs) {
+            if let Some(ns) = self.input_readers.get_mut(gone) {
+                ns.remove(&k);
+            }
+        }
+        for new in inputs.difference(&old_inputs) {
+            self.input_readers.entry(*new).or_default().insert(k);
+        }
         let native = self.natives.get_mut(&k).expect("native");
         native.reads = reads;
         native.base = base;
+        native.inputs = inputs;
         if !closing.is_empty() {
             // Raised over the read it dropped (a binding made over its output
             // raises what read it): back to above what it reads now, with
@@ -1665,6 +1852,11 @@ impl Reactive {
                 self.blocked.remove(&cell);
                 self.native_problems.remove(&k);
                 changed.extend(self.claim(doc, k, values));
+                self.natives.get_mut(&k).expect("native").extra = extra;
+                for l in marks {
+                    let v = self.read(doc, l).unwrap_or(Value::Str(String::new()));
+                    self.mark(l, v);
+                }
             }
             Err(Failure::Error(e)) => {
                 self.native_problems.remove(&k);
@@ -1698,6 +1890,7 @@ impl Reactive {
     /// released). The leaves whose readable value moved.
     fn claim(&mut self, doc: Tree<'_>, k: NativeKey, values: BTreeMap<Leaf, Value>) -> Vec<Leaf> {
         let producer = self.natives[&k].rule.producer();
+        let values = if producer == ProducerId::LAYOUT { self.glided(k, values) } else { values };
         let was = self.claims.remove(&k).unwrap_or_default();
         let mut now: BTreeSet<Leaf> = BTreeSet::new();
         let mut changed: Vec<Leaf> = Vec::new();
@@ -1755,6 +1948,117 @@ impl Reactive {
     /// tests use it to check that a change runs only what it reaches.
     pub fn native_runs(&self, leaf: Leaf) -> Option<u64> {
         self.owned.get(&leaf).and_then(|k| self.natives.get(k)).map(|n| n.runs)
+    }
+
+    /// A layout native's targets as drawn: transitions started for the nodes
+    /// whose target moved, from where they are drawn, and every node in
+    /// flight eased.
+    fn glided(&mut self, k: NativeKey, mut values: BTreeMap<Leaf, Value>) -> BTreeMap<Leaf, Value> {
+        let Some(g) = self.glide.as_mut() else { return values };
+        let (xp, yp) = xy();
+        let mine: BTreeSet<NodeId> = self.natives[&k].rule.outputs().iter().map(|l| l.node).collect();
+        let num = |m: &BTreeMap<Leaf, Value>, node: NodeId, path| m.get(&Leaf { node, path }).and_then(|v| v.as_f64());
+        let nodes: Vec<NodeId> = values.keys().filter(|l| l.path == xp).map(|l| l.node).collect();
+        for node in nodes {
+            let (Some(tx), Some(ty)) = (num(&values, node, xp), num(&values, node, yp)) else { continue };
+            if (num(&g.targets, node, xp), num(&g.targets, node, yp)) == (Some(tx), Some(ty)) || Some(node) == g.floating {
+                continue;
+            }
+            let shown = |path| self.runtime.get(&Leaf { node, path }).filter(|s| s.producer == ProducerId::LAYOUT).and_then(|s| s.value.as_f64());
+            let (Some(sx), Some(sy)) = (shown(xp), shown(yp)) else { continue };
+            let Some(&(ms, ease)) = g.specs.get(&node) else { continue };
+            g.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: g.clock, ms, ease });
+        }
+        g.targets.retain(|l, _| !mine.contains(&l.node));
+        g.targets.extend(values.iter().map(|(l, v)| (*l, v.clone())));
+        g.apply(&mut values, &|n| mine.contains(&n));
+        values
+    }
+
+    /// Move the transitions in flight to `now` and draw them there. The
+    /// nodes in flight before.
+    pub(crate) fn glide_to(&mut self, doc: Tree<'_>, now: f64) -> Vec<NodeId> {
+        let Some(g) = self.glide.as_mut() else { return Vec::new() };
+        g.clock = now;
+        let moving: Vec<NodeId> = g.anims.keys().copied().collect();
+        if moving.is_empty() {
+            return moving;
+        }
+        let (xp, yp) = xy();
+        let mut values: BTreeMap<Leaf, Value> = BTreeMap::new();
+        for &n in &moving {
+            for p in [xp, yp] {
+                let l = Leaf { node: n, path: p };
+                if let Some(v) = g.targets.get(&l) {
+                    values.insert(l, v.clone());
+                }
+            }
+        }
+        g.apply(&mut values, &|_| true);
+        let mut changed = Vec::new();
+        for (l, v) in values {
+            if let Some(s) = self.runtime.get_mut(&l)
+                && s.producer == ProducerId::LAYOUT
+                && s.value != v
+            {
+                s.value = v;
+                changed.push(l);
+            }
+        }
+        for &l in &changed {
+            if !self.overlay.contains_key(&l)
+                && let Some(v) = self.read(doc, l)
+            {
+                self.note(l, v);
+            }
+        }
+        if !changed.is_empty() {
+            self.invalidate(doc, changed);
+        }
+        moving
+    }
+
+    /// Whether a transition is in flight.
+    pub(crate) fn gliding(&self) -> bool {
+        self.glide.as_ref().is_some_and(|g| !g.anims.is_empty())
+    }
+
+    /// Set an input (`None` clears it) and run the natives that read it.
+    pub(crate) fn set_input(&mut self, doc: Tree<'_>, key: InputKey, value: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>) {
+        match value {
+            Some(v) => {
+                self.inputs.insert(key, Held(v));
+            }
+            None => {
+                self.inputs.remove(&key);
+            }
+        }
+        let primed: BTreeSet<CellId> = self.input_readers.get(&key).into_iter().flatten().filter(|k| self.natives.contains_key(k)).map(|k| CellId::Native(*k)).collect();
+        if primed.is_empty() {
+            return;
+        }
+        let dirty = self.readers(&primed);
+        self.evaluate(doc, &dirty, &primed);
+    }
+
+    /// What native `k` handed the store at its last run.
+    pub(crate) fn native_extra(&self, k: NativeKey) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.natives.get(&k).and_then(|n| n.extra.as_ref()).map(|h| &*h.0)
+    }
+
+    /// Run the natives `keys` in the next pass (their structure changed).
+    pub(crate) fn prime_natives(&mut self, keys: impl IntoIterator<Item = NativeKey>) {
+        let cells: Vec<CellId> = keys.into_iter().filter(|k| self.natives.contains_key(k)).map(CellId::Native).collect();
+        self.pending.extend(cells);
+    }
+
+    /// Hold layout natives back (`true`), or let them go and run the ones
+    /// waiting (`false`).
+    pub(crate) fn hold_layout(&mut self, doc: Tree<'_>, hold: bool) {
+        self.holding = hold;
+        if !hold && !self.pending.is_empty() {
+            self.evaluate(doc, &BTreeSet::new(), &BTreeSet::new());
+        }
     }
 
     /// The native cells' keys.
@@ -1845,6 +2149,11 @@ impl Reactive {
             self.pinned.remove(&cell);
             self.candidates.remove(&cell);
             self.native_problems.remove(k);
+            for i in &old.inputs {
+                if let Some(ns) = self.input_readers.get_mut(i) {
+                    ns.remove(k);
+                }
+            }
         }
         for (k, new) in batch {
             let Some((rule, rooted)) = new else { continue };
@@ -1857,7 +2166,7 @@ impl Reactive {
                 self.claims.insert(k, ls);
             }
             let runs = runs_of.get(&k).copied().unwrap_or(0);
-            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0 });
+            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0, inputs: BTreeSet::new(), extra: None });
             made.push(cell);
             primed.insert(cell);
             // Readers of its outputs now read through it.

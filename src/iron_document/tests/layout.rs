@@ -295,3 +295,27 @@ fn a_layout_reading_a_binding_over_another_layout_follows_it_at_once() {
     store.apply(tx("wider", vec![Op::Set { id: grow, path: path("size.w"), slot: n(40.0) }])).unwrap();
     assert_eq!(num(&store, two, "transform2d.x"), 50.0, "a gap of a's 40 now");
 }
+
+/// Each structural root is a layout native (reactive-engine handoff §4.10,
+/// RE-5.4): an edit in one container lays out that one, and no other.
+#[test]
+fn an_edit_in_one_container_lays_out_no_other() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$a" name="a" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x">
+        <rect id="$grow" name="grow" w="10" h="10"/><rect id="$next" name="next" w="10" h="10"/>
+      </group>
+      <group id="$b" name="b" x="0" y="100" size.w="10" size.h="10" layout.mode="stack_x">
+        <rect name="one" w="10" h="10"/><rect id="$two" name="two" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (grow, next, two) = (plan.aliases["$grow"], plan.aliases["$next"], plan.aliases["$two"]);
+    store.apply(tx("two rows", plan.ops)).unwrap();
+    let runs = |s: &Store, n: NodeId| s.reactive().native_runs(Leaf { node: n, path: path("transform2d.x") }).expect("laid out by a native");
+    let (a0, b0) = (runs(&store, next), runs(&store, two));
+    store.apply(tx("wider", vec![Op::Set { id: grow, path: path("size.w"), slot: n(40.0) }])).unwrap();
+    assert_eq!(num(&store, next, "transform2d.x"), 40.0);
+    assert!(runs(&store, next) > a0, "the edited container laid out");
+    assert_eq!(runs(&store, two), b0, "the other did not");
+}

@@ -15,7 +15,7 @@
 //! ([`base`]), so its own output never feeds back into it.
 
 use crate::tree::Tree as DocTree;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iron_layout::{Align, Area, Ask, Container, Dim, Item, Justify, Mode, Node, Track, Tree};
 use kurbo::Rect;
@@ -24,6 +24,7 @@ use crate::expr::Leaf;
 use crate::facet::{FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::text::{self, Sizing};
+use crate::graph::ProducerId;
 use crate::reads::Reads;
 use crate::{TypeId, Value};
 
@@ -525,7 +526,7 @@ fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
         let Some(def) = def else { continue };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
         let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
-        let constant = |id: NodeId, leaf: &str| doc.leaf(id, path(leaf)).and_then(|s| s.constant()).and_then(|v| v.as_f64());
+        let constant = |id: NodeId, leaf: &str| if doc.leaf(id, path(leaf)).is_some() { store.constant(id, path(leaf)).and_then(|v| v.as_f64()) } else { None };
         let (Some(w0), Some(h0)) = (constant(t, "size.w"), constant(t, "size.h")) else { continue };
         let (w, h) = (num(store, u, "size.w", w0), num(store, u, "size.h", h0));
         if (w - w0).abs() < 1e-9 && (h - h0).abs() < 1e-9 {
@@ -674,4 +675,118 @@ pub fn add_ops(doc: DocTree<'_>, extent: &dyn Fn(NodeId) -> Option<Rect>, select
         }
     }
     Ok((ops, id))
+}
+
+/// The leaves layout may write on a node: its place, and the sizes a layout
+/// decides.
+const WRITES: [&str; 7] = ["transform2d.x", "transform2d.y", "size.w", "size.h", "text.sizing", "radius.rx", "radius.ry"];
+
+/// The parts of resized pictures that `constrained` places: copies of
+/// template parts with a `constraints` facet. Their placement is the pins',
+/// not a container's (it overrode the container's before natives).
+pub(crate) fn pinned_parts(doc: DocTree<'_>) -> BTreeSet<NodeId> {
+    let use_ty = TypeId::lookup("use").expect("registered");
+    let mut out = BTreeSet::new();
+    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
+        let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
+        let Some(def) = def else { continue };
+        let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
+        let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
+        for &part in doc.children(t).iter() {
+            if doc.facet(part, FacetKind::Constraints).is_some()
+                && let Some(copy) = NodeId::expanded(u, part)
+                && doc.is_live(copy)
+            {
+                out.insert(copy);
+            }
+        }
+    }
+    out
+}
+
+/// A structural root's layout as a native cell (reactive-engine handoff
+/// §4.10, RE-5.4): it lays the root out through `lay_out`, reading every
+/// value through its `Cx`, and claims the placements. Its outputs are what
+/// it may write on the nodes that place children and their children, fixed
+/// by structure; a pinned part is the pins'.
+#[derive(Debug, PartialEq)]
+pub(crate) struct LayoutNative {
+    root: NodeId,
+    outputs: BTreeSet<Leaf>,
+}
+
+impl LayoutNative {
+    pub(crate) fn new(doc: DocTree<'_>, root: NodeId, pinned: &BTreeSet<NodeId>) -> LayoutNative {
+        let mut nodes = BTreeSet::new();
+        let mut stack = vec![root];
+        while let Some(n) = stack.pop() {
+            nodes.insert(n);
+            // A table places its cells, in its rows.
+            if doc.live(n).is_some_and(|x| x.ty.name() == "table") {
+                nodes.extend(crate::table::rows(doc, n));
+                nodes.extend(crate::table::cells(doc, n));
+            }
+            for &c in doc.children(n).iter().filter(|&&c| doc.is_live(c)) {
+                nodes.insert(c);
+                if lays_out(doc, c) {
+                    stack.push(c);
+                }
+            }
+        }
+        let outputs = nodes.into_iter().filter(|n| !pinned.contains(n)).flat_map(|n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect();
+        LayoutNative { root, outputs }
+    }
+}
+
+impl crate::graph::Native for LayoutNative {
+    fn producer(&self) -> ProducerId {
+        ProducerId::LAYOUT
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        // Text measures through the engine's fonts.
+        let _ = cx.input::<u64>(crate::graph::InputKey::Fonts);
+        let (values, grids) = lay_out(&*cx, self.root);
+        // A table whose tracks moved redraws its lines.
+        let columns: LeafPath = path("table.columns");
+        let before = cx.previous_extra::<BTreeMap<NodeId, crate::table::Grid>>();
+        let moved: Vec<NodeId> = grids.iter().filter(|(t, g)| before.and_then(|b| b.get(t)) != Some(g)).map(|(t, _)| *t).collect();
+        for t in moved {
+            cx.mark(Leaf { node: t, path: columns });
+        }
+        cx.set_extra(std::sync::Arc::new(grids));
+        Ok(values.into_iter().filter(|(l, _)| self.outputs.contains(l)).collect())
+    }
+}
+
+/// `constrained` as a native cell, for the whole document.
+#[derive(Debug, PartialEq)]
+pub(crate) struct PinsNative {
+    outputs: BTreeSet<Leaf>,
+}
+
+impl PinsNative {
+    pub(crate) fn new(pinned: &BTreeSet<NodeId>) -> PinsNative {
+        PinsNative { outputs: pinned.iter().flat_map(|&n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect() }
+    }
+}
+
+impl crate::graph::Native for PinsNative {
+    fn producer(&self) -> ProducerId {
+        ProducerId::LAYOUT
+    }
+    fn outputs(&self) -> &BTreeSet<Leaf> {
+        &self.outputs
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        Ok(constrained(&*cx).into_iter().filter(|(l, _)| self.outputs.contains(l)).collect())
+    }
 }

@@ -162,9 +162,6 @@ pub struct Document {
     /// The open transaction's undo records (reactive-engine handoff §4.3,
     /// task 2). Outside equality and cloning: a clone has none open.
     journal: JournalCell,
-    /// Bumped by every write of structure or facets: a cache of something
-    /// derived from them is current while this is unchanged. Not content.
-    edits: Edits,
     /// Each definition's and repeat's (or conditional's) last write under
     /// it ([`Document::scope_stamp`]). Not content.
     scopes: Scopes,
@@ -192,17 +189,6 @@ impl Default for Scopes {
 }
 
 impl PartialEq for Scopes {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
-}
-
-/// A count of writes, equal to any other: a `Document`'s equality is about
-/// its content.
-#[derive(Clone, Copy, Debug, Default)]
-struct Edits(u64);
-
-impl PartialEq for Edits {
     fn eq(&self, _: &Self) -> bool {
         true
     }
@@ -562,12 +548,6 @@ impl Document {
         false
     }
 
-    /// How many writes of structure or facets this document has had, a key
-    /// for caches of what is derived from them. Not content.
-    pub(crate) fn edits(&self) -> u64 {
-        self.edits.0
-    }
-
     /// When anything under definition, repeat or conditional `id` was last
     /// written: what is compiled from its content (`engine::template`) is
     /// current while this is unchanged. Written means a node in it made,
@@ -646,7 +626,6 @@ impl Document {
     /// Put back everything written since [`Document::begin`], bit for bit,
     /// and close the journal.
     pub(crate) fn rollback(&mut self) {
-        self.edits.0 += 1;
         let journal = self.journal.0.take().expect("no journal to roll back");
         // What is put back is written again: the scopes it is in now, and
         // those it is back in after.
@@ -862,7 +841,6 @@ impl Document {
     }
 
     pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Facet>) {
-        self.edits.0 += 1;
         let id = node.id;
         debug_assert!(node.is_live());
         self.type_insert(node.ty, id);
@@ -888,7 +866,6 @@ impl Document {
         order: OrderKey,
         comps: Vec<Facet>,
     ) {
-        self.edits.0 += 1;
         // Where the tombstone was, and (below) where it comes back.
         self.touch(id);
         for kind in FacetKind::ALL {
@@ -914,7 +891,6 @@ impl Document {
     /// Tombstone one node. The caller tombstones descendants separately so
     /// each gets its own inverse op.
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
-        self.edits.0 += 1;
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.tombstoned = Some(at));
@@ -930,7 +906,6 @@ impl Document {
     /// which its owner makes again when it is wanted (handoff §4.6). Its
     /// children go first; relations to it are the caller's.
     pub(crate) fn remove_node(&mut self, id: NodeId) {
-        self.edits.0 += 1;
         self.touch(id);
         debug_assert!(self.is_live(id), "only a live node is removed");
         self.unplace(id);
@@ -951,7 +926,6 @@ impl Document {
     }
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
-        self.edits.0 += 1;
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| {
@@ -963,7 +937,6 @@ impl Document {
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
-        self.edits.0 += 1;
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.order = order);
@@ -971,7 +944,6 @@ impl Document {
     }
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
-        self.edits.0 += 1;
         self.touch(id);
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
@@ -992,7 +964,6 @@ impl Document {
         id: NodeId,
         kind: FacetKind,
     ) -> Option<Facet> {
-        self.edits.0 += 1;
         self.touch(id);
         let c = self.facets.get_mut(&kind)?.remove(&id)?;
         if self.recording() {
@@ -1009,7 +980,6 @@ impl Document {
         id: NodeId,
         kind: FacetKind,
     ) -> Option<&mut Facet> {
-        self.edits.0 += 1;
         self.touch(id);
         if self.recording() {
             let before = self.facets.get(&kind)?.get(&id)?.clone();
@@ -1019,7 +989,6 @@ impl Document {
     }
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
-        self.edits.0 += 1;
         self.touch(r.from);
         let (id, from, to) = (r.id, r.from, r.to);
         let created = !self.by_source.contains_key(&from);
@@ -1045,7 +1014,6 @@ impl Document {
     }
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
-        self.edits.0 += 1;
         let r = self.relations.remove(&id)?;
         self.touch(r.from);
         if self.recording() {

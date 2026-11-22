@@ -436,6 +436,16 @@ struct BoundNode {
     height: u32,
 }
 
+/// Which token readers a structural change looks at again: those whose
+/// provider (`@name`) may have moved.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Rescope {
+    No,
+    /// The readers of these names, and those under these nodes (moved).
+    Some { names: BTreeSet<String>, under: Vec<NodeId> },
+    All,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Reactive {
     nodes: Counted<BTreeMap<Leaf, BoundNode>, GRAPH_NODES>,
@@ -493,6 +503,9 @@ pub struct Reactive {
     rest: Counted<BTreeSet<Leaf>, { crate::work::GRAPH_REST }>,
     /// Bound leaves whose expression reads context (`@name`).
     token_readers: Counted<BTreeSet<Leaf>, GRAPH_TOKEN_READERS>,
+    /// The token readers by the names they read: what a rescope of some
+    /// names visits (DS-3b), not every reader.
+    token_readers_by: BTreeMap<String, BTreeSet<Leaf>>,
     /// Bindings that failed on a tracked-read cycle or did not settle.
     /// Nothing tells them when that ends (the read that closed the cycle
     /// was never made an edge), so `restructure` runs them again (the
@@ -1134,6 +1147,7 @@ impl Reactive {
         self.nodes.clear();
         self.dependents.clear();
         self.token_readers.clear();
+        self.token_readers_by.clear();
         // Stored bindings, then the signals connections derive (`port`):
         // an in-port reads its partner, evaluated like any binding; then
         // anchors' positions and followers' placements (`anchor`).
@@ -1152,6 +1166,9 @@ impl Reactive {
             let names = expr.tokens();
             if !names.is_empty() {
                 self.token_readers.insert(leaf);
+                for n in &names {
+                    self.token_readers_by.entry(n.clone()).or_default().insert(leaf);
+                }
             }
             let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
             deps.extend(ctx.values().copied());
@@ -1208,7 +1225,7 @@ impl Reactive {
     /// `anchor::followers`): without it they are kept as they were; with it
     /// signals and followers are made again whole, and positions for each
     /// anchor whose chain of transformed ancestors changed.
-    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool, rederive: bool) {
+    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: Rescope, rederive: bool, tokens: &BTreeMap<String, Leaf>) {
         let start = first_leaf;
         // The leaves to look at again: every binding the nodes had or have,
         // and every derived signal that came, went or changed.
@@ -1271,7 +1288,6 @@ impl Reactive {
                 }
             }
         }
-        let tokens = crate::palette::leaves(doc);
         let mut primed: BTreeSet<CellId> = BTreeSet::new();
         let mut made: Vec<CellId> = Vec::new();
         for leaf in look {
@@ -1299,8 +1315,22 @@ impl Reactive {
                 (None, None) => {}
             }
         }
-        if rescope {
-            let readers: Vec<Leaf> = self.token_readers.iter().copied().collect();
+        let readers: Vec<Leaf> = match rescope {
+            Rescope::No => Vec::new(),
+            Rescope::All => self.token_readers.iter().copied().collect(),
+            // The readers of the names whose providers moved, and those
+            // under a moved node, whose ancestors changed (DS-3b).
+            Rescope::Some { names, under } => {
+                let mut out: BTreeSet<Leaf> = names.iter().filter_map(|n| self.token_readers_by.get(n)).flatten().copied().collect();
+                for &u in &under {
+                    for n in std::iter::once(u).chain(doc.descendants(u)) {
+                        out.extend(self.token_readers.range(start(n)..).take_while(|l| l.node == n).copied());
+                    }
+                }
+                out.into_iter().collect()
+            }
+        };
+        {
             for leaf in readers {
                 let Some(node) = self.nodes.get(&leaf) else { continue };
                 let ctx: BTreeMap<String, Leaf> = node.expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
@@ -1402,6 +1432,9 @@ impl Reactive {
         let names = expr.tokens();
         if !names.is_empty() {
             self.token_readers.insert(leaf);
+            for n in &names {
+                self.token_readers_by.entry(n.clone()).or_default().insert(leaf);
+            }
         }
         let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, tokens).map(|l| (n, l))).collect();
         deps.extend(ctx.values().copied());
@@ -1426,7 +1459,16 @@ impl Reactive {
                 }
             }
         }
-        self.token_readers.remove(&leaf);
+        if self.token_readers.remove(&leaf) {
+            for n in old.expr.tokens() {
+                if let Some(set) = self.token_readers_by.get_mut(&n) {
+                    set.remove(&leaf);
+                    if set.is_empty() {
+                        self.token_readers_by.remove(&n);
+                    }
+                }
+            }
+        }
         self.blocked.remove(&cell);
         self.unneeded.remove(&cell);
         self.stale.remove(&cell);
@@ -2419,10 +2461,13 @@ impl Reactive {
 
     /// Whether a repeat native ran since the last take: a repeat's inputs
     /// changed.
-    pub(crate) fn take_ran_repeats(&mut self) -> bool {
-        let any = self.ran.iter().any(|k| matches!(k, NativeKey::Repeat(_)));
+    pub(crate) fn take_ran_repeats(&mut self) -> Vec<NodeId> {
+        let ran: Vec<NodeId> = self.ran.iter().filter_map(|k| match k {
+            NativeKey::Repeat(r) => Some(*r),
+            _ => None,
+        }).collect();
         self.ran.retain(|k| !matches!(k, NativeKey::Repeat(_)));
-        any
+        ran
     }
 
     /// Whether cluster `k`'s native ran since `clear_ran` (something of it

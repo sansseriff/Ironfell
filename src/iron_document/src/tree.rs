@@ -125,11 +125,6 @@ impl Docs {
         }
     }
 
-    /// Writes to either document, a key for caches of what is derived from
-    /// them. A rollback counts as a write.
-    pub(crate) fn edits(&self) -> u64 {
-        self.authored.edits() + self.copies.edits()
-    }
 }
 
 /// A read view of the nodes, authored and derived.

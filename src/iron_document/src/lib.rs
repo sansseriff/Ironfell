@@ -358,7 +358,16 @@ struct Saved {
     /// The repeats in `presence` with an item entering or leaving: what the
     /// presence stepper visits each frame (DS-2), not every repeat.
     presence_moving: BTreeSet<NodeId>,
-    repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
+    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 4]>,
+    /// The drawn repeats and conditionals (`None` until first found), the
+    /// ones to read at the next settle, each one's problems and the item
+    /// leaves it published, and the repeat natives to make and drop
+    /// (DS-3b: kept as structure changes, not found by a pass).
+    drawn: Option<BTreeSet<NodeId>>,
+    repeat_dirty: BTreeSet<NodeId>,
+    repeat_problems: BTreeMap<NodeId, Vec<expand::Problem>>,
+    item_shown: BTreeMap<NodeId, Vec<Leaf>>,
+    repeat_natives: (BTreeSet<NodeId>, BTreeSet<NodeId>),
     truncated: Vec<expand::Problem>,
     expansion_problems: Vec<expand::Problem>,
     owners: engine::owners::Owners,
@@ -385,6 +394,11 @@ impl Saved {
             presence: s.presence.clone(),
             presence_moving: s.presence_moving.clone(),
             repeat_inputs: s.repeat_inputs.clone(),
+            drawn: s.drawn.clone(),
+            repeat_dirty: s.repeat_dirty.clone(),
+            repeat_problems: s.repeat_problems.clone(),
+            item_shown: s.item_shown.clone(),
+            repeat_natives: s.repeat_natives.clone(),
             truncated: s.truncated.clone(),
             expansion_problems: s.expansion_problems.clone(),
             owners: s.owners.clone(),
@@ -410,6 +424,11 @@ impl Saved {
         s.presence = self.presence;
         s.presence_moving = self.presence_moving;
         s.repeat_inputs = self.repeat_inputs;
+        s.drawn = self.drawn;
+        s.repeat_dirty = self.repeat_dirty;
+        s.repeat_problems = self.repeat_problems;
+        s.item_shown = self.item_shown;
+        s.repeat_natives = self.repeat_natives;
         s.truncated = self.truncated;
         s.expansion_problems = self.expansion_problems;
         s.owners = self.owners;
@@ -505,6 +524,7 @@ pub struct StoreCore {
     clips_end: Option<f64>,
     /// The tokens' stamp and the scheme the theme was last published for.
     theme_at: Option<(u64, bool)>,
+    token_leaves: Option<(u64, std::sync::Arc<BTreeMap<String, Leaf>>)>,
     /// Queries to Models (query.rs): presentation state.
     queries: query::Queries,
     /// Items entering and leaving, by owner (a repeat or a conditional):
@@ -551,12 +571,20 @@ pub struct StoreCore {
     /// The structural change the layout natives were made for.
     layout_at: Option<u64>,
     /// The count of document writes the repeat natives were made for.
-    repeats_at: Option<u64>,
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
     /// before doing any work. `None` after structure changed, until the
     /// next settle.
-    repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
+    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 4]>,
+    /// The drawn repeats and conditionals (`None` until first found), the
+    /// ones to read at the next settle, each one's problems and the item
+    /// leaves it published, and the repeat natives to make and drop
+    /// (DS-3b: kept as structure changes, not found by a pass).
+    drawn: Option<BTreeSet<NodeId>>,
+    repeat_dirty: BTreeSet<NodeId>,
+    repeat_problems: BTreeMap<NodeId, Vec<expand::Problem>>,
+    item_shown: BTreeMap<NodeId, Vec<Leaf>>,
+    repeat_natives: (BTreeSet<NodeId>, BTreeSet<NodeId>),
     /// Session state cells (`let.keep = session`) that differ from their
     /// initial value (reactivity.md §5.1): published over the constant,
     /// never saved, dropped with their node.
@@ -659,6 +687,7 @@ impl StoreCore {
             animated: BTreeSet::new(),
             clips_end: None,
             theme_at: None,
+            token_leaves: None,
             queries: self.queries.clone(),
             presence: self.presence.clone(),
             presence_moving: self.presence_moving.clone(),
@@ -677,8 +706,12 @@ impl StoreCore {
             network: self.network.clone(),
             layout_at: self.layout_at,
             structure_gen: self.structure_gen,
-            repeats_at: self.repeats_at,
             repeat_inputs: self.repeat_inputs.clone(),
+            drawn: self.drawn.clone(),
+            repeat_dirty: self.repeat_dirty.clone(),
+            repeat_problems: self.repeat_problems.clone(),
+            item_shown: self.item_shown.clone(),
+            repeat_natives: self.repeat_natives.clone(),
             session_state: self.session_state.clone(),
             emitted: Vec::new(),
             truncated: self.truncated.clone(),
@@ -720,6 +753,9 @@ impl StoreCore {
     /// Bring the graph up to date after structure changed through `ops`:
     /// update what the ops touched (reactive-engine handoff §4.4, stage 3a).
     fn regraph<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        let ops: Vec<&Op> = ops.collect();
+        self.update_drawn(ops.iter().copied());
+        let ops = ops.into_iter();
         self.structure_gen += 1;
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
         // The nodes a structural op made, moved, removed or reshaped, and
@@ -727,9 +763,17 @@ impl StoreCore {
         // whose subtree holds one must lay out again.
         let mut shaped: BTreeSet<NodeId> = BTreeSet::new();
         let mut reparented = false;
-        let mut rescope = false;
+        // Which `@name` readers to look at again: the names whose providers
+        // a let or token made, removed, renamed or reflagged may move, and
+        // the readers under a moved node; all of them only when a name
+        // cannot be told (DS-3b: not every reader on every change).
+        let mut names: BTreeSet<String> = BTreeSet::new();
+        let mut under: Vec<NodeId> = Vec::new();
+        let mut rescope_all = false;
         let mut rederive = false;
         let doc = Tree::of(&self.docs);
+        let name_of = |n: NodeId| doc.get::<facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
+        let provides_any = |n: NodeId| matches!(doc.node(n).map(|x| x.ty.name()), Some("let" | "token"));
         // What connections and anchors derive reads ports, anchors,
         // connections, the relations between them and each anchor's chain
         // of transformed ancestors (`port::derived_signals`,
@@ -783,7 +827,18 @@ impl StoreCore {
                 }
                 Op::Reparent { id, .. } => {
                     nodes.insert(*id);
-                    rescope = true;
+                    under.push(*id);
+                    // A let moved provides to its new siblings' readers.
+                    for n in std::iter::once(*id).chain(doc.descendants(*id)) {
+                        if provides_any(n) {
+                            match name_of(n) {
+                                Some(x) => {
+                                    names.insert(x);
+                                }
+                                None => rescope_all = true,
+                            }
+                        }
+                    }
                 }
                 Op::Link { rel } => {
                     nodes.insert(rel.from);
@@ -793,15 +848,37 @@ impl StoreCore {
             }
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
-            rescope |= match op {
-                Op::Reorder { id, .. } => provides(doc, *id),
-                Op::Create { ty, .. } => matches!(ty.name(), "let" | "token"),
-                Op::Delete { id } => gone.get(id).map(|w| w.ty).or_else(|| doc.node(*id).map(|n| n.ty)).is_some_and(|ty| matches!(ty.name(), "let" | "token")),
-                Op::Set { path, .. } => names_context(path),
-                Op::AddFacet { facet, .. } => matches!(facet.kind(), FacetKind::Let | FacetKind::Name),
-                Op::RemoveFacet { kind, .. } => matches!(kind, FacetKind::Let | FacetKind::Name),
-                _ => false,
+            let touches = match op {
+                Op::Reorder { id, .. } => provides(doc, *id).then_some(*id),
+                Op::Create { id, ty, .. } => matches!(ty.name(), "let" | "token").then_some(*id),
+                Op::Delete { id } => gone.get(id).map(|w| w.ty).or_else(|| doc.node(*id).map(|n| n.ty)).is_some_and(|ty| matches!(ty.name(), "let" | "token")).then_some(*id),
+                Op::Set { id, path, slot } => {
+                    // A rename: the new name here, the old one in the
+                    // inverse op, which comes through as well.
+                    if path.facet == FacetKind::Name
+                        && let Some(n) = slot.constant().and_then(|v| v.as_str())
+                    {
+                        names.insert(n.to_owned());
+                    }
+                    names_context(path).then_some(*id)
+                }
+                Op::AddFacet { id, facet } => matches!(facet.kind(), FacetKind::Let | FacetKind::Name).then_some(*id),
+                Op::RemoveFacet { id, kind } => matches!(kind, FacetKind::Let | FacetKind::Name).then_some(*id),
+                _ => None,
             };
+            if let Some(n) = touches {
+                // The name it has now; a node gone may have none to read.
+                match name_of(n) {
+                    Some(x) => {
+                        names.insert(x);
+                    }
+                    None => {
+                        if !matches!(op, Op::Set { path, .. } if path.facet == FacetKind::Name) {
+                            rescope_all = true;
+                        }
+                    }
+                }
+            }
         }
         // A boundary check on an instance's argument reads its definition's
         // port_specs (`types::declared`): an edit inside a definition
@@ -834,7 +911,28 @@ impl StoreCore {
             let keys: Vec<graph::NativeKey> = self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect();
             self.reactive.prime_natives(keys);
         }
-        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive);
+        let rescope = if rescope_all {
+            graph::Rescope::All
+        } else if names.is_empty() && under.is_empty() {
+            graph::Rescope::No
+        } else {
+            graph::Rescope::Some { names, under }
+        };
+        let tokens = self.token_leaves();
+        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive, &tokens);
+    }
+
+    /// The theme's tokens by name, as cells read them: kept until a token
+    /// changes (`Docs::tokens_shaped`), not gathered on every restructure.
+    fn token_leaves(&mut self) -> std::sync::Arc<BTreeMap<String, Leaf>> {
+        match &self.token_leaves {
+            Some((at, t)) if *at == self.docs.tokens_shaped => t.clone(),
+            _ => {
+                let t = std::sync::Arc::new(palette::leaves(Tree::of(&self.docs)));
+                self.token_leaves = Some((self.docs.tokens_shaped, t.clone()));
+                t
+            }
+        }
     }
 
     /// Store what an accepted expansion found.
@@ -951,6 +1049,7 @@ impl StoreCore {
             animated: BTreeSet::new(),
             clips_end: None,
             theme_at: None,
+            token_leaves: None,
             queries: query::Queries::default(),
             presence: Default::default(),
             presence_moving: BTreeSet::new(),
@@ -965,12 +1064,16 @@ impl StoreCore {
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: Default::default(),
-            repeat_inputs: None,
+            repeat_inputs: BTreeMap::new(),
+            drawn: None,
+            repeat_dirty: BTreeSet::new(),
+            repeat_problems: BTreeMap::new(),
+            item_shown: BTreeMap::new(),
+            repeat_natives: Default::default(),
             item_memo: Default::default(),
             network: None,
             layout_at: None,
             structure_gen: 0,
-            repeats_at: None,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
@@ -2055,7 +2158,6 @@ impl StoreCore {
         self.note_changes(ops.iter(), &undo);
         self.geometry.note_ops(ops.iter());
         if structural {
-            self.repeat_inputs = None;
             self.regraph(ops.iter().chain(&undo));
         } else {
             self.prime_reorders(ops.iter());
@@ -2097,11 +2199,15 @@ impl StoreCore {
             return Vec::new();
         }
         self.settling = true;
-        // Nothing to settle when no repeat's inputs changed (their natives
-        // did not run) and the last settle's inputs stand; else every drawn
-        // repeat's inputs are scanned (handoff §4.10, RE-5.4).
+        // The drawn repeats are kept as structure changes (`update_drawn`);
+        // a repeat is read again when its native ran (an input changed) or
+        // it was just drawn or undrawn. Nothing else is visited (DS-3b: no
+        // pass over every repeat, nor every group).
+        self.ensure_drawn();
         self.sync_repeats(true);
-        if !self.reactive.take_ran_repeats() && self.repeat_inputs.is_some() {
+        let ran = self.reactive.take_ran_repeats();
+        self.repeat_dirty.extend(ran);
+        if self.repeat_dirty.is_empty() {
             self.settling = false;
             return Vec::new();
         }
@@ -2113,33 +2219,45 @@ impl StoreCore {
         // A round per level of nesting, and one more to see nothing change.
         for round in 0..=expand::DEPTH_MAX + 1 {
             let mut round_start = applied.len();
-            let repeats: Vec<NodeId> = match &self.repeat_inputs {
-                Some(known) => known.iter().map(|k| k.0).collect(),
-                None => expand::drawn_repeats(Tree::of(&self.docs)),
-            };
-            let inputs: Vec<(NodeId, [Option<Value>; 4])> = repeats
+            let visit: Vec<NodeId> = std::mem::take(&mut self.repeat_dirty).into_iter().collect();
+            if visit.is_empty() {
+                break;
+            }
+            let drawn = self.drawn.as_ref().expect("ensured");
+            let (here, gone): (Vec<NodeId>, Vec<NodeId>) = visit.into_iter().partition(|r| drawn.contains(r));
+            // A repeat no longer drawn: what it gave goes.
+            let mut changed_repeats: BTreeSet<NodeId> = BTreeSet::new();
+            let mut unset: Vec<Leaf> = Vec::new();
+            for r in &gone {
+                self.repeat_inputs.remove(r);
+                self.item_memo.remove(r);
+                self.presence.remove(r);
+                self.presence_moving.remove(r);
+                self.repeat_problems.remove(r);
+                unset.extend(self.item_shown.remove(r).unwrap_or_default());
+                if self.repeats.remove(r).is_some() {
+                    changed_repeats.insert(*r);
+                }
+            }
+            let inputs: Vec<(NodeId, [Option<Value>; 4])> = here
                 .iter()
                 .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: p }))))
                 .collect();
             // `Value`'s `==` holds NaN equal to NaN ("no series").
-            if self.repeat_inputs.as_ref() == Some(&inputs) {
-                break;
+            let inputs: Vec<(NodeId, [Option<Value>; 4])> = inputs.into_iter().filter(|(r, v)| self.repeat_inputs.get(r) != Some(v) || !self.repeats.contains_key(r)).collect();
+            if inputs.is_empty() && gone.is_empty() {
+                continue;
             }
             // A repeat with no enter or exit timing settles to a function
-            // of its inputs: what it gave last is reused while they hold,
-            // and the published items are left alone when no repeat's
-            // changed (reactive-engine handoff §4.4, stage 3b).
-            let same_repeats = self.repeat_inputs.as_ref().is_some_and(|known| known.iter().map(|k| k.0).eq(inputs.iter().map(|k| k.0)));
-            let mut items_moved = !same_repeats;
-            let mut counts = expand::Items::new();
-            let mut results: Vec<ItemsOf> = Vec::with_capacity(inputs.len());
+            // of its inputs: what it gave last is reused while they hold
+            // (reactive-engine handoff §4.4, stage 3b).
+            let mut results: Vec<(NodeId, ItemsOf)> = Vec::with_capacity(inputs.len());
             for (r, [each, count, key, shown]) in &inputs {
                 let r = *r;
                 if self.restless.contains(&r)
                     && let Some((_, got)) = self.item_memo.get(&r)
                 {
-                    counts.insert(r, got.keys.clone());
-                    results.push(got.clone());
+                    results.push((r, got.clone()));
                     continue;
                 }
                 let is_repeat = Tree::of(&self.docs).facet(r, facet::FacetKind::Repeat).is_some();
@@ -2156,8 +2274,7 @@ impl StoreCore {
                     && let Some((was, got)) = self.item_memo.get(&r)
                     && was == k
                 {
-                    counts.insert(r, got.keys.clone());
-                    results.push(got.clone());
+                    results.push((r, got.clone()));
                     continue;
                 }
                 let mut got = ItemsOf { keys: Vec::new(), values: Vec::new(), problems: Vec::new() };
@@ -2215,38 +2332,42 @@ impl StoreCore {
                 }
                 match memo_key {
                     Some(k) => {
-                        if self.item_memo.get(&r).is_none_or(|(_, prev)| prev.values != got.values) {
-                            items_moved = true;
-                        }
                         self.item_memo.insert(r, (k, got.clone()));
                     }
                     None => {
-                        items_moved = true;
                         self.item_memo.remove(&r);
                     }
                 }
-                counts.insert(r, got.keys.clone());
-                results.push(got);
+                results.push((r, got));
             }
-            self.item_memo.retain(|r, _| counts.contains_key(r));
-            let truncated: Vec<expand::Problem> = results.iter().flat_map(|g| g.problems.iter().cloned()).collect();
-            let values: Option<BTreeMap<Leaf, Value>> = items_moved.then(|| results.iter().flat_map(|g| g.values.iter().cloned()).collect());
-            let mut truncated = truncated;
+            let mut set: BTreeMap<Leaf, Value> = BTreeMap::new();
+            for ((r, input), (_, got)) in inputs.into_iter().zip(results) {
+                self.repeat_inputs.insert(r, input);
+                if got.problems.is_empty() {
+                    self.repeat_problems.remove(&r);
+                } else {
+                    self.repeat_problems.insert(r, got.problems.clone());
+                }
+                let leaves: Vec<Leaf> = got.values.iter().map(|(l, _)| *l).collect();
+                for (l, v) in got.values {
+                    set.insert(l, v);
+                }
+                for l in self.item_shown.insert(r, leaves.clone()).unwrap_or_default() {
+                    if !leaves.contains(&l) {
+                        unset.push(l);
+                    }
+                }
+                if self.repeats.get(&r) != Some(&got.keys) {
+                    changed_repeats.insert(r);
+                    self.repeats.insert(r, got.keys);
+                }
+            }
+            let mut truncated: Vec<expand::Problem> = self.repeat_problems.values().flatten().cloned().collect();
             expand::sort_problems(&mut truncated);
             self.truncated = truncated;
-            self.presence.retain(|r, _| inputs.iter().any(|(n, _)| n == r));
-            let presence = &self.presence;
-            self.presence_moving.retain(|r| presence.contains_key(r));
-            self.repeat_inputs = Some(inputs);
-            let structural = counts != *self.repeats;
+            let structural = !changed_repeats.is_empty();
             if structural {
                 // The owners of the repeats whose items changed.
-                let changed_repeats: BTreeSet<NodeId> = counts
-                    .iter()
-                    .filter(|(r, k)| self.repeats.get(r) != Some(k))
-                    .map(|(r, _)| *r)
-                    .chain(self.repeats.keys().filter(|r| !counts.contains_key(r)).copied())
-                    .collect();
                 let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
                 for &r in &changed_repeats {
                     let n = self.repeat_changes.entry(r).or_default();
@@ -2259,7 +2380,6 @@ impl StoreCore {
                         }
                     }
                 }
-                self.repeats = counts.into();
                 let stamp = self.docs.authored.version();
                 // Only the items that changed, where that matches a whole
                 // expansion of their owners; else the owners.
@@ -2271,31 +2391,102 @@ impl StoreCore {
                 self.store_found(delta);
                 self.check_owners("settling repeats");
                 if round == expand::DEPTH_MAX + 1 && !ops.is_empty() {
-                    self.expansion_problems.push(expand::Problem { node: repeats[0], kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
+                    let first = *changed_repeats.iter().next().expect("structural");
+                    self.expansion_problems.push(expand::Problem { node: first, kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
                     expand::sort_problems(&mut self.expansion_problems);
                 }
                 self.geometry.note_ops(ops.iter());
                 round_start = applied.len();
                 applied.extend(ops);
             }
-            if let Some(values) = values
-                && values != self.reactive.published_by(ProducerId::ITEMS)
-            {
-                self.reactive.publish(Tree::of(&self.docs), ProducerId::ITEMS, values);
+            unset.retain(|l| !set.contains_key(l));
+            if !set.is_empty() || !unset.is_empty() {
+                self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::ITEMS, set, &unset);
             }
             // An item that has just joined starts unseen, in this same pass.
             self.publish_presence();
             if structural {
-                // New items may hold repeats: look again.
-                self.repeat_inputs = None;
+                // New items may hold repeats: `regraph` draws them, and
+                // they are read in the next round.
                 let these: Vec<Op> = applied[round_start..].to_vec();
                 self.regraph(these.iter());
                 self.resample();
                 self.publish_state();
             }
+            // What the round's publishing and structure ran.
+            let ran = self.reactive.take_ran_repeats();
+            self.repeat_dirty.extend(ran);
         }
         self.settling = false;
         applied
+    }
+
+    /// Every drawn repeat, found once (a load, or before the first
+    /// settle); afterwards kept by `update_drawn`.
+    fn ensure_drawn(&mut self) {
+        if self.drawn.is_some() {
+            return;
+        }
+        let all: BTreeSet<NodeId> = expand::drawn_repeats(Tree::of(&self.docs)).into_iter().collect();
+        self.repeat_dirty.extend(all.iter().copied());
+        self.repeat_natives.0.extend(all.iter().copied());
+        self.drawn = Some(all);
+    }
+
+    /// Keep the drawn repeats as `ops` change the structure: a node made,
+    /// moved, given or stripped of a repeat or conditional is looked at,
+    /// with its subtree where its ancestors changed; a node gone leaves.
+    /// What becomes drawn or stops is read again at the next settle.
+    fn update_drawn<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
+        let Some(drawn) = self.drawn.as_mut() else { return };
+        let doc = Tree::of(&self.docs);
+        let is_drawn = |n: NodeId| {
+            doc.is_live(n)
+                && doc.node(n).is_some_and(|x| x.ty.name() == "group")
+                && expand::is_item_owner(doc, n)
+                && !n.path().first().is_some_and(|&root| expand::in_library(doc, root))
+                && !expand::in_repeat_template(doc, n)
+        };
+        let mut look: BTreeSet<NodeId> = BTreeSet::new();
+        for op in ops {
+            match op {
+                Op::Create { id, .. } => {
+                    look.insert(*id);
+                }
+                Op::Reparent { id, .. } => {
+                    look.insert(*id);
+                    look.extend(doc.descendants(*id));
+                }
+                Op::AddFacet { id, facet } if expand::owns_items(facet.kind()) => {
+                    look.insert(*id);
+                    look.extend(doc.descendants(*id));
+                }
+                Op::RemoveFacet { id, kind } if expand::owns_items(*kind) => {
+                    look.insert(*id);
+                    look.extend(doc.descendants(*id));
+                }
+                Op::Delete { id } => {
+                    look.insert(*id);
+                }
+                _ => {}
+            }
+        }
+        // Everything deleted since the changes were last taken, subtrees
+        // included.
+        look.extend(self.docs.gone.keys());
+        for n in look {
+            let now = is_drawn(n);
+            if now != drawn.contains(&n) {
+                if now {
+                    drawn.insert(n);
+                    self.repeat_natives.0.insert(n);
+                } else {
+                    drawn.remove(&n);
+                    self.repeat_natives.1.insert(n);
+                }
+                self.repeat_dirty.insert(n);
+            }
+        }
     }
 
     /// Publish where each entering or leaving item has got to.
@@ -2339,10 +2530,11 @@ impl StoreCore {
                 continue;
             }
             let (enter_ms, exit_ms) = (p.enter_ms, p.exit_ms);
+            let mut left = false;
             p.items.retain(|_, e| {
                 if e.leaving {
                     e.p = if exit_ms > 0.0 { e.p - dt / exit_ms } else { 0.0 };
-                    gone |= e.p <= 0.0;
+                    left |= e.p <= 0.0;
                     e.p > 0.0
                 } else {
                     if e.p < 1.0 {
@@ -2356,10 +2548,15 @@ impl StoreCore {
             } else {
                 self.presence_moving.remove(&r);
             }
+            if left {
+                // Its items change though its inputs do not: read it again.
+                gone = true;
+                self.repeat_inputs.remove(&r);
+                self.repeat_dirty.insert(r);
+            }
         }
         if gone {
             // The structure changes: settle again, without the ones gone.
-            self.repeat_inputs = None;
             self.pipeline_from(false);
         }
         self.publish_presence();
@@ -3647,18 +3844,21 @@ impl StoreCore {
     /// Make a repeat native for each drawn repeat and conditional, and drop
     /// the rest, when the document's structure changed.
     fn sync_repeats(&mut self, run: bool) {
-        if self.repeats_at == Some(self.structure_gen) {
+        // The natives of the repeats drawn and undrawn since the last sync
+        // (`update_drawn`, `ensure_drawn`), not of every group.
+        self.ensure_drawn();
+        let (add, remove) = std::mem::take(&mut self.repeat_natives);
+        if add.is_empty() && remove.is_empty() {
             return;
         }
-        self.repeats_at = Some(self.structure_gen);
-        let drawn: BTreeSet<NodeId> = expand::drawn_repeats(Tree::of(&self.docs)).into_iter().collect();
-        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
-            .reactive
-            .native_keys()
-            .filter(|k| matches!(k, graph::NativeKey::Repeat(r) if !drawn.contains(r)))
-            .map(|k| (k, None))
-            .collect();
-        for r in drawn {
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = Vec::new();
+        for r in remove {
+            let k = graph::NativeKey::Repeat(r);
+            if self.reactive.native(k).is_some() {
+                batch.push((k, None));
+            }
+        }
+        for r in add {
             let k = graph::NativeKey::Repeat(r);
             if self.reactive.native(k).is_none() {
                 batch.push((k, Some((std::sync::Arc::new(RepeatNative::new(r)), true))));
@@ -3857,8 +4057,8 @@ impl StoreCore {
             self.resample_running();
         }
         // Repeats whose count this changed get their copies, as part of
-        // this transaction's derived structure.
-        self.repeat_inputs = None;
+        // this transaction's derived structure: those whose natives ran, or
+        // that the transaction drew or undrew.
         let copies = self.settle_repeats();
         expanded.extend(copies);
         self.rebuild_clusters();

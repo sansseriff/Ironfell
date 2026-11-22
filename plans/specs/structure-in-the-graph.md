@@ -246,33 +246,25 @@ that they and the cells keep. This table is that order:
 The order is written once, as this table. It isn't a list of ops: a cell's stage is its
 kind. No phase merges the writers' loops into one.
 
-### 3.3 Refusal
+### 3.3 No refusal after derivation
 
+**Decided by the user (2026-11-22): a failed solve is accepted and reported, not refused.**
 Today `Saved` clones the graph and about thirty store fields for every transaction in a
-document holding a constraint. That costs in proportion to the whole document, and its
-field list is another hand list.
+document holding a constraint, so that a solve that fails can put everything back. That
+snapshot is 47% of a constant edit in the scaled demo: 9.6 → 5.1 ms at +3 copies
+(`document_scaling_time`, 2026-11-22).
 
-- **The end state is refusal by re-derivation,** which is what this spec's rule implies.
-  It has three steps:
-  1. The document rolls back, and the rollback *reports* its keys. Today
-     `Document::rollback` discards them.
-  2. Only the declared state (§3.4) is restored.
-  3. The cells those keys mark run again.
+With the decision, nothing refuses once a transaction's ops have applied and derived
+work has begun:
+- an unsatisfiable cluster keeps its last good pose and reports a problem, as a failed
+  formula keeps its last good value;
+- a cycle between clusters is reported as a problem;
+- a constraint that can't be read is reported as a problem;
+- `Saved`, `can_refuse` and the refusal branch go (DS-7, §10).
 
-  This costs nothing on commit, costs in proportion to the refused change on refusal,
-  and needs no field list. It works fully only once every family is converted.
-- **Until then: cheap snapshots.** Persistent maps (`im` or `imbl`), or an `Arc` per
-  large table with copy-on-write, nested payloads included. These make `Saved` a clone
-  of the whole store rather than a list of fields, and make that clone cheap.
-- **DS-7 starts now.** It doesn't wait for DS-10. The refusal check (§4) already exists
-  as `IRON_ATOMICITY`, and it becomes a failure with DS-7. Its transaction boundary
-  comes before `run`'s first effect: today `run` relaxes and expands before `Saved` is
-  taken. It covers `restless`, `feedback` and the machines' clock, which `Saved` misses
-  today. DS-7 is the track's one large speed gain: about 650 samples per transaction
-  in a constrained document.
-
-Whether a refused solve should stay refused (and not, say, keep the last good pose and
-report a problem) is product behaviour, and it is out of scope.
+What `run` checks before deriving anything (unknown nodes, scope, binding checks) still
+refuses. That needs only the document's journal. An agent's `exact` edit is checked
+where it is planned, on the scratch store (§10).
 
 ### 3.4 State is not a derivation
 
@@ -359,14 +351,15 @@ and hiding the bug. The reference and the subject must then agree in two ways:
    changes low bits (measured: 173 of 200 cases, about 1.7e-11). That is why the check
    replays one step and doesn't test that another step changes nothing.
 
-**Refusal is checked apart:** a call that fails leaves the subject equal to its clone
-before the call, pending notifications included. This is the harness's atomicity check,
-today only measured (`IRON_ATOMICITY`, `intended::NOT_ATOMIC`). It becomes a failure
-with DS-7.
+**Failure is checked apart:** a call that fails (now only in `run`'s checks, before
+anything is derived) leaves the subject equal to its clone before the call, pending
+notifications included. This is the harness's atomicity check, today only measured
+(`IRON_ATOMICITY`, `intended::NOT_ATOMIC`). It becomes a failure in DS-10.
 
 **Named exclusions:**
 - a repeat held as `restless` or `depth_blocked`, compared for its problem only;
-- a cluster that didn't converge and kept its last pose, compared for its problem only;
+- a cluster that didn't converge and kept its last pose: its pose, problem and what
+  reads it are compared; its failed step is not replayed;
 - a cut by the global expansion budget (`NODE_BUDGET`), until DS-16 makes the budget
   per root.
 
@@ -406,7 +399,7 @@ renumbered twice on 2026-11-22; reviews before then use DS-10 to DS-15 for earli
 
 | Phase | Family | Deleted |
 |---|---|---|
-| **DS-7** | Refusal by cheap snapshots now, by re-derivation once the families are converted (§3.3). Starts now | `Saved`'s field list and clone cost, `can_refuse` |
+| **DS-7** | No refusal after derivation (§3.3, §10) | `Saved`, `can_refuse`, the refusal branch and its fallback rebuild, `TransactionInput::exact` |
 | **DS-10** | The oracle (§4) and its canary sweep. Results that depend on order become functions of state (§3.4). Structural fields are marked in the schema | `check_keyed_layouts`, the grouping oracle, the `structure-oracle` feature |
 | **DS-11** | The mechanism, completed. One write channel: leaf keys, and the graph taking the log. One driver, `settle(mode)`. `Cx` limited to recorded reads: `Cx::graph()` deleted, wiring reads keyed, `previous()` behind `history`, `scope_stamp` and `version()` keyed or asserted, absent lookups recorded, and old and new index membership reported on moves | the `changed` lists built from ops, the `drain_touched` call sites, the entry points' own stage sequences, `apply_session`'s structural classifier |
 | **DS-12** | Layout: roots, pins (`PinsNative` per composition), pinned parts and glide specs as makers per composition, read through `With(root, layout)`; glide targets per layout root; claim handoffs in one batch; what reservations as wiring change in `is_free` | `sync_layout`, `layout_touched`, `layout_roots`, `pinned_by_use`, `prime_layout`, `prime_reorders`, `regraph`'s `shaped`, `glided`'s sweep |
@@ -453,9 +446,9 @@ user:
 
 | When | Decision | Why the user decides |
 |---|---|---|
-| DS-7's design | Whether refusal is still wanted, or a failed solve keeps its last good pose and reports a problem | Product behaviour (§3.3) |
-| DS-10's design | The producers' fixed priority for a contested leaf, and every cell in a cycle reporting the error | The conflicts users see change |
-| DS-10's design | A binding on a structural field (`constraint.enabled`, `use.notation`) becomes an error | Documents that bind one today stop working |
+| DS-7's design | **Decided 2026-11-22:** a failed solve is accepted and reported; no refusal after derivation | Product behaviour (§3.3) |
+| DS-10's design | **Decided 2026-11-22:** a fixed priority of producers for a contested leaf; every cell in a cycle reports the error | The conflicts users see change |
+| DS-10's design | **Decided 2026-11-22:** structural fields become bindable: `constraint.enabled` and `kind` evaluated with the mates (DS-13), `use.notation` value-driven like a `when` (DS-16). Until each lands, a binding on one is reported as a problem, not ignored | Documents that bind one today behave differently |
 | Before DS-11 | Copies as views, or written copies | Architecture: it reshapes DS-11 to DS-16 |
 | After DS-12 | Whether the layout pilot proved the approach: rules deleted, no slope, costs within budget | Continue, or stop and rethink |
 | DS-13's design | Whether a constraint may span compositions | Product behaviour |
@@ -480,7 +473,7 @@ transactions). Structural keys are neither necessity edges nor gate edges.
 - **Read across compositions, by right:** the theme's tokens and the contexts library,
   whose readers are the cone of an edit to them; `Roots`, when a top-level root is made
   or removed; and wiring across compositions, which is its readers' cone.
-- **Refusal** costs a cheap snapshot from DS-7. Once re-derivation lands, it costs what the refused transaction changed.
+- **Refusal after derivation** goes in DS-7, and with it the snapshot that cost 47% of a constant edit.
 - **Still in proportion to the document after DS-16,** and owned elsewhere:
   - necessity, `ROOTED` and per-frame player scans (DS-4a, DS-4b, DS-5);
   - clip sampling after a structural transaction, and the animation end's scan after an
@@ -517,7 +510,7 @@ transactions). Structural keys are neither necessity edges nor gate edges.
   - per-cluster roles and order, ~100;
   - `Cx`'s keyed wiring reads, ~80;
   - the oracle, a fresh store with declared state and step replay, ~300;
-  - DS-7: ~100 for cheap snapshots.
+  - DS-7: none; it deletes about 150.
 
 So the total is roughly even with today's code, give or take 300 lines.
 
@@ -542,8 +535,6 @@ that:
   often than a leaf would. That costs speed, never correctness, and the tests show it.
 - **Escapes.** A cached derivation outside a cell escapes the rule. Each phase deletes
   its family's caches, and the oracle catches any stale one left.
-- **Persistent maps too slow** (DS-7). If they are, DS-7 uses an `Arc` per table, or a
-  journal of the graph's mutations, and the refusal check keeps either honest.
 - **The deeper alternative.** Copies as computed views, not written nodes, would remove
   stage 1 and most of stage 4. That is the real source of the order problem. It is
   decided before DS-11 (§5).
@@ -584,3 +575,159 @@ that:
     (`machines::playback_stops_after_a_lengthened_transition`);
   - a running clip withdraws only the leaves no other clip drives
     (`time::a_running_clip_leaves_a_paused_clip_s_value_alone`).
+
+## 10. DS-7's design: no refusal after derivation (draft, 2026-11-22)
+
+The user decided (§3.3): a failed solve is accepted and reported. So the store never has
+to put derived state back, and the snapshot that does it goes.
+
+**Measured on today's code** (`document_scaling_time`, native release, p50, with the
+snapshot as now → with it skipped):
+
+| Copies | Constant edit | Structural edit |
+|---|---|---|
+| +0 | 2.33 → 1.30 ms | 3.54 → 2.51 ms |
+| +1 | 4.62 → 2.57 ms | 6.59 → 4.45 ms |
+| +3 | 9.63 → 5.09 ms | 13.20 → 8.41 ms |
+
+What remains of the slope is necessity and the gate (DS-4a, DS-4b, DS-5).
+
+**What `post_apply` does instead of failing:**
+
+| Today it refuses with | After DS-7 |
+|---|---|
+| `Unsatisfiable`: a cluster's solve didn't converge | The cluster keeps its pose as it was before the solve, with the transaction's own writes to its leaves kept. Its problem goes on the cluster's constraints (`problems()`, kind `"constraint"`), naming the residual and the likely culprits, as the error says today. Other clusters solve as usual |
+| `Cycle`: clusters depend on each other through bindings (`regroup`) | The last good grouping stays, as `rebuild_clusters` already keeps it, and the cycle is a problem on each cluster in it |
+| `BadConstraint`: a constraint can't be read (`validated`) | That constraint is left out of the grouping, and its problem goes on it. This also covers a binding on `kind` or `enabled` until DS-13 makes those bindable |
+| `exact` not honoured | Moves to the edit's plan (below) |
+| an `ApplyError` from `release` (an internal write that can't fail on a live copy) | An `expect` |
+
+`post_apply` returns the summary, which keeps `unmet`, and no longer returns errors.
+
+**The agent's exact edits.** `<edit exact="true">` is planned on a scratch store, verb by
+verb (`edit::Planner::push`), before it is applied. After its last verb, the planner
+looks at the scratch apply's `SolverSummary::unmet`. If any is non-empty, the plan fails
+with today's message ("exact transaction not honoured: …"), and the real store is never
+touched. `TransactionInput::exact` and the `exact` argument go. A plan's scratch store
+is a copy, so the check costs what planning already costs.
+
+**Deleted:**
+- `Saved`, with its `of` and `restore` (about 90 lines);
+- `can_refuse`;
+- the refusal branch in `apply` and its fallback rebuild;
+- `TransactionInput::exact`;
+- `ErrorKind::Unsatisfiable`, and `Cycle` and `BadConstraint` where only `post_apply`
+  makes them (`run`'s own checks keep theirs).
+
+**Unchanged:**
+- `run`'s checks, which refuse before anything is derived using only the document's
+  journal (`abort`);
+- the atomicity measurement for those (`IRON_ATOMICITY`).
+
+**Tests.** About 23 assertions expect a refusal (`tests/constraints.rs`, `anchors.rs`,
+`rollback.rs`, `atomicity.rs`, `reactive.rs`, `embeds.rs`, `spine.rs`). Each becomes:
+- the edit applies;
+- the cluster keeps its pose;
+- the problem is reported;
+- undo puts the edit back.
+
+`rollback.rs`'s tests of putting derived state back after a refusal are deleted with the
+refusal. Their subject is gone.
+
+**Exit:**
+- the suite, the differential suite with `IRON_OWNER_CHECK`, and the structure oracle
+  pass;
+- an unsatisfiable edit applies and reports;
+- an exact edit that constraints would move is refused at planning;
+- `document_scaling_time`'s constant edit at +3 is at most 5.5 ms;
+- the smoke and `single-tab.txt` pass.
+
+## 11. DS-10's design: the oracle (draft, 2026-11-22)
+
+**1. Order-free results first** (§3.4, decided by the user). Without these, the oracle
+would need exclusions.
+- **Contested leaves.** In `Reactive::claim`, today, a leaf already driven by another
+  producer refuses the newcomer. Instead, **the lower `ProducerId` wins**, whichever ran
+  first. The order is the ids' order: clips, network, layout, machines, theme, items,
+  state, selection, steps, queries, presence, events, then hosts in registration order.
+  A clip therefore wins over a layout on a laid-out child, as it usually does today
+  because clips are sampled first. The loser gets today's error, and the loser's error
+  is recomputed whenever either one claims. So an error on a released leaf no longer
+  waits for its producer's next publish.
+- **Cycles.** Today a read that would close a cycle blocks the reading cell only (spec
+  §6.3), so which binding is blamed depends on order. Instead, the walk that finds the
+  cycle (`graph.rs`, the deref and native read checks) returns its path. Every cell on
+  it is failed with the cycle error and keeps its last good value. A test for each
+  order: the same cells fail whichever is edited first.
+- **Structural fields.** The schema marks `constraint.kind` and `enabled` and
+  `use.notation` as structural. A binding on one is reported as a problem on its leaf,
+  until DS-13 and DS-16 make them work. It is no longer read silently as its default.
+
+**2. The reference store.** Under the feature `fresh-oracle` (implying `differential`),
+after every facade call that isn't mid-gesture, `Store::agree` builds a reference:
+1. It calls `StoreCore::with_document` on the subject's authored document.
+2. It moves in the subject's **declared state** through one function,
+   `StoreCore::state()` → `State`, applied with `StoreCore::with_state`. `State` is a
+   struct with one field per row of §3.4's state and input tables:
+   - the solved values on held copies (`Owners::solved`, with their slots);
+   - the islands' last solutions;
+   - the last good values of failed cells;
+   - the players (`machine::Player`, `Steps`, `Queries`, presence);
+   - the clocks;
+   - `session_state`;
+   - the overlay, fingers and drivers;
+   - host publishes;
+   - time, theme, motion and fonts' generation;
+   - the layout preview;
+   - the observers.
+
+   A field added to `StoreCore` must be classed as state (in `State`) or as derived (not
+   in it). A test lists `StoreCore`'s fields and fails on one in neither list.
+3. It lets the reference settle as a host's first frame does (`pipeline_from(true)`).
+
+Then it compares the snapshots' derived parts:
+- values of needed cells, and errors by kind;
+- signals;
+- problems;
+- the view;
+- clusters and port anchors;
+- the contexts library and table grids;
+- the dependency edges, forward and reverse.
+
+**3. History.** Islands and cluster solves are history cells (`Native::history`). Under
+the feature, each step records:
+- the state it started from;
+- the values of the inputs it read;
+- what it produced.
+
+After a call, for each history cell, the reference's own input set is read at its
+current values:
+- if these differ from the recorded ones, the subject must have stepped it in this call;
+- the last recorded step is replayed (`solve::solve_cluster` from the recorded pose,
+  or the island's solve from its recorded start), with the recorded inputs, and must
+  give what the subject produced;
+- the reference takes the subject's history state, so the two then compare equal.
+
+**4. Failure.** `IRON_ATOMICITY`'s comparison becomes a panic under the feature, for
+calls that fail. Its known cases (`intended::NOT_ATOMIC`) are each fixed or named as
+exclusions here.
+
+**5. The canary sweep.** `structure::silence_for_canary` takes any choke point by name.
+A test, run under the feature, builds once per choke point with it silenced, runs the
+suite's structural tests, and fails if a silenced choke point passes them all.
+
+**Deleted:**
+- `check_keyed_layouts`;
+- `check_grouping`;
+- the `structure-oracle` feature.
+
+**Exit:**
+- the suite passes under `fresh-oracle` with `IRON_OWNER_CHECK`, with only §4's named
+  exclusions;
+- every choke point's canary fails;
+- the cycle and contested-leaf tests pass in either order;
+- the time for the oracle's suite is reported, and if it is over 15 minutes, the heavy
+  tests run the oracle every tenth call.
+
+**Order of work:** order-free results, then the `State` split and the reference, then
+history, then the canary sweep. Each is a commit with its tests.

@@ -763,6 +763,47 @@ would need exclusions.
   `use.notation` as structural. A binding on one is reported as a problem on its leaf,
   until DS-13 and DS-16 make them work. It is no longer read silently as its default.
 
+**DS-10a part 1, as built (2026-11-22, `95ff421`):** the producers' `rank`, with layout
+first; `waiting` requests promoted the moment the holder lets go, bindings included;
+`offer` and `withdraw` shared by `publish`, `publish_delta`, `claim` and a dropped
+native's release; `conflict` deriving the claim error (`clear_layout_errors` deleted);
+formulas on structural fields reported on their leaf. Tests:
+- `time::layout_outranks_a_clip_on_a_laid_out_child_edited_or_loaded`;
+- `signals::two_producers_on_one_leaf_the_higher_rank_drives_it`;
+- `graph::tests::a_contested_leaf_goes_to_the_higher_rank_whichever_asked_first`;
+- `constraints::a_formula_on_a_structural_field_is_reported`.
+
+**DS-10a part 2: cycles (design, for review before it is built).** Cycles arise only
+while evaluating: through a binding's tracked reads (`deref`, `graph.rs` at "reads {own}
+through deref") and through a native's reads (`closing`). Authored static cycles stay
+with `run`'s own checks (`op.rs`). Today the cell whose evaluation finds the closing read
+fails and is blocked, and the rest of the cycle evaluates normally, so which cell is
+blamed depends on which ran first.
+
+- **A cycle set.** On finding a closing read from reader `X` to leaf `t`, the graph walks
+  the reads from `t`'s cell back to `X` (`reads_of`, keeping parents), and takes every
+  cell on such a path as a member. The set is kept as `cycles: Vec<Cycle>` (each with
+  its members and its closing reads, as reader and leaf) and `in_cycle: BTreeMap<CellId,
+  usize>`. A new cycle that shares a member with one already kept is merged into it, so
+  overlapping cycles are one set, as a strongly connected component is.
+- **Every member fails alike.** Each gets one error naming the members in id order (so
+  the message doesn't depend on order either). Each is blocked and keeps its last good
+  value; a native member keeps its last claims. The closing reads are never edges, as
+  today (spec §6.3).
+- **While it stands.** A member that evaluates (an input changed) still computes, but its
+  result is replaced by the cycle error, so no member clears its error by evaluating
+  first. A closing reader that evaluates and no longer makes its closing read (its
+  `deref` points elsewhere now) dissolves the set: the set is dropped and every member
+  is primed to run again in the same pass, and any cycle that remains is found again.
+- **Tests, each run in both orders:**
+  - two cells reading each other through `deref`, retargeted X first then Y, and Y
+    first then X: the same members fail with the same message;
+  - a native and a binding in a cycle;
+  - overlapping cycles;
+  - dissolving by retargeting either reader.
+
+  Each test also passes under the differential suite.
+
 **DS-10 is split (after review).** **DS-10a** is part 1: order-free results. It changes
 behaviour, and its own tests stand without the oracle. **DS-10b** is parts 2 to 5, and it
 starts with a spike over session writes, paused playback, undo and replay. The review

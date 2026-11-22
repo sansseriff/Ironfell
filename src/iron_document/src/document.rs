@@ -170,6 +170,9 @@ pub struct Document {
     /// Each definition's and repeat's (or conditional's) last write under
     /// it ([`Document::scope_stamp`]). Not content.
     scopes: Scopes,
+    /// The structural keys written since the store last took them
+    /// (structure-in-the-graph.md §3.3). Not content.
+    touched: crate::structure::Touched,
 }
 
 /// When each scope was last written under: a stamp from one counter for
@@ -622,6 +625,22 @@ impl Document {
         });
     }
 
+    /// Collect the structural keys its writes touch, for a store's graph
+    /// (structure-in-the-graph.md §3.3); off, it collects none.
+    pub(crate) fn set_touched(&mut self, on: bool) {
+        self.touched.on = on;
+        self.touched.keys.clear();
+    }
+
+    /// The keys written since they were last taken.
+    pub(crate) fn take_touched(&mut self) -> Vec<crate::structure::Key> {
+        std::mem::take(&mut self.touched.keys)
+    }
+
+    pub(crate) fn touched_empty(&self) -> bool {
+        self.touched.keys.is_empty()
+    }
+
     /// Keep everything written since [`Document::begin`], and close the journal.
     pub(crate) fn commit(&mut self) {
         debug_assert!(self.journal.0.is_some(), "no journal to commit");
@@ -631,6 +650,9 @@ impl Document {
     /// Put back everything written since [`Document::begin`], bit for bit,
     /// and close the journal.
     pub(crate) fn rollback(&mut self) {
+        // What the undone writes touched never reaches the graph: the
+        // store puts its own state back (structure-in-the-graph.md §3.3).
+        self.touched.keys.clear();
         let journal = self.journal.0.take().expect("no journal to roll back");
         // What is put back is written again: the scopes it is in now, and
         // those it is back in after.
@@ -753,6 +775,7 @@ impl Document {
 
     /// Replace `nodes[id]`, recording what it was.
     fn write_node(&mut self, id: NodeId, f: impl FnOnce(&mut Node)) {
+        self.touched.note(crate::structure::Key::Node(id));
         let n = self.nodes.get_mut(&id).expect("known node");
         let before = self.journal.0.is_some().then(|| n.clone());
         f(n);
@@ -853,6 +876,7 @@ impl Document {
         debug_assert!(node.is_live());
         self.type_insert(node.ty, id);
         let before = self.nodes.insert(id, node);
+        self.touched.note(crate::structure::Key::Node(id));
         if self.recording() {
             self.rec(Rec::Node(id, before));
         }
@@ -878,6 +902,8 @@ impl Document {
         self.touch(id);
         for kind in FacetKind::ALL {
             if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
+                self.touched.note(crate::structure::Key::FacetSet(id));
+                self.touched.note(crate::structure::Key::Facet(id, *kind));
                 self.rec(Rec::Facet(*kind, id, Some(f)));
             }
         }
@@ -928,6 +954,7 @@ impl Document {
             self.rec(Rec::ChildrenUnkeyed(id));
         }
         let before = self.nodes.remove(&id);
+        self.touched.note(crate::structure::Key::Node(id));
         if self.recording() {
             self.rec(Rec::Node(id, before));
         }
@@ -945,10 +972,13 @@ impl Document {
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("set_order");
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.order = order);
         self.place(id);
+        self.touched.on = on;
     }
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
@@ -956,6 +986,8 @@ impl Document {
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
         let before = self.facets.entry(kind).or_default().insert(id, c);
+        self.touched.note(crate::structure::Key::FacetSet(id));
+        self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
             if created {
                 self.rec(Rec::FacetTable(kind));
@@ -974,6 +1006,8 @@ impl Document {
     ) -> Option<Facet> {
         self.touch(id);
         let c = self.facets.get_mut(&kind)?.remove(&id)?;
+        self.touched.note(crate::structure::Key::FacetSet(id));
+        self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
             self.rec(Rec::Facet(kind, id, Some(c.clone())));
         }
@@ -989,6 +1023,7 @@ impl Document {
         kind: FacetKind,
     ) -> Option<&mut Facet> {
         self.touch(id);
+        self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
             let before = self.facets.get(&kind)?.get(&id)?.clone();
             self.rec(Rec::Facet(kind, id, Some(before)));
@@ -1076,6 +1111,9 @@ impl Document {
             (&cn.order, c) < (&key, id)
         });
         container.insert(pos, id);
+        if let Some(p) = parent {
+            self.touched.note(crate::structure::Key::Children(p));
+        }
         self.rec(Rec::Placed(parent, pos));
     }
 
@@ -1090,6 +1128,9 @@ impl Document {
         };
         if let Some(pos) = container.iter().position(|&c| c == id) {
             container.remove(pos);
+            if let Some(p) = parent {
+                self.touched.note(crate::structure::Key::Children(p));
+            }
             self.rec(Rec::Unplaced(parent, pos, id));
         }
     }

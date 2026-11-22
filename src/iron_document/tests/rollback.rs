@@ -340,3 +340,25 @@ fn a_layout_made_in_a_refused_transaction_lays_out_when_made_again() {
     let x = |id: NodeId| store.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64());
     assert_eq!((x(s["a"]), x(s["b"])), (Some(0.0), Some(20.0)), "the stack laid out");
 }
+
+/// A reorder in a stack, run by the keys it touched, in a transaction the
+/// solver refuses: the stack is laid out as before it, and a reorder after
+/// lays it out again (structure-in-the-graph.md §3.3).
+#[test]
+fn a_keyed_layout_run_in_a_refused_transaction_is_put_back() {
+    let (mut store, comp) = sheet();
+    let n = pair(&mut store, comp);
+    let (ops, s) = draw(&store, comp, r#"<group id="$g" x="0" y="0" layout.mode="stack_x" layout.gap="10"><rect id="$a" w="10" h="10"/><rect id="$b" w="10" h="10"/></group>"#);
+    store.apply(tx("a stack", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = |store: &Store, id: NodeId| store.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64());
+    assert_eq!((x(&store, s["a"]), x(&store, s["b"])), (Some(0.0), Some(20.0)));
+    let first = store.tree().live(s["a"]).unwrap().order.clone();
+    let swap = Op::Reorder { id: s["b"], order: OrderKey::before(&first) };
+    let mut strict = tx("swap, and q pushed exactly", vec![swap.clone(), Op::Set { id: n["q"], path: path("transform2d.x"), slot: num(900.0) }]);
+    strict.exact = true;
+    let errs = store.apply(strict).unwrap_err();
+    assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{errs:?}");
+    assert_eq!((x(&store, s["a"]), x(&store, s["b"])), (Some(0.0), Some(20.0)), "laid out as before");
+    store.apply(tx("swap", vec![swap])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!((x(&store, s["a"]), x(&store, s["b"])), (Some(20.0), Some(0.0)), "laid out again");
+}

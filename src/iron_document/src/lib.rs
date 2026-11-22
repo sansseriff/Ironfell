@@ -19,6 +19,9 @@
 pub mod facet;
 #[doc(hidden)]
 pub mod work;
+mod structure;
+#[cfg(feature = "structure-oracle")]
+pub use structure::silence_for_canary;
 pub mod reads;
 mod engine;
 mod clocks;
@@ -956,6 +959,9 @@ impl StoreCore {
         self.sync_layout(false);
         self.sync_repeats(false);
         self.prime_layout(&shaped);
+        // What the ops wrote reaches the keyed cells that read it, now that
+        // layout's outputs are reconciled (structure-in-the-graph.md §3.3).
+        self.drain_touched();
         // Constraints and their operands are structure to the grouping
         // and to validation: they look again when an op touched what they
         // read (DS-3b: not on every structural change). A reparent can move
@@ -1036,12 +1042,14 @@ impl StoreCore {
     #[cfg(not(feature = "differential"))]
     fn check_owners(&self, _after: &str) {}
 
-    /// Whether `post_apply` could refuse what is in the document now: only
-    /// a constraint can be malformed, close a cycle through a cluster, or
-    /// fail to solve.
+    /// Whether `post_apply` could refuse what is in the document now: a
+    /// constraint can be malformed, close a cycle through a cluster, or fail
+    /// to solve, and so can a mate a connection implies between plugged
+    /// anchors (`plug::implied_mates`), with no constraint node at all.
     fn can_refuse(&self) -> bool {
+        let doc = Tree::of(&self.docs);
         let ty = TypeId::lookup("constraint").expect("registered");
-        Tree::of(&self.docs).nodes_of_type(ty).any(|n| Tree::of(&self.docs).is_live(n))
+        doc.nodes_of_type(ty).any(|n| doc.is_live(n)) || doc.nodes_with(FacetKind::Anchor).any(|a| doc.is_live(a))
     }
 
     /// Keep what `run` applied.
@@ -1154,6 +1162,9 @@ impl StoreCore {
             producers: Default::default(),
             text_generation: iron_text::engine().generation(),
         };
+        // What writes touch is handed to the graph from here on (§3.3 of
+        // structure-in-the-graph.md): a load is a clean baseline.
+        store.docs.log_touched();
         // A loaded document holds only authored nodes: derive its instances.
         let stamp = store.docs.authored.version();
         let (_, delta) = store.owners.expand(&mut store.docs, stamp, &BTreeMap::new(), engine::owners::Which::All);
@@ -1166,6 +1177,7 @@ impl StoreCore {
         store.docs.gone.clear();
         store.rebuild_clusters();
         store.resolve_physics();
+        store.drain_touched();
         store
     }
 
@@ -2252,6 +2264,7 @@ impl StoreCore {
         } else {
             self.prime_reorders(ops.iter());
             self.prime_grouping(ops.iter());
+            self.drain_touched();
             let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
             if !changed.is_empty() {
                 // Report each written leaf as changed, as a preview does, so
@@ -2264,6 +2277,9 @@ impl StoreCore {
                     }
                 }
                 self.reactive.invalidate(Tree::of(&self.docs), changed);
+            } else {
+                // A reorder sets no leaf: what its keys marked runs now.
+                self.reactive.flush(Tree::of(&self.docs));
             }
         }
         self.session_version += 1;
@@ -4055,7 +4071,58 @@ impl StoreCore {
         }
     }
 
-    /// Run the layouts whose subtree holds one of `shaped`, and the pins.
+    /// The structure oracle (structure-in-the-graph.md §3.5): every keyed
+    /// layout that is up to date, laid out again from the store as it is
+    /// now, must give what its native claims, and the same tables' grids.
+    /// What a missed key leaves stale fails here, whatever primed it or
+    /// not. Skipped mid-glide, when claims are eased.
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn check_keyed_layouts(&self) -> Result<(), String> {
+        if self.reactive.gliding() {
+            return Ok(());
+        }
+        let doc = Tree::of(&self.docs);
+        for root in layout::structural_roots(doc) {
+            let k = graph::NativeKey::Layout(root);
+            let Some(native) = self.reactive.native(k) else { return Err(format!("layout root {root} has no native")) };
+            if !native.keyed() || !self.reactive.native_current(k) {
+                continue;
+            }
+            let (values, grids) = layout::lay_out(self, root);
+            for (leaf, v) in values.iter().filter(|(l, _)| native.outputs().contains(l)) {
+                let kept = self.reactive.signal(*leaf).filter(|s| s.producer == ProducerId::LAYOUT).map(|s| &s.value);
+                let same = match (kept, v) {
+                    (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
+                    (Some(a), b) => a == b,
+                    (None, _) => false,
+                };
+                if !same {
+                    return Err(format!("layout of {root}: {leaf} is {kept:?}, laid out again {v:?}"));
+                }
+            }
+            let kept = self.reactive.native_extra_of(k).and_then(|e| e.downcast_ref::<BTreeMap<NodeId, table::Grid>>());
+            if kept.is_some_and(|g| *g != grids) {
+                return Err(format!("layout of {root}: its tables' grids differ laid out again"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Hand the graph what the documents' writes touched since this was
+    /// last done: the keyed cells that read it run in the next pass. Marks
+    /// only; called where the graph is primed (structure-in-the-graph.md
+    /// §3.3), never inside `run`.
+    fn drain_touched(&mut self) {
+        let keys = self.docs.take_touched();
+        if !keys.is_empty() {
+            self.reactive.prime_keys(keys);
+        }
+    }
+
+    /// Run the pinned layouts whose subtree holds one of `shaped`, and the
+    /// pins: what reads `constrained`, which scans every `use`. An unpinned
+    /// layout is keyed (`Native::keyed`): what it read being written runs
+    /// it, with no rule (structure-in-the-graph.md DS-9).
     fn prime_layout(&mut self, shaped: &BTreeSet<NodeId>) {
         if shaped.is_empty() {
             return;
@@ -4066,7 +4133,10 @@ impl StoreCore {
         for &n in shaped {
             let mut at = Some(n);
             while let Some(x) = at {
-                keys.insert(graph::NativeKey::Layout(x));
+                let k = graph::NativeKey::Layout(x);
+                if self.reactive.native(k).is_some_and(|n| !n.keyed()) {
+                    keys.insert(k);
+                }
                 at = doc.live(x).and_then(|l| l.parent).or_else(|| gone.get(&x).and_then(|w| w.parent));
             }
         }
@@ -4237,6 +4307,7 @@ impl StoreCore {
                 .collect();
             self.prime_reorders(tx.ops.iter().chain(expanded.iter()));
             self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
+            self.drain_touched();
             self.reactive.invalidate(Tree::of(&self.docs), changed);
             // A set on a clip's timing, or a link, changes the sample too.
             // Cheap enough to do unconditionally: clips are few.
@@ -4348,7 +4419,8 @@ impl StoreCore {
                 self.abort(rollback);
                 match saved {
                     Some(saved) => saved.restore(self),
-                    // Not reached: without a constraint nothing refuses.
+                    // Not reached: without a constraint or an anchor
+                    // nothing refuses.
                     None => {
                         self.reactive.rebuild(Tree::of(&self.docs));
                         self.resample();
@@ -4603,6 +4675,7 @@ impl StoreCore {
             if !changed.is_empty() || !result.unmet.is_empty() {
                 summary.clusters.push(c.id);
             }
+            self.drain_touched();
             self.reactive.invalidate(Tree::of(&self.docs), changed);
             self.pose(c);
             summary.unmet.extend(result.unmet);

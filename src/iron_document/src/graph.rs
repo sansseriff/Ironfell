@@ -140,6 +140,12 @@ pub(crate) trait Native: Send + Sync + std::fmt::Debug {
     /// For the store to tell whether a native it would make is the one it
     /// has (`native`).
     fn as_any(&self) -> &dyn std::any::Any;
+    /// Whether it reads the tree through a recording one, and runs again
+    /// when a key it recorded is touched, with no rule to prime it
+    /// (structure-in-the-graph.md §3.2). In DS-9, unpinned layouts only.
+    fn keyed(&self) -> bool {
+        false
+    }
 }
 
 /// Why a native gave no result.
@@ -175,6 +181,8 @@ struct NativeCell {
     watches: BTreeSet<Leaf>,
     /// What it handed the store at its last run (`Cx::set_extra`).
     extra: Option<Held>,
+    /// The structural keys it read at its last run, sorted (`keyed`).
+    keys: Vec<crate::structure::Key>,
 }
 
 /// Something a native consults that is not a leaf (handoff §4.10): the
@@ -216,13 +224,28 @@ pub(crate) struct Cx<'a> {
     marks: std::cell::RefCell<Vec<Leaf>>,
     /// What it hands the store beside its claims (a table's grid).
     extra: std::cell::RefCell<Option<Held>>,
+    /// Whether it reads through a recording tree (`Native::keyed`), and
+    /// what that noted.
+    keyed: bool,
+    keys: crate::structure::Recorder,
 }
 
 impl Cx<'_> {
+    /// A leaf's node read for its existence: what a leaf read depends on
+    /// beyond the leaf (it may come into being), for a keyed native.
+    fn note_leaf(&self, leaf: Leaf) {
+        if self.keyed {
+            let mut keys = self.keys.borrow_mut();
+            keys.push(crate::structure::Key::Node(leaf.node));
+            keys.push(crate::structure::Key::FacetSet(leaf.node));
+        }
+    }
+
     /// A leaf as any reader sees it. One this native owns reads beneath
     /// its own claim: the authored constant, or the facet's default (as
     /// `layout::base` reads), recorded apart so that it is no cycle.
     pub fn read(&self, leaf: Leaf) -> Option<Value> {
+        self.note_leaf(leaf);
         if self.graph.owned.get(&leaf) == Some(&self.me) && !self.graph.nodes.contains_key(&leaf) {
             // Beneath its own claim; where it holds none, the leaf reads
             // as it would without this native (an overlay, a constant).
@@ -245,13 +268,15 @@ impl Cx<'_> {
     /// A leaf's authored constant, or its facet's default, beneath every
     /// claim and binding; tracked, so a change of it runs this again.
     pub fn constant(&self, leaf: Leaf) -> Option<Value> {
+        self.note_leaf(leaf);
         self.base.borrow_mut().insert(leaf);
         beneath(self.doc, leaf)
     }
 
-    /// The tree it reads.
+    /// The tree it reads: a recording one for a keyed native, so what it
+    /// reads of structure runs it again when written (§3.2).
     pub fn tree(&self) -> Tree<'_> {
-        self.doc
+        if self.keyed { self.doc.recording(&self.keys) } else { self.doc }
     }
 
     /// The graph, for what is structure and not a value (whether a leaf is
@@ -300,7 +325,7 @@ impl Cx<'_> {
 /// tracked (handoff §4.10, RE-5.4).
 impl crate::reads::Reads for Cx<'_> {
     fn tree(&self) -> Tree<'_> {
-        self.doc
+        Cx::tree(self)
     }
     fn resolved(&self, id: NodeId, path: crate::facet::LeafPath) -> Option<Value> {
         let leaf = Leaf { node: id, path };
@@ -568,6 +593,9 @@ pub struct Reactive {
     input_readers: BTreeMap<InputKey, BTreeSet<NativeKey>>,
     /// The natives that watch whether each leaf is claimed.
     claim_watchers: BTreeMap<Leaf, BTreeSet<NativeKey>>,
+    /// The keyed natives that read each structural key at their last run
+    /// (structure-in-the-graph.md §3.2).
+    key_readers: BTreeMap<crate::structure::Key, BTreeSet<NativeKey>>,
     /// Repeat natives that ran since the store last took them: the repeats
     /// whose inputs changed.
     ran: BTreeSet<NativeKey>,
@@ -1983,7 +2011,7 @@ impl Reactive {
         if matches!(k, NativeKey::Repeat(_) | NativeKey::Cluster(_)) {
             self.ran.insert(k);
         }
-        let (result, reads, base, reached, inputs, watches, marks, extra) = {
+        let (result, reads, base, reached, inputs, watches, marks, extra, mut keys) = {
             let mut cx = Cx {
                 doc,
                 graph: &*self,
@@ -1995,9 +2023,11 @@ impl Reactive {
                 watches: Default::default(),
                 marks: Default::default(),
                 extra: Default::default(),
+                keyed: rule.keyed(),
+                keys: Default::default(),
             };
             let result = rule.compute(&mut cx);
-            (result, cx.reads.into_inner(), cx.base.into_inner(), cx.reached.into_inner(), cx.inputs.into_inner(), cx.watches.into_inner(), cx.marks.into_inner(), cx.extra.into_inner())
+            (result, cx.reads.into_inner(), cx.base.into_inner(), cx.reached.into_inner(), cx.inputs.into_inner(), cx.watches.into_inner(), cx.marks.into_inner(), cx.extra.into_inner(), cx.keys.into_inner())
         };
         // What it read that nothing needed is needed now: evaluated first,
         // this after it.
@@ -2101,6 +2131,18 @@ impl Reactive {
         }
         for new in watches.difference(&old_watches) {
             self.claim_watchers.entry(*new).or_default().insert(k);
+        }
+        // What it read of structure, kept only when it differs from its
+        // last run's (an exact comparison, §3.2).
+        keys.sort_unstable();
+        keys.dedup();
+        if self.natives[&k].keys != keys {
+            let old = std::mem::take(&mut self.natives.get_mut(&k).expect("native").keys);
+            self.unkey(k, &old);
+            for key in &keys {
+                self.key_readers.entry(*key).or_default().insert(k);
+            }
+            self.natives.get_mut(&k).expect("native").keys = keys;
         }
         let native = self.natives.get_mut(&k).expect("native");
         native.reads = reads;
@@ -2422,6 +2464,45 @@ impl Reactive {
         self.pending.extend(cells);
     }
 
+    /// The structural keys writes touched (`Docs::take_touched`): the
+    /// natives that read one run in the next pass. Marks only; evaluates
+    /// nothing (structure-in-the-graph.md §3.3).
+    pub(crate) fn prime_keys(&mut self, touched: impl IntoIterator<Item = crate::structure::Key>) {
+        let mut cells: Vec<CellId> = Vec::new();
+        for key in touched {
+            if let Some(ks) = self.key_readers.get(&key) {
+                cells.extend(ks.iter().map(|k| CellId::Native(*k)));
+            }
+        }
+        self.pending.extend(cells);
+    }
+
+    /// Whether native `k` is up to date: needed, not stale, not waiting to
+    /// run. What the structure oracle compares (§3.5).
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn native_current(&self, k: NativeKey) -> bool {
+        let c = CellId::Native(k);
+        self.natives.contains_key(&k) && !self.unneeded.contains(&c) && !self.stale.contains(&c) && !self.pending.contains(&c)
+    }
+
+    /// What native `k` handed the store at its last run.
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn native_extra_of(&self, k: NativeKey) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.native_extra(k)
+    }
+
+    /// Drop `k` as a reader of `keys`.
+    fn unkey(&mut self, k: NativeKey, keys: &[crate::structure::Key]) {
+        for key in keys {
+            if let Some(ks) = self.key_readers.get_mut(key) {
+                ks.remove(&k);
+                if ks.is_empty() {
+                    self.key_readers.remove(key);
+                }
+            }
+        }
+    }
+
     /// Clear the claim errors on every leaf layout holds, when a layout
     /// claim moved: as a publish of every placement does. Walks the errors,
     /// which are few, not the placements.
@@ -2539,6 +2620,7 @@ impl Reactive {
                     }
                 }
             }
+            self.unkey(*k, &old.keys);
             for o in old.rule.outputs() {
                 if self.owned.get(o) == Some(k) {
                     self.owned.remove(o);
@@ -2601,7 +2683,7 @@ impl Reactive {
                 self.claims.insert(k, ls);
             }
             let runs = runs_of.get(&k).copied().unwrap_or(0);
-            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0, inputs: BTreeSet::new(), watches: BTreeSet::new(), extra: None });
+            self.natives.insert(k, NativeCell { rule, reads: BTreeSet::new(), base: BTreeSet::new(), height: 1, rooted, runs, errored: false, checked: 0, inputs: BTreeSet::new(), watches: BTreeSet::new(), extra: None, keys: Vec::new() });
             made.push(cell);
             primed.insert(cell);
             // Readers of its outputs now read through it.

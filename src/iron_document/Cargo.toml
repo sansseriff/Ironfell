@@ -41,6 +41,10 @@ iron_layout = { path = "../iron_layout" }
 # becomes a facade over two stores compared after every call, so every test
 # is a differential script. Test-only; the app never enables it.
 differential = []
+# The reference for the cells on structural keys (plans/specs/structure-in-the-graph.md
+# §3.5): after every facade call, each keyed layout laid out again from the store and
+# compared with its native's claims. Test-only.
+structure-oracle = ["differential"]
 # Work counted at whole-document choke points (`work.rs`), for the scaling test
 # (plans/handoff-scaling.md §5). Test-only.
 work = []

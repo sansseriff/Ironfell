@@ -94,8 +94,28 @@ impl Docs {
         if self.apart && id.is_expanded() { &mut self.copies } else { &mut self.authored }
     }
 
-    /// Open both documents' journals.
+    /// Collect what writes touch, in both documents (a store's; §3.3 of
+    /// structure-in-the-graph.md). Starts empty.
+    pub(crate) fn log_touched(&mut self) {
+        self.authored.set_touched(true);
+        self.copies.set_touched(true);
+    }
+
+    /// The keys both documents' writes touched since they were last taken.
+    pub(crate) fn take_touched(&mut self) -> Vec<crate::structure::Key> {
+        let mut keys = self.authored.take_touched();
+        keys.append(&mut self.copies.take_touched());
+        keys
+    }
+
+    pub(crate) fn touched_empty(&self) -> bool {
+        self.authored.touched_empty() && self.copies.touched_empty()
+    }
+
+    /// Open both documents' journals. What earlier writes touched has been
+    /// handed to the graph: a rollback clears what this transaction's do.
     pub(crate) fn begin(&mut self) {
+        debug_assert!(self.touched_empty(), "a transaction begins with touched keys not handed to the graph");
         self.authored.begin();
         self.copies.begin();
         self.gone_journal = Some(Vec::new());
@@ -133,12 +153,32 @@ pub struct Tree<'a> {
     doc: &'a Document,
     /// The copies, when they are kept apart from `doc`.
     copies: Option<&'a Document>,
+    /// Where a cell's reads are noted, when it reads through a recording
+    /// tree (structure-in-the-graph.md §3.2).
+    rec: Option<&'a crate::structure::Recorder>,
 }
 
 impl<'a> Tree<'a> {
     /// The tree over a store's documents.
     pub(crate) fn of(docs: &'a Docs) -> Tree<'a> {
-        Tree { doc: &docs.authored, copies: docs.apart.then_some(&docs.copies) }
+        Tree { doc: &docs.authored, copies: docs.apart.then_some(&docs.copies), rec: None }
+    }
+
+    /// This tree, noting what is read through it in `rec`.
+    pub(crate) fn recording(self, rec: &'a crate::structure::Recorder) -> Tree<'a> {
+        Tree { rec: Some(rec), ..self }
+    }
+
+    fn note(self, k: crate::structure::Key) {
+        if let Some(r) = self.rec {
+            r.borrow_mut().push(k);
+        }
+    }
+
+    /// A read a recording tree has no key for yet: caught where debug
+    /// assertions run, so it is never missed (§3.1).
+    fn unkeyed(self, what: &str) {
+        debug_assert!(self.rec.is_none(), "a recording tree has no key for `{what}` (structure-in-the-graph.md §3.1)");
     }
 
     /// When anything under definition or repeat `id` was last written
@@ -151,7 +191,7 @@ impl<'a> Tree<'a> {
     /// scratch document cloned for planning, a fragment, a document being
     /// loaded. A derived node it does not hold is not there.
     pub fn authored_only(doc: &'a Document) -> Tree<'a> {
-        Tree { doc, copies: None }
+        Tree { doc, copies: None, rec: None }
     }
 
     /// Each document's invariants, with parents answered across both (a
@@ -219,31 +259,38 @@ impl<'a> Tree<'a> {
 
     /// Any node, live or tombstoned.
     pub fn node(self, id: NodeId) -> Option<&'a Node> {
+        self.note(crate::structure::Key::Node(id));
         self.at(id).node(id)
     }
 
     pub fn live(self, id: NodeId) -> Option<&'a Node> {
+        self.note(crate::structure::Key::Node(id));
         self.at(id).live(id)
     }
 
     pub fn is_live(self, id: NodeId) -> bool {
+        self.note(crate::structure::Key::Node(id));
         self.at(id).is_live(id)
     }
 
     pub fn nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
+        self.unkeyed("nodes");
         self.both().flat_map(Document::nodes)
     }
 
     pub fn live_nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
+        self.unkeyed("live_nodes");
         self.both().flat_map(Document::live_nodes)
     }
 
     pub fn roots(self) -> &'a [NodeId] {
+        self.unkeyed("roots");
         self.doc.roots()
     }
 
     /// The last root in root order, without visiting the others.
     pub fn last_root(self) -> Option<NodeId> {
+        self.unkeyed("last_root");
         self.doc.last_root()
     }
 
@@ -251,6 +298,7 @@ impl<'a> Tree<'a> {
     /// documents' own tie-break, where both hold children of `id`: only at
     /// an owner, the authored parent of its copies.
     pub fn children(self, id: NodeId) -> Cow<'a, [NodeId]> {
+        self.note(crate::structure::Key::Children(id));
         let mine = self.at(id).children(id);
         let Some(copies) = self.copies.filter(|_| !id.is_expanded()) else { return Cow::Borrowed(mine) };
         let derived = copies.children(id);
@@ -323,6 +371,7 @@ impl<'a> Tree<'a> {
     /// Every expanded node's id, live or tombstoned (component-model.md §6).
     /// Expanded ids sort after every other id, so this is a range read.
     pub fn expanded_ids(self) -> impl Iterator<Item = NodeId> + 'a {
+        self.unkeyed("expanded_ids");
         self.both().flat_map(Document::expanded_ids)
     }
 
@@ -350,33 +399,54 @@ impl<'a> Tree<'a> {
     }
 
     pub fn nodes_of_type(self, ty: TypeId) -> impl Iterator<Item = NodeId> + 'a {
+        self.unkeyed("nodes_of_type");
         self.both().flat_map(move |d| d.nodes_of_type(ty))
     }
 
     pub fn nodes_with(self, kind: FacetKind) -> impl Iterator<Item = NodeId> + 'a {
+        self.unkeyed("nodes_with");
         self.both().flat_map(move |d| d.nodes_with(kind))
     }
 
+    /// A facet, what it holds included: a recording tree notes the whole
+    /// facet, so any write to it reaches the reader (§3.1).
     pub fn facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
+        self.note(crate::structure::Key::Facet(id, kind));
         self.at(id).facet(id, kind)
     }
 
+    /// Whether `id` carries `kind`, and nothing of what it holds: a reader
+    /// that asks only this is not reached by a write to the facet's fields.
+    pub fn has(self, id: NodeId, kind: FacetKind) -> bool {
+        self.note(crate::structure::Key::FacetSet(id));
+        self.at(id).facet(id, kind).is_some()
+    }
+
     pub fn get<T: LeafStruct>(self, id: NodeId) -> Option<&'a T> {
+        self.note(crate::structure::Key::Facet(id, T::KIND));
         self.at(id).get::<T>(id)
     }
 
     /// All facets of a node, in kind order.
     pub fn facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        if self.rec.is_some() {
+            self.note(crate::structure::Key::FacetSet(id));
+            for f in self.at(id).facets_of(id) {
+                self.note(crate::structure::Key::Facet(id, f.kind()));
+            }
+        }
         self.at(id).facets_of(id)
     }
 
     pub fn leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
+        self.note(crate::structure::Key::Facet(id, path.facet));
         self.at(id).leaf(id, path)
     }
 
     /// Every bound slot on a live node, with its expression: facet kind by
     /// kind, and by id within a kind, as one document gives them.
     pub fn bound_slots(self) -> impl Iterator<Item = (Leaf, &'a Expr)> + 'a {
+        self.unkeyed("bound_slots");
         let kinds: BTreeSet<FacetKind> = self.both().flat_map(|d| d.raw_facets().keys().copied()).collect();
         kinds.into_iter().flat_map(move |kind| self.both().flat_map(move |d| d.bound_slots_of(kind)))
     }
@@ -422,6 +492,7 @@ impl<'a> Tree<'a> {
     }
 
     pub fn relation(self, id: RelationId) -> Option<&'a Relation> {
+        self.unkeyed("relation");
         match self.copies {
             Some(c) if id.is_expanded() => c.relation(id),
             _ => self.doc.relation(id),
@@ -430,21 +501,25 @@ impl<'a> Tree<'a> {
 
     /// The derived relations whose id names `owner`, from either document.
     pub(crate) fn rooted(self, owner: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
+        self.unkeyed("rooted");
         self.both().flat_map(move |d| d.rooted(owner))
     }
 
     pub fn relations(self) -> impl Iterator<Item = &'a Relation> + 'a {
+        self.unkeyed("relations");
         self.both().flat_map(Document::relations)
     }
 
     /// Edges leaving `id`, from either document: an authored relation can
     /// end at a copy and a derived one start at an authored node.
     pub fn relations_from(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
+        self.unkeyed("relations_from");
         self.both().flat_map(move |d| d.relations_from(id))
     }
 
     /// Edges arriving at `id`: "what drives this node" (doc 05 §3.1).
     pub fn relations_to(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
+        self.unkeyed("relations_to");
         self.both().flat_map(move |d| d.relations_to(id))
     }
 }

@@ -480,3 +480,74 @@ fn a_refused_edit_mid_drag_does_not_restart_a_glide() {
     assert!(alone > 10.0 && alone < 50.0, "in flight at 120 ms: {alone}");
     assert_eq!(refused, alone, "the refusal changed nothing drawn");
 }
+
+/// A sibling reorder in a stack lays it out again: what its layout read of
+/// the stack's children changed, and nothing primes it by hand
+/// (structure-in-the-graph.md DS-9). The canary silences it (§3.5).
+#[test]
+fn a_reorder_in_a_stack_lays_it_out_again() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y">
+        <rect id="$a" name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/><rect id="$c" name="c" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (a, c) = (plan.aliases["$a"], plan.aliases["$c"]);
+    store.apply(tx("stack", plan.ops)).unwrap();
+    assert_eq!((num(&store, a, "transform2d.y"), num(&store, c, "transform2d.y")), (0.0, 20.0));
+    let first = store.tree().live(a).unwrap().order.clone();
+    store.apply(tx("reorder", vec![Op::Reorder { id: c, order: OrderKey::before(&first) }])).unwrap();
+    assert_eq!((num(&store, a, "transform2d.y"), num(&store, c, "transform2d.y")), (10.0, 0.0));
+}
+
+/// A stack, its three rects and the store, for the canary.
+fn three_in_a_stack(store: &mut Store) -> (NodeId, NodeId, NodeId) {
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y">
+        <rect id="$a" name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/><rect id="$c" name="c" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&*store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let ids = (plan.aliases["$a"], plan.aliases["$b"], plan.aliases["$c"]);
+    store.apply(tx("stack", plan.ops)).unwrap();
+    ids
+}
+
+/// The canary (structure-in-the-graph.md §3.5): with `set_order` silenced,
+/// a reorder touches no key, its layout stays as it was, and the structure
+/// oracle must say so.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_reorder_fails_the_oracle() {
+    let mut store = Store::new();
+    let (a, _, c) = three_in_a_stack(&mut store);
+    let first = store.tree().live(a).unwrap().order.clone();
+    iron_document::silence_for_canary(Some("set_order"));
+    store.apply(tx("reorder", vec![Op::Reorder { id: c, order: OrderKey::before(&first) }])).unwrap();
+}
+
+/// New words in a text lay its stack out again.
+#[test]
+fn new_words_lay_a_stack_out_again() {
+    inter();
+    let mut store = Store::new();
+    let mut row = stack(10.0, 0.0);
+    row.mode = e("stack_x");
+    let (_, kids) = group(&mut store, row, vec![text("Hi"), text("There")]);
+    let before = num(&store, kids[1], "transform2d.x");
+    store.apply(tx("words", vec![Op::Set { id: kids[0], path: path("text.content"), slot: Slot::Const(Value::Str("Hello, wide world".into())) }])).unwrap();
+    assert!(num(&store, kids[1], "transform2d.x") > before + 20.0);
+}
+
+/// Taking a child out of a stack lays the stack out again.
+#[test]
+fn a_child_taken_out_of_a_stack_lays_it_out_again() {
+    let mut store = Store::new();
+    let (_, b, c) = three_in_a_stack(&mut store);
+    let mut item = LayoutItem::default();
+    item.absolute = Slot::Const(Value::Bool(true));
+    store.apply(tx("absolute", vec![Op::AddFacet { id: b, facet: item.wrap() }])).unwrap();
+    assert_eq!(num(&store, c, "transform2d.y"), 10.0);
+}

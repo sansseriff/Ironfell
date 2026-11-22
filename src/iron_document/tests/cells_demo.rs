@@ -100,6 +100,15 @@ fn cells_demo() {
     }
     let big = format!(r#"<group x="0" y="0" size.w="10" size.h="10" layout.mode="stack_y"><rect id="$r0" w="10" h="10"/>{}</group>"#, (0..999).map(|_| r#"<rect w="10" h="10"/>"#).collect::<String>());
     both("one container of 1,000 items, edit one", &big, 40, |s, names, i| set_w(s, names["$r0"], if i % 2 == 0 { 30.0 } else { 10.0 }));
+    // A drag's frames (a preview) and a reorder in it: what DS-9's
+    // structural keys add to an observed large layout (structure-in-the-graph.md §3.5).
+    both("one container of 1,000 items, preview one", &big, 40, |s, names, i| s.preview(names["$r0"], "size.w".parse().unwrap(), Value::Number(if i % 2 == 0 { 30.0 } else { 10.0 })));
+    both("one container of 1,000 items, reorder one", &big, 40, |s, names, i| {
+        let r0 = names["$r0"];
+        let kids = s.tree().children(s.tree().live(r0).unwrap().parent.unwrap()).to_vec();
+        let order = if i % 2 == 0 { OrderKey::after(&s.tree().live(*kids.last().unwrap()).unwrap().order) } else { OrderKey::before(&s.tree().live(kids[0]).unwrap().order) };
+        s.apply(tx(vec![Op::Reorder { id: r0, order }])).unwrap();
+    });
     // Every container re-laid out by one edit (the RE-5.6 council's case):
     // each claim that moves clears layout's claim errors.
     let shared = r#"<rect id="$src" w="10" h="10"/>"#.to_owned()

@@ -1,7 +1,7 @@
 # Structure in the graph: one reader of the document
 
-**Status:** draft, revised 2026-11-22 after council rounds 1 (Opus 5/10, Sol 5/10), 2
-(Opus 6/10, Sol 6/10) and 3 (Opus 7/10, Sol 7/10); §10. Not adopted. It changes the order of
+**Status:** adopted 2026-11-22 by the user, after council rounds 1 (Opus 5/10, Sol 5/10),
+2 (Opus 6/10, Sol 6/10) and 3 (Opus 7/10, Sol 7/10); §10. **DS-9 built** (§11). It changes the order of
 [`handoff-scaling.md`](../handoff-scaling.md) (the `DS` track): DS-3b stops at part 2
 (`08e0539`), and this spec's phases, DS-9 to DS-14, replace the rest of DS-3b. DS-4a,
 DS-4b and DS-5 stay as planned there and do not wait for these (§6). It replaces
@@ -279,3 +279,47 @@ key kind. Opus: keys act only on unpinned layout cells in DS-9; the reference is
 the shadow moves to DS-10; the key table shrinks to the four the slice uses; no hash.
 Sol: refusal through implied mates with no constraint node; a session reorder still
 evaluates; cost budgets named. All adopted (§3, §4).
+
+## 11. DS-9 as built (2026-11-22)
+
+- **Keys and the recording tree** (`structure.rs`, `tree.rs`): `Node`, `Children`,
+  `FacetSet`, `Facet`; `Tree::recording`; `Tree::has` for presence. Every other `Tree` read
+  on a recording tree fails a debug assertion (`unkeyed`).
+- **The touched-key log** (`document.rs`): noted in `write_node`, `insert_node`,
+  `remove_node`, `restore_node`, `place`, `unplace`, `insert_facet`, `remove_facet`,
+  `facet_mut`. On only in a store's two documents (`Docs::log_touched`, at load);
+  asserted empty at `Docs::begin`, cleared by `Document::rollback`.
+- **The graph** (`graph.rs`): `Native::keyed` (unpinned `LayoutNative` only); `Cx::tree`
+  hands a keyed native a recording tree, and `Cx::read`/`constant` note `Node` and
+  `FacetSet` for the leaf's node; `run_native` keeps a run's keys sorted and deduplicated
+  and updates `key_readers` only when they differ; `set_natives` drops a native's keys;
+  `prime_keys` marks only. `Reactive::rebuild` keeps `key_readers`, unlike §3.2 said:
+  natives survive a rebuild, and their keys with them.
+- **Drains** (`Store::drain_touched`): in `regraph` after `prime_layout`; before the
+  non-structural `invalidate` in `after_transaction`, the session path (which now
+  evaluates once when a reorder set no leaf) and each cluster's write-back in
+  `post_apply`; at the end of load.
+- **The slice:** `prime_layout` primes `Pins` and pinned layouts only.
+- **The oracle** (feature `structure-oracle`, implying `differential`):
+  `StoreCore::check_keyed_layouts`, after every facade call, lays out every structural
+  root from the store and compares each current, keyed native's claims and grids;
+  skipped while a glide runs. **The canary** silences `set_order`
+  (`silence_for_canary`) and must fail it (`layout::canary_a_silenced_reorder_fails_the_oracle`).
+  A reorder is the only write that reaches layouts by keys alone in DS-9: a create,
+  delete, move or facet change also reaches them through `sync_layout` replacing the
+  native or `restructure`'s leaf priming, so a canary on `insert_facet` or `facet_mut`
+  cannot fail (tried; both passed). With `prime_keys` disabled, two layout tests fail
+  (the reorder tests), which is what the keys alone carry today.
+- **Refusal:** `can_refuse` counts live anchors, so a mate implied by a connection
+  refuses through `Saved` (test: `anchors::plugging_two_rigid_ports_mates_their_parts`'
+  end); a keyed layout run in a refused transaction is put back
+  (`rollback::a_keyed_layout_run_in_a_refused_transaction_is_put_back`).
+- **Cost** (native release, `cells_demo`, p50 per change, before → after): a 1,000-item
+  stack, edit one 3.08 → 3.34 ms, preview one 3.09 → 3.34 ms, reorder one 3.28 → 3.54 ms
+  (+8%, within 1.3×); 1,000 containers read by one edit 47.4 → 50.0 ms; small cases within
+  noise.
+
+- **Checks:** plain (488, fonts 37), differential with `IRON_OWNER_CHECK` (492), the oracle
+  build (492, fonts 38 with the canary), the scaling test, smoke, regression, and
+  `single-tab.txt` in wasm (drag `advance` p50 0.03 ms, under the 0.1 ms budget; playing
+  0.09 ms) pass.

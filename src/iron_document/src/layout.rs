@@ -796,6 +796,13 @@ impl crate::graph::Native for LayoutNative {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    /// An unpinned layout reads its subtree through a recording tree and
+    /// runs again when what it read is written (structure-in-the-graph.md
+    /// DS-9); a pinned one's `constrained` scans every `use`, and keeps
+    /// `prime_layout`.
+    fn keyed(&self) -> bool {
+        !self.pins
+    }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         // Text measures through the engine's fonts.
         let _ = cx.input::<u64>(crate::graph::InputKey::Fonts);

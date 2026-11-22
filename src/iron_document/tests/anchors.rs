@@ -284,8 +284,8 @@ fn plugging_two_rigid_ports_mates_their_parts() {
     assert!(store.clusters().containing(socket_use).is_some(), "mated again");
 
     // Pulled apart exactly, the mate refuses it, with no constraint node in
-    // the document: the store is put back as it was (`can_refuse` counts
-    // plugged anchors; structure-in-the-graph.md §3.3).
+    // the document: an exact edit is tried on a scratch copy first, so the
+    // store never changes (structure-in-the-graph.md §10).
     let before = (world(&store, socket_anchor), world(&store, jack_anchor));
     let mut apart = tx("apart", vec![
         Op::Set { id: jack_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(0.0)) },

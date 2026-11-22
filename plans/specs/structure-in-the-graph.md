@@ -694,6 +694,40 @@ What remains of the slope is necessity and the gate (DS-4a, DS-4b, DS-5).
     `rollback::a_solver_refusal_after_repeats_settled`.
 - **Measured** (`document_scaling_time`, +3 copies): constant edit 9.63 → 5.08 ms,
   structural edit 13.20 → 8.34 ms. Within the exit.
+- **Code review (2026-11-22; Opus 6/10, Sol 5/10), all fixed with tests:**
+  - **Exact edits.** Taking an unmet exact edit back with `retract` cancelled a running
+    gesture and kept its previews, dropped the redo stack, advanced the version, and
+    left the idempotency key to replay as applied. An exact edit is now applied first to
+    `scratch()` with its key removed, and refused if unmet, before this store is
+    touched (`rollback::an_exact_edit_refused_mid_gesture_leaves_the_gesture`).
+  - **The reply.** It missed grouping problems, because the baseline was taken after
+    `after_transaction` regrouped, and it repeated old ones. Now it names the
+    constraints' problems the transaction brought, measured from before `run`, and a
+    failed solve's culprits unless that cluster was in trouble already
+    (`rollback::the_reply_names_the_problems_a_transaction_brought`).
+  - **Duplicates.** A disabled constraint hid an enabled duplicate. Only enabled
+    constraints with live operands count now
+    (`rollback::a_disabled_constraint_hides_no_duplicate`).
+  - **Stale grouping.** A cluster made cyclic by an earlier cluster's write in the same
+    pass still solved. The solve loops now take the grouping again before each cluster,
+    and track solved clusters by key, not by index.
+  - **Cost.** The watcher ran a culprit solve on every violated pose, which doubled a
+    drag's solves. It now only measures residuals, and the culprits are the failed
+    solve's, in the reply. A cycle cluster is counted as posed, so `to_solve` doesn't
+    scan every cluster. A failed live solve is posed and not retried each frame
+    (`rollback::a_failed_live_solve_is_not_retried_by_an_unrelated_drag`).
+  - **One tolerance.** A solve is written when its required residual is within
+    `solve::HOLDS` (1e-6), and the watchers report past the same value.
+  - **Smaller fixes:**
+    - a ring's message names clusters by key;
+    - `release` skips a template slot `apply_op` refuses;
+    - `post_apply` flushes, so `problems()` reads the pose just written;
+    - a test for a ring with a cluster downstream that still solves
+      (`rollback::a_ring_of_clusters_fails_and_what_reads_it_still_solves`).
+
+  After the fixes: plain (499), differential with the structure oracle and
+  `IRON_OWNER_CHECK` (503) and the smoke pass, and the constant edit at +3 copies is
+  5.23 ms.
 - **Checks:**
   - plain (492) passes;
   - differential with the structure oracle and `IRON_OWNER_CHECK` (496, fonts 40) passes;

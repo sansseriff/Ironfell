@@ -1083,16 +1083,23 @@ impl StoreCore {
             // `committed` names current clusters only: `resolve_clusters_live`
             // counts on it.
             self.committed.retain(|k| c.at.contains_key(k));
+            // A cluster in a cycle is never solved: count it as posed, so
+            // `to_solve` doesn't look at every cluster for it (review of
+            // DS-7, Opus).
+            self.committed.extend(c.failed.iter().copied());
             self.clusters = c;
             self.sync_cluster_natives();
         }
     }
 
-    /// The next cluster after `after` in solve order whose solve could move
-    /// something, asked again after each solve: a cluster's write can wake
-    /// a later one that reads it (council review of DS-9, Sol).
-    fn next_to_solve(&self, drivers: &[solve::Driver], after: Option<usize>) -> Option<usize> {
-        self.to_solve(drivers).into_iter().find(|&i| after.is_none_or(|a| i > a))
+    /// The first cluster in solve order whose solve could move something
+    /// and that this pass hasn't solved, asked again after each solve,
+    /// with the grouping taken again first: a cluster's write can wake a
+    /// later one that reads it (council review of DS-9, Sol), or make a
+    /// cluster cyclic, which is then not solved (review of DS-7, Sol).
+    fn next_to_solve(&mut self, drivers: &[solve::Driver], solved: &BTreeSet<NodeId>) -> Option<solve::Cluster> {
+        self.regroup();
+        self.to_solve(drivers).into_iter().map(|i| &self.clusters.list[i]).find(|c| !solved.contains(&c.key())).cloned()
     }
 
     /// The clusters, in solve order, whose solve could move something: a
@@ -1149,10 +1156,10 @@ impl StoreCore {
         // The clusters that could have moved: their watching native ran,
         // a finger holds them, or they have not been committed; the rest
         // are as their last solve left them (DS-3a: no pass over all).
-        let mut solved_to = None;
-        while let Some(i) = self.next_to_solve(&[], solved_to) {
-            solved_to = Some(i);
-            let c = &self.clusters.list[i].clone();
+        let mut solved = BTreeSet::new();
+        while let Some(c) = self.next_to_solve(&[], &solved) {
+            solved.insert(c.key());
+            let c = &c;
             if self.unmoved(c, &[]) {
                 continue;
             }
@@ -1164,9 +1171,12 @@ impl StoreCore {
             report.vars += c.vars.len();
             report.iterations += result.iterations;
             report.evaluations += result.evaluations;
-            if result.status != iron_solve::Status::Converged {
-                // Keep the previous pose rather than show a jump (CS §5.5).
+            if !solve::holds(&result) {
+                // Keep the previous pose rather than show a jump (CS §5.5),
+                // and pose it, so that only a change to its inputs tries
+                // again, not every frame (review of DS-7, Sol).
                 report.converged = false;
+                self.pose(c);
                 continue;
             }
             for (leaf, v) in result.values {
@@ -2868,16 +2878,7 @@ impl StoreCore {
         let mut out: Vec<expand::Problem> = self.clusters.problems.iter().map(|(id, message)| expand::Problem { node: *id, kind: "constraint", message: message.clone() }).collect();
         for c in self.clusters.list.iter().filter(|c| !self.clusters.failed.contains(&c.key())) {
             let Some(v) = self.reactive.native_extra(graph::NativeKey::Cluster(c.key())).and_then(|e| e.downcast_ref::<solve::Violated>()) else { continue };
-            let Some(worst) = v.residuals.iter().map(|(_, r)| *r).reduce(f64::max) else { continue };
-            let names: Vec<String> = v.culprits.iter().map(|c| c.to_string()).collect();
-            let message = format!(
-                "constraints of cluster {} cannot all hold (residual {worst:.3e}); likely at fault: {}",
-                c.id,
-                if names.is_empty() { "unknown".to_owned() } else { names.join(", ") }
-            );
-            // On each constraint at fault, else on each that doesn't hold.
-            let on: Vec<NodeId> = if v.culprits.is_empty() { v.residuals.iter().map(|(id, _)| *id).collect() } else { v.culprits.clone() };
-            out.extend(on.into_iter().map(|id| expand::Problem { node: id, kind: "constraint", message: message.clone() }));
+            out.extend(v.0.iter().map(|(id, r)| expand::Problem { node: *id, kind: "constraint", message: format!("constraint {id} of cluster {} doesn't hold here (residual {r:.3e}): its cluster could not be solved", c.id) }));
         }
         out
     }
@@ -4304,7 +4305,24 @@ impl StoreCore {
                 solver: None,
             });
         }
-        let (exact, ts) = (input.exact, input.ts);
+        // An exact edit is tried first on a scratch copy, as it would apply
+        // here: if the solve leaves a request unmet, it is refused before
+        // this store is touched (DS-7; review: a retract here would cancel a
+        // gesture, drop redo and keep the idempotency key).
+        if input.exact {
+            let mut dry = input.clone();
+            dry.exact = false;
+            dry.idempotency_key = None;
+            let applied = self.scratch().apply_now(dry)?;
+            if let Some(unmet) = applied.solver.as_ref().map(|s| &s.unmet).filter(|u| !u.is_empty()) {
+                let lines: Vec<String> = unmet.iter().map(|u| format!("{} requested {} but constraints allow {}", u.leaf, crate::value::fmt_num(u.requested), crate::value::fmt_num(u.solved))).collect();
+                return Err(vec![ApplyError { op: 0, kind: ErrorKind::Unsatisfiable, message: format!("exact transaction not honoured: {}", lines.join("; ")) }]);
+            }
+        }
+        // The constraints' problems before, so the reply names those this
+        // transaction brought (review of DS-7: after `after_transaction` it
+        // was too late to see the grouping's).
+        let problems_before: BTreeSet<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
         let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
         if let Some(found) = problems {
             self.store_found(found);
@@ -4312,7 +4330,21 @@ impl StoreCore {
         self.check_owners("a transaction");
         self.after_transaction(&tx, &mut expanded, &full_inverse);
         let held = self.keep_solved(&mut tx, solved, &expanded);
-        let solver = self.post_apply(&mut tx, &held);
+        let mut solver = self.post_apply(&mut tx, &held);
+        // What the reply tells: the constraints' problems this transaction
+        // brought (a malformed or duplicate constraint, a cycle, a pose
+        // that doesn't hold), and why a solve failed, unless that cluster
+        // was in trouble already.
+        let after: Vec<expand::Problem> = self.cluster_problems();
+        let new: Vec<solve::SolverProblem> = after.into_iter().filter(|p| !problems_before.contains(&(p.node, p.message.clone()))).map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
+        if !new.is_empty() || solver.as_ref().is_some_and(|s| !s.problems.is_empty()) {
+            let s = solver.get_or_insert_with(SolverSummary::default);
+            s.problems.retain(|p| !problems_before.iter().any(|(n, _)| *n == p.node));
+            s.problems.extend(new);
+            if s.is_empty() {
+                solver = None;
+            }
+        }
         if shared {
             self.machines.shared += 1;
         }
@@ -4332,17 +4364,6 @@ impl StoreCore {
         }
         self.history.record(tx);
         self.commit(rollback);
-        // An exact edit the constraints moved is taken back at once: undone
-        // and dropped from history, judged by the one joint solve at the
-        // store's real state (DS-7). A cluster that failed to solve keeps
-        // what the edit set, so it leaves nothing unmet.
-        if exact && let Some(unmet) = solver.as_ref().map(|s| &s.unmet).filter(|u| !u.is_empty()) {
-            let lines: Vec<String> = unmet.iter().map(|u| format!("{} requested {} but constraints allow {}", u.leaf, crate::value::fmt_num(u.requested), crate::value::fmt_num(u.solved))).collect();
-            let message = format!("exact transaction not honoured: {}", lines.join("; "));
-            let retracted = self.retract(version, ts);
-            debug_assert!(retracted, "the transaction just applied is the last in history");
-            return Err(vec![ApplyError { op: 0, kind: ErrorKind::Unsatisfiable, message }]);
-        }
         Ok(Applied {
             version,
             replayed: false,
@@ -4517,14 +4538,11 @@ impl StoreCore {
     /// problem is read from the pose (`cluster_problems`).
     fn post_apply(&mut self, tx: &mut Transaction, held: &[Leaf]) -> Option<SolverSummary> {
         let last = tx.ops.len().saturating_sub(1);
-        let before: BTreeSet<(NodeId, String)> = self.clusters.problems.iter().cloned().collect();
         self.regroup();
         let mut summary = SolverSummary::default();
-        // The grouping's problems this transaction brought, for the reply.
-        summary.problems.extend(self.clusters.problems.iter().filter(|p| !before.contains(p)).map(|(node, message)| solve::SolverProblem { node: *node, message: message.clone() }));
         self.release(tx, held, last);
         if self.clusters.list.is_empty() {
-            return (!summary.is_empty()).then_some(summary);
+            return None;
         }
         let drivers: Vec<solve::Driver> = tx
             .ops
@@ -4537,10 +4555,10 @@ impl StoreCore {
                 _ => None,
             })
             .collect();
-        let mut solved_to = None;
-        while let Some(i) = self.next_to_solve(&drivers, solved_to) {
-            solved_to = Some(i);
-            let c = &self.clusters.list[i].clone();
+        let mut solved = BTreeSet::new();
+        while let Some(c) = self.next_to_solve(&drivers, &solved) {
+            solved.insert(c.key());
+            let c = &c;
             if self.unmoved(c, &drivers) {
                 continue;
             }
@@ -4548,7 +4566,7 @@ impl StoreCore {
                 let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
                 solve::solve_cluster(Tree::of(&self.docs), &read, c, &drivers, &self.fingers)
             };
-            if result.status != iron_solve::Status::Converged {
+            if !solve::holds(&result) {
                 let names: Vec<String> = result.culprits.iter().map(|c| c.to_string()).collect();
                 let message = format!(
                     "constraints of cluster {} cannot all hold (residual {:.3e}); likely at fault: {}",
@@ -4586,6 +4604,8 @@ impl StoreCore {
             self.pose(c);
             summary.unmet.extend(result.unmet);
         }
+        // The watchers read the pose just written, so `problems` is current.
+        self.reactive.flush(Tree::of(&self.docs));
         // Drivers that are not variables of any cluster were plain sets;
         // only a moved node is a cause worth telling the model about.
         (!summary.is_empty()).then_some(summary)
@@ -4641,7 +4661,9 @@ impl StoreCore {
                 continue;
             }
             let op = Op::Set { id: leaf.node, path: leaf.path, slot };
-            let inverse = op::apply_op(&mut self.docs, at, &op, tx.version).expect("a released copy's leaf is live");
+            // A template's binding can fail `apply_op`'s checks: the copy
+            // keeps the solved value rather than refuse (DS-7).
+            let Ok(inverse) = op::apply_op(&mut self.docs, at, &op, tx.version) else { continue };
             self.geometry.note_ops([&op]);
             tx.inverse.extend(inverse);
             changed.push(leaf);

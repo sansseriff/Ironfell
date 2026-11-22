@@ -257,11 +257,11 @@ fn an_unsolvable_cluster_beside_one_that_solves() {
     assert!(!problems(&store).is_empty(), "redo shows the problem again");
 }
 
-/// An exact request the constraints would move is taken back (`retract`):
-/// the edit is undone and dropped from history, and the error names it
-/// (DS-7: exact edits are judged by the one joint solve, then retracted).
+/// An exact request the constraints would move is refused: tried on a
+/// scratch copy first, it never reaches this store's document or history
+/// (DS-7, after review).
 #[test]
-fn an_exact_request_unmet_is_retracted() {
+fn an_exact_request_unmet_is_refused() {
     let (mut store, comp) = sheet();
     let n = pair(&mut store, comp);
     let x = |s: &Store| s.resolved(n["q"], path("transform2d.x")).and_then(|v| v.as_f64());
@@ -376,4 +376,115 @@ fn a_cluster_that_reads_another_s_variable_solves_after_it() {
     assert!((dist(&store, a["p"], a["q"]) - 80.0).abs() < 1e-6);
     let want = x(&store, a["q"]);
     assert!((dist(&store, b["p"], b["q"]) - want).abs() < 1e-6, "the second cluster at {}, its distance {want}", dist(&store, b["p"], b["q"]));
+}
+
+/// An exact edit refused while a gesture runs leaves the gesture and its
+/// preview as they were, and history untouched: the edit is tried on a
+/// scratch copy first, never applied and taken back (review of DS-7).
+#[test]
+fn an_exact_edit_refused_mid_gesture_leaves_the_gesture() {
+    let (mut store, comp) = sheet();
+    let n = pair(&mut store, comp);
+    let (ops, r) = draw(&store, comp, r#"<rect id="$r" x="0" y="0" w="4" h="4"/>"#);
+    store.apply(tx("free", ops)).unwrap();
+    let y = path("transform2d.y");
+    store.begin_gesture(&[r["r"]]);
+    store.preview(r["r"], y, Value::Number(77.0));
+    let (version, past) = (store.authored().version(), store.history().past().len());
+    let mut strict = tx("push q exactly", vec![Op::Set { id: n["q"], path: path("transform2d.x"), slot: num(900.0) }]);
+    strict.exact = true;
+    strict.idempotency_key = Some("k".into());
+    assert_eq!(store.apply(strict.clone()).unwrap_err()[0].kind, ErrorKind::Unsatisfiable);
+    assert!(store.gesture_in_progress(), "the gesture runs on");
+    assert_eq!(store.resolved(r["r"], y), Some(Value::Number(77.0)), "its preview stands");
+    assert_eq!((store.authored().version(), store.history().past().len()), (version, past), "nothing applied");
+    // A retry with the same key is refused again, not replayed as applied.
+    assert_eq!(store.apply(strict).unwrap_err()[0].kind, ErrorKind::Unsatisfiable);
+}
+
+/// The reply names what a transaction brought: a duplicate constraint, and
+/// a binding that closes a cycle through a cluster (review of DS-7: they
+/// were missed, the grouping having been taken before the comparison).
+#[test]
+fn the_reply_names_the_problems_a_transaction_brought() {
+    let (mut store, comp) = sheet();
+    let n = pair(&mut store, comp);
+    let id = store.authored().next_id();
+    let rels = store.authored().next_relation_ids(2);
+    let mut dup = Constraint::default();
+    dup.kind = Slot::Const(Value::Enum("distance".into()));
+    dup.value = num(30.0);
+    let applied = store
+        .apply(tx("dup", vec![Op::Create { id, ty: ty("constraint"), parent: Some(comp), order: OrderKey::first(), facets: vec![dup.wrap()] }, constrain(rels[0], id, n["p"], "a"), constrain(rels[1], id, n["q"], "b")]))
+        .unwrap();
+    let told = applied.solver.map(|s| s.problems).unwrap_or_default();
+    assert!(told.iter().any(|p| p.node == id && p.message.contains("already constrained by")), "{told:?}");
+    store.undo(0).unwrap().unwrap();
+    let applied = store.apply(tx("loop", vec![Op::Set { id: n["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x + 50", n["q"])) }])).unwrap();
+    let told = applied.solver.map(|s| s.problems).unwrap_or_default();
+    assert!(told.iter().any(|p| p.node == n["d"] && p.message.contains("feeds the same cluster")), "{told:?}");
+    // An unrelated edit brings nothing, and tells nothing of the cycle again.
+    let applied = store.apply(tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str("renamed".into())) }])).unwrap();
+    assert!(applied.solver.is_none_or(|s| s.problems.is_empty()));
+}
+
+/// A disabled constraint doesn't hide an enabled one over the same
+/// operands: only what the solver would use is a duplicate (review of DS-7).
+#[test]
+fn a_disabled_constraint_hides_no_duplicate() {
+    let (mut store, comp) = sheet();
+    let n = pair(&mut store, comp);
+    store.apply(tx("off", vec![Op::Set { id: n["d"], path: path("constraint.enabled"), slot: Slot::Const(Value::Bool(false)) }])).unwrap();
+    let id = store.authored().next_id();
+    let rels = store.authored().next_relation_ids(2);
+    let mut again = Constraint::default();
+    again.kind = Slot::Const(Value::Enum("distance".into()));
+    again.value = num(30.0);
+    store.apply(tx("again", vec![Op::Create { id, ty: ty("constraint"), parent: Some(comp), order: OrderKey::first(), facets: vec![again.wrap()] }, constrain(rels[0], id, n["p"], "a"), constrain(rels[1], id, n["q"], "b")])).unwrap();
+    let x = store.resolved(n["q"], path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    assert!((x - 30.0).abs() < 1e-6, "the enabled one holds: q at {x}");
+    assert!(store.problems().iter().all(|p| p.kind != "constraint"), "{:?}", store.problems());
+}
+
+/// Two clusters that read each other's variables through bindings are a
+/// ring: both fail and are not solved; a third that only reads one of them
+/// is solved after it as usual (DS-7, strongly connected components).
+#[test]
+fn a_ring_of_clusters_fails_and_what_reads_it_still_solves() {
+    let (mut store, comp) = sheet();
+    let a = pair(&mut store, comp);
+    let b = pair(&mut store, comp);
+    let c = pair(&mut store, comp);
+    store
+        .apply(tx(
+            "ring",
+            vec![
+                Op::Set { id: a["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x", b["q"])) },
+                Op::Set { id: b["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x", a["q"])) },
+                Op::Set { id: c["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x + 10", a["q"])) },
+            ],
+        ))
+        .unwrap();
+    let ring: Vec<_> = store.problems().into_iter().filter(|p| p.kind == "constraint" && p.message.contains("depend on each other")).map(|p| p.node).collect();
+    assert!(ring.contains(&a["d"]) && ring.contains(&b["d"]) && !ring.contains(&c["d"]), "{:?}", store.problems());
+    let x = |id: NodeId| store.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    assert!((x(c["q"]) - (x(a["q"]) + 10.0)).abs() < 1e-6, "the cluster that reads the ring is solved: {} against {}", x(c["q"]), x(a["q"]));
+}
+
+/// A live solve that fails is posed: dragging an independent cluster
+/// doesn't try it again each frame (review of DS-7, Sol).
+#[test]
+fn a_failed_live_solve_is_not_retried_by_an_unrelated_drag() {
+    let (mut store, comp) = sheet();
+    let a = pair(&mut store, comp);
+    let b = pair(&mut store, comp);
+    let live = store.register_producer("live");
+    // A negative distance can't hold.
+    store.publish(live, BTreeMap::from([(Leaf { node: a["d"], path: path("constraint.value") }, Value::Number(-10.0))]));
+    let h = store.begin_drag(b["q"], [0.0, 0.0]);
+    let first = store.drag_to(&h, [45.0, 5.0]);
+    let second = store.drag_to(&h, [46.0, 6.0]);
+    assert!(first.converged || second.converged, "{first:?}");
+    assert!(second.converged, "the failed cluster is not tried again: {second:?}");
+    store.end_drag(&h);
 }

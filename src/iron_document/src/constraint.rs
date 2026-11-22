@@ -189,6 +189,9 @@ pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<Co
 /// in id order, is kept.
 pub fn usable(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
     let (mut all, mut problems) = all(doc, read_value);
+    // Only what the solver would use can hide a duplicate: a disabled one,
+    // or one with an operand gone, doesn't (review of DS-7, Opus).
+    all.retain(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)));
     all.sort_by_key(|c| c.id);
     let mut seen: BTreeMap<(&'static str, Vec<(NodeId, [i64; 2])>), NodeId> = BTreeMap::new();
     let mut kept = Vec::with_capacity(all.len());

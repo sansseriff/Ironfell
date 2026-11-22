@@ -332,8 +332,9 @@ pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, li
         let ring = comp.len() > 1;
         for &i in &comp {
             let why = if ring {
-                let names: Vec<String> = comp.iter().map(|&k| list[k].id.to_string()).collect();
-                Some(format!("clusters {} depend on each other through bindings", names.join(", ")))
+                // By key (the lowest constraint): clusters can share a parent.
+                let names: Vec<String> = comp.iter().map(|&k| list[k].key().to_string()).collect();
+                Some(format!("the clusters of constraints {} depend on each other through bindings", names.join(", ")))
             } else {
                 own[i].clone()
             };
@@ -693,6 +694,17 @@ pub fn solve_cluster(
     }
 }
 
+/// The largest required residual at which constraints hold: what a solve
+/// must reach to be written, and what the watchers report past (review of
+/// DS-7: the solver's own tolerance and the watchers' differed, so a
+/// failed solve could leave no problem).
+pub(crate) const HOLDS: f64 = 1e-6;
+
+/// Whether a solve's result holds: converged, or within `HOLDS`.
+pub(crate) fn holds(result: &ClusterResult) -> bool {
+    result.status == Status::Converged || result.max_required_residual <= HOLDS
+}
+
 /// The constraints of `cluster` that don't hold at the values `read`
 /// gives now, each with its largest residual: what a cluster whose solve
 /// failed shows, read from the pose and not remembered from the solve
@@ -707,7 +719,7 @@ pub(crate) fn violated(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, clus
         buf.resize(t.len, 0.0);
         t.eval(&problem.vars, &mut buf);
         let r = buf.iter().fold(0.0f64, |m, x| m.max(x.abs()));
-        if r > 1e-6 {
+        if r > HOLDS {
             match out.iter_mut().find(|(c, _)| *c == id) {
                 Some((_, m)) => *m = m.max(r),
                 None => out.push((id, r)),
@@ -801,11 +813,8 @@ pub(crate) struct ClusterNative {
 }
 
 /// A cluster's constraints that don't hold at its pose, as its watching
-/// native last read them (`violated`), and those likely at fault.
-pub(crate) struct Violated {
-    pub(crate) residuals: Vec<(NodeId, f64)>,
-    pub(crate) culprits: Vec<NodeId>,
-}
+/// native last read them (`violated`).
+pub(crate) struct Violated(pub(crate) Vec<(NodeId, f64)>);
 
 impl ClusterNative {
     pub(crate) fn new(cluster: Cluster) -> ClusterNative {
@@ -831,12 +840,11 @@ impl crate::graph::Native for ClusterNative {
                 let _ = cx.read(Leaf { node: n, path: p.parse().expect("declared leaf") });
             }
         }
-        // Whether its constraints hold where it is: its problem (DS-7). Only
-        // when they don't, which constraints are likely at fault: those
-        // whose removal makes it solvable (`solve_cluster`'s culprits).
-        let held = violated(cx.tree(), &|l| cx.read(l), &self.cluster);
-        let culprits = if held.is_empty() { Vec::new() } else { solve_cluster(cx.tree(), &|l| cx.read(l), &self.cluster, &[], &[]).culprits };
-        cx.set_extra(std::sync::Arc::new(Violated { residuals: held, culprits }));
+        // Whether its constraints hold where it is: its problem (DS-7). No
+        // solve here: which are at fault is the failed solve's to tell, in
+        // the transaction's reply (review of DS-7: a solve per watcher run
+        // doubled a drag's solves).
+        cx.set_extra(std::sync::Arc::new(Violated(violated(cx.tree(), &|l| cx.read(l), &self.cluster))));
         Ok(BTreeMap::new())
     }
 }

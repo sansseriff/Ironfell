@@ -263,7 +263,8 @@ fn a_contradiction_applies_keeps_its_pose_and_names_the_culprits() {
         data.insert("role".to_owned(), Value::Str(role.into()));
         Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Constrains, data } }
     };
-    p.store
+    let applied = p
+        .store
         .apply(tx(
             "weld",
             vec![
@@ -275,9 +276,13 @@ fn a_contradiction_applies_keeps_its_pose_and_names_the_culprits() {
         .unwrap_or_else(|e| panic!("applied, not refused: {e:?}"));
     assert!(p.store.authored().version() > version, "applied");
     assert_eq!(p.joints.iter().map(|&j| pos(&p.store, j)).collect::<Vec<_>>(), joints, "the cluster keeps its pose");
+    // The reply names the constraints at fault, from the failed solve.
+    let told: Vec<String> = applied.solver.as_ref().map(|s| s.problems.iter().map(|q| q.message.clone()).collect()).unwrap_or_default();
+    assert!(told.iter().any(|m| m.contains(&id.to_string()) && m.contains(&p.links[1].to_string())), "both sides of the contradiction are named: {told:?}");
+    assert!(told.iter().all(|m| !m.contains(&p.links[0].to_string())), "an innocent constraint is not: {told:?}");
+    // The document's problems say what doesn't hold where it is.
     let problems = constraint_problems(&p.store);
-    assert!(problems.iter().any(|(_, m)| m.contains(&id.to_string()) && m.contains(&p.links[1].to_string())), "both sides of the contradiction are named: {problems:?}");
-    assert!(problems.iter().all(|(_, m)| !m.contains(&p.links[0].to_string())), "an innocent constraint is not: {problems:?}");
+    assert!(problems.iter().any(|(n, _)| *n == id), "{problems:?}");
     // Undo takes it back, and its problem with it: the problem is read from
     // the pose, not remembered from the solve.
     p.store.undo(0).unwrap().unwrap();

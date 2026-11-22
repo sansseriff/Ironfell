@@ -74,6 +74,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
 | `plot-view.txt`, `pulses.txt` (`GPU=1`) | ~12 s each (2026-11-10) |
 | `idle.txt`, `context.txt` (`GPU=1`) | ~8 s each (2026-11-10) |
+| `single-tab.txt` (`GPU=1`): the store's per-frame cost with one tab open, dragging and playing | ~15 s (2026-11-21) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -229,6 +230,21 @@ Expected: four `assertion passed` lines (a dash with at least four runs, so two 
 on the curve at once; at least eight different dashes; the meter reading both 12 mW and
 0; the version unchanged), `(no page errors)`. `screenshots/pulses.png` shows pale
 dashes along the amber fiber.
+
+`single-tab.txt` is the store's per-frame cost as a user working in one tab has it:
+a new composition in the demo with every other tab closed, so the demo's pages are
+hidden (the visibility gate's worst case; observing every page hides that cost, and
+did, 2026-11-21). It drags a rect, then loops the playhead over 0–4 s, and asserts
+`__iron.timings`' `advance` p50 under 1 ms for each (it was ~20 ms before the gate kept
+its decision).
+
+```sh
+cd .claude/skills/run-iron && GPU=1 bun run drive.ts < single-tab.txt; cd -
+```
+
+Expected: `"open: Perf"`, `"drag: advance p50 … ms, frame p50 … ms"` (0.06 and 3.4 ms
+on 2026-11-21), `"playing: advance p50 … ms over … frames, frame p50 … ms"` (0.31 ms
+over ~90 frames, 2.0 ms), two `assertion passed` lines, `(no page errors)`.
 
 `idle.txt` places a laser that is not pulsing, a fiber, a meter and a plot, and counts
 what is drawn over 1.5 s of rest. `context.txt` defines a component whose template
@@ -714,7 +730,7 @@ interaction a unit test cannot reach: a real pointer or keyboard gesture through
 canvas and the DOM. Checks: `smoke.txt` (always), `regression.txt`, `gestures.txt`,
 `timeline.txt`, `layers.txt`, `snapping.txt`, `canvas-grid.txt`, `sequence.txt`, `text.txt`,
 `text-styles.txt`, `keys.txt`, `menu.txt`, `tables.txt`, `schematic.txt`, `contexts.txt`,
-`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
+`narrative.txt`, `actions.txt`, `fiber.txt`, `query.txt`, `plot-view.txt`, `pulses.txt`, `idle.txt`, `single-tab.txt`, `context.txt`, `scopes.txt`, `scope-menu.txt`, `workspace.txt`, `document-calls.txt`,
 `protocol-lifecycle.txt`. Measurement tools, not checks: `bench-*.txt`,
 `raster-pixels.txt`, `instance-pixels.txt`, `spatial.txt`, `picking.txt`,
 `selection-cache.txt`. Retired: `smoke-full.txt` (split into `regression.txt` and

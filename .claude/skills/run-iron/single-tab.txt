@@ -1,0 +1,35 @@
+# The store's per-frame cost with one composition on screen, as a user
+# working in a new tab has it: the demo's other pages hidden, which is the
+# gate's worst case (handoff-patches.md PT-1.2, "Cost, as built"). Its
+# `advance` once cost ~20 ms a frame here, at rest, dragging and playing,
+# where an empty scope costs nothing. A drag, then the playhead looping
+# 0-4 s, must each keep `advance` under 1 ms at p50.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog
+ready
+sleep 800
+clickel .dv-groupview:has(.dv-tab:has-text("Main")) button[aria-label="Open a view"]
+sleep 300
+clickel [role=menuitem]:has-text("New composition")
+sleep 400
+key Backspace
+key P
+key e
+key r
+key f
+key Enter
+sleep 800
+eval (()=>{for(const p of [...__dock.panels]) if(p.api.title!=='Perf') p.api.close(); return 'open: '+__dock.panels.map(p=>p.api.title).join(' ')})()
+sleep 800
+key r
+pdrag Perf 100 100 250 200 10
+sleep 500
+key v
+sleep 300
+eval (async()=>{await __iron.timings(true);return 1})()
+pdrag Perf 175 150 450 400 90
+eval (async()=>{const t=await __iron.timings(false);window.__drag=t.phases;return 'drag: advance p50 '+t.phases.advance.p50+' ms, frame p50 '+t.phases.frame.p50+' ms'})()
+assert window.__drag.advance.p50 < 1
+eval (async()=>{await __iron.call('clock_set',[JSON.stringify({loop_in:0,loop_out:4,playing:true})]);await __iron.timings(true);await new Promise(r=>setTimeout(r,1500));const t=await __iron.timings(false);await __iron.call('clock_set',[JSON.stringify({playing:false})]);window.__play=t.phases;return 'playing: advance p50 '+t.phases.advance.p50+' ms over '+t.phases.advance.n+' frames, frame p50 '+t.phases.frame.p50+' ms'})()
+assert window.__play.advance.n > 20 && window.__play.advance.p50 < 1
+errors
+quit

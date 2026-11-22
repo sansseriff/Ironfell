@@ -3,7 +3,7 @@
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
 6/10, Sol 6/10; both: DS-1 can start). **DS-1, DS-2 and DS-3a done 2026-11-21; DS-3b
-stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its code review fixed in `fd884ac`; the spec rewritten 2026-11-22 after a review of its direction (§9). Next: the rewritten spec to the council, with DS-7 (refusal by cheap snapshots) now, then DS-10 (the oracle), DS-11 (the mechanism completed: one write channel, one driver), the copies-as-views decision, and DS-12 (the layout pilot), from
+stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its code review fixed in `fd884ac`; the spec rewritten 2026-11-22 after a review of its direction (§9). Next: the rewritten spec to the council, **DS-7 done 2026-11-22** (no refusal after derivation, decided by the user: constant edit at +3 copies 9.6 → 5.1 ms); then DS-10a (order-free results), DS-10b (the oracle, after a spike), DS-11 (the mechanism completed: one write channel, one driver), the copies-as-views decision, and DS-12 (the layout pilot), from
 [`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md), whose phases DS-10 to DS-16 (renumbered 2026-11-22) and DS-7, brought forward, replace the rest of DS-3b. DS-4a, DS-4b and
 DS-5 stay as planned here and may land any time after DS-9. Why (the user, 2026-11-22): DS-3b's
 fixes were rules for when a whole-document pass may be skipped; the cause is that cells do

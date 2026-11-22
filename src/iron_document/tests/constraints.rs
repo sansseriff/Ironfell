@@ -43,6 +43,12 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 /// Canonical JSON without the version, for before/after comparisons.
+/// The constraints' problems: what grouping could not use or solve, and
+/// what doesn't hold at a cluster's pose (DS-7).
+fn constraint_problems(store: &Store) -> Vec<(NodeId, String)> {
+    store.problems().into_iter().filter(|p| p.kind == "constraint").map(|p| (p.node, p.message)).collect()
+}
+
 fn content(store: &Store) -> String {
     let mut v: serde_json::Value = serde_json::from_str(&store.save()).unwrap();
     v.as_object_mut().unwrap().remove("version");
@@ -240,11 +246,13 @@ fn save_load_and_replay_from_empty_agree() {
     assert_eq!(replayed.save(), text, "replay applies recorded derived ops; the solver is never consulted");
 }
 
+/// A contradiction is applied, not refused (DS-7): the cluster keeps the
+/// pose it had, and its problem names the constraints at fault.
 #[test]
-fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
+fn a_contradiction_applies_keeps_its_pose_and_names_the_culprits() {
     let mut p = pendulum();
     let version = p.store.authored().version();
-    let before = content(&p.store);
+    let joints: Vec<_> = p.joints.iter().map(|&j| pos(&p.store, j)).collect();
     // j1 coincident with j2 contradicts their distance of 100.
     let id = p.store.authored().next_id();
     let rels = p.store.authored().next_relation_ids(2);
@@ -255,8 +263,7 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
         data.insert("role".to_owned(), Value::Str(role.into()));
         Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Constrains, data } }
     };
-    let errs = p
-        .store
+    p.store
         .apply(tx(
             "weld",
             vec![
@@ -265,29 +272,41 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
                 link(rels[1], p.joints[2], "b"),
             ],
         ))
-        .unwrap_err();
-    assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{}", errs[0].message);
-    let m = &errs[0].message;
-    assert!(m.contains(&id.to_string()) && m.contains(&p.links[1].to_string()), "both sides of the contradiction are named: {m}");
-    assert!(!m.contains(&p.links[0].to_string()), "an innocent constraint is not: {m}");
-    assert_eq!(p.store.authored().version(), version, "nothing applied");
-    assert_eq!(content(&p.store), before);
-    assert_eq!(p.store.clusters().list.len(), 1);
+        .unwrap_or_else(|e| panic!("applied, not refused: {e:?}"));
+    assert!(p.store.authored().version() > version, "applied");
+    assert_eq!(p.joints.iter().map(|&j| pos(&p.store, j)).collect::<Vec<_>>(), joints, "the cluster keeps its pose");
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(_, m)| m.contains(&id.to_string()) && m.contains(&p.links[1].to_string())), "both sides of the contradiction are named: {problems:?}");
+    assert!(problems.iter().all(|(_, m)| !m.contains(&p.links[0].to_string())), "an innocent constraint is not: {problems:?}");
+    // Undo takes it back, and its problem with it: the problem is read from
+    // the pose, not remembered from the solve.
+    p.store.undo(0).unwrap().unwrap();
+    assert!(!p.store.tree().is_live(id));
+    assert!(constraint_problems(&p.store).is_empty(), "{:?}", constraint_problems(&p.store));
+    p.store.redo(0).unwrap().unwrap();
+    assert!(!constraint_problems(&p.store).is_empty(), "redo shows it again");
+    p.store.undo(0).unwrap().unwrap();
     p.store.authored().check_invariants().unwrap();
 
-    // Malformed constraints are BadConstraint: a missing operand, an unknown
-    // kind, a duplicate.
-    let errs = p
-        .store
-        .apply(tx("half", vec![Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), facets: vec![Constraint::default().wrap()] }]))
-        .unwrap_err();
-    assert_eq!(errs[0].kind, ErrorKind::BadConstraint);
-    assert!(errs[0].message.contains("missing operand"), "{}", errs[0].message);
+    // A malformed constraint (a missing operand, an unknown kind, a
+    // duplicate) is applied and reported; the rest still solve.
+    let id = p.store.authored().next_id();
+    p.store.apply(tx("half", vec![Op::Create { id, ty: ty("constraint"), parent: Some(p.group), order: OrderKey::first(), facets: vec![Constraint::default().wrap()] }])).unwrap();
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(n, m)| *n == id && m.contains("missing operand")), "{problems:?}");
+    assert_eq!(p.store.clusters().list.len(), 1, "the good constraints still form their cluster");
+    p.store.undo(0).unwrap().unwrap();
     let mut dup = Constraint::default();
     dup.kind = Slot::Const(Value::Enum("distance".into()));
     dup.value = num(50.0);
-    let errs = p
-        .store
+    let id = p.store.authored().next_id();
+    let rels = p.store.authored().next_relation_ids(2);
+    let link = |rel: RelationId, to: NodeId, role: &str| {
+        let mut data = BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str(role.into()));
+        Op::Link { rel: Relation { id: rel, from: id, to, rel: RelKind::Constrains, data } }
+    };
+    p.store
         .apply(tx(
             "dup",
             vec![
@@ -296,20 +315,21 @@ fn a_contradiction_is_unsatisfiable_and_names_the_culprits() {
                 link(rels[1], p.joints[1], "b"),
             ],
         ))
-        .unwrap_err();
-    assert_eq!(errs[0].kind, ErrorKind::BadConstraint);
-    assert!(errs[0].message.contains("already constrained by") && errs[0].message.contains(&p.links[0].to_string()), "{}", errs[0].message);
+        .unwrap();
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(n, m)| *n == id && m.contains("already constrained by") && m.contains(&p.links[0].to_string())), "the later of the pair is left out: {problems:?}");
+    assert!((dist(pos(&p.store, p.joints[0]), pos(&p.store, p.joints[1])) - 100.0).abs() < 1e-6, "the first of the pair still holds");
 }
 
 #[test]
 fn a_binding_that_reads_and_feeds_a_cluster_is_a_cycle() {
     let mut p = pendulum();
-    let errs = p
-        .store
-        .apply(tx("loop", vec![Op::Set { id: p.links[0], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x / 3", p.joints[1])) }]))
-        .unwrap_err();
-    assert_eq!(errs[0].kind, ErrorKind::Cycle, "{}", errs[0].message);
-    assert!(errs[0].message.contains(&p.group.to_string()), "{}", errs[0].message);
+    // Applied and reported, not refused (DS-7): the cluster is not solved.
+    p.store.apply(tx("loop", vec![Op::Set { id: p.links[0], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x / 3", p.joints[1])) }])).unwrap();
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(n, m)| *n == p.links[0] && m.contains("feeds the same cluster") && m.contains(&p.group.to_string())), "{problems:?}");
+    p.store.undo(0).unwrap().unwrap();
+    assert!(constraint_problems(&p.store).is_empty());
     // A value bound to something outside the cluster is a driving dimension.
     let slider = p.store.authored().next_id();
     let mut sl = iron_document::facet::Slider::default();
@@ -618,12 +638,13 @@ fn two_parents() -> (Store, BTreeMap<String, NodeId>) {
 
 /// Swapping two coincident operands between their parents keeps the same
 /// ancestor leaves but breaks the constraint: the cluster is solved again,
-/// and with both operands fixed the transaction is refused.
+/// and with both operands fixed it fails, which is reported (DS-7).
 #[test]
 fn swapping_constrained_operands_between_parents_is_solved_again() {
     let (mut store, n) = two_parents();
-    let swap = store.apply(tx("swap", vec![Op::Reparent { id: n["a"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["b"], parent: Some(n["g0"]), order: OrderKey::first() }]));
-    assert!(swap.is_err(), "coincident operands 40 apart, both fixed: {swap:?}");
+    store.apply(tx("swap", vec![Op::Reparent { id: n["a"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["b"], parent: Some(n["g0"]), order: OrderKey::first() }])).unwrap();
+    let problems = constraint_problems(&store);
+    assert!(problems.iter().any(|(id, _)| *id == n["c"]), "coincident operands 40 apart, both fixed: {problems:?}");
 }
 
 /// A live solve's answer is a preview: the next transaction, even an
@@ -666,13 +687,14 @@ fn swapping_wrapped_operands_between_parents_is_solved_again() {
     let n = built.named;
     let r = store.authored().next_relation_ids(4);
     store.apply(tx("tie", built.ops.into_iter().chain([constrains(r[0], n["c"], n["a"], "a"), constrains(r[1], n["c"], n["b"], "b"), constrains(r[2], n["fa"], n["a"], "a"), constrains(r[3], n["fb"], n["b"], "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
-    let swap = store.apply(tx("swap", vec![Op::Reparent { id: n["w0"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["w1"], parent: Some(n["g0"]), order: OrderKey::first() }]));
-    assert!(swap.is_err(), "coincident operands 40 apart, both fixed: {swap:?}");
+    store.apply(tx("swap", vec![Op::Reparent { id: n["w0"], parent: Some(n["g1"]), order: OrderKey::first() }, Op::Reparent { id: n["w1"], parent: Some(n["g0"]), order: OrderKey::first() }])).unwrap();
+    let problems = constraint_problems(&store);
+    assert!(problems.iter().any(|(id, _)| *id == n["c"]), "coincident operands 40 apart, both fixed: {problems:?}");
 }
 
 /// A constraint's value read through `deref`, retargeted onto a variable of
-/// its own cluster at the same value, is a cycle: refused, as a binding
-/// reading and feeding one cluster is.
+/// its own cluster at the same value, is a cycle: reported, and the cluster
+/// left unsolved, as a binding reading and feeding one cluster is (DS-7).
 #[test]
 fn a_deref_retargeted_onto_its_own_clusters_variable_is_a_cycle() {
     let mut store = Store::new();
@@ -686,8 +708,9 @@ fn a_deref_retargeted_onto_its_own_clusters_variable_is_a_cycle() {
     store.apply(tx("tie", built.ops.into_iter().chain([constrains(r[0], n["d"], n["a"], "a"), constrains(r[1], n["d"], n["b"], "b"), constrains(r[2], n["fa"], n["a"], "a")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
     store.apply(tx("outside", vec![Op::Set { id: n["ref"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["o"])) }])).unwrap_or_else(|e| panic!("{e:?}"));
     // b's x is 10, as o's is: the value does not move, but what it reads does.
-    let inside = store.apply(tx("inside", vec![Op::Set { id: n["ref"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["b"])) }]));
-    assert!(inside.is_err(), "the distance reads b's x, a variable of its own cluster: {inside:?}");
+    store.apply(tx("inside", vec![Op::Set { id: n["ref"], path: path("let.value"), slot: Slot::Const(Value::Ref(n["b"])) }])).unwrap();
+    let problems = constraint_problems(&store);
+    assert!(problems.iter().any(|(id, m)| *id == n["d"] && m.contains("feeds the same cluster")), "the distance reads b's x, a variable of its own cluster: {problems:?}");
 }
 
 /// RE-5.5's natives do no work where nothing of theirs changed: an edit
@@ -704,12 +727,12 @@ fn an_unrelated_edit_runs_no_constraint_native() {
     store.apply(tx("lone", vec![Op::Create { id: lone, ty: ty("rect"), parent: Some(comp), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), s.wrap()] }])).unwrap();
     let runs = |s: &Store| {
         let r = s.reactive();
-        [graph::NativeKey::Clusters, graph::NativeKey::Validate].map(|k| r.runs_of(k))
+        [graph::NativeKey::Clusters].map(|k| r.runs_of(k))
     };
     let cluster = graph::NativeKey::Cluster(store.clusters().list[0].constraints.iter().map(|c| c.id).min().unwrap());
     let (before, cluster_before) = (runs(&store), store.reactive().runs_of(cluster));
     store.apply(tx("move", vec![Op::Set { id: lone, path: path("transform2d.x"), slot: Slot::Const(Value::Number(30.0)) }])).unwrap();
-    assert_eq!(runs(&store), before, "grouping and validation did not run");
+    assert_eq!(runs(&store), before, "grouping (which validates) did not run");
     assert_eq!(store.reactive().runs_of(cluster), cluster_before, "nor the cluster's watcher");
     assert!(before.iter().all(|r| r.is_some()), "the natives exist: {before:?}");
 }

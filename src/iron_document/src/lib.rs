@@ -100,7 +100,7 @@ pub use op::{Actor, ApplyError, ErrorKind, Op, Transaction, TransactionInput};
 pub use order::OrderKey;
 pub use registry::{ChildPolicy, Host, TypeId, TypeSpec};
 pub use serial::LoadError;
-pub use solve::{Finger, SolverSummary, Unmet};
+pub use solve::{Finger, SolverProblem, SolverSummary, Unmet};
 pub use units::Dim;
 pub use value::{Slot, Value, ValueKind};
 pub use view::{Fidelity, ViewError, ViewQuery, ViewRelation};
@@ -220,9 +220,9 @@ impl History {
     }
 }
 
-/// What a store needs to put the document back after `run` succeeded and a
-/// later step failed: the document's journal is open. Consumed exactly once,
-/// by `commit` or `abort`.
+/// The document's journal, open from `run` until the transaction is kept.
+/// Nothing after `run` refuses (DS-7), so it is consumed exactly once, by
+/// `commit`.
 #[must_use]
 struct Rollback(bool);
 
@@ -236,7 +236,7 @@ impl Drop for Rollback {
     fn drop(&mut self) {
         // While unwinding, a second panic would abort the test binary and
         // hide the first.
-        debug_assert!(!self.0 || std::thread::panicking(), "a transaction was neither committed nor aborted");
+        debug_assert!(!self.0 || std::thread::panicking(), "a transaction was not committed");
     }
 }
 
@@ -341,125 +341,6 @@ pub struct Advanced {
     pub changed: bool,
 }
 
-/// What `after_transaction`, `post_apply` and the pipeline change outside
-/// the document, kept so that a transaction the solver refuses leaves the
-/// store as it was (reactive-engine handoff §4.4, stage 1).
-struct Saved {
-    reactive: graph::Reactive,
-    clusters: solve::Clusters,
-    /// The clusters, by key, whose last solve converged and whose change
-    /// native has not run since: not solved again (§9.4, A6).
-    committed: BTreeSet<NodeId>,
-    /// The grouping native's run count when its result was last taken
-    /// (`grouped`), and the error it gave then.
-    grouped_at: Option<u64>,
-    grouping_error: Option<String>,
-    geometry: geom::Revisions,
-    repeats: work::Counted<expand::Items, { work::STORE_REPEATS }>,
-    item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
-    presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
-    /// The repeats in `presence` with an item entering or leaving: what the
-    /// presence stepper visits each frame (DS-2), not every repeat.
-    presence_moving: BTreeSet<NodeId>,
-    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 7]>,
-    /// The drawn repeats and conditionals (`None` until first found), the
-    /// ones to read at the next settle, each one's problems and the item
-    /// leaves it published, and the repeat natives to make and drop
-    /// (DS-3b: kept as structure changes, not found by a pass).
-    drawn: Option<BTreeSet<NodeId>>,
-    repeat_dirty: BTreeSet<NodeId>,
-    repeat_problems: BTreeMap<NodeId, Vec<expand::Problem>>,
-    item_shown: BTreeMap<NodeId, Vec<Leaf>>,
-    repeat_natives: (BTreeSet<NodeId>, BTreeSet<NodeId>),
-    truncated: Vec<expand::Problem>,
-    expansion_problems: Vec<expand::Problem>,
-    owners: engine::owners::Owners,
-    session_state: BTreeMap<Leaf, Value>,
-    motion: Motion,
-    contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
-    layout_preview: Option<layout::Preview>,
-    /// The layout roots and pinned parts kept as structure changes, and the
-    /// nodes each root glides (DS-3b): put back with the graph's layout
-    /// natives, which they describe.
-    layout_roots: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
-    pinned_by_use: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
-    layout_touched: BTreeSet<NodeId>,
-    glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
-    time_errors: BTreeMap<NodeId, String>,
-    machines_unsettled: Option<expand::Problem>,
-    pending: Changes,
-}
-
-impl Saved {
-    fn of(s: &StoreCore) -> Saved {
-        Saved {
-            reactive: s.reactive.clone(),
-            clusters: s.clusters.clone(),
-            committed: s.committed.clone(),
-            grouped_at: s.grouped_at,
-            grouping_error: s.grouping_error.clone(),
-            geometry: s.geometry.clone(),
-            repeats: s.repeats.clone(),
-            item_memo: s.item_memo.clone(),
-            presence: s.presence.clone(),
-            presence_moving: s.presence_moving.clone(),
-            repeat_inputs: s.repeat_inputs.clone(),
-            drawn: s.drawn.clone(),
-            repeat_dirty: s.repeat_dirty.clone(),
-            repeat_problems: s.repeat_problems.clone(),
-            item_shown: s.item_shown.clone(),
-            repeat_natives: s.repeat_natives.clone(),
-            truncated: s.truncated.clone(),
-            expansion_problems: s.expansion_problems.clone(),
-            owners: s.owners.clone(),
-            session_state: s.session_state.clone(),
-            motion: s.motion.clone(),
-            contexts: s.contexts.clone(),
-            layout_preview: s.layout_preview.clone(),
-            layout_roots: s.layout_roots.clone(),
-            pinned_by_use: s.pinned_by_use.clone(),
-            layout_touched: s.layout_touched.clone(),
-            glide_nodes: s.glide_nodes.clone(),
-            time_errors: s.time_errors.clone(),
-            machines_unsettled: s.machines_unsettled.clone(),
-            pending: s.pending.clone(),
-        }
-    }
-
-    fn restore(self, s: &mut StoreCore) {
-        s.reactive = self.reactive;
-        s.clusters = self.clusters;
-        s.committed = self.committed;
-        s.grouped_at = self.grouped_at;
-        s.grouping_error = self.grouping_error;
-        s.geometry = self.geometry;
-        s.repeats = self.repeats;
-        s.item_memo = self.item_memo;
-        s.presence = self.presence;
-        s.presence_moving = self.presence_moving;
-        s.repeat_inputs = self.repeat_inputs;
-        s.drawn = self.drawn;
-        s.repeat_dirty = self.repeat_dirty;
-        s.repeat_problems = self.repeat_problems;
-        s.item_shown = self.item_shown;
-        s.repeat_natives = self.repeat_natives;
-        s.truncated = self.truncated;
-        s.expansion_problems = self.expansion_problems;
-        s.owners = self.owners;
-        s.session_state = self.session_state;
-        s.motion = self.motion;
-        s.contexts = self.contexts;
-        s.layout_preview = self.layout_preview;
-        s.layout_roots = self.layout_roots;
-        s.pinned_by_use = self.pinned_by_use;
-        s.layout_touched = self.layout_touched;
-        s.glide_nodes = self.glide_nodes;
-        s.time_errors = self.time_errors;
-        s.machines_unsettled = self.machines_unsettled;
-        s.pending = self.pending;
-    }
-}
-
 /// What `run` returns on success.
 struct Run {
     tx: Transaction,
@@ -500,7 +381,6 @@ pub struct StoreCore {
     /// The grouping native's run count when its result was last taken
     /// (`grouped`), and the error it gave then.
     grouped_at: Option<u64>,
-    grouping_error: Option<String>,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -691,7 +571,6 @@ impl StoreCore {
             clusters: self.clusters.clone(),
             committed: self.committed.clone(),
             grouped_at: self.grouped_at,
-            grouping_error: self.grouping_error.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
@@ -964,7 +843,7 @@ impl StoreCore {
         // an operand's ancestry without touching it (a wrapper swapped):
         // the clusters beneath what moved look again.
         if regroup {
-            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+            self.reactive.prime_natives([graph::NativeKey::Clusters]);
         }
         if reparented && !moved.is_empty() {
             let doc = Tree::of(&self.docs);
@@ -1038,28 +917,10 @@ impl StoreCore {
     #[cfg(not(feature = "differential"))]
     fn check_owners(&self, _after: &str) {}
 
-    /// Whether `post_apply` could refuse what is in the document now: a
-    /// constraint can be malformed, close a cycle through a cluster, or fail
-    /// to solve, and so can a mate a connection implies between plugged
-    /// anchors (`plug::implied_mates`), with no constraint node at all: only
-    /// where an anchor and a connection both are (council review of DS-9:
-    /// any anchor made every edit of a circuit snapshot the graph).
-    fn can_refuse(&self) -> bool {
-        let doc = Tree::of(&self.docs);
-        let live = |ty: &str| doc.nodes_of_type(TypeId::lookup(ty).expect("registered")).any(|n| doc.is_live(n));
-        live("constraint") || (live("connection") && doc.nodes_with(FacetKind::Anchor).any(|a| doc.is_live(a)))
-    }
-
     /// Keep what `run` applied.
     fn commit(&mut self, r: Rollback) {
         r.take();
         self.docs.commit();
-    }
-
-    /// Put the document back as it was before `run`.
-    fn abort(&mut self, r: Rollback) {
-        r.take();
-        self.docs.rollback();
     }
 
     pub fn new() -> StoreCore {
@@ -1100,7 +961,6 @@ impl StoreCore {
             clusters: Default::default(),
             committed: BTreeSet::new(),
             grouped_at: None,
-            grouping_error: None,
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -1184,9 +1044,7 @@ impl StoreCore {
     }
 
     fn rebuild_clusters(&mut self) {
-        // A malformed document (which `apply` refuses) or a cycle leaves the
-        // last good clusters; `post_apply` reports the error.
-        let _ = self.regroup();
+        self.regroup();
     }
 
     /// Under the differential check: the grouping not run since it was last
@@ -1194,22 +1052,16 @@ impl StoreCore {
     /// from scratch makes now.
     #[cfg(feature = "differential")]
     fn check_grouping(&self) {
-        let doc = Tree::of(&self.docs);
-        match (solve::clusters(doc, &self.reactive, self.contexts()), &self.grouping_error) {
-            (Ok(fresh), None) => assert!(fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>()),
-            (Err(_), Some(_)) => {}
-            // A refusal the grouping missed, or one it keeps that is gone
-            // (council review of DS-9, Sol: the oracle ignored fresh errors).
-            (fresh, kept) => panic!("the grouping was not run, but grouping from scratch gives {:?} where it kept {kept:?}", fresh.map(|c| c.list.len())),
-        }
+        let fresh = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts());
+        assert!(fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>());
     }
 
     /// Take the constraints as grouped now into `clusters`: the grouping
     /// native's result, made again only when what it read changed (handoff
     /// §4.10, RE-5.5), and taken only when it ran since it was last taken
-    /// (DS-3b: an unchanged grouping costs nothing). An error leaves the
-    /// last good clusters, and is given again until the grouping runs.
-    fn regroup(&mut self) -> Result<(), String> {
+    /// (DS-3b: an unchanged grouping costs nothing). Grouping is total: what
+    /// it can't use or solve is in `clusters.problems` (DS-7).
+    fn regroup(&mut self) {
         if self.reactive.native(graph::NativeKey::Clusters).is_none() {
             self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
         }
@@ -1219,24 +1071,13 @@ impl StoreCore {
         if runs.is_some() && runs == self.grouped_at {
             #[cfg(feature = "differential")]
             self.check_grouping();
-            return match &self.grouping_error {
-                Some(e) => Err(e.clone()),
-                None => Ok(()),
-            };
+            return;
         }
-        let result = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()) {
+        let c = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()) {
             Some(g) => g.result.clone(),
             None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
         };
         self.grouped_at = runs;
-        let c = match result {
-            Ok(c) => c,
-            Err(e) => {
-                self.grouping_error = Some(e.clone());
-                return Err(e);
-            }
-        };
-        self.grouping_error = None;
         if c != self.clusters {
             self.owners.hold(c.copies().clone());
             // `committed` names current clusters only: `resolve_clusters_live`
@@ -1245,7 +1086,6 @@ impl StoreCore {
             self.clusters = c;
             self.sync_cluster_natives();
         }
-        Ok(())
     }
 
     /// The next cluster after `after` in solve order whose solve could move
@@ -1267,31 +1107,14 @@ impl StoreCore {
         if self.committed.len() < self.clusters.list.len() {
             keys.extend(self.clusters.at.keys().filter(|k| !self.committed.contains(k)).copied());
         }
-        let mut order: Vec<usize> = keys.iter().filter_map(|k| self.clusters.at.get(k).copied()).collect();
+        // A cluster in a cycle through bindings is never solved (DS-7).
+        let mut order: Vec<usize> = keys.iter().filter(|k| !self.clusters.failed.contains(k)).filter_map(|k| self.clusters.at.get(k).copied()).collect();
         order.sort_unstable();
         #[cfg(feature = "differential")]
         for (i, c) in self.clusters.list.iter().enumerate() {
-            assert!(order.contains(&i) || self.unmoved(c, drivers), "cluster {} could move but is not solved", c.id);
+            assert!(order.contains(&i) || self.clusters.failed.contains(&c.key()) || self.unmoved(c, drivers), "cluster {} could move but is not solved", c.id);
         }
         order
-    }
-
-    /// Whether the constraints are well formed: in native mode the
-    /// validating native's result, made again only when what it read or
-    /// structure changed (RE-5.5).
-    fn validated(&mut self) -> Result<(), String> {
-        let read_now = |s: &StoreCore| {
-            let read = |l: Leaf| s.reactive.read(Tree::of(&s.docs), l);
-            constraint::validate_all(Tree::of(&s.docs), &read)
-        };
-        if self.reactive.native(graph::NativeKey::Validate).is_none() {
-            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Validate, Some((std::sync::Arc::new(solve::ValidateNative::default()), true)))], true);
-        }
-        self.reactive.flush(Tree::of(&self.docs));
-        match self.reactive.native_extra(graph::NativeKey::Validate).and_then(|e| e.downcast_ref::<Result<(), String>>()) {
-            Some(r) => r.clone(),
-            None => read_now(self),
-        }
     }
 
     /// A watching native per cluster (`solve::ClusterNative`): made for a
@@ -1393,6 +1216,11 @@ impl StoreCore {
         }
         let doc = Tree::of(&self.docs);
         let read = |l: Leaf| self.reactive.read(doc, l);
+        // A cluster whose last solve failed keeps a pose its constraints
+        // don't hold at; solving it again may well move it (DS-7).
+        if !solve::violated(doc, &read, c).is_empty() {
+            return;
+        }
         let result = solve::solve_cluster(doc, &read, c, &[], &self.fingers);
         for (leaf, v) in result.values {
             let now = read(leaf).and_then(|x| x.as_f64());
@@ -3027,6 +2855,30 @@ impl StoreCore {
         out.extend(self.feedback.iter().cloned());
         out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
         out.extend(self.machines_unsettled.iter().cloned());
+        out.extend(self.cluster_problems());
+        out
+    }
+
+    /// The constraints' problems (DS-7): what grouping could not use or
+    /// solve (a malformed constraint, a duplicate, a cycle through
+    /// bindings), and each constraint that doesn't hold at its cluster's
+    /// pose, as the cluster's watching native last read it. Read from the
+    /// document and the pose, never remembered from a solve.
+    fn cluster_problems(&self) -> Vec<expand::Problem> {
+        let mut out: Vec<expand::Problem> = self.clusters.problems.iter().map(|(id, message)| expand::Problem { node: *id, kind: "constraint", message: message.clone() }).collect();
+        for c in self.clusters.list.iter().filter(|c| !self.clusters.failed.contains(&c.key())) {
+            let Some(v) = self.reactive.native_extra(graph::NativeKey::Cluster(c.key())).and_then(|e| e.downcast_ref::<solve::Violated>()) else { continue };
+            let Some(worst) = v.residuals.iter().map(|(_, r)| *r).reduce(f64::max) else { continue };
+            let names: Vec<String> = v.culprits.iter().map(|c| c.to_string()).collect();
+            let message = format!(
+                "constraints of cluster {} cannot all hold (residual {worst:.3e}); likely at fault: {}",
+                c.id,
+                if names.is_empty() { "unknown".to_owned() } else { names.join(", ") }
+            );
+            // On each constraint at fault, else on each that doesn't hold.
+            let on: Vec<NodeId> = if v.culprits.is_empty() { v.residuals.iter().map(|(id, _)| *id).collect() } else { v.culprits.clone() };
+            out.extend(on.into_iter().map(|id| expand::Problem { node: id, kind: "constraint", message: message.clone() }));
+        }
         out
     }
 
@@ -4062,7 +3914,7 @@ impl StoreCore {
             _ => false,
         };
         if ops.into_iter().any(touches) {
-            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+            self.reactive.prime_natives([graph::NativeKey::Clusters]);
         }
     }
 
@@ -4452,36 +4304,15 @@ impl StoreCore {
                 solver: None,
             });
         }
-        let exact = input.exact;
+        let (exact, ts) = (input.exact, input.ts);
         let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
-        // `post_apply` can refuse only a document that holds a constraint;
-        // then what `after_transaction` and the pipeline change is kept to
-        // put back (reactive-engine handoff §4.4, stage 1).
-        let saved = self.can_refuse().then(|| Saved::of(self));
         if let Some(found) = problems {
             self.store_found(found);
         }
         self.check_owners("a transaction");
         self.after_transaction(&tx, &mut expanded, &full_inverse);
         let held = self.keep_solved(&mut tx, solved, &expanded);
-        let solver = match self.post_apply(&mut tx, exact, &held) {
-            Ok(s) => s,
-            Err(e) => {
-                self.abort(rollback);
-                match saved {
-                    Some(saved) => saved.restore(self),
-                    // Not reached: without a constraint, or an anchor and
-                    // a connection, nothing refuses.
-                    None => {
-                        assert!(!cfg!(feature = "differential"), "a refusal with nothing that can refuse: {e:?}");
-                        self.reactive.rebuild(Tree::of(&self.docs));
-                        self.resample();
-                        self.rebuild_clusters();
-                    }
-                }
-                return Err(e);
-            }
-        };
+        let solver = self.post_apply(&mut tx, &held);
         if shared {
             self.machines.shared += 1;
         }
@@ -4501,6 +4332,17 @@ impl StoreCore {
         }
         self.history.record(tx);
         self.commit(rollback);
+        // An exact edit the constraints moved is taken back at once: undone
+        // and dropped from history, judged by the one joint solve at the
+        // store's real state (DS-7). A cluster that failed to solve keeps
+        // what the edit set, so it leaves nothing unmet.
+        if exact && let Some(unmet) = solver.as_ref().map(|s| &s.unmet).filter(|u| !u.is_empty()) {
+            let lines: Vec<String> = unmet.iter().map(|u| format!("{} requested {} but constraints allow {}", u.leaf, crate::value::fmt_num(u.requested), crate::value::fmt_num(u.solved))).collect();
+            let message = format!("exact transaction not honoured: {}", lines.join("; "));
+            let retracted = self.retract(version, ts);
+            debug_assert!(retracted, "the transaction just applied is the last in history");
+            return Err(vec![ApplyError { op: 0, kind: ErrorKind::Unsatisfiable, message }]);
+        }
         Ok(Applied {
             version,
             replayed: false,
@@ -4666,14 +4508,23 @@ impl StoreCore {
     /// as drivers. The solver's writes are applied and recorded as
     /// `derived_ops`. Runs on the committed document; the caller rolls back
     /// on `Err`.
-    fn post_apply(&mut self, tx: &mut Transaction, exact: bool, held: &[Leaf]) -> Result<Option<SolverSummary>, Vec<ApplyError>> {
+    /// Solve what the transaction moved and write the solutions as its
+    /// derived ops. Nothing here refuses (DS-7, decided by the user): a
+    /// constraint that can't be used and a cycle are problems of the
+    /// grouping, and a cluster whose solve fails keeps the values it had
+    /// when its solve began, the transaction's own writes included, and is
+    /// posed so that only a change to its inputs solves it again. Its
+    /// problem is read from the pose (`cluster_problems`).
+    fn post_apply(&mut self, tx: &mut Transaction, held: &[Leaf]) -> Option<SolverSummary> {
         let last = tx.ops.len().saturating_sub(1);
-        let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
-        self.validated().map_err(|m| err(ErrorKind::BadConstraint, m))?;
-        self.regroup().map_err(|m| err(ErrorKind::Cycle, m))?;
-        self.release(tx, held, last).map_err(|e| vec![e])?;
+        let before: BTreeSet<(NodeId, String)> = self.clusters.problems.iter().cloned().collect();
+        self.regroup();
+        let mut summary = SolverSummary::default();
+        // The grouping's problems this transaction brought, for the reply.
+        summary.problems.extend(self.clusters.problems.iter().filter(|p| !before.contains(p)).map(|(node, message)| solve::SolverProblem { node: *node, message: message.clone() }));
+        self.release(tx, held, last);
         if self.clusters.list.is_empty() {
-            return Ok(None);
+            return (!summary.is_empty()).then_some(summary);
         }
         let drivers: Vec<solve::Driver> = tx
             .ops
@@ -4686,7 +4537,6 @@ impl StoreCore {
                 _ => None,
             })
             .collect();
-        let mut summary = SolverSummary::default();
         let mut solved_to = None;
         while let Some(i) = self.next_to_solve(&drivers, solved_to) {
             solved_to = Some(i);
@@ -4700,15 +4550,17 @@ impl StoreCore {
             };
             if result.status != iron_solve::Status::Converged {
                 let names: Vec<String> = result.culprits.iter().map(|c| c.to_string()).collect();
-                return Err(err(
-                    ErrorKind::Unsatisfiable,
-                    format!(
-                        "constraints of cluster {} cannot all hold (residual {:.3e}); likely at fault: {}",
-                        c.id,
-                        result.max_required_residual,
-                        if names.is_empty() { "unknown".to_owned() } else { names.join(", ") }
-                    ),
-                ));
+                let message = format!(
+                    "constraints of cluster {} cannot all hold (residual {:.3e}); likely at fault: {}",
+                    c.id,
+                    result.max_required_residual,
+                    if names.is_empty() { "unknown".to_owned() } else { names.join(", ") }
+                );
+                let on = if result.culprits.is_empty() { vec![c.id] } else { result.culprits.clone() };
+                summary.problems.extend(on.into_iter().map(|node| solve::SolverProblem { node, message: message.clone() }));
+                summary.clusters.push(c.id);
+                self.pose(c);
+                continue;
             }
             let mut changed = Vec::new();
             for (leaf, v) in result.values {
@@ -4717,7 +4569,7 @@ impl StoreCore {
                     continue;
                 }
                 let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };
-                let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).map_err(|e| vec![e])?;
+                let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).expect("a solved leaf is a live constant slot");
                 self.geometry.note_ops([&op]);
                 tx.derived_ops.push(op);
                 tx.inverse.extend(inverse);
@@ -4734,13 +4586,9 @@ impl StoreCore {
             self.pose(c);
             summary.unmet.extend(result.unmet);
         }
-        if exact && !summary.unmet.is_empty() {
-            let lines: Vec<String> = summary.unmet.iter().map(|u| format!("{} requested {} but constraints allow {}", u.leaf, crate::value::fmt_num(u.requested), crate::value::fmt_num(u.solved))).collect();
-            return Err(err(ErrorKind::Unsatisfiable, format!("exact transaction not honoured: {}", lines.join("; "))));
-        }
         // Drivers that are not variables of any cluster were plain sets;
         // only a moved node is a cause worth telling the model about.
-        Ok((!summary.is_empty()).then_some(summary))
+        (!summary.is_empty()).then_some(summary)
     }
 
     /// A recorded transaction's writes to copies (the solver's, or their
@@ -4777,14 +4625,14 @@ impl StoreCore {
     /// to what its owner's expansion wants, written as the solver writes,
     /// so undo puts the solved value back. A copy still in a cluster keeps
     /// it, as a variable or as a fixed or driven input.
-    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], at: usize) -> Result<(), ApplyError> {
+    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], at: usize) {
         let released: Vec<Leaf> = {
             let doc = Tree::of(&self.docs);
             let now = self.clusters.copies();
             held.iter().filter(|l| doc.is_live(l.node) && !now.contains(&l.node)).copied().collect()
         };
         if released.is_empty() {
-            return Ok(());
+            return;
         }
         let mut changed = Vec::new();
         let mut ops = Vec::new();
@@ -4793,7 +4641,7 @@ impl StoreCore {
                 continue;
             }
             let op = Op::Set { id: leaf.node, path: leaf.path, slot };
-            let inverse = op::apply_op(&mut self.docs, at, &op, tx.version)?;
+            let inverse = op::apply_op(&mut self.docs, at, &op, tx.version).expect("a released copy's leaf is live");
             self.geometry.note_ops([&op]);
             tx.inverse.extend(inverse);
             changed.push(leaf);
@@ -4805,7 +4653,6 @@ impl StoreCore {
             self.reactive.invalidate(Tree::of(&self.docs), changed);
         }
         tx.derived_ops.extend(ops);
-        Ok(())
     }
 
     /// Apply the ops, expand, and check; on success the document holds the

@@ -48,6 +48,12 @@ pub struct Clusters {
     pub by_node: BTreeMap<NodeId, NodeId>,
     /// The copies some cluster holds (`copies`).
     copies: BTreeSet<NodeId>,
+    /// The clusters, by key, in a cycle through bindings: formed, never
+    /// solved (DS-7: a cycle is a problem, not a refusal).
+    pub failed: BTreeSet<NodeId>,
+    /// What grouping could not use or solve, by constraint: a malformed
+    /// constraint, the second of a duplicate pair, a cluster in a cycle.
+    pub problems: Vec<(NodeId, String)>,
 }
 
 impl Clusters {
@@ -56,7 +62,7 @@ impl Clusters {
         let at = list.iter().enumerate().map(|(i, c)| (c.key(), i)).collect();
         let by_node = list.iter().flat_map(|c| c.nodes.iter().map(move |&n| (n, c.key()))).collect();
         let copies = list.iter().flat_map(|c| c.nodes.iter().copied()).filter(|n| n.is_expanded()).collect();
-        Clusters { list: list.into(), var_cluster, at, by_node, copies }
+        Clusters { list: list.into(), var_cluster, at, by_node, copies, failed: BTreeSet::new(), problems: Vec::new() }
     }
 
     /// The cluster with key `key`.
@@ -162,11 +168,22 @@ pub struct SolverSummary {
     pub moved: Vec<NodeId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmet: Vec<Unmet>,
+    /// What the transaction left that constraints can't satisfy or use: a
+    /// cluster whose solve failed, a malformed or duplicate constraint, a
+    /// cycle (DS-7: applied and reported, not refused).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<SolverProblem>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SolverProblem {
+    pub node: NodeId,
+    pub message: String,
 }
 
 impl SolverSummary {
     pub fn is_empty(&self) -> bool {
-        self.clusters.is_empty() && self.moved.is_empty() && self.unmet.is_empty()
+        self.clusters.is_empty() && self.moved.is_empty() && self.unmet.is_empty() && self.problems.is_empty()
     }
 }
 
@@ -204,24 +221,21 @@ fn is_free(doc: Tree<'_>, reactive: &crate::graph::Reactive, leaf: Leaf, touch: 
         && !reactive.is_driven(leaf)
 }
 
-/// Group the document's constraints into clusters. `Err` when a constraint
-/// is malformed (callers validate first) or when bindings and clusters form
-/// a cycle.
-pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Result<Clusters, String> {
+/// Group the document's constraints into clusters. Total (DS-7): a
+/// constraint that can't be used, and clusters that bindings join in a
+/// cycle, are problems in the result.
+pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Clusters {
     clusters_with(doc, reactive, lib, &|l| reactive.read(doc, l), &|_| {})
 }
 
 /// `clusters`, reading values through `read` and telling `touch` each leaf
 /// whose role (free or driven) it looks at: a native grouping clusters
 /// tracks both (reactive-engine handoff §4.10, RE-5.5).
-pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library, read: &dyn Fn(Leaf) -> Option<Value>, touch: &dyn Fn(Leaf)) -> Result<Clusters, String> {
-    let all: Vec<ConstraintInfo> = constraint::all(doc, read)?
-        .into_iter()
-        .chain(crate::plug::implied_mates(doc, read, lib))
-        .filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)))
-        .collect();
+pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library, read: &dyn Fn(Leaf) -> Option<Value>, touch: &dyn Fn(Leaf)) -> Clusters {
+    let (usable, problems) = constraint::usable(doc, read);
+    let all: Vec<ConstraintInfo> = usable.into_iter().chain(crate::plug::implied_mates(doc, read, lib)).filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n))).collect();
     if all.is_empty() {
-        return Ok(Clusters::default());
+        return Clusters { problems, ..Clusters::default() };
     }
     let fixed: BTreeSet<NodeId> = all.iter().filter(|c| c.spec.kind == "fix").flat_map(|c| c.nodes()).collect();
 
@@ -288,40 +302,103 @@ pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, li
 
     // A binding that reads a cluster's variable and feeds the same
     // cluster's input is a cycle; across clusters, inputs order the solves.
+    // `edges[i]` holds the clusters `i` reads a variable of.
     let var_owner: BTreeMap<Leaf, usize> = list.iter().enumerate().flat_map(|(i, c)| c.vars.iter().map(move |v| (*v, i))).collect();
     let mut edges: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); list.len()];
+    let mut own: Vec<Option<String>> = vec![None; list.len()];
     for (i, c) in list.iter().enumerate() {
         for input in &c.inputs {
             for dep in reactive.transitive_deps(*input).into_iter().chain(std::iter::once(*input)) {
                 if let Some(&j) = var_owner.get(&dep) {
                     if j == i {
-                        return Err(format!(
-                            "binding {input} reads {dep}, a variable of cluster {}, and feeds the same cluster",
-                            c.id
-                        ));
+                        own[i].get_or_insert_with(|| format!("binding {input} reads {dep}, a variable of cluster {}, and feeds the same cluster", c.id));
+                    } else {
+                        edges[i].insert(j);
                     }
-                    edges[i].insert(j);
                 }
             }
         }
     }
-    // Kahn's algorithm; anything left is a cycle between clusters.
-    let mut order = Vec::new();
-    let mut remaining: BTreeSet<usize> = (0..list.len()).collect();
-    while !remaining.is_empty() {
-        let ready: Vec<usize> = remaining.iter().copied().filter(|i| edges[*i].iter().all(|j| !remaining.contains(j))).collect();
-        if ready.is_empty() {
-            let names: Vec<String> = remaining.iter().map(|i| list[*i].id.to_string()).collect();
-            return Err(format!("clusters {} depend on each other through bindings", names.join(", ")));
-        }
-        for i in ready {
-            remaining.remove(&i);
+    // Strongly connected components, each emitted after every component
+    // it reads (Tarjan): that is the solve order. A component of more than
+    // one cluster, or a cluster that feeds itself, is a cycle: its members
+    // fail and are not solved; what only reads them is solved after them
+    // as usual (DS-7).
+    let comps = strongly_connected(&edges);
+    let mut order = Vec::with_capacity(list.len());
+    let mut failed = BTreeSet::new();
+    let mut problems = problems;
+    for comp in comps {
+        let ring = comp.len() > 1;
+        for &i in &comp {
+            let why = if ring {
+                let names: Vec<String> = comp.iter().map(|&k| list[k].id.to_string()).collect();
+                Some(format!("clusters {} depend on each other through bindings", names.join(", ")))
+            } else {
+                own[i].clone()
+            };
+            if let Some(why) = why {
+                failed.insert(list[i].key());
+                problems.extend(list[i].constraints.iter().map(|c| (c.id, why.clone())));
+            }
             order.push(i);
         }
     }
     let ordered: Vec<Cluster> = order.into_iter().map(|i| list[i].clone()).collect();
     let var_cluster = ordered.iter().flat_map(|c| c.vars.iter().map(move |v| (*v, c.id))).collect();
-    Ok(Clusters::new(ordered, var_cluster))
+    problems.sort_by_key(|(id, _)| *id);
+    Clusters { failed, problems, ..Clusters::new(ordered, var_cluster) }
+}
+
+/// Tarjan's strongly connected components of `edges` (`i` reads `j`),
+/// each emitted after every component it reaches, members in index order.
+fn strongly_connected(edges: &[BTreeSet<usize>]) -> Vec<Vec<usize>> {
+    struct S<'a> {
+        edges: &'a [BTreeSet<usize>],
+        index: Vec<Option<usize>>,
+        low: Vec<usize>,
+        on: Vec<bool>,
+        stack: Vec<usize>,
+        next: usize,
+        out: Vec<Vec<usize>>,
+    }
+    fn visit(s: &mut S<'_>, v: usize) {
+        s.index[v] = Some(s.next);
+        s.low[v] = s.next;
+        s.next += 1;
+        s.stack.push(v);
+        s.on[v] = true;
+        for &w in s.edges[v].iter() {
+            match s.index[w] {
+                None => {
+                    visit(s, w);
+                    s.low[v] = s.low[v].min(s.low[w]);
+                }
+                Some(iw) if s.on[w] => s.low[v] = s.low[v].min(iw),
+                Some(_) => {}
+            }
+        }
+        if Some(s.low[v]) == s.index[v] {
+            let mut comp = Vec::new();
+            while let Some(w) = s.stack.pop() {
+                s.on[w] = false;
+                comp.push(w);
+                if w == v {
+                    break;
+                }
+            }
+            comp.sort_unstable();
+            s.out.push(comp);
+        }
+    }
+    let n = edges.len();
+    let mut s = S { edges, index: vec![None; n], low: vec![0; n], on: vec![false; n], stack: Vec::new(), next: 0, out: Vec::new() };
+    for v in 0..n {
+        if s.index[v].is_none() {
+            visit(&mut s, v);
+        }
+    }
+    s.out
 }
 
 /// Where a residual gets a transform leaf from: the solver's variable
@@ -616,6 +693,30 @@ pub fn solve_cluster(
     }
 }
 
+/// The constraints of `cluster` that don't hold at the values `read`
+/// gives now, each with its largest residual: what a cluster whose solve
+/// failed shows, read from the pose and not remembered from the solve
+/// (DS-7), so undo, redo and replay show the right problem without one.
+pub(crate) fn violated(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, cluster: &Cluster) -> Vec<(NodeId, f64)> {
+    let (problem, tags) = build_problem(doc, read, cluster, &[], &[], None);
+    let mut out: Vec<(NodeId, f64)> = Vec::new();
+    let mut buf = Vec::new();
+    for (i, t) in problem.terms.iter().enumerate() {
+        let Tag::Constraint(id) = tags[i] else { continue };
+        buf.clear();
+        buf.resize(t.len, 0.0);
+        t.eval(&problem.vars, &mut buf);
+        let r = buf.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        if r > 1e-6 {
+            match out.iter_mut().find(|(c, _)| *c == id) {
+                Some((_, m)) => *m = m.max(r),
+                None => out.push((id, r)),
+            }
+        }
+    }
+    out
+}
+
 /// The document's constraint clusters as one native cell (reactive-engine
 /// handoff §4.10, RE-5.5): grouping runs again only when what it read
 /// changed (a constraint's value, `enabled`, a claim on an operand, the
@@ -649,7 +750,7 @@ impl crate::graph::Native for ClustersNative {
 /// What the grouping native made: the clusters, and what it read of the
 /// document's structure (`grouping_reach`).
 pub(crate) struct Grouping {
-    pub(crate) result: Result<Clusters, String>,
+    pub(crate) result: Clusters,
     pub(crate) reach: BTreeSet<NodeId>,
 }
 
@@ -699,6 +800,13 @@ pub(crate) struct ClusterNative {
     outputs: BTreeSet<Leaf>,
 }
 
+/// A cluster's constraints that don't hold at its pose, as its watching
+/// native last read them (`violated`), and those likely at fault.
+pub(crate) struct Violated {
+    pub(crate) residuals: Vec<(NodeId, f64)>,
+    pub(crate) culprits: Vec<NodeId>,
+}
+
 impl ClusterNative {
     pub(crate) fn new(cluster: Cluster) -> ClusterNative {
         ClusterNative { cluster, outputs: BTreeSet::new() }
@@ -723,30 +831,12 @@ impl crate::graph::Native for ClusterNative {
                 let _ = cx.read(Leaf { node: n, path: p.parse().expect("declared leaf") });
             }
         }
-        Ok(BTreeMap::new())
-    }
-}
-
-/// `constraint::validate_all` as a native cell (RE-5.5): validated again
-/// only when a constraint's value or structure changed.
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct ValidateNative {
-    outputs: BTreeSet<Leaf>,
-}
-
-impl crate::graph::Native for ValidateNative {
-    fn producer(&self) -> crate::graph::ProducerId {
-        crate::graph::ProducerId::NETWORK
-    }
-    fn outputs(&self) -> &BTreeSet<Leaf> {
-        &self.outputs
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
-        let result = constraint::validate_all(cx.tree(), &|l| cx.read(l));
-        cx.set_extra(std::sync::Arc::new(result));
+        // Whether its constraints hold where it is: its problem (DS-7). Only
+        // when they don't, which constraints are likely at fault: those
+        // whose removal makes it solvable (`solve_cluster`'s culprits).
+        let held = violated(cx.tree(), &|l| cx.read(l), &self.cluster);
+        let culprits = if held.is_empty() { Vec::new() } else { solve_cluster(cx.tree(), &|l| cx.read(l), &self.cluster, &[], &[]).culprits };
+        cx.set_extra(std::sync::Arc::new(Violated { residuals: held, culprits }));
         Ok(BTreeMap::new())
     }
 }

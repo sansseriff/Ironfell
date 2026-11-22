@@ -17,7 +17,7 @@ use crate::expr::Leaf;
 use crate::id::NodeId;
 use crate::registry::TypeId;
 use crate::value::Value;
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConstraintSpec {
@@ -162,53 +162,45 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
     Ok(Some(ConstraintInfo { id, spec, value, enabled, operands }))
 }
 
-/// Every live constraint, malformed ones as errors.
-pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<Vec<ConstraintInfo>, String> {
+/// Every live constraint that can be read, and a problem for each that
+/// cannot: one malformed constraint leaves the rest usable (DS-7).
+pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
     let mut out = Vec::new();
+    let mut problems = Vec::new();
     for id in doc.nodes_of_type(constraint_type()) {
-        if let Some(c) = read(doc, read_value, id)? {
-            out.push(c);
+        match read(doc, read_value, id) {
+            Ok(Some(c)) => out.push(c),
+            Ok(None) => {}
+            Err(e) => problems.push((id, e)),
         }
     }
-    Ok(out)
+    (out, problems)
 }
 
-/// Validate every constraint: kinds, roles, anchors, and no duplicates (two
-/// constraints of one kind over the same anchored operands). Inkling unified
-/// duplicates silently; for an author that is an LLM, an explicit error
-/// teaches more.
-pub fn validate_all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> Result<(), String> {
-    let all = all(doc, read_value)?;
-    let mut seen: BTreeSet<(&'static str, Vec<(NodeId, [i64; 2])>)> = BTreeSet::new();
-    for c in &all {
-        if c.spec.kind == "fix" {
-            continue;
+/// The constraints the solver may use, and a problem for each it may not:
+/// a malformed one, or the second of two of one kind over the same
+/// anchored operands (Inkling unified duplicates silently; for an author
+/// that is an LLM, an explicit problem teaches more). The first of a pair,
+/// in id order, is kept.
+pub fn usable(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
+    let (mut all, mut problems) = all(doc, read_value);
+    all.sort_by_key(|c| c.id);
+    let mut seen: BTreeMap<(&'static str, Vec<(NodeId, [i64; 2])>), NodeId> = BTreeMap::new();
+    let mut kept = Vec::with_capacity(all.len());
+    for c in all {
+        if c.spec.kind != "fix" {
+            let mut key: Vec<(NodeId, [i64; 2])> = c.operands.iter().map(|o| (o.node, [(o.anchor[0] * 1e6) as i64, (o.anchor[1] * 1e6) as i64])).collect();
+            key.sort();
+            if let Some(first) = seen.get(&(c.spec.kind, key.clone())) {
+                problems.push((c.id, format!("{} ({}): already constrained by {first}", c.id, c.spec.kind)));
+                continue;
+            }
+            seen.insert((c.spec.kind, key), c.id);
         }
-        let key: Vec<(NodeId, [i64; 2])> =
-            c.operands.iter().map(|o| (o.node, [(o.anchor[0] * 1e6) as i64, (o.anchor[1] * 1e6) as i64])).collect();
-        let mut sorted = key.clone();
-        sorted.sort();
-        if !seen.insert((c.spec.kind, sorted)) {
-            let other = all.iter().find(|o| o.id != c.id && o.spec.kind == c.spec.kind && same_operands(o, c)).map(|o| o.id);
-            return Err(format!(
-                "{} ({}): already constrained by {}",
-                c.id,
-                c.spec.kind,
-                other.map(|o| o.to_string()).unwrap_or_default()
-            ));
-        }
+        kept.push(c);
     }
-    Ok(())
-}
-
-fn same_operands(a: &ConstraintInfo, b: &ConstraintInfo) -> bool {
-    let key = |c: &ConstraintInfo| {
-        let mut k: Vec<(NodeId, [i64; 2])> =
-            c.operands.iter().map(|o| (o.node, [(o.anchor[0] * 1e6) as i64, (o.anchor[1] * 1e6) as i64])).collect();
-        k.sort();
-        k
-    };
-    key(a) == key(b)
+    problems.sort_by_key(|(id, _)| *id);
+    (kept, problems)
 }
 
 #[cfg(test)]

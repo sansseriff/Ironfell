@@ -105,8 +105,6 @@ pub enum NativeKey {
     Repeat(NodeId),
     /// The grouping of the document's constraints (`solve::ClustersNative`).
     Clusters,
-    /// Whether the document's constraints are well formed (`solve::ValidateNative`).
-    Validate,
     /// One constraint cluster, by its lowest constraint (`solve::ClusterNative`).
     Cluster(NodeId),
     /// A native for the graph's own tests.
@@ -119,7 +117,7 @@ impl NativeKey {
         match self {
             NativeKey::Island(l) => l.node,
             NativeKey::Layout(n) | NativeKey::Repeat(n) | NativeKey::Cluster(n) => n,
-            NativeKey::Clusters | NativeKey::Validate => NodeId::from_raw(0),
+            NativeKey::Clusters => NodeId::from_raw(0),
             NativeKey::Pins => NodeId::from_raw(0),
             #[cfg(test)]
             NativeKey::Test(n, _) => n,

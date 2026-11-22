@@ -9,6 +9,8 @@ export interface SolverSummary {
   clusters: string[];
   moved: string[];
   unmet?: { leaf: string; requested: number; solved: number; reason: string }[];
+  /** What constraints can't satisfy or use after the edit: applied and reported, not refused. */
+  problems?: { node: string; message: string }[];
 }
 
 export interface ApplyResult {

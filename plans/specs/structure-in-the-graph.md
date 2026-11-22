@@ -655,6 +655,55 @@ What remains of the slope is necessity and the gate (DS-4a, DS-4b, DS-5).
   (`apply` plus `advance`);
 - the smoke and `single-tab.txt` pass.
 
+### DS-7 as built (2026-11-22)
+
+- **`post_apply` can't fail.** A cluster whose solve fails keeps the values it had and is
+  posed. Grouping is total:
+  - `constraint::usable` reports per constraint;
+  - the later of a duplicate pair is left out;
+  - clusters in a strongly connected component of binding dependencies (Tarjan), or
+    feeding themselves, are `Clusters::failed` and never solved;
+  - downstream clusters solve as usual.
+- **Problems are derived.** Each cluster's watching native records, as its extra
+  (`solve::Violated`):
+  - the constraints that don't hold at its pose;
+  - when there are any, the culprits.
+
+  `StoreCore::problems()` lists them with the grouping's own (kind `"constraint"`). So
+  undo, redo and replay show the right problem with no rule.
+- **The reply.** `SolverSummary::problems` carries what a transaction brought, and the
+  agent's `<applied>` reply lists them as `<problem>`.
+- **Exact edits.** An exact edit left unmet is retracted: undone and dropped from
+  history.
+- **Deleted:**
+  - `Saved`;
+  - `can_refuse`;
+  - the refusal branch and its fallback rebuild;
+  - `abort`;
+  - `ValidateNative` and `NativeKey::Validate`;
+  - `validated()`;
+  - `grouping_error`.
+- **Tests:**
+  - refusal tests rewritten to "applies, keeps its pose, reports, undoes";
+  - new: a failed cluster beside one that solves, with undo and redo
+    (`rollback::an_unsolvable_cluster_beside_one_that_solves`);
+  - new: exact retracted (`rollback::an_exact_request_unmet_is_retracted`);
+  - removed with their subject:
+    `atomicity::a_transaction_refused_by_the_solver_leaves_nothing_pending`,
+    `rollback::solver_refusals_before_any_solver_write`,
+    `rollback::a_solver_refusal_after_repeats_settled`.
+- **Measured** (`document_scaling_time`, +3 copies): constant edit 9.63 → 5.08 ms,
+  structural edit 13.20 → 8.34 ms. Within the exit.
+- **Checks:**
+  - plain (492) passes;
+  - differential with the structure oracle and `IRON_OWNER_CHECK` (496, fonts 40) passes;
+  - the smoke passes;
+  - `bun run check` passes.
+- **`single-tab.txt`:** drag `advance` p50 is 0.02 ms and playing is 0.04 ms. Its Lorenz
+  check (more than 100 frames in 6 s) failed: 77 frames, with per-frame costs normal
+  (advance p50 1.06 ms, frame p50 5.1 ms). The browser ran at 6 to 13 frames a second
+  today, before this change too (startup: 29 frames in 4.5 s).
+
 ## 11. DS-10's design: the oracle (draft, 2026-11-22)
 
 **1. Order-free results first** (§3.4, decided by the user). Without these, the oracle

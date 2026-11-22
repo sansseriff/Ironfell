@@ -104,6 +104,7 @@ function solverLines(s: SolverSummary): string[] {
   return [
     `  <solver clusters="${s.clusters.join(' ')}" moved="${s.moved.join(' ')}"/>`,
     ...(s.unmet ?? []).map((u) => `  <unmet leaf="${u.leaf}" requested="${u.requested}" solved="${u.solved}">${escapeXml(u.reason)}</unmet>`),
+    ...(s.problems ?? []).map((p) => `  <problem node="${p.node}">${escapeXml(p.message)}</problem>`),
   ];
 }
 

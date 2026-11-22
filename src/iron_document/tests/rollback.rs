@@ -211,23 +211,13 @@ fn constrain(id: RelationId, from: NodeId, to: NodeId, role: &str) -> Op {
     Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
 }
 
-#[test]
-fn solver_refusals_before_any_solver_write() {
-    let (mut store, comp) = sheet();
-    let n = pair(&mut store, comp);
-    // A constraint with no operands.
-    let id = store.authored().next_id();
-    let ops = vec![rect(&store, comp), Op::Create { id: id.offset(1), ty: ty("constraint"), parent: Some(comp), order: OrderKey::first(), facets: vec![Constraint::default().wrap()] }];
-    let errs = refused(&mut store, comp, "a malformed constraint", |s| s.apply(tx("bad", ops)));
-    assert_eq!(errs[0].kind, ErrorKind::BadConstraint, "{errs:?}");
-    // A binding that reads and feeds the cluster.
-    let set = Op::Set { id: n["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x + 50", n["q"])) };
-    let errs = refused(&mut store, comp, "a cycle through the cluster", |s| s.apply(tx("loop", vec![set])));
-    assert_eq!(errs[0].kind, ErrorKind::Cycle, "{errs:?}");
-}
 
+/// A cluster that can't be solved, beside one that can, in one
+/// transaction: the first solves and writes; the second keeps its pose and
+/// reports, and undo and redo bring its problem back and forth (DS-7: no
+/// refusal after derivation).
 #[test]
-fn an_unsolvable_cluster_after_another_cluster_wrote() {
+fn an_unsolvable_cluster_beside_one_that_solves() {
     let (mut store, comp) = sheet();
     let first = pair(&mut store, comp);
     let second = pair(&mut store, comp);
@@ -254,34 +244,40 @@ fn an_unsolvable_cluster_after_another_cluster_wrote() {
         constrain(rels[2], ids[2], second["q"], "a"),
         constrain(rels[3], ids[2], ids[0], "b"),
     ];
-    let errs = refused(&mut store, comp, "a contradiction", |s| s.apply(tx("bad", ops)));
-    assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{errs:?}");
+    let x = |s: &Store, id: NodeId| s.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    let second_q = x(&store, second["q"]);
+    store.apply(tx("bad", ops)).unwrap_or_else(|e| panic!("applied, not refused: {e:?}"));
+    assert!((x(&store, first["q"]) + 50.0).abs() < 1e-6, "the first cluster solved: q at {}", x(&store, first["q"]));
+    assert_eq!(x(&store, second["q"]), second_q, "the second keeps its pose");
+    let problems = |s: &Store| s.problems().into_iter().filter(|p| p.kind == "constraint").map(|p| p.node).collect::<Vec<_>>();
+    assert!(problems(&store).iter().any(|n| *n == ids[1] || *n == ids[2]), "{:?}", store.problems());
+    store.undo(0).unwrap().unwrap();
+    assert!(problems(&store).is_empty(), "{:?}", store.problems());
+    store.redo(0).unwrap().unwrap();
+    assert!(!problems(&store).is_empty(), "redo shows the problem again");
 }
 
+/// An exact request the constraints would move is taken back (`retract`):
+/// the edit is undone and dropped from history, and the error names it
+/// (DS-7: exact edits are judged by the one joint solve, then retracted).
 #[test]
-fn an_exact_request_unmet_after_the_solver_wrote() {
+fn an_exact_request_unmet_is_retracted() {
     let (mut store, comp) = sheet();
     let n = pair(&mut store, comp);
+    let x = |s: &Store| s.resolved(n["q"], path("transform2d.x")).and_then(|v| v.as_f64());
+    let (q, past) = (x(&store), store.history().past().len());
     let mut strict = tx("push q exactly", vec![Op::Set { id: n["q"], path: path("transform2d.x"), slot: num(900.0) }]);
     strict.exact = true;
-    let errs = refused(&mut store, comp, "an exact request out of reach", |s| s.apply(strict));
+    let errs = store.apply(strict).unwrap_err();
     assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{errs:?}");
+    assert!(errs[0].message.contains("exact transaction not honoured"), "{errs:?}");
+    assert_eq!(x(&store), q, "q is where it was");
+    assert_eq!(store.history().past().len(), past, "nothing was kept in history");
+    assert!(store.history().future().is_empty(), "nor left to redo");
+    store.authored().check_invariants().unwrap();
+    let _ = comp;
 }
 
-/// A changed repeat count settles in `after_transaction`, re-expanding
-/// through the journal, before the solver refuses.
-#[test]
-fn a_solver_refusal_after_repeats_settled() {
-    let (mut store, comp) = sheet();
-    let n = pair(&mut store, comp);
-    let (ops, r) = draw(&store, comp, r#"<group id="$g" repeat.count="2"><rect w="4" h="4"/></group>"#);
-    store.apply(tx("repeat", ops)).unwrap();
-    let ops = vec![
-        Op::Set { id: r["g"], path: path("repeat.count"), slot: num(5.0) },
-        Op::Set { id: n["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x + 50", n["q"])) },
-    ];
-    refused(&mut store, comp, "more items, and a cycle through the cluster", |s| s.apply(tx("bad", ops)));
-}
 
 /// One node written several times by a refused transaction.
 #[test]

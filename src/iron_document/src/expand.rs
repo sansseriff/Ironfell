@@ -76,7 +76,8 @@ struct Want {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Problem {
     pub node: NodeId,
-    /// `depth`, `depth_blocked`, `budget`, `truncated`, `expansion`, `binding`.
+    /// `depth`, `depth_blocked`, `budget`, `truncated`, `expansion`, `binding`,
+    /// `constraint`.
     pub kind: &'static str,
     pub message: String,
 }

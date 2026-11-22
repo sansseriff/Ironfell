@@ -292,7 +292,7 @@ fn static_coordinates(store: &crate::StoreCore, nodes: &[NodeId]) -> Result<(), 
         }) {
             return Err("An instance overrides these coordinates; remove its transform overrides before changing the main's pivot".into());
         }
-        if crate::constraint::all(doc, &|l| store.resolved(l.node, l.path))?.iter().any(|c| c.enabled && c.nodes().any(same)) {
+        if crate::constraint::all(doc, &|l| store.resolved(l.node, l.path)).0.iter().any(|c| c.enabled && c.nodes().any(same)) {
             return Err("Remove constraints on these coordinates before changing the pivot".into());
         }
         if doc.bound_slots().any(|(_, e)| e.deps().iter().any(|d| same(d.node) && d.path.facet == FacetKind::Transform2d)) {

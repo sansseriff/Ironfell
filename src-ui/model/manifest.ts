@@ -335,8 +335,10 @@ ${p.contextFields}`,
   is maintained by the solver: setting it drives the cluster and the rest follows, as
   far as the constraints allow; the reply then carries a <solver> summary with any
   <unmet> request. Put exact="true" on <edit> to have such an edit rejected instead.
-  A value may be bound (a driving dimension); binding it to one of the cluster's own
-  variables is a cycle and is rejected.`,
+  Constraints that cannot all hold, a malformed or duplicate constraint, and a value
+  bound to one of its cluster's own variables (a cycle) are applied and shown as
+  problem= on the constraints; the cluster keeps its pose until they are fixed. A
+  value may be bound to anything outside its cluster (a driving dimension).`,
   },
   layout: {
     summary: 'stacks and grids that place their children (layout, layout_item)',

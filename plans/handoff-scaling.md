@@ -3,13 +3,12 @@
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
 6/10, Sol 6/10; both: DS-1 can start). **DS-1, DS-2 and DS-3a done 2026-11-21; DS-3b
-stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its council code review (with DS-2 and DS-3: Opus 6/10, Sol 5/10) fixed in `fd884ac`. Next: round 2 of that review on the fixes, then DS-10's design (drafted in the spec's §13) to the council, then DS-10, from
-[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md) (adopted 2026-11-22; council rounds 1 to 3:
-Opus 5, 6, 7/10; Sol 5, 6, 7/10), whose phases DS-9 to DS-14 replace the rest of DS-3b. DS-4a, DS-4b and
+stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its code review fixed in `fd884ac`; the spec rewritten 2026-11-22 after a review of its direction (§9). Next: the rewritten spec to the council, then DS-10 (the oracle), then DS-11 (the layout family), from
+[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md), whose phases DS-10 to DS-15 (renumbered 2026-11-22) and DS-7, brought forward, replace the rest of DS-3b. DS-4a, DS-4b and
 DS-5 stay as planned here and may land any time after DS-9. Why (the user, 2026-11-22): DS-3b's
 fixes were rules for when a whole-document pass may be skipped; the cause is that cells do
-not record what they read of structure. The council reviews the code by groups (that
-spec's §8). The user asked for it (2026-11-21): "I want all costs that scale with
+not record what they read of structure. The council reviews each phase's design and
+code. The user asked for it (2026-11-21): "I want all costs that scale with
 document size to be gone", councils on this plan and through the code.
 
 ## 0. Read first
@@ -579,3 +578,95 @@ layout→repeat edge necessity-only; refusal by journal and re-derivation instea
 snapshot, plans as aborted transactions; the remaining fallbacks and inventory items;
 adversarial fixtures, two scaling axes, many more operations; DS-3 and DS-6 split;
 council reviews by groups.
+
+### Structure in the graph (specs/structure-in-the-graph.md)
+
+**Round 1 (2026-11-22): Opus 5/10, Sol 5/10.** Both: the diagnosis holds, the rule is
+right. Adopted: facet contents are a key; a touched-key log, not the rollback journal;
+binding wiring and the graph's topology recorded; always record, hash and skip; the
+oracle reruns cells rather than trusting the rules; each rule deleted with its
+replacement; necessity and the gate decoupled; clips and grouping's split deferred; the
+size estimate was low.
+
+**Round 2 (2026-11-22): Opus 6/10, Sol 6/10.** Both: DS-9's slice could not delete
+`layout_touched`, which is maker work; the oracle could pass with a key missing (the
+differential suite is two incremental stores, not a rebuild); drains inside `run` would
+evaluate on a document that can still roll back without the graph; scoped indexes belong
+with makers. Adopted: DS-9 narrowed to existing, unpinned layout natives (§3.4); an
+independent reference, a shadow and a canary (§3.5); drains only at §3.3's points, the
+log's position journaled; `has` for presence and `Cx::read` per leaf (§3.1); `Bound` and
+`Reads` folded into `Wired`; per-unit connection and anchor cells cut (DS-13); later
+phases' open questions listed for their own designs (§5). Fixed in code at once: `Saved`
+now restores the layout roots, pinned parts and glide nodes DS-3b part 2 added
+(`tests/rollback.rs`, a layout made in a refused transaction).
+
+**Round 3 (2026-11-22): Opus 7/10, Sol 7/10, on DS-9 alone.** Both: draining before
+`sync_layout` would run old layout natives against new children (an output assertion),
+so a drain only marks, where the graph is primed today; `prime_layout` is also the only
+structural trigger for `Pins` and pinned layouts, which keep it; the oracle's reference
+must not share the invalidation it checks; the canary must silence a choke point, not a
+key kind. Opus: keys act only on unpinned layout cells in DS-9; the reference is
+`layout::lay_out` on the store; an empty log at `begin` instead of a journaled position;
+the shadow moves to DS-10; the key table shrinks to the four the slice uses; no hash.
+Sol: refusal through implied mates with no constraint node; a session reorder still
+evaluates; cost budgets named. All adopted (§3, §4).
+
+**Code review of DS-9 with DS-2 and DS-3 (2026-11-22): Opus 6/10, Sol 5/10.**
+
+Both: DS-9's mechanism holds (Opus traced every write path to a drain before the next
+`begin`). The findings were in DS-2's and DS-3's code, untested because the tests ran
+with everything observed and none added or removed a `layout` facet. Fixed, each with a
+test that fails without the fix:
+
+- **A nested layout root** was not made or dropped when its parent gained or lost a
+  `layout` facet (both; "owned twice" in debug): `sync_layout` looks at a touched node's
+  children too (`layout::a_layout_given_to_and_taken_from_a_parent_moves_the_root`).
+- **A repeat whose layout reads its item** ran the old layout over new children (Sol;
+  an output assertion): `settle_repeats` regraphs before it publishes a round
+  (`layout::a_stack_whose_gap_reads_its_own_item_settles`).
+- **A cluster reading another's variable** was left unsolved (Sol): `post_apply` and the
+  live solve take the next cluster after each write (`next_to_solve`;
+  `rollback::a_cluster_that_reads_another_s_variable_solves_after_it`).
+- **A constant edit woke no player** (both): `invalidate` wakes each changed leaf
+  (`reactivity::a_query_s_constant_input_set_asks_again`, one view observed).
+- **`repeat.max` and the enter and exit timings** were not compared (both):
+  `REPEAT_INPUTS` (`reactivity::a_repeat_s_max_set_settles_its_items`).
+- **Clips:** a running clip withdraws what it drives and gave nothing for (scrubbing
+  before its first key; Sol); a clip's own leaves set resample every clip (a `prop`
+  retargeted; Opus); the clips' end is cleared only when clips or structure change, not
+  by every playhead move (both); clocked machine instances are revisited when clips
+  change (`Player::reclock`; Opus) (`time::scrubbing_before_the_first_key_withdraws_the_clip`,
+  `time::a_clip_retargeted_lets_go_of_its_old_leaf`, `machines::keyed_state_scrubs_and_one_occurrence_retimes`).
+- **`can_refuse`** counts anchors only where a connection is (both: any anchor made a
+  circuit snapshot the graph on every edit); the fallback without `Saved` fails under
+  `differential` (Opus).
+- **The oracle** checks claims both ways (Opus); the grouping oracle fails on an error
+  the kept grouping lacks (Sol).
+- **Smaller:** glide specs found afresh when motion turns on record their nodes; players
+  forget leaves the graph refused (`publish_delta` returns them); `scratch()` keeps the
+  running clips; `structure_gen` deleted.
+
+Left for DS-10: a binding retargeted onto a cluster's variable is not regrouped (Sol), the
+grouping reach's gap that DS-10's recorded wiring reads close. Left for DS-12:
+`sync_layout`'s pass over every pinned part, and `update_drawn`'s look at every gone
+node (Opus).
+
+**Direction review (2026-11-22): Opus 6/10, Sol 6/10; both: continue, with changes.** The
+user asked whether this is the necessary path to both generality and performance. Both:
+recorded reads are the right mechanism for *when* a kept result reruns, with no simpler
+correct alternative. But they decide only when, not *how much*: grouping, validation
+and connections stay whole-document cells unless scoped, and the plan deferred scoping.
+The structure oracle can't fail for most writes (hand priming still covers them), and it
+reimplements claim rules (it passes stale output sets and panics on a bound leaf). Key
+lists were rewritten whole, and `Saved`'s clone grows with every keyed cell. Opus: most
+of the review's bugs were in makers and hand lists, so design makers first. Sol: make
+DS-10 a measured decision point. Both reproduced regressions from `fd884ac`: the
+animation end went stale on a transition edit, and a running clip erased a paused
+clip's held value. Fixed (tests in `machines` and `time`), with key changes applied as
+a diff. The spec was rewritten around one rule: every kept result is a from-scratch
+function over a bounded scope, rerun by its recorded keys. Its families are converted
+one at a time, each deleting its rules (DS-10 to DS-15), makers are cells reconciled before
+evaluation, refusal goes by the journal (DS-7), and one oracle replaces the per-family
+ones. A spike showed a store rebuilt from the document can't be that oracle (72 of 494
+tests differ by design, through history the document doesn't hold), so the oracle
+compares structure from scratch and reruns every current cell.

@@ -158,6 +158,11 @@ pub struct Document {
     by_facet: BTreeMap<FacetKind, BTreeSet<NodeId>>,
     by_source: BTreeMap<NodeId, BTreeSet<RelationId>>,
     by_target: BTreeMap<NodeId, BTreeSet<RelationId>>,
+    /// Derived relations by the owner their id names (`RelationId::root`):
+    /// what an expansion of that owner holds, found without a pass over
+    /// every relation (plans/handoff-scaling.md DS-3b). Not journaled: a
+    /// rollback refreshes the ids it puts back (`refresh_rooted`).
+    by_root: BTreeMap<NodeId, BTreeSet<RelationId>>,
 
     /// The open transaction's undo records (reactive-engine handoff §4.3,
     /// task 2). Outside equality and cloning: a clone has none open.
@@ -699,7 +704,10 @@ impl Document {
                 self.facets.remove(&kind);
             }
             Rec::Facet(kind, id, f) => put(self.facets.get_mut(&kind).expect("journaled facet table"), id, f),
-            Rec::Relation(id, r) => put(&mut self.relations, id, r),
+            Rec::Relation(id, r) => {
+                put(&mut self.relations, id, r);
+                self.refresh_rooted(id);
+            }
             Rec::NextId(client, n) => put(&mut self.next_ids, client, n),
             Rec::NextRel(client, n) => put(&mut self.next_rels, client, n),
             Rec::SessionId(n) => self.next_session_id = n,
@@ -1011,10 +1019,30 @@ impl Document {
         if self.recording() {
             self.rec(Rec::Relation(id, before));
         }
+        self.refresh_rooted(id);
+    }
+
+    /// Keep `by_root` true for relation `id`, present or not.
+    fn refresh_rooted(&mut self, id: RelationId) {
+        let Some(root) = id.root() else { return };
+        if self.relations.contains_key(&id) {
+            self.by_root.entry(root).or_default().insert(id);
+        } else if let Some(set) = self.by_root.get_mut(&root) {
+            set.remove(&id);
+            if set.is_empty() {
+                self.by_root.remove(&root);
+            }
+        }
+    }
+
+    /// The derived relations whose id names `owner`.
+    pub(crate) fn rooted(&self, owner: NodeId) -> impl Iterator<Item = &Relation> + '_ {
+        self.by_root.get(&owner).into_iter().flatten().filter_map(|id| self.relations.get(id))
     }
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
         let r = self.relations.remove(&id)?;
+        self.refresh_rooted(id);
         self.touch(r.from);
         if self.recording() {
             self.rec(Rec::Relation(id, Some(r.clone())));
@@ -1131,6 +1159,7 @@ impl Document {
         self.by_facet.clear();
         self.by_source.clear();
         self.by_target.clear();
+        self.by_root.clear();
         let live: Vec<NodeId> = self
             .nodes
             .values()
@@ -1158,6 +1187,9 @@ impl Document {
         for r in rels {
             self.by_source.entry(r.from).or_default().insert(r.id);
             self.by_target.entry(r.to).or_default().insert(r.id);
+            if let Some(root) = r.id.root() {
+                self.by_root.entry(root).or_default().insert(r.id);
+            }
         }
     }
 
@@ -1245,6 +1277,16 @@ impl Document {
                 || !self.by_target.get(&r.to).is_some_and(|s| s.contains(&r.id))
             {
                 return Err(format!("relation {} not indexed", r.id));
+            }
+            if let Some(root) = r.id.root()
+                && !self.by_root.get(&root).is_some_and(|s| s.contains(&r.id))
+            {
+                return Err(format!("relation {} not indexed by its owner", r.id));
+            }
+        }
+        for (root, ids) in &self.by_root {
+            if ids.is_empty() || ids.iter().any(|id| !self.relations.contains_key(id) || id.root() != Some(*root)) {
+                return Err(format!("owner {root}'s relations misindexed"));
             }
         }
         Ok(())

@@ -46,6 +46,8 @@ pub struct Clusters {
     /// (plans/handoff-scaling.md DS-3a).
     pub at: BTreeMap<NodeId, usize>,
     pub by_node: BTreeMap<NodeId, NodeId>,
+    /// The copies some cluster holds (`copies`).
+    copies: BTreeSet<NodeId>,
 }
 
 impl Clusters {
@@ -53,7 +55,8 @@ impl Clusters {
     pub fn new(list: Vec<Cluster>, var_cluster: BTreeMap<Leaf, NodeId>) -> Clusters {
         let at = list.iter().enumerate().map(|(i, c)| (c.key(), i)).collect();
         let by_node = list.iter().flat_map(|c| c.nodes.iter().map(move |&n| (n, c.key()))).collect();
-        Clusters { list: list.into(), var_cluster, at, by_node }
+        let copies = list.iter().flat_map(|c| c.nodes.iter().copied()).filter(|n| n.is_expanded()).collect();
+        Clusters { list: list.into(), var_cluster, at, by_node, copies }
     }
 
     /// The cluster with key `key`.
@@ -68,8 +71,8 @@ impl Clusters {
     /// The copies some cluster holds: their transform is the solver's,
     /// as a variable or as a fixed or driven input, until no cluster
     /// holds them.
-    pub(crate) fn copies(&self) -> std::collections::BTreeSet<NodeId> {
-        self.list.iter().flat_map(|c| c.nodes.iter().copied()).filter(|n| n.is_expanded()).collect()
+    pub(crate) fn copies(&self) -> &BTreeSet<NodeId> {
+        &self.copies
     }
 }
 
@@ -638,9 +641,52 @@ impl crate::graph::Native for ClustersNative {
         let result = clusters_with(cx.tree(), cx.graph(), lib, &|l| cx.read(l), &|l| {
             let _ = cx.driven(l);
         });
-        cx.set_extra(std::sync::Arc::new(result));
+        cx.set_extra(std::sync::Arc::new(Grouping { result, reach: grouping_reach(cx.tree()) }));
         Ok(BTreeMap::new())
     }
+}
+
+/// What the grouping native made: the clusters, and what it read of the
+/// document's structure (`grouping_reach`).
+pub(crate) struct Grouping {
+    pub(crate) result: Result<Clusters, String>,
+    pub(crate) reach: BTreeSet<NodeId>,
+}
+
+/// The nodes whose structure grouping and validation read: every
+/// constraint and its operands, every anchor with the port it names, that
+/// port's outer port, its connection and partner, an expanded anchor's
+/// root, and the ancestors of all of these (operands' transform chains,
+/// clusters' parents, compositions and context chains). A structural op
+/// that touches none of them, and makes no constraint, anchor, port or
+/// connection, leaves both as they were (DS-3b: `Store::regraph`).
+pub(crate) fn grouping_reach(doc: Tree<'_>) -> BTreeSet<NodeId> {
+    let mut seeds: Vec<NodeId> = Vec::new();
+    for c in doc.nodes_of_type(constraint::constraint_type()) {
+        seeds.push(c);
+        seeds.extend(doc.relations_from(c).filter(|r| r.rel == crate::document::RelKind::Constrains).map(|r| r.to));
+    }
+    for a in doc.nodes_with(FacetKind::Anchor) {
+        seeds.push(a);
+        seeds.extend(a.expanded_root());
+        let Some(port) = doc.get::<crate::facet::Anchor>(a).and_then(|f| f.port.constant().and_then(|v| v.as_ref())) else { continue };
+        let outer = crate::plug::outer_port(doc, port);
+        seeds.extend([port, outer]);
+        if let Some((c, partner)) = crate::plug::connection_of(doc, outer) {
+            seeds.extend([c, partner]);
+        }
+    }
+    let mut reach = BTreeSet::new();
+    for s in seeds {
+        let mut at = Some(s);
+        while let Some(n) = at {
+            if !reach.insert(n) {
+                break;
+            }
+            at = doc.node(n).and_then(|x| x.parent);
+        }
+    }
+    reach
 }
 
 /// One cluster as a native cell that only watches (RE-5.5): it reads what a

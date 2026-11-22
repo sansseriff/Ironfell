@@ -31,6 +31,9 @@ pub(crate) struct Owners {
     problems: BTreeMap<NodeId, Vec<Problem>>,
     /// How many derived nodes each owner wanted: the budget's share.
     counts: crate::work::Counted<BTreeMap<NodeId, usize>, { crate::work::OWNERS_COUNTS }>,
+    /// The sum of `counts`, kept as they change (DS-3b: no sum over every
+    /// owner per expansion).
+    held: usize,
     /// Definition -> owners whose expansion read it. Only grows.
     by_def: crate::work::Counted<BTreeMap<NodeId, BTreeSet<NodeId>>, { crate::work::OWNERS_BY_DEF }>,
     /// Owner -> owners whose pictures figure its derived entities. Only
@@ -108,7 +111,12 @@ impl Owners {
         // Each wave expands the owners whose pictures read what the last one
         // changed.
         while !todo.is_empty() {
-            let held: usize = self.counts.iter().chain(delta.counts.iter()).filter(|(o, _)| !todo.contains(o)).map(|(o, n)| delta.counts.get(o).copied().unwrap_or(*n)).sum::<usize>();
+            // What the owners not in this wave hold, as this call has
+            // left them so far.
+            let mut held = self.held - todo.iter().filter_map(|o| self.counts.get(o)).sum::<usize>();
+            for (o, &n) in delta.counts.iter().filter(|(o, _)| !todo.contains(o)) {
+                held = (held + n).saturating_sub(self.counts.get(o).copied().unwrap_or(0));
+            }
             let held = held.min(expand::NODE_BUDGET);
             let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
             let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.made.0, &troubled);
@@ -157,7 +165,7 @@ impl Owners {
         }
         // What every owner holds, kept as each one's items change, so two
         // owners never spend the same room.
-        let mut held: usize = self.counts.values().sum();
+        let mut held: usize = self.held;
         let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         let mut ops = Vec::new();
         let mut repair: BTreeSet<NodeId> = BTreeSet::new();
@@ -214,6 +222,7 @@ impl Owners {
         if d.all {
             self.problems.clear();
             self.counts.clear();
+            self.held = 0;
         }
         for (o, p) in d.problems {
             if p.is_empty() {
@@ -223,12 +232,11 @@ impl Owners {
             }
         }
         for (o, n) in d.counts {
-            if n == 0 {
-                self.counts.remove(&o);
-            } else {
-                self.counts.insert(o, n);
-            }
+            let was = if n == 0 { self.counts.remove(&o) } else { self.counts.insert(o, n) };
+            self.held = self.held + n - was.unwrap_or(0);
         }
+        #[cfg(feature = "differential")]
+        assert_eq!(self.held, self.counts.values().sum::<usize>());
         for (def, o) in d.defs {
             self.by_def.entry(def).or_default().insert(o);
         }
@@ -360,8 +368,20 @@ impl Owners {
                     all |= touch(*id, &mut out);
                 }
                 // Where a subtree moves can change which owners are in a
-                // repeat's template or in the library: expand them all.
-                Op::Reparent { .. } => all = true,
+                // repeat's template, a definition or the library: the owners
+                // around its new place (here) and its old one (the inverse
+                // move, below), and every owner and picture inside it, which
+                // may now be nested or top-level (DS-3b: not every owner).
+                Op::Reparent { id, .. } => {
+                    for n in std::iter::once(*id).chain(doc.descendants(*id)) {
+                        all |= is_structure_type(n);
+                        if owner_kind(n) && !n.is_expanded() {
+                            out.insert(n);
+                        }
+                        all |= pictures(n, &mut out);
+                    }
+                    all |= touch(*id, &mut out);
+                }
                 Op::Link { rel } => {
                     all |= touch(rel.from, &mut out);
                 }
@@ -381,6 +401,10 @@ impl Owners {
                 }
                 // A derived relation unlinked: its owner derives it again.
                 Op::Link { rel } => out.extend(rel.id.root()),
+                // A move's old place.
+                Op::Reparent { parent: Some(p), .. } => {
+                    all |= touch(*p, &mut out);
+                }
                 _ => {}
             }
         }

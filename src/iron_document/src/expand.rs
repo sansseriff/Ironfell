@@ -489,7 +489,7 @@ pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stam
     };
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
-    let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.root().is_some_and(|o| owners.contains(&o))).cloned().collect();
+    let have_rels: Vec<Relation> = owners.iter().flat_map(|&o| Tree::of(docs).rooted(o).cloned().collect::<Vec<_>>()).collect();
     out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, (solved, edited), &kept, &was);
     for o in owners {
         out.problems.insert(*o, Vec::new());
@@ -585,7 +585,10 @@ pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp
         let tree = Tree::of(docs);
         repeats.iter().flat_map(|&r| tree.descendants(r).into_iter().filter(move |d| d.item_of(r).is_some())).collect()
     };
-    let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|rel| rel.id.is_expanded() && repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect();
+    // The derived relations from the repeats' items: under each repeat's
+    // top owner, the one its items' ids name.
+    let tops: BTreeSet<NodeId> = repeats.iter().map(|&r| r.path().first().copied().unwrap_or(r)).collect();
+    let have_rels: Vec<Relation> = tops.iter().flat_map(|&o| Tree::of(docs).rooted(o).filter(|rel| repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect::<Vec<_>>()).collect();
     let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect(), pieces: std::mem::take(&mut out.pieces) };
     let mut problems = Vec::new();
     let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, (solved, edited), &out.kept, &out.was);

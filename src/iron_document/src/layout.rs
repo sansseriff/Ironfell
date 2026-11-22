@@ -374,7 +374,7 @@ impl Reads for Fresh<'_> {
 
 /// Whether a node places its children: a group with a `layout` facet, or a
 /// table.
-fn lays_out(doc: DocTree<'_>, n: NodeId) -> bool {
+pub(crate) fn lays_out(doc: DocTree<'_>, n: NodeId) -> bool {
     doc.live(n).is_some_and(|x| match x.ty.name() {
         "group" => doc.facet(n, FacetKind::Layout).is_some(),
         "table" => true,
@@ -719,17 +719,18 @@ pub fn lay_out_count() -> u64 {
 /// decides.
 const WRITES: [&str; 7] = ["transform2d.x", "transform2d.y", "size.w", "size.h", "text.sizing", "radius.rx", "radius.ry"];
 
-/// The parts of resized pictures that `constrained` places: copies of
-/// template parts with a `constraints` facet. Their placement is the pins',
-/// not a container's (it overrode the container's before natives).
-pub(crate) fn pinned_parts(doc: DocTree<'_>) -> BTreeSet<NodeId> {
-    let use_ty = TypeId::lookup("use").expect("registered");
+/// The pinned parts of one `use`: the parts of a resized picture that
+/// `constrained` places, copies of template parts with a `constraints`
+/// facet. Their placement is the pins', not a container's (it overrode the
+/// container's before natives). None unless the use is live and sized.
+pub(crate) fn pinned_parts_of(doc: DocTree<'_>, u: NodeId) -> BTreeSet<NodeId> {
     let mut out = BTreeSet::new();
-    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
+    let use_ty = TypeId::lookup("use").expect("registered");
+    if doc.node(u).is_some_and(|n| n.ty == use_ty) && doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some() {
         let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
-        let Some(def) = def else { continue };
+        let Some(def) = def else { return out };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
-        let Some(t) = crate::definition::template_of(doc, def, &notation) else { continue };
+        let Some(t) = crate::definition::template_of(doc, def, &notation) else { return out };
         for &part in doc.children(t).iter() {
             if doc.facet(part, FacetKind::Constraints).is_some()
                 && let Some(copy) = NodeId::expanded(u, part)

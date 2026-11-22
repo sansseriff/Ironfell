@@ -210,10 +210,10 @@ pub(crate) fn apply_op(
     if reshapes(op) {
         docs.reshaped = crate::stamp();
     }
-    if rewires_network(op) {
+    if rewires_network(docs, op) {
         docs.network_shaped = crate::stamp();
     }
-    if retokens(op) {
+    if retokens(docs, op) {
         docs.tokens_shaped = crate::stamp();
     }
     match op {
@@ -264,22 +264,42 @@ fn reshapes(op: &Op) -> bool {
     }
 }
 
-/// Whether `op` can change the port network (`port::network`): structure
-/// and relations, and a port's, connection's or equation's leaf (whether
-/// one is bound decides an unknown). A constant elsewhere cannot.
-fn rewires_network(op: &Op) -> bool {
+/// Whether `op`, about to apply, touches a node of one of `types` or one
+/// carrying one of `kinds`: what it makes, deletes or moves (its subtree,
+/// for a delete or a move), a facet it adds or removes, or an end of a
+/// relation it links or unlinks. Costs what the op touches.
+fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
+    let doc = Tree::of(docs);
+    let is = |n: NodeId| doc.node(n).is_some_and(|x| types.contains(&x.ty.name())) || kinds.iter().any(|&k| doc.facet(n, k).is_some());
+    let subtree = |n: NodeId| std::iter::once(n).chain(doc.descendants(n)).any(is);
     match op {
-        Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Connection | FacetKind::Equation),
-        _ => true,
+        Op::Create { ty, facets, .. } => types.contains(&ty.name()) || facets.iter().any(|f| kinds.contains(&f.kind())),
+        Op::Delete { id } | Op::Reparent { id, .. } => subtree(*id),
+        Op::AddFacet { id, facet } => kinds.contains(&facet.kind()) || is(*id),
+        Op::RemoveFacet { id, kind } => kinds.contains(kind) || is(*id),
+        Op::Link { rel } => is(rel.from) || is(rel.to),
+        Op::Unlink { id } => doc.relation(*id).is_none_or(|r| is(r.from) || is(r.to)),
+        Op::Reorder { .. } | Op::Set { .. } => false,
     }
 }
 
-/// Whether `op` can change the theme's tokens: structure, or a token's
-/// leaf.
-fn retokens(op: &Op) -> bool {
+/// Whether `op` can change the port network (`port::network`): a port,
+/// connection or equation made, deleted, moved or relinked, or one of their
+/// leaves set (whether one is bound decides an unknown). Nothing else can
+/// (DS-3b: a structural change elsewhere does not rebuild it).
+fn rewires_network(docs: &Docs, op: &Op) -> bool {
     match op {
-        Op::Set { path, .. } => path.facet == FacetKind::Token,
-        _ => true,
+        Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Connection | FacetKind::Equation),
+        _ => touches(docs, op, &["port", "connection", "equation"], &[FacetKind::Port, FacetKind::Connection, FacetKind::Equation]),
+    }
+}
+
+/// Whether `op` can change the theme's tokens: a token made, deleted or
+/// moved, or a token's leaf or name set.
+fn retokens(docs: &Docs, op: &Op) -> bool {
+    match op {
+        Op::Set { id, path, .. } => path.facet == FacetKind::Token || (path.facet == FacetKind::Name && Tree::of(docs).node(*id).is_some_and(|n| n.ty.name() == "token")),
+        _ => touches(docs, op, &["token"], &[FacetKind::Token]),
     }
 }
 

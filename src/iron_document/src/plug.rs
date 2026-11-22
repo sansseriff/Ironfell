@@ -81,7 +81,7 @@ pub fn held_end(doc: Tree<'_>, connection: NodeId) -> Option<NodeId> {
 }
 
 /// The outermost port exposing `port`.
-fn outer_port(doc: Tree<'_>, mut port: NodeId) -> NodeId {
+pub(crate) fn outer_port(doc: Tree<'_>, mut port: NodeId) -> NodeId {
     for _ in 0..16 {
         match doc.relations_to(port).find(|r| r.rel == RelKind::Exposes && doc.is_live(r.from)) {
             Some(r) => port = r.from,

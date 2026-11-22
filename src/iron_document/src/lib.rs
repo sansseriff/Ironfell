@@ -569,7 +569,14 @@ pub struct StoreCore {
     /// are made again only when it moved.
     structure_gen: u64,
     /// The structural change the layout natives were made for.
-    layout_at: Option<u64>,
+    /// The structural roots, each with the nodes its layout covers; each
+    /// `use`'s pinned parts; the nodes structural changes shaped since the
+    /// last `sync_layout`; and the x-placed nodes of each root (for glide
+    /// specs). Kept, not found by a pass (DS-3b).
+    layout_roots: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    pinned_by_use: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    layout_touched: BTreeSet<NodeId>,
+    glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// The count of document writes the repeat natives were made for.
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
@@ -704,7 +711,10 @@ impl StoreCore {
             repeats: self.repeats.clone(),
             item_memo: self.item_memo.clone(),
             network: self.network.clone(),
-            layout_at: self.layout_at,
+            layout_roots: self.layout_roots.clone(),
+            pinned_by_use: self.pinned_by_use.clone(),
+            layout_touched: self.layout_touched.clone(),
+            glide_nodes: self.glide_nodes.clone(),
             structure_gen: self.structure_gen,
             repeat_inputs: self.repeat_inputs.clone(),
             drawn: self.drawn.clone(),
@@ -781,6 +791,16 @@ impl StoreCore {
         let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
         // A deleted node is read as it was when it went (`Docs::gone`).
         let gone = &self.docs.gone;
+        // What grouping and validation read of structure, as of their last
+        // run (`solve::grouping_reach`); unknown before one, when every
+        // structural change makes them look again.
+        let reach = self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()).map(|g| &g.reach);
+        let grouping_kind = |k: FacetKind| matches!(k, FacetKind::Constraint | FacetKind::Anchor | FacetKind::Port | FacetKind::Connection);
+        let in_reach = |n: NodeId| reach.is_none_or(|r| r.contains(&n));
+        let mut regroup = false;
+        // The nodes a move took in or out of the grouping's reach: the
+        // clusters beneath them read a changed chain of ancestors.
+        let mut moved: Vec<NodeId> = Vec::new();
         let made_of = |id: NodeId| match gone.get(&id) {
             Some(w) => matches!(w.ty.name(), "port" | "connection") || w.port_or_anchor,
             None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
@@ -846,6 +866,23 @@ impl StoreCore {
                 }
                 Op::Unlink { .. } => {}
             }
+            regroup |= match op {
+                // A copy made again may be an operand that went.
+                Op::Create { id, ty, facets, .. } => in_reach(*id) || matches!(ty.name(), "constraint" | "port" | "connection") || facets.iter().any(|f| grouping_kind(f.kind())),
+                Op::AddFacet { id, facet } => grouping_kind(facet.kind()) || in_reach(*id),
+                Op::RemoveFacet { id, kind } => grouping_kind(*kind) || in_reach(*id),
+                Op::Delete { id } | Op::Set { id, .. } => in_reach(*id),
+                Op::Reparent { id, .. } => {
+                    if in_reach(*id) {
+                        moved.push(*id);
+                    }
+                    in_reach(*id)
+                }
+                Op::Link { rel } => matches!(rel.rel, RelKind::Constrains | RelKind::Connects | RelKind::Exposes) || in_reach(rel.from) || in_reach(rel.to),
+                // Its relation is gone; the inverse link names its ends.
+                Op::Unlink { id } => doc.relation(*id).is_none_or(|r| in_reach(r.from) || in_reach(r.to)),
+                Op::Reorder { .. } => false,
+            };
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
             let touches = match op {
@@ -880,6 +917,7 @@ impl StoreCore {
                 }
             }
         }
+        let reach_unknown = reach.is_none();
         // A boundary check on an instance's argument reads its definition's
         // port_specs (`types::declared`): an edit inside a definition
         // reaches the arguments of every entity naming it.
@@ -899,16 +937,25 @@ impl StoreCore {
         if fresh {
             self.sync_islands(&net, false);
         }
+        self.layout_touched.extend(shaped.iter().copied());
         self.sync_layout(false);
         self.sync_repeats(false);
         self.prime_layout(&shaped);
         // Constraints and their operands are structure to the grouping
-        // and to validation; a reparent can move an operand's ancestry
-        // without touching it (a wrapper swapped), so every cluster
-        // looks again.
-        self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
-        if reparented {
-            let keys: Vec<graph::NativeKey> = self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect();
+        // and to validation: they look again when an op touched what they
+        // read (DS-3b: not on every structural change). A reparent can move
+        // an operand's ancestry without touching it (a wrapper swapped):
+        // the clusters beneath what moved look again.
+        if regroup {
+            self.reactive.prime_natives([graph::NativeKey::Clusters, graph::NativeKey::Validate]);
+        }
+        if reparented && !moved.is_empty() {
+            let doc = Tree::of(&self.docs);
+            let keys: BTreeSet<graph::NativeKey> = if reach_unknown {
+                self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect()
+            } else {
+                moved.iter().flat_map(|&m| std::iter::once(m).chain(doc.descendants(m))).filter_map(|n| self.clusters.by_node.get(&n)).map(|&k| graph::NativeKey::Cluster(k)).collect()
+            };
             self.reactive.prime_natives(keys);
         }
         let rescope = if rescope_all {
@@ -1072,7 +1119,10 @@ impl StoreCore {
             repeat_natives: Default::default(),
             item_memo: Default::default(),
             network: None,
-            layout_at: None,
+            layout_roots: None,
+            pinned_by_use: None,
+            layout_touched: BTreeSet::new(),
+            glide_nodes: BTreeMap::new(),
             structure_gen: 0,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -1112,51 +1162,83 @@ impl StoreCore {
     fn rebuild_clusters(&mut self) {
         // A malformed document (which `apply` refuses) or a cycle leaves the
         // last good clusters; `post_apply` reports the error.
-        if self.reactive.native(graph::NativeKey::Clusters).is_some() {
-            // Nothing to take when the grouping did not run since.
-            self.reactive.flush(Tree::of(&self.docs));
-            if self.reactive.runs_of(graph::NativeKey::Clusters) == self.grouped_at {
-                return;
-            }
+        let _ = self.regroup();
+    }
+
+    /// Under the differential check: the grouping not run since it was last
+    /// taken (DS-3b: no structural op touched its reach) is what grouping
+    /// from scratch makes now.
+    #[cfg(feature = "differential")]
+    fn check_grouping(&self) {
+        let doc = Tree::of(&self.docs);
+        if let Ok(fresh) = solve::clusters(doc, &self.reactive, self.contexts()) {
+            assert!(self.grouping_error.is_none() && fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>());
         }
-        if let Ok(c) = self.grouped() {
-            self.owners.hold(c.copies());
+    }
+
+    /// Take the constraints as grouped now into `clusters`: the grouping
+    /// native's result, made again only when what it read changed (handoff
+    /// §4.10, RE-5.5), and taken only when it ran since it was last taken
+    /// (DS-3b: an unchanged grouping costs nothing). An error leaves the
+    /// last good clusters, and is given again until the grouping runs.
+    fn regroup(&mut self) -> Result<(), String> {
+        if self.reactive.native(graph::NativeKey::Clusters).is_none() {
+            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
+        }
+        // A claim that came or went on an operand waits to run it.
+        self.reactive.flush(Tree::of(&self.docs));
+        let runs = self.reactive.runs_of(graph::NativeKey::Clusters);
+        if runs.is_some() && runs == self.grouped_at {
+            #[cfg(feature = "differential")]
+            self.check_grouping();
+            return match &self.grouping_error {
+                Some(e) => Err(e.clone()),
+                None => Ok(()),
+            };
+        }
+        let result = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()) {
+            Some(g) => g.result.clone(),
+            None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
+        };
+        self.grouped_at = runs;
+        let c = match result {
+            Ok(c) => c,
+            Err(e) => {
+                self.grouping_error = Some(e.clone());
+                return Err(e);
+            }
+        };
+        self.grouping_error = None;
+        if c != self.clusters {
+            self.owners.hold(c.copies().clone());
             // `committed` names current clusters only: `resolve_clusters_live`
             // counts on it.
             self.committed.retain(|k| c.at.contains_key(k));
             self.clusters = c;
             self.sync_cluster_natives();
         }
+        Ok(())
     }
 
-    /// The constraints as grouped now: in native mode the grouping native's
-    /// result, made again only when what it read changed (handoff §4.10,
-    /// RE-5.5).
-    fn grouped(&mut self) -> Result<solve::Clusters, String> {
-        if self.reactive.native(graph::NativeKey::Clusters).is_none() {
-            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
+    /// The clusters, in solve order, whose solve could move something: a
+    /// driver is one of their variables or a finger holds one, their
+    /// watching native ran since their last committed solve, or they have
+    /// none. The rest are as their last solve left them (`unmoved`), found
+    /// by index, not by a pass over every cluster (DS-3a, DS-3b).
+    fn to_solve(&self, drivers: &[solve::Driver]) -> Vec<usize> {
+        let mut keys: BTreeSet<NodeId> = self.reactive.ran_clusters().collect();
+        keys.extend(self.fingers.iter().filter_map(|f| self.clusters.by_node.get(&f.node).copied()));
+        keys.extend(drivers.iter().filter_map(|d| self.clusters.by_node.get(&d.leaf.node).copied()));
+        if self.committed.len() < self.clusters.list.len() {
+            keys.extend(self.clusters.at.keys().filter(|k| !self.committed.contains(k)).copied());
         }
-        // A claim that came or went on an operand waits to run it.
-        self.reactive.flush(Tree::of(&self.docs));
-        // Its result is taken again only when it ran since it was last taken.
-        let runs = self.reactive.runs_of(graph::NativeKey::Clusters);
-        if runs.is_some() && runs == self.grouped_at {
-            return match &self.grouping_error {
-                Some(e) => Err(e.clone()),
-                None => Ok(self.clusters.clone()),
-            };
+        let mut order: Vec<usize> = keys.iter().filter_map(|k| self.clusters.at.get(k).copied()).collect();
+        order.sort_unstable();
+        #[cfg(feature = "differential")]
+        for (i, c) in self.clusters.list.iter().enumerate() {
+            assert!(order.contains(&i) || self.unmoved(c, drivers), "cluster {} could move but is not solved", c.id);
         }
-        let result = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<Result<solve::Clusters, String>>()) {
-            Some(r) => r.clone(),
-            None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
-        };
-        self.grouped_at = runs;
-        if let Err(e) = &result {
-            self.grouping_error = Some(e.clone());
-        } else {
-            self.grouping_error = None;
-        }
-        result
+        order
     }
 
     /// Whether the constraints are well formed: in native mode the
@@ -1209,14 +1291,7 @@ impl StoreCore {
         // The clusters that could have moved: their watching native ran,
         // a finger holds them, or they have not been committed; the rest
         // are as their last solve left them (DS-3a: no pass over all).
-        let mut keys: BTreeSet<NodeId> = self.reactive.ran_clusters().collect();
-        keys.extend(self.fingers.iter().filter_map(|f| self.clusters.by_node.get(&f.node).copied()));
-        if self.committed.len() < self.clusters.list.len() {
-            keys.extend(self.clusters.at.keys().filter(|k| !self.committed.contains(k)).copied());
-        }
-        let mut order: Vec<usize> = keys.iter().filter_map(|k| self.clusters.at.get(k).copied()).collect();
-        order.sort_unstable();
-        let clusters: Vec<solve::Cluster> = order.into_iter().map(|i| self.clusters.list[i].clone()).collect();
+        let clusters: Vec<solve::Cluster> = self.to_solve(&[]).into_iter().map(|i| self.clusters.list[i].clone()).collect();
         for c in &clusters {
             if self.unmoved(c, &[]) {
                 continue;
@@ -2975,6 +3050,45 @@ impl StoreCore {
 
     /// What each laid-out node may glide by, as its placement's context
     /// declares: kept with the glides while they run (handoff §4.10).
+    /// `glide_specs` for the nodes of the layout roots `rebuilt` only:
+    /// their old entries go, their nodes' are found again.
+    fn glide_specs_of(&mut self, rebuilt: &[NodeId]) {
+        if self.reactive.glide.is_none() || rebuilt.is_empty() {
+            return;
+        }
+        let mut gone: Vec<NodeId> = Vec::new();
+        for &r in rebuilt {
+            gone.extend(self.glide_nodes.remove(&r).unwrap_or_default());
+        }
+        let doc = Tree::of(&self.docs);
+        let x: LeafPath = "transform2d.x".parse().expect("declared leaf");
+        let resolver = contexts::Resolver::new(doc, self.contexts());
+        let mut add = BTreeMap::new();
+        let mut placed: Vec<(NodeId, Vec<NodeId>)> = Vec::new();
+        for &r in rebuilt {
+            let Some(n) = self.reactive.native(graph::NativeKey::Layout(r)) else { continue };
+            let nodes: Vec<NodeId> = n.outputs().iter().filter(|l| l.path == x).map(|l| l.node).collect();
+            for &node in &nodes {
+                let chain = contexts::chain_of(doc, node);
+                if chain.is_empty() {
+                    continue;
+                }
+                let declared = resolver.get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
+                if let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) {
+                    add.insert(node, (m.ms, m.ease));
+                }
+            }
+            placed.push((r, nodes));
+        }
+        self.glide_nodes.extend(placed);
+        if let Some(g) = self.reactive.glide.as_mut() {
+            for n in gone {
+                g.specs.remove(&n);
+            }
+            g.specs.extend(add);
+        }
+    }
+
     fn glide_specs(&mut self) {
         if self.reactive.glide.is_none() {
             return;
@@ -3773,49 +3887,106 @@ impl StoreCore {
     /// Make the layout natives (handoff §4.10, RE-5.4): one per structural
     /// root, and the pins, keeping each that is as it would be made now.
     fn sync_layout(&mut self, run: bool) {
-        if self.layout_at == Some(self.structure_gen) {
+        // The first time, every structural root and pinned part; after
+        // that, the roots the nodes a structural change shaped belong to,
+        // and the uses among them (DS-3b: no pass over every group, table
+        // and use on each structural change).
+        let doc = Tree::of(&self.docs);
+        let use_ty = TypeId::lookup("use").expect("registered");
+        let (mut roots, mut pinned_by) = match (self.layout_roots.take(), self.pinned_by_use.take()) {
+            (Some(r), Some(p)) => (r, p),
+            _ => {
+                self.layout_touched.clear();
+                let roots: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
+                let pinned: BTreeMap<NodeId, BTreeSet<NodeId>> = doc.nodes_of_type(use_ty).map(|u| (u, layout::pinned_parts_of(doc, u))).filter(|(_, p)| !p.is_empty()).collect();
+                let all = layout::structural_roots(doc);
+                self.layout_touched.extend(all);
+                (roots, pinned)
+            }
+        };
+        let touched = std::mem::take(&mut self.layout_touched);
+        if touched.is_empty() {
+            self.layout_roots = Some(roots);
+            self.pinned_by_use = Some(pinned_by);
             return;
         }
-        self.layout_at = Some(self.structure_gen);
-        let doc = Tree::of(&self.docs);
-        let pinned = layout::pinned_parts(doc);
+        // The uses whose pinned parts may have changed: those touched, and
+        // the owners of copies touched.
+        let mut uses: BTreeSet<NodeId> = BTreeSet::new();
+        for &t in &touched {
+            if doc.node(t).is_some_and(|n| n.ty == use_ty) {
+                uses.insert(t);
+            }
+            if let Some((owner, _)) = t.expanded_parts()
+                && doc.node(owner).is_some_and(|n| n.ty == use_ty)
+            {
+                uses.insert(owner);
+            }
+        }
+        let mut changed_parts: BTreeSet<NodeId> = BTreeSet::new();
+        for u in uses {
+            let now = layout::pinned_parts_of(doc, u);
+            let was = pinned_by.remove(&u).unwrap_or_default();
+            changed_parts.extend(now.symmetric_difference(&was).copied());
+            if !now.is_empty() {
+                pinned_by.insert(u, now);
+            }
+        }
+        let pinned: BTreeSet<NodeId> = pinned_by.values().flatten().copied().collect();
+        // The top of the chain of placing nodes above `n`: the structural
+        // root whose layout covers it.
+        let top = |n: NodeId| -> Option<NodeId> {
+            let mut at = if layout::lays_out(doc, n) { Some(n) } else { doc.live(n).and_then(|x| x.parent) };
+            let mut found = None;
+            while let Some(x) = at.filter(|&x| layout::lays_out(doc, x)) {
+                found = Some(x);
+                at = doc.live(x).and_then(|y| y.parent);
+            }
+            found
+        };
+        let mut candidates: BTreeSet<NodeId> = BTreeSet::new();
+        for &t in touched.iter().chain(&changed_parts) {
+            candidates.insert(t);
+            candidates.extend(top(t));
+        }
         let mut want: Vec<(graph::NativeKey, std::sync::Arc<dyn graph::Native>)> = Vec::new();
-        let mut covered: BTreeSet<NodeId> = BTreeSet::new();
-        for root in layout::structural_roots(doc) {
-            let k = graph::NativeKey::Layout(root);
-            let n = layout::LayoutNative::new(doc, root, &pinned);
-            covered.extend(n.nodes());
-            if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<layout::LayoutNative>()) != Some(&n) {
-                want.push((k, std::sync::Arc::new(n)));
+        let mut drop: Vec<graph::NativeKey> = Vec::new();
+        let mut rebuilt: Vec<NodeId> = Vec::new();
+        for c in candidates {
+            let is_root = layout::lays_out(doc, c) && !doc.live(c).and_then(|x| x.parent).is_some_and(|p| layout::lays_out(doc, p));
+            let k = graph::NativeKey::Layout(c);
+            if is_root {
+                let n = layout::LayoutNative::new(doc, c, &pinned);
+                roots.insert(c, n.nodes());
+                rebuilt.push(c);
+                if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<layout::LayoutNative>()) != Some(&n) {
+                    want.push((k, std::sync::Arc::new(n)));
+                }
+            } else if roots.remove(&c).is_some() || self.reactive.native(k).is_some() {
+                drop.push(k);
+                rebuilt.push(c);
             }
         }
         // The pins of parts no layout holds.
-        let pinned: BTreeSet<NodeId> = pinned.difference(&covered).copied().collect();
-        let pins = layout::PinsNative::new(&pinned);
-        let keep_pins = !pinned.is_empty();
+        let uncovered: BTreeSet<NodeId> = pinned.iter().copied().filter(|&p| top(p).is_none_or(|t| !roots.get(&t).is_some_and(|ns| ns.contains(&p)))).collect();
+        let pins = layout::PinsNative::new(&uncovered);
+        let keep_pins = !uncovered.is_empty();
         if keep_pins && self.reactive.native(graph::NativeKey::Pins).and_then(|x| x.as_any().downcast_ref::<layout::PinsNative>()) != Some(&pins) {
             want.push((graph::NativeKey::Pins, std::sync::Arc::new(pins)));
+        } else if !keep_pins && self.reactive.native(graph::NativeKey::Pins).is_some() {
+            drop.push(graph::NativeKey::Pins);
         }
-        let made: BTreeSet<graph::NativeKey> = want.iter().map(|(k, _)| *k).collect();
-        let roots: BTreeSet<NodeId> = layout::structural_roots(doc).into_iter().collect();
-        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
-            .reactive
-            .native_keys()
-            .filter(|k| match k {
-                graph::NativeKey::Layout(r) => !roots.contains(r) && !made.contains(k),
-                graph::NativeKey::Pins => !keep_pins,
-                _ => false,
-            })
-            .map(|k| (k, None))
-            .collect();
+        self.layout_roots = Some(roots);
+        self.pinned_by_use = Some(pinned_by);
         // Rooted, so a hidden composition stays laid out: an unrun native
         // claims nothing, so a host could take a placement first, and a
         // capture draws what no observer shows (handoff §4.10, RE-5.6).
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = drop.into_iter().map(|k| (k, None)).collect();
         batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
         if !batch.is_empty() {
             self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
-        self.glide_specs();
+        self.glide_specs_of(&rebuilt);
     }
 
     /// What decides whether a plugged pair mates, read from the document by
@@ -4221,8 +4392,7 @@ impl StoreCore {
         self.after_transaction(&applied, &mut expanded, &full_inverse);
         let held = self.keep_solved(&mut applied, solved, &expanded);
         self.apply_recorded(&mut applied, recorded, &mut full_inverse);
-        let now = self.clusters.copies();
-        let _ = self.release(&mut applied, &held, &now, 0);
+        let _ = self.release(&mut applied, &held, 0);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -4264,8 +4434,7 @@ impl StoreCore {
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
                 // Undo has no solve: a copy it leaves in no cluster is let go.
                 let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
-                let now = self.clusters.copies();
-                let _ = self.release(&mut applied, &held, &now, 0);
+                let _ = self.release(&mut applied, &held, 0);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -4312,8 +4481,7 @@ impl StoreCore {
                 self.after_transaction(&applied, &mut expanded, &full_inverse);
                 let held = self.keep_solved(&mut applied, solved, &expanded);
                 self.apply_recorded(&mut applied, recorded, &mut full_inverse);
-                let now = self.clusters.copies();
-                let _ = self.release(&mut applied, &held, &now, 0);
+                let _ = self.release(&mut applied, &held, 0);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
@@ -4363,18 +4531,9 @@ impl StoreCore {
         let last = tx.ops.len().saturating_sub(1);
         let err = |kind: ErrorKind, message: String| vec![ApplyError { op: last, kind, message }];
         self.validated().map_err(|m| err(ErrorKind::BadConstraint, m))?;
-        let clusters = self.grouped().map_err(|m| err(ErrorKind::Cycle, m))?;
-        let keys: BTreeSet<NodeId> = clusters.list.iter().map(solve::Cluster::key).collect();
-        self.committed.retain(|k| keys.contains(k));
-        let now = clusters.copies();
-        self.release(tx, held, &now, last).map_err(|e| vec![e])?;
-        self.owners.hold(now);
-        let regrouped = self.clusters != clusters;
-        self.clusters = clusters.clone();
-        if regrouped {
-            self.sync_cluster_natives();
-        }
-        if clusters.list.is_empty() {
+        self.regroup().map_err(|m| err(ErrorKind::Cycle, m))?;
+        self.release(tx, held, last).map_err(|e| vec![e])?;
+        if self.clusters.list.is_empty() {
             return Ok(None);
         }
         let drivers: Vec<solve::Driver> = tx
@@ -4389,7 +4548,8 @@ impl StoreCore {
             })
             .collect();
         let mut summary = SolverSummary::default();
-        for c in &clusters.list {
+        let clusters: Vec<solve::Cluster> = self.to_solve(&drivers).into_iter().map(|i| self.clusters.list[i].clone()).collect();
+        for c in &clusters {
             if self.unmoved(c, &drivers) {
                 continue;
             }
@@ -4475,9 +4635,10 @@ impl StoreCore {
     /// to what its owner's expansion wants, written as the solver writes,
     /// so undo puts the solved value back. A copy still in a cluster keeps
     /// it, as a variable or as a fixed or driven input.
-    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], now: &BTreeSet<NodeId>, at: usize) -> Result<(), ApplyError> {
+    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], at: usize) -> Result<(), ApplyError> {
         let released: Vec<Leaf> = {
             let doc = Tree::of(&self.docs);
+            let now = self.clusters.copies();
             held.iter().filter(|l| doc.is_live(l.node) && !now.contains(&l.node)).copied().collect()
         };
         if released.is_empty() {

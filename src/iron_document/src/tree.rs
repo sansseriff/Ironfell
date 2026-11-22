@@ -428,6 +428,11 @@ impl<'a> Tree<'a> {
         }
     }
 
+    /// The derived relations whose id names `owner`, from either document.
+    pub(crate) fn rooted(self, owner: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
+        self.both().flat_map(move |d| d.rooted(owner))
+    }
+
     pub fn relations(self) -> impl Iterator<Item = &'a Relation> + 'a {
         self.both().flat_map(Document::relations)
     }

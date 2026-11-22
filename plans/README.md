@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-20 for the patches track. Update this file whenever a plan is added,
+**Updated:** 2026-11-22 for the scaling track (`structure-in-the-graph.md`). Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -57,7 +57,7 @@ work under a plan gets the next free number.
 |---|---|---|
 | `RE` | [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) (closed; `RE-4.3` is now in `handoff-render.md` §10) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
 | `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
-| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`) |
+| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`), and `specs/structure-in-the-graph.md` §5 (`DS-9` … `DS-14`) |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
 
@@ -82,6 +82,7 @@ that orders them gives them a key.
 |---|---|---|
 | [`agent-vision.md`](specs/agent-vision.md) | Pasted/dropped raster references and GPU composition pictures for the built-in agent | Built on `t3/agent-image-vision`; 2D capture, bounded visual refinement; native/live-provider verification pending |
 | [`agent-runtimes.md`](specs/agent-runtimes.md) | Loopback runtime interoperability, Codex bootstrap, Claude CLI adapter, provider selection and 2D authoring tests | Bootstrap built 2026-11-03 in `agent-runtimes` worktree; live Codex create/edit/undo passes in worker/main modes; live Claude, native and full smoke pending |
+| [`structure-in-the-graph.md`](specs/structure-in-the-graph.md) (DS-9 to DS-14) | Cells read the document only through the graph, which records structure reads as it records values; the hand rules for what an edit affects deleted | Draft 2026-11-22, for council round 1 |
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |

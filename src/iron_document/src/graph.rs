@@ -80,7 +80,7 @@ pub enum CellId {
 }
 
 impl CellId {
-    /// The node the cell belongs to, for `read_by`.
+    /// The node the cell belongs to.
     pub fn node(self) -> NodeId {
         match self {
             CellId::Leaf(l) => l.node,
@@ -811,17 +811,37 @@ impl Reactive {
         (wake, taken)
     }
 
-    /// Whether a cell on a node `by` names reads a leaf of `nodes`.
-    pub(crate) fn read_by(&self, nodes: impl IntoIterator<Item = NodeId>, by: &dyn Fn(NodeId) -> bool) -> bool {
-        // A native runs where a node it writes is, or its own when it
-        // writes none; a rooted island always (the network integrates).
-        let runs_at = |d: &CellId| match d {
-            CellId::Leaf(l) => by(l.node),
-            CellId::Native(k) => self.natives.get(k).is_some_and(|n| {
-                (n.rooted && matches!(k, NativeKey::Island(_))) || n.rule.outputs().iter().any(|o| by(o.node)) || (n.rule.outputs().is_empty() && by(k.node()))
-            }),
-        };
-        nodes.into_iter().any(|n| self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).any(|(_, ds)| ds.iter().any(runs_at)))
+    /// The nodes where the cells reading any of `nodes` run, added to
+    /// `out`: a binding at its own node, a native where a node it writes is,
+    /// or at its own when it writes none. True when one runs everywhere (a
+    /// rooted island: the network integrates). For the gate
+    /// (`Store::paused`), which decides over every hidden composition's
+    /// readers at once.
+    pub(crate) fn reader_nodes(&self, nodes: impl IntoIterator<Item = NodeId>, out: &mut BTreeSet<NodeId>) -> bool {
+        let mut always = false;
+        for n in nodes {
+            for (_, ds) in self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n) {
+                for d in ds {
+                    match d {
+                        CellId::Leaf(l) => {
+                            out.insert(l.node);
+                        }
+                        CellId::Native(k) => {
+                            let Some(native) = self.natives.get(k) else { continue };
+                            if native.rooted && matches!(k, NativeKey::Island(_)) {
+                                always = true;
+                            }
+                            let outputs = native.rule.outputs();
+                            if outputs.is_empty() {
+                                out.insert(k.node());
+                            }
+                            out.extend(outputs.iter().map(|o| o.node));
+                        }
+                    }
+                }
+            }
+        }
+        always
     }
 
     /// Need every cell again, bringing the stale ones up to date: what a

@@ -1772,7 +1772,13 @@ mod tests {
     fn new_composition_in(kind: &str, all: bool) -> (iron_document::Store, iron_document::NodeId) {
         use iron_document::facet::{self, Size, Transform2d};
         use iron_document::{Actor, Interest, LeafStruct, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
-        let mut store = Store::load(&super::template_snapshot(kind).unwrap()).unwrap();
+        // `DOC=<file>` measures a saved document (`__iron.save()`) instead
+        // of the demo template.
+        let text = match std::env::var("DOC") {
+            Ok(path) if kind == "demo" => std::fs::read_to_string(path).unwrap(),
+            _ => super::template_snapshot(kind).unwrap(),
+        };
+        let mut store = Store::load(&text).unwrap();
         let (comp, rect) = {
             let doc = store.authored();
             let ids = doc.next_ids(2);
@@ -1873,6 +1879,17 @@ mod tests {
                 store.advance(now);
                 play.push(s.elapsed().as_secs_f64() * 1e3);
             }
+            // Playing, as the transport does: the playhead advanced inside
+            // `advance`, looping over 0-4 s.
+            crate::document_bridge::clock::set(&mut store, &[("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(4.0)), ("playing", Value::Bool(true))]).unwrap();
+            let mut looping = Vec::new();
+            let frames = std::env::var("FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(600);
+            for k in 0..frames {
+                let now = 40.0 + k as f64 / 60.0;
+                let s = std::time::Instant::now();
+                store.advance(now);
+                looping.push(s.elapsed().as_secs_f64() * 1e3);
+            }
             let q = |v: &mut Vec<f64>, f: f64| {
                 v.sort_by(f64::total_cmp);
                 v[((v.len() - 1) as f64 * f) as usize]
@@ -1886,7 +1903,40 @@ mod tests {
                 q(&mut adv, 0.5),
                 q(&mut adv, 0.95)
             );
-            println!("  playing: set_time + advance p50 {:.3} p95 {:.3} ms", q(&mut play, 0.5), q(&mut play, 0.95));
+            println!("  set_time + advance p50 {:.3} p95 {:.3} ms", q(&mut play, 0.5), q(&mut play, 0.95));
+            println!("  playing, looping: advance p50 {:.3} p95 {:.3} ms", q(&mut looping, 0.5), q(&mut looping, 0.95));
+        }
+    }
+
+    /// The Lorenz page shown alone and running, frame by frame: the frames
+    /// that cost most, and whether the gate decided in them.
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin lorenz_frames -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn lorenz_frames_time() {
+        use iron_document::{Interest, Store, composition, narrative};
+        let mut store = Store::load(&super::template_snapshot("demo").unwrap()).unwrap();
+        let lorenz = {
+            let doc = store.tree();
+            composition::compositions(doc).into_iter().find(|&c| narrative::name(doc, c) == "lorenz").unwrap()
+        };
+        store.set_observe_all(false);
+        store.set_motion(true);
+        store.observe(Interest::Region { composition: lorenz, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
+        let mut frames = Vec::new();
+        for k in 0..900 {
+            let decided = store.gate_decisions();
+            let nodes = store.tree().live_nodes().count();
+            let s = std::time::Instant::now();
+            store.advance(k as f64 / 60.0);
+            let ms = s.elapsed().as_secs_f64() * 1e3;
+            frames.push((ms, k, store.gate_decisions() - decided, store.tree().live_nodes().count() as i64 - nodes as i64));
+        }
+        let mut sorted: Vec<f64> = frames.iter().map(|f| f.0).collect();
+        sorted.sort_by(f64::total_cmp);
+        println!("p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms", sorted[450], sorted[855], sorted[899]);
+        for (ms, k, decided, dn) in frames.iter().filter(|f| f.0 > 3.0 * sorted[450] + 0.5) {
+            println!("frame {k}: {ms:.3} ms, gate decided {decided}, live nodes {dn:+}");
         }
     }
 

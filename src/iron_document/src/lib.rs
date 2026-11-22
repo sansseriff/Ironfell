@@ -3128,13 +3128,50 @@ impl StoreCore {
         // roots). Decided until no more join (one hidden tab read through
         // another).
         let mut entities: BTreeSet<NodeId> = pictured.iter().filter(|(_, cs)| cs.iter().any(|c| live.contains(c))).map(|(&e, _)| e).collect();
+        // Who reads each hidden composition and each pictured entity not yet
+        // running, found once: where each reading cell runs, as the
+        // composition it is in, else the pictured entity it belongs to, else
+        // nowhere in particular (it always runs). Then decided over those
+        // small sets until no more join. (Walking every hidden composition's
+        // readers each round cost 8-10 ms on the demo, 2026-11-21.)
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum Owner {
+            Composition(NodeId),
+            Entity(NodeId),
+            Free,
+        }
+        let mut owners: BTreeMap<NodeId, Owner> = BTreeMap::new();
+        let mut readers_of = |root: NodeId| -> BTreeSet<Owner> {
+            let mut nodes = BTreeSet::new();
+            let always = self.reactive.reader_nodes(std::iter::once(root).chain(doc.descendants(root)), &mut nodes);
+            let mut out: BTreeSet<Owner> = nodes
+                .into_iter()
+                .map(|n| {
+                    *owners.entry(n).or_insert_with(|| match composition::composition_of(doc, n) {
+                        Some(c) => Owner::Composition(c),
+                        None => entity_of(n).map_or(Owner::Free, Owner::Entity),
+                    })
+                })
+                .collect();
+            if always {
+                out.insert(Owner::Free);
+            }
+            out
+        };
+        let hidden_readers: Vec<(NodeId, BTreeSet<Owner>)> = hidden.iter().map(|&c| (c, readers_of(c))).collect();
+        let entity_readers: Vec<(NodeId, BTreeSet<Owner>)> = pictured.keys().filter(|e| !entities.contains(e)).map(|&e| (e, readers_of(e))).collect();
         loop {
-            let reads = |n: NodeId| match composition::composition_of(doc, n) {
-                Some(c) => live.contains(&c),
-                None => entity_of(n).is_none_or(|e| entities.contains(&e)),
+            let runs = |o: &Owner| match o {
+                Owner::Composition(c) => live.contains(c),
+                Owner::Entity(e) => entities.contains(e),
+                Owner::Free => true,
             };
-            let joined: Vec<NodeId> = hidden.iter().copied().filter(|c| !live.contains(c) && self.reactive.read_by(std::iter::once(*c).chain(doc.descendants(*c)), &reads)).collect();
-            let joined_entities: Vec<NodeId> = pictured.iter().filter(|(e, cs)| !entities.contains(e) && (cs.iter().any(|c| live.contains(c) || joined.contains(c)) || self.reactive.read_by(std::iter::once(**e).chain(doc.descendants(**e)), &reads))).map(|(&e, _)| e).collect();
+            let joined: Vec<NodeId> = hidden_readers.iter().filter(|(c, rs)| !live.contains(c) && rs.iter().any(runs)).map(|(c, _)| *c).collect();
+            let joined_entities: Vec<NodeId> = entity_readers
+                .iter()
+                .filter(|(e, rs)| !entities.contains(e) && (pictured[e].iter().any(|c| live.contains(c) || joined.contains(c)) || rs.iter().any(runs)))
+                .map(|(e, _)| *e)
+                .collect();
             if joined.is_empty() && joined_entities.is_empty() {
                 break;
             }

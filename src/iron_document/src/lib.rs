@@ -375,6 +375,13 @@ struct Saved {
     motion: Motion,
     contexts: Option<(Vec<(NodeId, String)>, contexts::Library)>,
     layout_preview: Option<layout::Preview>,
+    /// The layout roots and pinned parts kept as structure changes, and the
+    /// nodes each root glides (DS-3b): put back with the graph's layout
+    /// natives, which they describe.
+    layout_roots: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    pinned_by_use: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
+    layout_touched: BTreeSet<NodeId>,
+    glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     time_errors: BTreeMap<NodeId, String>,
     machines_unsettled: Option<expand::Problem>,
     pending: Changes,
@@ -406,6 +413,10 @@ impl Saved {
             motion: s.motion.clone(),
             contexts: s.contexts.clone(),
             layout_preview: s.layout_preview.clone(),
+            layout_roots: s.layout_roots.clone(),
+            pinned_by_use: s.pinned_by_use.clone(),
+            layout_touched: s.layout_touched.clone(),
+            glide_nodes: s.glide_nodes.clone(),
             time_errors: s.time_errors.clone(),
             machines_unsettled: s.machines_unsettled.clone(),
             pending: s.pending.clone(),
@@ -436,6 +447,10 @@ impl Saved {
         s.motion = self.motion;
         s.contexts = self.contexts;
         s.layout_preview = self.layout_preview;
+        s.layout_roots = self.layout_roots;
+        s.pinned_by_use = self.pinned_by_use;
+        s.layout_touched = self.layout_touched;
+        s.glide_nodes = self.glide_nodes;
         s.time_errors = self.time_errors;
         s.machines_unsettled = self.machines_unsettled;
         s.pending = self.pending;

@@ -320,3 +320,23 @@ fn a_refused_replay_rolls_back() {
     // Replaying restores the deleted one, then finds the other still there.
     refused(&mut store, comp, "a replay that collides", |s| s.replay(&recorded));
 }
+
+/// A stack made in a transaction the solver refuses, then made again with
+/// the same ids: its layout runs, so the store's layout roots were put back
+/// with the graph (DS-3b part 2 kept them; `Saved` must hold them too).
+#[test]
+fn a_layout_made_in_a_refused_transaction_lays_out_when_made_again() {
+    let (mut store, comp) = sheet();
+    let n = pair(&mut store, comp);
+    let stack = r#"<group id="$g" x="0" y="0" layout.mode="stack_x" layout.gap="10"><rect id="$a" w="10" h="10"/><rect id="$b" w="10" h="10"/></group>"#;
+    let (mut ops, _) = draw(&store, comp, stack);
+    ops.push(Op::Set { id: n["q"], path: path("transform2d.x"), slot: num(900.0) });
+    let mut strict = tx("a stack, and q pushed exactly", ops);
+    strict.exact = true;
+    let errs = store.apply(strict).unwrap_err();
+    assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{errs:?}");
+    let (ops, s) = draw(&store, comp, stack);
+    store.apply(tx("the stack again", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = |id: NodeId| store.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64());
+    assert_eq!((x(s["a"]), x(s["b"])), (Some(0.0), Some(20.0)), "the stack laid out");
+}

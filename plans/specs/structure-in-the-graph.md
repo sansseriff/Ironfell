@@ -736,7 +736,8 @@ What remains of the slope is necessity and the gate (DS-4a, DS-4b, DS-5).
 - **`single-tab.txt`:** drag `advance` p50 is 0.02 ms and playing is 0.04 ms. Its Lorenz
   check (more than 100 frames in 6 s) failed: 77 frames, with per-frame costs normal
   (advance p50 1.06 ms, frame p50 5.1 ms). The browser ran at 6 to 13 frames a second
-  today, before this change too (startup: 29 frames in 4.5 s).
+  today. The same check fails on `6e0d626`, before any of this day's code changes
+  (rebuilt and run 2026-11-22), so it is the environment, not DS-7.
 
 ## 11. DS-10's design: the oracle (draft, 2026-11-22)
 

@@ -3,7 +3,7 @@
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
 6/10, Sol 6/10; both: DS-1 can start). **DS-1, DS-2 and DS-3a done 2026-11-21; DS-3b
-stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22. Next: council review of DS-9's code, then DS-10, from
+stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its council code review (with DS-2 and DS-3: Opus 6/10, Sol 5/10) fixed in `fd884ac`. Next: round 2 of that review on the fixes, then DS-10's design (drafted in the spec's §13) to the council, then DS-10, from
 [`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md) (adopted 2026-11-22; council rounds 1 to 3:
 Opus 5, 6, 7/10; Sol 5, 6, 7/10), whose phases DS-9 to DS-14 replace the rest of DS-3b. DS-4a, DS-4b and
 DS-5 stay as planned here and may land any time after DS-9. Why (the user, 2026-11-22): DS-3b's

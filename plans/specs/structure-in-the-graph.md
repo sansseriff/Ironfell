@@ -366,3 +366,55 @@ grouping reach's gap that DS-10's recorded wiring reads close. Left for DS-12:
 `sync_layout`'s pass over every pinned part, and `update_drawn`'s look at every gone
 node (Opus).
 
+## 13. DS-10's design (draft, 2026-11-22; not yet reviewed)
+
+Grouping (`ClustersNative`), validation (`ValidateNative`) and each cluster's change
+test (`ClusterNative`) become keyed. What they read of structure runs them again; the
+rules that prime them by hand go.
+
+**Keys added** (§3.1's table grows by these; a recording tree still fails a debug
+assertion on any read with no key):
+
+| Key | Recorded by | Fired by |
+|---|---|---|
+| `Type(t)` | `nodes_of_type` | `type_insert`, `type_remove` |
+| `With(kind)` | `nodes_with` | `facet_index_insert`, `facet_index_remove` |
+| `Relations(n)` | `relations_from`, `relations_to` | `insert_relation`, `remove_relation`, at both ends |
+| `Relation(id)` | `relation` | the same, for `id` |
+| `Bound(leaf)` | `Cx::is_bound`; `Cx::transitive_deps` for every leaf it visits | the graph: `set_cell`, `drop_cell` for `leaf` |
+| `Reads(leaf)` | `Cx::transitive_deps` for every bound leaf it visits | the graph: a cell's static deps made or dropped, or its tracked reads changed in a pass |
+
+Any further key the suite's debug assertions name is added the same way, its write
+side at the choke point that changes what it names.
+
+- **`Cx::graph()` goes.** `solve::is_free` reads `Cx::is_bound` and `Cx::driven`;
+  the solve-order check reads `Cx::transitive_deps`. Both are recorded.
+- **Graph-side keys are fired by the graph,** where it changes the wiring, straight into
+  `pending` as `prime_keys` does: they never pass through the document's log.
+  `evaluate`'s "grouping looks again" on any tracked change (`graph.rs`, the
+  `pending.insert(CellId::Native(NativeKey::Clusters))`) is replaced by `Reads(leaf)`.
+- **Presence reads become `has`:** `solve.rs` (an operand's `Transform2d`),
+  `constraint.rs` (`read`'s operand check), `plug.rs` (`implied_mates`' operand), so a
+  committed move of a constrained or mated part does not run the grouping.
+
+**Deleted:** `prime_grouping`; `solve::grouping_reach`, `Grouping::reach` and
+`regraph`'s `regroup`, `in_reach`, `moved` and the cluster priming on a reparent; the
+`pending.insert(Clusters)` rule in `evaluate`.
+
+**Kept:** grouping's unit (the document), `regroup`'s take-when-it-ran (`grouped_at`),
+`to_solve`.
+
+**The oracle:** `check_grouping` (under `differential`, already there) compares the kept
+grouping with one made from scratch whenever the grouping did not run; DS-10 runs it
+after every facade call, not only when `regroup` skips, and adds the same for
+validation. The canary silences `insert_relation` and must fail it on a constraint
+linked to a second operand (a cluster that grows).
+
+**Exit:** differential (with `IRON_OWNER_CHECK`), the structure oracle and the grouping
+oracle pass with the rules gone; the canary fails as it should; the scaling test's
+structural edit, reparent and drag rows do not grow (no grouping run they did not have);
+a drag committing a mated part does not run the grouping (a test counting its runs).
+
+Also closes the council's gap from §12: a binding retargeted onto a cluster's variable is
+regrouped, because the grouping recorded `Bound` and `Reads` on the leaves it walked
+(Sol's relay test lands with DS-10).

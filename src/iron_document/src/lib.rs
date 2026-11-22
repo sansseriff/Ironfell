@@ -1729,14 +1729,25 @@ impl StoreCore {
         // What a running clip drives but gave nothing for now (before its
         // first key) goes back to what it is without the clip (council
         // review of DS-2).
-        let gone: Vec<Leaf> = sample.targets.iter().filter(|l| !sample.values.contains_key(l)).copied().collect();
+        // A leaf another clip drives, one on a paused page holding its
+        // value, is that clip's to give or withdraw: the clips publish as
+        // one producer, so withdrawing it would drop the held value.
+        let doc = Tree::of(&self.docs);
+        let others = |l: &Leaf| {
+            doc.relations_to(l.node).any(|r| {
+                r.rel == RelKind::Animates
+                    && !clips.contains(&r.from)
+                    && doc.get::<facet::Clip>(r.from).and_then(|c| c.prop.constant()).and_then(|v| v.as_str()).and_then(|p| p.parse::<facet::LeafPath>().ok()) == Some(l.path)
+            })
+        };
+        let gone: Vec<Leaf> = sample.targets.iter().filter(|l| !sample.values.contains_key(l) && !others(l)).copied().collect();
         if !sample.values.is_empty() || !gone.is_empty() {
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::CLIPS, sample.values, &gone);
         }
     }
 
     /// Whether `ops` change a clip, a key, a timing or a track: what every
-    /// clip's sample and the clips' end read. A playhead move does not.
+    /// clip's sample reads. A playhead move does not.
     fn touches_clips<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool {
         let kinds = [FacetKind::Clip, FacetKind::Key, FacetKind::Timing, FacetKind::Track];
         ops.into_iter().any(|op| match op {
@@ -4314,13 +4325,14 @@ impl StoreCore {
             // The first provider among siblings answers `@name`.
             Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
         });
-        // A clip, key, timing or track changed, or the structure: the
-        // clips' end, and the clocked machine instances, read again.
+        // The clips' end reads clips, keys, relations and the transitions a
+        // keyed state runs on: any edit may move it, so it is read again
+        // after every transaction (lazily, and only while playing with no
+        // loop range); a playhead move does not. Likewise the clocked
+        // machine instances.
+        self.clips_end = None;
+        self.machines.reclock();
         let clips = Self::touches_clips(tx.ops.iter().chain(expanded.iter()));
-        if structural || clips {
-            self.clips_end = None;
-            self.machines.reclock();
-        }
         if structural {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();

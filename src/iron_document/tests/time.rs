@@ -225,3 +225,40 @@ fn views_answer_why_is_this_moving() {
     assert!(v.contains("value=\"100\"") && v.contains("value=\"300\""), "the clip's keys: {v}");
     assert_eq!(store.tree().relations_to(rect).count(), 1);
 }
+
+/// A clip on a running page that gives nothing yet (before its first key)
+/// leaves alone a leaf a paused clip holds: it withdraws only what no other
+/// clip drives.
+#[test]
+fn a_running_clip_leaves_a_paused_clip_s_value_alone() {
+    let mut store = Store::new();
+    let [shown, hidden, visible, invisible, timeline, active, paused, k0, k1] = store.authored().next_ids(9)[..] else { unreachable!() };
+    let rels = store.authored().next_relation_ids(3);
+    let create = |id, name, parent, facets| Op::Create { id, ty: ty(name), parent, order: OrderKey::first(), facets };
+    let rel = |i: usize, from, to| Op::Link { rel: Relation { id: rels[i], from, to, rel: RelKind::Animates, data: BTreeMap::new() } };
+    let key = |t, v| Key { t: num(t), value: num(v), ..Key::default() }.wrap();
+    let clip = Clip { prop: Slot::Const(Value::Str("transform2d.x".into())), ..Clip::default() }.wrap();
+    let name = |x: &str| facet::Name { text: Slot::Const(Value::Str(x.into())), ..Default::default() }.wrap();
+    let comp = facet::Composition { dims: Slot::Const(Value::Enum("2d".into())), ..Default::default() }.wrap();
+    store.apply(tx("make", vec![
+        create(shown, "composition", None, vec![comp.clone(), name("shown")]),
+        create(hidden, "composition", None, vec![comp, name("hidden")]),
+        create(visible, "rect", Some(shown), vec![Transform2d::default().wrap(), Size::default().wrap()]),
+        create(invisible, "rect", Some(hidden), vec![Transform2d::default().wrap(), Size::default().wrap()]),
+        create(timeline, "timeline", None, vec![]),
+        create(active, "clip", Some(timeline), vec![clip.clone(), Timing::default().wrap()]),
+        create(paused, "clip", Some(timeline), vec![clip, Timing::default().wrap()]),
+        create(k0, "key", Some(active), vec![key(2., 99.)]),
+        create(k1, "key", Some(paused), vec![key(0., 123.)]),
+        rel(0, active, visible),
+        rel(1, active, invisible),
+        rel(2, paused, invisible),
+    ])).unwrap();
+    store.ensure_clock().unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: shown, rect: [-1000., -1000., 2000., 2000.], zoom: 1. });
+    store.advance(0.);
+    assert_eq!(x_of(&store, invisible), 123.);
+    store.set_time(1.);
+    assert_eq!(x_of(&store, invisible), 123.);
+}

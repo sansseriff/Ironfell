@@ -236,6 +236,10 @@ impl Cx<'_> {
     fn note_leaf(&self, leaf: Leaf) {
         if self.keyed {
             let mut keys = self.keys.borrow_mut();
+            // A node's leaves are read one after another: note it once.
+            if keys.last() == Some(&crate::structure::Key::FacetSet(leaf.node)) {
+                return;
+            }
             keys.push(crate::structure::Key::Node(leaf.node));
             keys.push(crate::structure::Key::FacetSet(leaf.node));
         }
@@ -2145,11 +2149,29 @@ impl Reactive {
         keys.sort_unstable();
         keys.dedup();
         if self.natives[&k].keys != keys {
+            // Only the difference: a child added to a long stack changes a
+            // few of its keys, not all of them (both lists are sorted).
             let old = std::mem::take(&mut self.natives.get_mut(&k).expect("native").keys);
-            self.unkey(k, &old);
-            for key in &keys {
-                self.key_readers.entry(*key).or_default().insert(k);
+            let (mut i, mut j) = (0, 0);
+            let mut gone = Vec::new();
+            while i < old.len() || j < keys.len() {
+                match (old.get(i), keys.get(j)) {
+                    (Some(a), Some(b)) if a == b => {
+                        i += 1;
+                        j += 1;
+                    }
+                    (Some(a), b) if b.is_none_or(|b| a < b) => {
+                        gone.push(*a);
+                        i += 1;
+                    }
+                    (_, Some(b)) => {
+                        self.key_readers.entry(*b).or_default().insert(k);
+                        j += 1;
+                    }
+                    (_, None) => unreachable!("one list has more"),
+                }
             }
+            self.unkey(k, &gone);
             self.natives.get_mut(&k).expect("native").keys = keys;
         }
         let native = self.natives.get_mut(&k).expect("native");

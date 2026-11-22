@@ -463,3 +463,47 @@ fn a_refused_channel_is_not_an_unsettled_machine() {
     store.advance(0.3);
     assert!(!store.problems().iter().any(|p| p.kind == "machine"), "{:?}", store.problems());
 }
+
+/// Lengthening the transition a keyed state runs on past its last key moves
+/// where playback stops: the clips' end is read again after any edit, not
+/// only one to a clip.
+#[test]
+fn playback_stops_after_a_lengthened_transition() {
+    let Card { mut store, entity, .. } = card();
+    let ids = store.authored().next_ids(4);
+    let (timeline, clip, k0, k1) = (ids[0], ids[1], ids[2], ids[3]);
+    let key = |t: f64, v: &str| {
+        let mut k = facet::Key::default();
+        k.t = n(t);
+        k.value = Slot::Const(Value::Enum(v.into()));
+        k.easing = Slot::Const(Value::Enum("hold".into()));
+        k.wrap()
+    };
+    let mut c = facet::Clip::default();
+    c.prop = str_("args.vis");
+    let first = OrderKey::first();
+    let last = store.tree().roots().iter().filter_map(|&r| store.tree().live(r)).map(|x| x.order.clone()).max().unwrap();
+    store
+        .apply(tx(
+            "key the state",
+            vec![
+                Op::Create { id: timeline, ty: ty("timeline"), parent: None, order: OrderKey::after(&last), facets: vec![] },
+                Op::Create { id: clip, ty: ty("clip"), parent: Some(timeline), order: first.clone(), facets: vec![facet::Timing::default().wrap(), c.wrap()] },
+                Op::Create { id: k0, ty: ty("key"), parent: Some(clip), order: first.clone(), facets: vec![key(0.0, "shown")] },
+                Op::Create { id: k1, ty: ty("key"), parent: Some(clip), order: OrderKey::after(&first), facets: vec![key(2.0, "hidden")] },
+                Op::Link { rel: Relation { id: store.authored().next_relation_id(), from: clip, to: entity, rel: RelKind::Animates, data: Default::default() } },
+            ],
+        ))
+        .unwrap();
+
+    let def = expand::linked_definition(store.tree(), entity).unwrap();
+    let disappear = named_child(&store, def, "transition", "disappear");
+    let clock = store.ensure_clock().unwrap();
+    store.advance(10.);
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.playing"), slot: Slot::Const(Value::Bool(true)) }]).unwrap();
+    store.advance(11.);
+    assert!((store.time() - 1.).abs() < 1e-9, "{}", store.time());
+    store.apply(tx("lengthen", vec![Op::Set { id: disappear, path: path("transition.ms"), slot: n(2000.) }])).unwrap();
+    store.advance(13.);
+    assert!((store.time() - 3.).abs() < 1e-9, "playhead stopped at {}", store.time());
+}

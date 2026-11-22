@@ -447,6 +447,20 @@ in DS-13.
   - a cluster whose free leaves change when a claim moves;
   - an ineligible mate that joins nothing.
 
+**Checkpoints: the council and the user.** Every phase has its design note reviewed by
+the council before it is built, and its code reviewed after. These points also need the
+user:
+
+| When | Decision | Why the user decides |
+|---|---|---|
+| DS-7's design | Whether refusal is still wanted, or a failed solve keeps its last good pose and reports a problem | Product behaviour (§3.3) |
+| DS-10's design | The producers' fixed priority for a contested leaf, and every cell in a cycle reporting the error | The conflicts users see change |
+| DS-10's design | A binding on a structural field (`constraint.enabled`, `use.notation`) becomes an error | Documents that bind one today stop working |
+| Before DS-11 | Copies as views, or written copies | Architecture: it reshapes DS-11 to DS-16 |
+| After DS-12 | Whether the layout pilot proved the approach: rules deleted, no slope, costs within budget | Continue, or stop and rethink |
+| DS-13's design | Whether a constraint may span compositions | Product behaviour |
+| Any time | When to resume the PT track (handoff-patches.md, paused before PT-5) | Priorities |
+
 **Planned in handoff-scaling.md and unchanged:** DS-3c (heights by `raise`), DS-4a,
 DS-4b, DS-5, DS-6 and DS-8, as well as DS-7's other half (plans as aborted
 transactions). Structural keys are neither necessity edges nor gate edges.

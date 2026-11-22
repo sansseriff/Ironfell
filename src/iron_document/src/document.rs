@@ -385,6 +385,11 @@ impl Document {
         &self.roots
     }
 
+    /// The last root in root order, without visiting the others.
+    pub fn last_root(&self) -> Option<NodeId> {
+        self.roots.last().copied()
+    }
+
     /// Live children in sibling order.
     pub fn children(&self, id: NodeId) -> &[NodeId] {
         self.children.get(&id).map(Vec::as_slice).unwrap_or(&[])
@@ -436,7 +441,7 @@ impl Document {
     /// Every expanded node's id, live or tombstoned (component-model.md §6).
     /// Expanded ids sort after every other id, so this is a range read.
     pub fn expanded_ids(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.nodes.range(NodeId::from_raw(crate::id::EXPANDED)..).map(|(id, _)| *id)
+        self.nodes.range(NodeId::from_raw(crate::id::EXPANDED)..).map(|(id, _)| *id).inspect(|_| crate::work::visit(crate::work::Site::Nodes, 1))
     }
 
     /// How many ancestors a node has.

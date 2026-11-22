@@ -163,7 +163,7 @@ pub fn blocks(doc: Tree<'_>, narrative: NodeId) -> Vec<(NodeId, BlockContent)> {
 /// ids from `first` on (the root first). Ordered after `order`.
 pub fn create_ops(doc: Tree<'_>, name: &str, blocks: &[BlockContent]) -> (NodeId, Vec<Op>) {
     let ids = doc.next_ids(blocks.len() + 1);
-    let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+    let order = doc.last_root().and_then(|r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
     let mut nm = Name::default();
     nm.text = Slot::Const(Value::Str(name.into()));
     let mut ops = vec![Op::Create { id: ids[0], ty: ty("narrative"), parent: None, order, facets: vec![nm.wrap()] }];

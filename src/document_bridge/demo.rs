@@ -2008,32 +2008,9 @@ mod tests {
             let whole = std::env::var_os("WHOLE").is_some();
             for _ in 0..extra {
                 if whole {
-                    // Every composition of the demo again, its contents pasted
-                    // into a twin (constraints, islands, 3D, embeds, machines,
-                    // pictured entities).
+                    // Every composition of the demo again (the scaling test's twins).
                     for c in iron_document::composition::compositions(store.tree()).into_iter().filter(|c| !c.is_session()) {
-                        let (children, dims) = {
-                            let doc = store.tree();
-                            let dims = iron_document::composition::dims(doc, c);
-                            (doc.children(c).iter().copied().filter(|&k| doc.is_live(k)).collect::<Vec<iron_document::NodeId>>(), dims)
-                        };
-                        if children.is_empty() {
-                            continue;
-                        }
-                        let twin = store.authored().next_id();
-                        let mut comp = iron_document::facet::Composition::default();
-                        comp.dims = Slot::Const(Value::Enum(if dims == Some(iron_document::composition::Dims::Three) { "3d" } else { "2d" }.into()));
-                        let mut name = iron_document::facet::Name::default();
-                        name.text = Slot::Const(Value::Str("twin".into()));
-                        use iron_document::LeafStruct;
-                        let order = {
-                            let doc = store.tree();
-                            doc.roots().iter().filter(|r| !r.is_session()).filter_map(|&r| doc.live(r)).map(|r| r.order.clone()).max().map_or_else(iron_document::OrderKey::first, |k| iron_document::OrderKey::after(&k))
-                        };
-                        store.apply(tx("twin", vec![Op::Create { id: twin, ty: iron_document::TypeId::lookup("composition").unwrap(), parent: None, order, facets: vec![name.wrap(), comp.wrap()] }])).unwrap();
-                        let Ok(frag) = iron_document::copy::fragment(&store, &children, "scaling") else { continue };
-                        let Ok(pasted) = iron_document::copy::paste(&store, &frag, &iron_document::copy::Placement { parent: Some(twin), ..Default::default() }, "scaling") else { continue };
-                        let _ = store.apply(tx("paste", pasted.ops));
+                        crate::document_bridge::scaling::twin(&mut store, c);
                     }
                     continue;
                 }

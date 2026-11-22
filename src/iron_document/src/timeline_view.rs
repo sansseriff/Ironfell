@@ -1097,7 +1097,7 @@ pub fn reconcile(store: &StoreCore, plan: &Plan) -> Vec<Op> {
             let mut c = Composition::default();
             c.dims = Slot::Const(Value::Enum("2d".into()));
             c.notation = Slot::Const(Value::Str(NOTATION.into()));
-            let order = doc.roots().last().and_then(|&r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
+            let order = doc.last_root().and_then(|r| doc.live(r)).map_or_else(OrderKey::first, |n| OrderKey::after(&n.order));
             ops.push(Op::Create { id, ty: ty("composition"), parent: None, order, facets: vec![named(TIMELINE), c.wrap(), Axis::default().wrap()] });
             id
         }

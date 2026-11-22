@@ -446,10 +446,30 @@ DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS
   it; the test fails when an unlisted one grows or a listed one stops. What grows is §3's
   list: e.g. an idle frame visits every node (the clock lookup), `let made` visits roots
   106,208 times (rescope's providers) and 367,024 with one twin.
+- **Code review (Opus 6/10, Sol 5/10), fixed the same day:**
+  - expectations are per (operation, count), 347 pairs each with its phase, so a new
+    pass in a listed operation fails; a count grows when it rises at both steps of three
+    sizes on each axis (+0/+1/+2 twins; one page of 0/400/800 rects); allocations and
+    bytes are counts like the rest, with absolute tolerances (24, 24 KiB);
+  - two canaries must always grow: `save` (allocations) and a walk of every
+    composition's descendants (the counters);
+  - newly wrapped or counted: `repeats`, the clusters list, `chains`, `rest`, the
+    owners' `counts` and `by_def`, `expanded_ids`, `signals()`, a leaf's readers
+    (`Readers`), a producer's published set; `difference` charges what it yields;
+    `last_root` for callers that only want the last root;
+  - the fixture: a page of queries added (the demo has none), twins checked kind by kind
+    (constraints, clips, machines, queries, embeds, ports, accumulators, repeats, 3D
+    compositions, pictured entities, placed plots each grow at every step), a refused
+    paste retried without its bad ops instead of swallowed; the hidden edit and
+    show-a-page use a page made after the growth, the running accumulator a page
+    observed only around that operation;
+  - each operation is set up and torn down outside the measurement, measured from a
+    settled store (nothing stale, a frame that changes nothing), and checks that it took
+    effect; the five fixtures are built in parallel threads (about 50 s).
 - **Not covered yet** (added by the phase that touches them): a `compose` plan, a
   solver refusal after expansion, deleting and duplicating a page, a scoped agent view, a
   capture, a query's reply on a paused page, a hidden-to-shown publish, a fixture without
-  constraints, and the host operations (DS-8).
+  constraints, link and unlink, selection and hover, and the host operations (DS-8).
 
 ## 7. Risks
 

@@ -236,6 +236,11 @@ impl<'a> Tree<'a> {
         self.doc.roots()
     }
 
+    /// The last root in root order, without visiting the others.
+    pub fn last_root(self) -> Option<NodeId> {
+        self.doc.last_root()
+    }
+
     /// Live children in sibling order. Merged by (order, id), the
     /// documents' own tie-break, where both hold children of `id`: only at
     /// an owner, the authored parent of its copies.

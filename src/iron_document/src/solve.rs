@@ -38,7 +38,7 @@ pub struct Cluster {
 pub struct Clusters {
     /// In solve order: a cluster whose inputs depend on another's variables
     /// comes after it.
-    pub list: Vec<Cluster>,
+    pub list: crate::work::Counted<Vec<Cluster>, { crate::work::STORE_CLUSTERS }>,
     /// Variable leaf → cluster id, for `.by` markers.
     pub var_cluster: BTreeMap<Leaf, NodeId>,
 }
@@ -301,7 +301,7 @@ pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, li
     }
     let ordered: Vec<Cluster> = order.into_iter().map(|i| list[i].clone()).collect();
     let var_cluster = ordered.iter().flat_map(|c| c.vars.iter().map(move |v| (*v, c.id))).collect();
-    Ok(Clusters { list: ordered, var_cluster })
+    Ok(Clusters { list: ordered.into(), var_cluster })
 }
 
 /// Where a residual gets a transform leaf from: the solver's variable

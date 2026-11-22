@@ -56,7 +56,7 @@ thread_local! {
 }
 
 /// The large maps `Counted` wraps, by the name a report gives them.
-pub const MAP_NAMES: [&str; 24] = [
+pub const MAP_NAMES: [&str; 30] = [
     "graph.nodes",
     "graph.dependents",
     "graph.natives",
@@ -81,6 +81,12 @@ pub const MAP_NAMES: [&str; 24] = [
     "queries",
     "clocks",
     "other",
+    "graph.readers",
+    "graph.chains",
+    "graph.rest",
+    "owners.counts",
+    "owners.by_def",
+    "producer.published",
 ];
 
 /// Indexes into `MAP_NAMES`, as `Counted`'s parameter.
@@ -107,6 +113,13 @@ pub const MACHINES: usize = 19;
 pub const STEPS: usize = 20;
 pub const QUERIES: usize = 21;
 pub const CLOCKS: usize = 22;
+/// The readers of one leaf or native, as a pass visits them (`Readers`).
+pub const GRAPH_READERS: usize = 24;
+pub const GRAPH_CHAINS: usize = 25;
+pub const GRAPH_REST: usize = 26;
+pub const OWNERS_COUNTS: usize = 27;
+pub const OWNERS_BY_DEF: usize = 28;
+pub const PRODUCER_PUBLISHED: usize = 29;
 
 /// Count `n` units of work at `site`.
 #[inline(always)]
@@ -191,6 +204,10 @@ impl<I: Iterator, const N: usize> Iterator for Counting<I, N> {
         self.0.size_hint()
     }
 }
+
+impl<I: ExactSizeIterator, const N: usize> ExactSizeIterator for Counting<I, N> {}
+
+impl<I: std::iter::FusedIterator, const N: usize> std::iter::FusedIterator for Counting<I, N> {}
 
 impl<I: DoubleEndedIterator, const N: usize> DoubleEndedIterator for Counting<I, N> {
     fn next_back(&mut self) -> Option<I::Item> {
@@ -284,7 +301,6 @@ impl<T: Ord, const N: usize> Counted<BTreeSet<T>, N> {
         self.0.retain(f);
     }
     pub fn difference<'a>(&'a self, other: &'a BTreeSet<T>) -> Counting<std::collections::btree_set::Difference<'a, T>, N> {
-        visit_map(N, other.len());
         Counting(self.0.difference(other))
     }
     pub fn is_subset(&self, other: &BTreeSet<T>) -> bool {
@@ -318,5 +334,49 @@ impl<T: Ord, const N: usize> FromIterator<T> for Counted<BTreeSet<T>, N> {
 impl<T: Ord, const N: usize> Extend<T> for Counted<BTreeSet<T>, N> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.0.extend(iter);
+    }
+}
+
+impl<T, const N: usize> Counted<Vec<T>, N> {
+    pub fn iter(&self) -> Counting<std::slice::Iter<'_, T>, N> {
+        Counting(self.0.iter())
+    }
+    pub fn iter_mut(&mut self) -> Counting<std::slice::IterMut<'_, T>, N> {
+        Counting(self.0.iter_mut())
+    }
+    pub fn retain<F: FnMut(&T) -> bool>(&mut self, f: F) {
+        visit_map(N, self.0.len());
+        self.0.retain(f);
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a Counted<Vec<T>, N> {
+    type Item = &'a T;
+    type IntoIter = Counting<std::slice::Iter<'a, T>, N>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, T, const N: usize> IntoIterator for &'a mut Counted<Vec<T>, N> {
+    type Item = &'a mut T;
+    type IntoIter = Counting<std::slice::IterMut<'a, T>, N>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<T, const N: usize> FromIterator<T> for Counted<Vec<T>, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Counted(iter.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every map name has a constant, and every constant a name.
+    #[test]
+    fn every_map_is_named() {
+        assert_eq!(super::MAP_NAMES.len(), super::PRODUCER_PUBLISHED + 1);
     }
 }

@@ -406,8 +406,8 @@ impl Iterator for Readers<'_> {
     type Item = CellId;
     fn next(&mut self) -> Option<CellId> {
         match self {
-            Readers::One(it) => it.as_mut()?.next().copied(),
-            Readers::Many(it) => it.next(),
+            Readers::One(it) => it.as_mut()?.next().copied().inspect(|_| crate::work::visit_map(crate::work::GRAPH_READERS, 1)),
+            Readers::Many(it) => it.next().inspect(|_| crate::work::visit_map(crate::work::GRAPH_READERS, 1)),
         }
     }
 }
@@ -481,10 +481,10 @@ pub struct Reactive {
     /// Each anchor's chain of transformed ancestors as its positions in
     /// `derived` were made from (`anchor::chain`): a restructure makes them
     /// again only for an anchor whose chain changed.
-    chains: BTreeMap<NodeId, Vec<NodeId>>,
+    chains: Counted<BTreeMap<NodeId, Vec<NodeId>>, { crate::work::GRAPH_CHAINS }>,
     /// The rest of `derived`: connections' signals and followers'
     /// placements, made again whole by a restructure that rederives.
-    rest: BTreeSet<Leaf>,
+    rest: Counted<BTreeSet<Leaf>, { crate::work::GRAPH_REST }>,
     /// Bound leaves whose expression reads context (`@name`).
     token_readers: Counted<BTreeSet<Leaf>, GRAPH_TOKEN_READERS>,
     /// Bindings that failed on a tracked-read cycle or did not settle.
@@ -924,7 +924,7 @@ impl Reactive {
     }
 
     /// The runtime layer as published.
-    pub fn signals(&self) -> &BTreeMap<Leaf, Signal> {
+    pub fn signals(&self) -> &Counted<BTreeMap<Leaf, Signal>, GRAPH_RUNTIME> {
         &self.runtime
     }
 
@@ -945,7 +945,7 @@ impl Reactive {
 
     /// The leaves a producer holds, with their values.
     pub fn published_by(&self, producer: ProducerId) -> BTreeMap<Leaf, Value> {
-        self.held.get(&producer).map(|ls| ls.iter().filter_map(|l| self.runtime.get(l).map(|s| (*l, s.value.clone()))).collect()).unwrap_or_default()
+        self.held.get(&producer).map(|ls| ls.iter().inspect(|_| crate::work::visit_map(crate::work::PRODUCER_PUBLISHED, 1)).filter_map(|l| self.runtime.get(l).map(|s| (*l, s.value.clone()))).collect()).unwrap_or_default()
     }
 
     /// Leaves a producer asked for while another held them, with why.

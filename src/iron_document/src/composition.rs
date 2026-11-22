@@ -326,7 +326,7 @@ fn new_entity_ops(doc: Tree<'_>, a: NodeId, b: NodeId) -> Vec<Op> {
         n.text = Slot::Const(Value::Str(s.to_owned()));
         n.wrap()
     };
-    let last_root = || doc.roots().last().and_then(|&r| doc.live(r)).map(|n| n.order.clone());
+    let last_root = || doc.last_root().and_then(|r| doc.live(r)).map(|n| n.order.clone());
     let after = |k: Option<crate::order::OrderKey>| k.map_or_else(crate::order::OrderKey::first, |k| crate::order::OrderKey::after(&k));
 
     let model = model_root(doc);

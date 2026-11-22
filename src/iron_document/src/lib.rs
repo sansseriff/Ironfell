@@ -352,7 +352,7 @@ struct Saved {
     grouped_at: Option<u64>,
     grouping_error: Option<String>,
     geometry: geom::Revisions,
-    repeats: expand::Items,
+    repeats: work::Counted<expand::Items, { work::STORE_REPEATS }>,
     item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
     presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
     repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
@@ -516,7 +516,7 @@ pub struct StoreCore {
     expansion_problems: Vec<expand::Problem>,
     /// The items each drawn repeat and conditional has, by key
     /// (plans/specs/repeat.md), as last settled from its inputs.
-    repeats: expand::Items,
+    repeats: work::Counted<expand::Items, { work::STORE_REPEATS }>,
     /// What each repeat without enter or exit timing settled
     /// to last, and from what: a cache, a pure function of its key.
     item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
@@ -928,7 +928,7 @@ impl StoreCore {
             observe_all: true,
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
-            repeats: BTreeMap::new(),
+            repeats: Default::default(),
             repeat_inputs: None,
             item_memo: Default::default(),
             network: None,
@@ -2160,7 +2160,7 @@ impl StoreCore {
             self.truncated = truncated;
             self.presence.retain(|r, _| inputs.iter().any(|(n, _)| n == r));
             self.repeat_inputs = Some(inputs);
-            let structural = counts != self.repeats;
+            let structural = counts != *self.repeats;
             if structural {
                 // The owners of the repeats whose items changed.
                 let changed_repeats: BTreeSet<NodeId> = counts
@@ -2181,7 +2181,7 @@ impl StoreCore {
                         }
                     }
                 }
-                self.repeats = counts;
+                self.repeats = counts.into();
                 let stamp = self.docs.authored.version();
                 // Only the items that changed, where that matches a whole
                 // expansion of their owners; else the owners.

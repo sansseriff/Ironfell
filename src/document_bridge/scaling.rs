@@ -4,44 +4,379 @@
 //!
 //! A fixture is grown along two axes, keeping the shown composition and the
 //! operations the same: more hidden pages (`copies`: every composition of
-//! the demo twinned, constraints, islands, 3D, embeds, clips, machines and
-//! pictured entities included), and one larger hidden page (`big`). Each
-//! operation runs at each size; the work it does at the store's choke
-//! points (`iron_document::work`) and what it allocates
-//! (`crate::alloc_count`) must not grow with the size.
+//! the demo twinned, and a page of queries), and one larger hidden page
+//! (`big` bound rects). Each operation runs at three sizes on each axis; the
+//! work it does at the store's choke points (`iron_document::work`) and what
+//! it allocates (`crate::alloc_count`) must not grow with the size. A count
+//! grows when it rises at both steps (beyond an absolute tolerance for
+//! allocations, which B-tree splits vary).
 //!
-//! `SCALING` lists the operations that still grow, with the plan's phase
-//! that removes each: the test fails if one grows that is not listed, or one
-//! listed stops growing (so the list stays true as phases land).
+//! `SCALING` lists each (operation, count) that still grows, with the
+//! plan's phase that removes it: the test fails if a count grows that is
+//! not listed, or one listed stops growing, so the list stays true as phases
+//! land. `save` is a canary: a whole-document walk the harness must see.
 //!
 //!   cargo test -p ironfell --lib --features native --target aarch64-apple-darwin scaling -- --nocapture
 
 use iron_document::{Actor, Interest, LeafPath, NodeId, Op, Slot, Store, TransactionInput, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// The operations that still grow with the hidden document, and the phase
-/// expected to stop it (DS-1's starting point: §3's list).
-const SCALING: &[(&str, &str)] = &[
-    ("idle", "DS-2: the clock found by a scan of every node; machines, steps, presence, clocks each frame"),
-    ("accumulator", "DS-2: as idle"),
-    ("drag", "DS-2: as idle, each frame"),
-    ("theme", "DS-2, DS-3a: as idle; palette and contexts published whole"),
-    ("scrub", "DS-2: every clip sampled; DS-6b: clip-driven cells on hidden pages"),
-    ("playing", "DS-2: every clip sampled, `Animates` walked; DS-6b"),
-    ("structural preview", "DS-3b: repeats, layout and `regraph` scanned; DS-5: the gate decides again"),
-    ("reparent", "DS-3b: `regraph`'s rederive and rescope (every token reader's provider, every root)"),
-    ("let made", "DS-3b: as reparent"),
-    ("observe nodes", "DS-4a: necessity swept on an observer change"),
-    ("show and hide a page", "DS-4a: as observe nodes"),
-    ("constant edit", "DS-4b: `exact` and the sweep; DS-7: the snapshot"),
-    ("structural edit", "DS-4b, DS-7: as constant edit, with DS-3b's scans"),
-    ("hidden-page edit", "DS-4b, DS-7: as constant edit"),
-    ("edit plan", "DS-7: `scratch` clones the store; DS-4b"),
-    ("fire", "DS-4b: `fire_at`'s `exact`; DS-7"),
-    ("paste", "DS-4b, DS-7: as constant edit"),
-    ("undo and redo", "DS-4b, DS-7: as constant edit"),
-    ("rejected edit", "DS-7: the snapshot and its restore"),
+/// Each (operation, count) that still grows with the hidden document, and
+/// the phase expected to stop it.
+const SCALING: &[(&str, &str, &str)] = &[
+    ("constant edit", "allocations", "DS-7"),
+    ("constant edit", "bytes", "DS-7"),
+    ("constant edit", "clocks", "DS-2"),
+    ("constant edit", "descendants", "DS-4a, DS-5"),
+    ("constant edit", "graph.natives", "DS-3a"),
+    ("constant edit", "graph.nodes", "DS-4a"),
+    ("constant edit", "graph.readers", "DS-4a"),
+    ("constant edit", "machines", "DS-2"),
+    ("constant edit", "nodes", "DS-3b"),
+    ("constant edit", "nodes_of_type", "DS-3b"),
+    ("constant edit", "nodes_with", "DS-3b"),
+    ("constant edit", "producer.published", "DS-3a"),
+    ("constant edit", "queries", "DS-2"),
+    ("constant edit", "relations", "DS-3b"),
+    ("constant edit", "roots", "DS-3b"),
+    ("constant edit", "steps", "DS-2"),
+    ("constant edit", "store.clusters", "DS-3a"),
+    ("constant edit", "store.item_memo", "DS-3b"),
+    ("constant edit", "store.presence", "DS-2"),
+    ("drag", "allocations", "DS-2"),
+    ("drag", "bytes", "DS-2"),
+    ("drag", "clocks", "DS-2"),
+    ("drag", "machines", "DS-2"),
+    ("drag", "nodes", "DS-2"),
+    ("drag", "nodes_of_type", "DS-3b"),
+    ("drag", "nodes_with", "DS-2"),
+    ("drag", "producer.published", "DS-3a"),
+    ("drag", "queries", "DS-2"),
+    ("drag", "steps", "DS-2"),
+    ("drag", "store.clusters", "DS-3a"),
+    ("drag", "store.presence", "DS-2"),
+    ("edit plan", "allocations", "DS-7"),
+    ("edit plan", "bytes", "DS-7"),
+    ("edit plan", "clocks", "DS-2"),
+    ("edit plan", "descendants", "DS-4a, DS-5"),
+    ("edit plan", "graph.natives", "DS-3a"),
+    ("edit plan", "graph.nodes", "DS-4a"),
+    ("edit plan", "graph.readers", "DS-4a"),
+    ("edit plan", "machines", "DS-2"),
+    ("edit plan", "nodes", "DS-3b"),
+    ("edit plan", "nodes_of_type", "DS-3b"),
+    ("edit plan", "nodes_with", "DS-3b"),
+    ("edit plan", "producer.published", "DS-3a"),
+    ("edit plan", "queries", "DS-2"),
+    ("edit plan", "relations", "DS-3b"),
+    ("edit plan", "roots", "DS-3b"),
+    ("edit plan", "steps", "DS-2"),
+    ("edit plan", "store.clusters", "DS-3a"),
+    ("edit plan", "store.item_memo", "DS-3b"),
+    ("edit plan", "store.presence", "DS-2"),
+    ("fire", "allocations", "DS-7"),
+    ("fire", "bytes", "DS-7"),
+    ("fire", "clocks", "DS-2"),
+    ("fire", "descendants", "DS-4a, DS-5"),
+    ("fire", "graph.dependents", "DS-4a"),
+    ("fire", "graph.natives", "DS-3a"),
+    ("fire", "graph.nodes", "DS-4a"),
+    ("fire", "graph.readers", "DS-4a"),
+    ("fire", "machines", "DS-2"),
+    ("fire", "nodes", "DS-3b"),
+    ("fire", "nodes_of_type", "DS-3b"),
+    ("fire", "nodes_with", "DS-3b"),
+    ("fire", "owners.counts", "DS-3b"),
+    ("fire", "producer.published", "DS-3a"),
+    ("fire", "queries", "DS-2"),
+    ("fire", "relations", "DS-3b"),
+    ("fire", "roots", "DS-3b"),
+    ("fire", "steps", "DS-2"),
+    ("fire", "store.clusters", "DS-3a"),
+    ("fire", "store.item_memo", "DS-3b"),
+    ("fire", "store.presence", "DS-2"),
+    ("fire", "store.repeats", "DS-3b"),
+    ("hidden-page edit", "allocations", "DS-7"),
+    ("hidden-page edit", "bytes", "DS-7"),
+    ("hidden-page edit", "clocks", "DS-2"),
+    ("hidden-page edit", "descendants", "DS-4a, DS-5"),
+    ("hidden-page edit", "graph.natives", "DS-3a"),
+    ("hidden-page edit", "graph.nodes", "DS-4a"),
+    ("hidden-page edit", "graph.readers", "DS-4a"),
+    ("hidden-page edit", "machines", "DS-2"),
+    ("hidden-page edit", "nodes", "DS-3b"),
+    ("hidden-page edit", "nodes_of_type", "DS-3b"),
+    ("hidden-page edit", "nodes_with", "DS-3b"),
+    ("hidden-page edit", "producer.published", "DS-3a"),
+    ("hidden-page edit", "queries", "DS-2"),
+    ("hidden-page edit", "relations", "DS-3b"),
+    ("hidden-page edit", "roots", "DS-3b"),
+    ("hidden-page edit", "steps", "DS-2"),
+    ("hidden-page edit", "store.clusters", "DS-3a"),
+    ("hidden-page edit", "store.item_memo", "DS-3b"),
+    ("hidden-page edit", "store.presence", "DS-2"),
+    ("idle", "allocations", "DS-2"),
+    ("idle", "bytes", "DS-2"),
+    ("idle", "clocks", "DS-2"),
+    ("idle", "machines", "DS-2"),
+    ("idle", "nodes", "DS-2"),
+    ("idle", "nodes_of_type", "DS-3b"),
+    ("idle", "nodes_with", "DS-2"),
+    ("idle", "producer.published", "DS-3a"),
+    ("idle", "queries", "DS-2"),
+    ("idle", "steps", "DS-2"),
+    ("idle", "store.presence", "DS-2"),
+    ("let made", "allocations", "DS-7"),
+    ("let made", "bytes", "DS-7"),
+    ("let made", "clocks", "DS-2"),
+    ("let made", "descendants", "DS-4a, DS-5"),
+    ("let made", "graph.dependents", "DS-4a"),
+    ("let made", "graph.natives", "DS-3a"),
+    ("let made", "graph.nodes", "DS-4a"),
+    ("let made", "graph.readers", "DS-4a"),
+    ("let made", "graph.token_readers", "DS-3b"),
+    ("let made", "machines", "DS-2"),
+    ("let made", "nodes", "DS-3b"),
+    ("let made", "nodes_of_type", "DS-3b"),
+    ("let made", "nodes_with", "DS-3b"),
+    ("let made", "owners.counts", "DS-3b"),
+    ("let made", "producer.published", "DS-3a"),
+    ("let made", "queries", "DS-2"),
+    ("let made", "relations", "DS-3b"),
+    ("let made", "roots", "DS-3b"),
+    ("let made", "steps", "DS-2"),
+    ("let made", "store.clusters", "DS-3a"),
+    ("let made", "store.item_memo", "DS-3b"),
+    ("let made", "store.presence", "DS-2"),
+    ("observe nodes", "allocations", "DS-4a"),
+    ("observe nodes", "bytes", "DS-4a"),
+    ("observe nodes", "clocks", "DS-2"),
+    ("observe nodes", "descendants", "DS-4a, DS-5"),
+    ("observe nodes", "graph.natives", "DS-3a"),
+    ("observe nodes", "graph.nodes", "DS-4a"),
+    ("observe nodes", "graph.readers", "DS-4a"),
+    ("observe nodes", "machines", "DS-2"),
+    ("observe nodes", "nodes", "DS-3b"),
+    ("observe nodes", "nodes_of_type", "DS-3b"),
+    ("observe nodes", "nodes_with", "DS-3b"),
+    ("observe nodes", "producer.published", "DS-3a"),
+    ("observe nodes", "queries", "DS-2"),
+    ("observe nodes", "relations", "DS-3b"),
+    ("observe nodes", "roots", "DS-3b"),
+    ("observe nodes", "steps", "DS-2"),
+    ("observe nodes", "store.clusters", "DS-3a"),
+    ("observe nodes", "store.presence", "DS-2"),
+    ("paste", "allocations", "DS-7"),
+    ("paste", "bytes", "DS-7"),
+    ("paste", "clocks", "DS-2"),
+    ("paste", "descendants", "DS-4a, DS-5"),
+    ("paste", "graph.dependents", "DS-4a"),
+    ("paste", "graph.natives", "DS-3a"),
+    ("paste", "graph.nodes", "DS-4a"),
+    ("paste", "graph.readers", "DS-4a"),
+    ("paste", "machines", "DS-2"),
+    ("paste", "nodes", "DS-3b"),
+    ("paste", "nodes_of_type", "DS-3b"),
+    ("paste", "nodes_with", "DS-3b"),
+    ("paste", "owners.counts", "DS-3b"),
+    ("paste", "producer.published", "DS-3a"),
+    ("paste", "queries", "DS-2"),
+    ("paste", "relations", "DS-3b"),
+    ("paste", "roots", "DS-3b"),
+    ("paste", "steps", "DS-2"),
+    ("paste", "store.clusters", "DS-3a"),
+    ("paste", "store.item_memo", "DS-3b"),
+    ("paste", "store.presence", "DS-2"),
+    ("playing", "allocations", "DS-6b"),
+    ("playing", "bytes", "DS-6b"),
+    ("playing", "clocks", "DS-2"),
+    ("playing", "graph.natives", "DS-3a"),
+    ("playing", "machines", "DS-2"),
+    ("playing", "nodes", "DS-2"),
+    ("playing", "nodes_of_type", "DS-3b"),
+    ("playing", "nodes_with", "DS-2"),
+    ("playing", "producer.published", "DS-3a"),
+    ("playing", "queries", "DS-2"),
+    ("playing", "relations", "DS-3b"),
+    ("playing", "steps", "DS-2"),
+    ("playing", "store.clusters", "DS-3a"),
+    ("playing", "store.presence", "DS-2"),
+    ("rejected edit", "allocations", "DS-7"),
+    ("rejected edit", "bytes", "DS-7"),
+    ("rejected edit", "clocks", "DS-2"),
+    ("rejected edit", "descendants", "DS-4a, DS-5"),
+    ("rejected edit", "graph.dependents", "DS-4a"),
+    ("rejected edit", "graph.natives", "DS-3a"),
+    ("rejected edit", "graph.nodes", "DS-4a"),
+    ("rejected edit", "graph.readers", "DS-4a"),
+    ("rejected edit", "machines", "DS-2"),
+    ("rejected edit", "nodes", "DS-3b"),
+    ("rejected edit", "nodes_of_type", "DS-3b"),
+    ("rejected edit", "nodes_with", "DS-3b"),
+    ("rejected edit", "producer.published", "DS-3a"),
+    ("rejected edit", "queries", "DS-2"),
+    ("rejected edit", "relations", "DS-3b"),
+    ("rejected edit", "roots", "DS-3b"),
+    ("rejected edit", "steps", "DS-2"),
+    ("rejected edit", "store.clusters", "DS-3a"),
+    ("rejected edit", "store.presence", "DS-2"),
+    ("reparent", "allocations", "DS-7"),
+    ("reparent", "bytes", "DS-7"),
+    ("reparent", "clocks", "DS-2"),
+    ("reparent", "descendants", "DS-4a, DS-5"),
+    ("reparent", "graph.chains", "DS-3b"),
+    ("reparent", "graph.dependents", "DS-4a"),
+    ("reparent", "graph.natives", "DS-3a"),
+    ("reparent", "graph.nodes", "DS-4a"),
+    ("reparent", "graph.readers", "DS-4a"),
+    ("reparent", "graph.rest", "DS-3b"),
+    ("reparent", "graph.token_readers", "DS-3b"),
+    ("reparent", "machines", "DS-2"),
+    ("reparent", "nodes", "DS-3b"),
+    ("reparent", "nodes_of_type", "DS-3b"),
+    ("reparent", "nodes_with", "DS-3b"),
+    ("reparent", "producer.published", "DS-3a"),
+    ("reparent", "queries", "DS-2"),
+    ("reparent", "relations", "DS-3b"),
+    ("reparent", "roots", "DS-3b"),
+    ("reparent", "steps", "DS-2"),
+    ("reparent", "store.clusters", "DS-3a"),
+    ("reparent", "store.item_memo", "DS-3b"),
+    ("reparent", "store.presence", "DS-2"),
+    ("running accumulator", "allocations", "DS-2"),
+    ("running accumulator", "bytes", "DS-2"),
+    ("running accumulator", "clocks", "DS-2"),
+    ("running accumulator", "descendants", "DS-4a, DS-5"),
+    ("running accumulator", "graph.dependents", "DS-4a"),
+    ("running accumulator", "machines", "DS-2"),
+    ("running accumulator", "nodes", "DS-2"),
+    ("running accumulator", "nodes_of_type", "DS-3b"),
+    ("running accumulator", "nodes_with", "DS-2"),
+    ("running accumulator", "producer.published", "DS-3a"),
+    ("running accumulator", "queries", "DS-2"),
+    ("running accumulator", "relations", "DS-3b"),
+    ("running accumulator", "roots", "DS-3b"),
+    ("running accumulator", "steps", "DS-2"),
+    ("running accumulator", "store.clusters", "DS-3a"),
+    ("running accumulator", "store.presence", "DS-2"),
+    ("save (canary)", "allocations", "canary: must always grow"),
+    ("save (canary)", "bytes", "canary: must always grow"),
+    ("save (canary)", "relations", "canary: must always grow"),
+    ("scrub", "allocations", "DS-6b"),
+    ("scrub", "bytes", "DS-6b"),
+    ("scrub", "clocks", "DS-2"),
+    ("scrub", "graph.natives", "DS-3a"),
+    ("scrub", "machines", "DS-2"),
+    ("scrub", "nodes", "DS-2"),
+    ("scrub", "nodes_of_type", "DS-3b"),
+    ("scrub", "nodes_with", "DS-2"),
+    ("scrub", "producer.published", "DS-3a"),
+    ("scrub", "queries", "DS-2"),
+    ("scrub", "steps", "DS-2"),
+    ("scrub", "store.clusters", "DS-3a"),
+    ("scrub", "store.presence", "DS-2"),
+    ("show and hide a page", "allocations", "DS-4a"),
+    ("show and hide a page", "bytes", "DS-4a"),
+    ("show and hide a page", "clocks", "DS-2"),
+    ("show and hide a page", "descendants", "DS-4a, DS-5"),
+    ("show and hide a page", "graph.dependents", "DS-4a"),
+    ("show and hide a page", "graph.natives", "DS-3a"),
+    ("show and hide a page", "graph.nodes", "DS-4a"),
+    ("show and hide a page", "graph.readers", "DS-4a"),
+    ("show and hide a page", "machines", "DS-2"),
+    ("show and hide a page", "nodes", "DS-3b"),
+    ("show and hide a page", "nodes_of_type", "DS-3b"),
+    ("show and hide a page", "nodes_with", "DS-3b"),
+    ("show and hide a page", "producer.published", "DS-3a"),
+    ("show and hide a page", "queries", "DS-2"),
+    ("show and hide a page", "relations", "DS-3b"),
+    ("show and hide a page", "roots", "DS-3b"),
+    ("show and hide a page", "steps", "DS-2"),
+    ("show and hide a page", "store.clusters", "DS-3a"),
+    ("show and hide a page", "store.presence", "DS-2"),
+    ("structural edit", "allocations", "DS-7"),
+    ("structural edit", "bytes", "DS-7"),
+    ("structural edit", "clocks", "DS-2"),
+    ("structural edit", "descendants", "DS-4a, DS-5"),
+    ("structural edit", "graph.dependents", "DS-4a"),
+    ("structural edit", "graph.natives", "DS-3a"),
+    ("structural edit", "graph.nodes", "DS-4a"),
+    ("structural edit", "graph.readers", "DS-4a"),
+    ("structural edit", "machines", "DS-2"),
+    ("structural edit", "nodes", "DS-3b"),
+    ("structural edit", "nodes_of_type", "DS-3b"),
+    ("structural edit", "nodes_with", "DS-3b"),
+    ("structural edit", "owners.counts", "DS-3b"),
+    ("structural edit", "producer.published", "DS-3a"),
+    ("structural edit", "queries", "DS-2"),
+    ("structural edit", "relations", "DS-3b"),
+    ("structural edit", "roots", "DS-3b"),
+    ("structural edit", "steps", "DS-2"),
+    ("structural edit", "store.clusters", "DS-3a"),
+    ("structural edit", "store.item_memo", "DS-3b"),
+    ("structural edit", "store.presence", "DS-2"),
+    ("structural edit", "store.repeats", "DS-3b"),
+    ("structural preview", "allocations", "DS-5"),
+    ("structural preview", "bytes", "DS-5"),
+    ("structural preview", "clocks", "DS-2"),
+    ("structural preview", "descendants", "DS-4a, DS-5"),
+    ("structural preview", "graph.dependents", "DS-4a"),
+    ("structural preview", "graph.natives", "DS-3a"),
+    ("structural preview", "machines", "DS-2"),
+    ("structural preview", "nodes", "DS-3b"),
+    ("structural preview", "nodes_of_type", "DS-3b"),
+    ("structural preview", "nodes_with", "DS-3b"),
+    ("structural preview", "owners.counts", "DS-3b"),
+    ("structural preview", "producer.published", "DS-3a"),
+    ("structural preview", "queries", "DS-2"),
+    ("structural preview", "relations", "DS-3b"),
+    ("structural preview", "roots", "DS-3b"),
+    ("structural preview", "steps", "DS-2"),
+    ("structural preview", "store.clusters", "DS-3a"),
+    ("structural preview", "store.item_memo", "DS-3b"),
+    ("structural preview", "store.presence", "DS-2"),
+    ("structural preview", "store.repeats", "DS-3b"),
+    ("theme", "allocations", "DS-3a"),
+    ("theme", "bytes", "DS-3a"),
+    ("theme", "clocks", "DS-2"),
+    ("theme", "graph.readers", "DS-4a"),
+    ("theme", "machines", "DS-2"),
+    ("theme", "nodes", "DS-2"),
+    ("theme", "nodes_of_type", "DS-3b"),
+    ("theme", "nodes_with", "DS-2"),
+    ("theme", "producer.published", "DS-3a"),
+    ("theme", "queries", "DS-2"),
+    ("theme", "steps", "DS-2"),
+    ("theme", "store.presence", "DS-2"),
+    ("undo and redo", "allocations", "DS-7"),
+    ("undo and redo", "bytes", "DS-7"),
+    ("undo and redo", "clocks", "DS-2"),
+    ("undo and redo", "descendants", "DS-4a, DS-5"),
+    ("undo and redo", "graph.natives", "DS-3a"),
+    ("undo and redo", "graph.nodes", "DS-4a"),
+    ("undo and redo", "graph.readers", "DS-4a"),
+    ("undo and redo", "machines", "DS-2"),
+    ("undo and redo", "nodes", "DS-3b"),
+    ("undo and redo", "nodes_of_type", "DS-3b"),
+    ("undo and redo", "nodes_with", "DS-3b"),
+    ("undo and redo", "producer.published", "DS-3a"),
+    ("undo and redo", "queries", "DS-2"),
+    ("undo and redo", "relations", "DS-3b"),
+    ("undo and redo", "roots", "DS-3b"),
+    ("undo and redo", "steps", "DS-2"),
+    ("undo and redo", "store.clusters", "DS-3a"),
+    ("undo and redo", "store.item_memo", "DS-3b"),
+    ("undo and redo", "store.presence", "DS-2"),
+    ("walk (canary)", "allocations", "canary: must always grow"),
+    ("walk (canary)", "bytes", "canary: must always grow"),
+    ("walk (canary)", "descendants", "canary: must always grow"),
+    ("walk (canary)", "roots", "canary: must always grow"),
 ];
+
+/// Allocations and bytes may differ by this much between sizes without
+/// growing (B-tree node splits vary with the size of a map).
+const ALLOCS_SLACK: u64 = 24;
+const BYTES_SLACK: u64 = 24 * 1024;
 
 fn tx(label: &str, ops: Vec<Op>) -> TransactionInput {
     TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }
@@ -51,20 +386,69 @@ fn path(s: &str) -> LeafPath {
     s.parse().unwrap()
 }
 
-/// What the shown composition holds, and the ids the operations use.
-struct Shown {
-    comp: NodeId,
+fn everything(composition: NodeId) -> Interest {
+    Interest::Region { composition, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 }
+}
+
+/// The store and the nodes the operations use.
+struct Ctx {
+    store: Store,
+    now: f64,
+    /// The shown composition and what is in it.
+    perf: NodeId,
     n: NodeId,
     r: NodeId,
     g: NodeId,
     button: NodeId,
+    /// A hidden page made after the growth, so the same at every size: what
+    /// a hidden edit and showing a page touch.
+    quiet: NodeId,
+    quiet_r: NodeId,
+    /// A hidden page with a running accumulator, observed only while the
+    /// accumulator operation runs.
+    running: NodeId,
     acc: NodeId,
+    observer: Option<iron_document::ObserverId>,
+    /// What the edit-plan operation sets next.
+    toggle: bool,
 }
 
-/// The demo, grown: `copies` twins of each of its compositions, and a hidden
-/// page of `big` bound rects; then the shown composition, observed alone.
-fn fixture(copies: usize, big: usize) -> (Store, Shown, NodeId) {
-    let mut store = Store::load(&super::demo::template_snapshot("demo").unwrap()).unwrap();
+impl Ctx {
+    fn frame(&mut self) -> bool {
+        self.now += 1.0 / 60.0;
+        self.store.advance(self.now).changed
+    }
+
+    /// Step until nothing is stale and a frame changes nothing.
+    fn settle(&mut self) {
+        let mut quiet = 0;
+        for _ in 0..400 {
+            let changed = self.frame();
+            quiet = if !changed && self.store.reactive().stale_count() == 0 { quiet + 1 } else { 0 };
+            if quiet == 2 {
+                return;
+            }
+        }
+        panic!("the store did not settle: {} stale", self.store.reactive().stale_count());
+    }
+
+    fn apply(&mut self, label: &str, ops: Vec<Op>) {
+        self.store.apply(tx(label, ops)).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+    }
+}
+
+/// The demo (`snapshot`), grown: `copies` twins of each of its compositions
+/// and of a page of queries, and a hidden page of `big` bound rects; then
+/// the pages the operations use, and the shown composition, observed alone.
+fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
+    let mut store = Store::load(snapshot).unwrap();
+    let edit = |store: &mut Store, markup: &str| -> BTreeMap<String, NodeId> {
+        let plan = iron_document::edit::plan(store, &format!("<edit>{markup}</edit>"), None).unwrap_or_else(|f| panic!("{}", f.message()));
+        store.apply(tx("fixture", plan.ops)).unwrap();
+        plan.aliases
+    };
+    // Queries are the one kind the demo lacks.
+    edit(&mut store, r#"<composition name="queries" dims="2d"><let id="$k" name="k" value="1"/><query name="q1" model="sim" input="{= record(k: $k)}" debounce="0.5" initial="{= 0}"/><query name="q2" model="sim" input="{= record(k: $k + 1)}"/><text name="answer" text.content="{= 'k ' + str($k)}"/></composition>"#);
     let originals: Vec<NodeId> = iron_document::composition::compositions(store.tree()).into_iter().filter(|c| !c.is_session()).collect();
     for _ in 0..copies {
         for &c in &originals {
@@ -72,36 +456,48 @@ fn fixture(copies: usize, big: usize) -> (Store, Shown, NodeId) {
         }
     }
     if big > 0 {
-        let rects: String = (0..big).map(|i| format!(r#"<rect name="b{i}" x="{{= $k.let.value + {i}}}" y="10" w="5" h="5"/>"#)).collect();
-        let plan = iron_document::edit::plan(&store, &format!(r#"<edit><composition name="big" dims="2d"><let id="$k" name="k" value="1"/>{rects}</composition></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
-        store.apply(tx("big", plan.ops)).unwrap();
+        let rects: String = (0..big).map(|i| format!(r#"<rect name="b{i}" x="{{= $kk.let.value + {i}}}" y="10" w="5" h="5"/>"#)).collect();
+        edit(&mut store, &format!(r#"<composition name="big" dims="2d"><let id="$kk" name="k" value="1"/>{rects}</composition>"#));
     }
-    let plan = iron_document::edit::plan(
-        &store,
-        r#"<edit><composition id="$c" name="perf" dims="2d">
+    let quiet = edit(&mut store, r#"<composition id="$q" name="quiet" dims="2d"><rect id="$qr" name="qr" x="10" y="10" w="20" h="20"/><text name="qt" text.content="quiet"/></composition>"#);
+    let running = edit(&mut store, r#"<composition id="$run" name="running" dims="2d"><accumulate id="$acc" name="acc" accumulate.next="{= $acc.accumulate.value + $acc.accumulate.dt}"/><rect name="bar" x="0" y="0" w="{= $acc.accumulate.value}" h="4"/></composition>"#);
+    let perf = edit(
+        &mut store,
+        r#"<composition id="$c" name="perf" dims="2d">
             <let id="$n" name="n" value="3"/>
-            <accumulate id="$acc" name="acc" accumulate.next="{= $acc.accumulate.value + $acc.accumulate.dt}"/>
             <rect id="$r" name="r" x="100" y="100" w="150" h="100"/>
             <group id="$g" name="g" repeat.count="{= $n.let.value}"><rect name="cell" x="{= $g.repeat.index * 20}" y="300" w="10" h="10"/></group>
             <group id="$b" name="button" transform2d.x="400" transform2d.y="400"><rect name="face" size.w="40" size.h="20"/><on name="bump" write.target="$n" write.to="{= $n.let.value + 1}"/></group>
-        </composition></edit>"#,
-        None,
-    )
-    .unwrap_or_else(|f| panic!("{}", f.message()));
-    store.apply(tx("perf", plan.ops)).unwrap();
-    let shown = Shown { comp: plan.aliases["$c"], n: plan.aliases["$n"], r: plan.aliases["$r"], g: plan.aliases["$g"], button: plan.aliases["$b"], acc: plan.aliases["$acc"] };
+        </composition>"#,
+    );
     store.clear_history();
     store.set_observe_all(false);
     store.set_motion(true);
-    store.observe(Interest::Region { composition: shown.comp, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
-    // A hidden page the operations touch: the demo's first composition,
-    // the same at every size.
-    let hidden = originals[0];
-    (store, shown, hidden)
+    store.observe(everything(perf["$c"]));
+    let mut ctx = Ctx {
+        store,
+        now: 0.0,
+        perf: perf["$c"],
+        n: perf["$n"],
+        r: perf["$r"],
+        g: perf["$g"],
+        button: perf["$b"],
+        quiet: quiet["$q"],
+        quiet_r: quiet["$qr"],
+        running: running["$run"],
+        acc: running["$acc"],
+        observer: None,
+        toggle: false,
+    };
+    ctx.settle();
+    ctx
 }
 
-/// Another composition holding a copy of `c`'s contents.
-fn twin(store: &mut Store, c: NodeId) {
+/// Another composition holding a copy of `c`'s contents. A paste the store
+/// refuses (a constraint cluster that cannot be copied whole, say) is
+/// retried without the ops it named, so the rest of the page is still there;
+/// `kinds` checks that every kind grew.
+pub(super) fn twin(store: &mut Store, c: NodeId) {
     use iron_document::LeafStruct;
     let (children, dims) = {
         let doc = store.tree();
@@ -117,232 +513,306 @@ fn twin(store: &mut Store, c: NodeId) {
     name.text = Slot::Const(Value::Str("twin".into()));
     let order = {
         let doc = store.tree();
-        doc.roots().iter().filter(|r| !r.is_session()).filter_map(|&r| doc.live(r)).map(|r| r.order.clone()).max().map_or_else(iron_document::OrderKey::first, |k| iron_document::OrderKey::after(&k))
+        doc.last_root().and_then(|r| doc.live(r)).map_or_else(iron_document::OrderKey::first, |n| iron_document::OrderKey::after(&n.order))
     };
     store.apply(tx("twin", vec![Op::Create { id, ty: iron_document::TypeId::lookup("composition").unwrap(), parent: None, order, facets: vec![name.wrap(), comp.wrap()] }])).unwrap();
-    if let Ok(frag) = iron_document::copy::fragment(store, &children, "scaling")
-        && let Ok(pasted) = iron_document::copy::paste(store, &frag, &iron_document::copy::Placement { parent: Some(id), ..Default::default() }, "scaling")
-    {
-        let _ = store.apply(tx("paste", pasted.ops));
+    let Ok(frag) = iron_document::copy::fragment(store, &children, "scaling") else { return };
+    let place = iron_document::copy::Placement { parent: Some(id), ..Default::default() };
+    let pasted = iron_document::copy::paste(store, &frag, &place, "scaling").unwrap_or_else(|e| panic!("twin of {c}: {e}"));
+    if let Err(e) = store.apply(tx("paste", pasted.ops.clone())) {
+        let bad: BTreeSet<usize> = e.iter().map(|x| x.op).collect();
+        let ops: Vec<Op> = pasted.ops.into_iter().enumerate().filter(|(i, _)| !bad.contains(i)).map(|(_, o)| o).collect();
+        let _ = store.apply(tx("paste", ops));
     }
 }
 
-/// The work one operation did.
-#[derive(Clone, Debug, Default, PartialEq)]
-struct Work {
-    sites: BTreeMap<&'static str, u64>,
-    maps: BTreeMap<&'static str, u64>,
-    allocs: u64,
-    bytes: u64,
+/// How many of each kind the fixture holds, to check that growing it grows
+/// every kind the plan names.
+fn kinds(store: &Store) -> BTreeMap<&'static str, usize> {
+    let doc = store.tree();
+    let of = |ty: &str| iron_document::TypeId::lookup(ty).map_or(0, |t| doc.nodes_of_type(t).filter(|&n| doc.is_live(n)).count());
+    use iron_document::facet::FacetKind as K;
+    let with = |k: K| doc.nodes_with(k).filter(|&n| doc.is_live(n)).count();
+    BTreeMap::from([
+        ("constraints", with(K::Constraint)),
+        ("clips", of("clip")),
+        ("machines", of("machine") + with(K::Machine)),
+        ("placed plots", doc.nodes_with(K::Args).filter(|&n| doc.is_live(n)).count()),
+        ("queries", with(K::Query)),
+        ("embeds", of("embed")),
+        ("ports", with(K::Port)),
+        ("accumulators", with(K::Accumulate)),
+        ("repeats", with(K::Repeat)),
+        ("3d compositions", iron_document::composition::compositions(doc).into_iter().filter(|&c| iron_document::composition::dims(doc, c) == Some(iron_document::composition::Dims::Three)).count()),
+        ("pictured entities", doc.relations().filter(|r| r.rel == iron_document::document::RelKind::Figures).count()),
+    ])
 }
+
+/// The work one operation did, by count.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Work(BTreeMap<&'static str, u64>);
 
 fn take() -> Work {
-    let (sites, maps) = iron_document::work::take();
+    // Allocations first: building the report allocates.
     let (allocs, bytes) = crate::alloc_count::take();
-    Work { sites: sites.into_iter().filter(|(_, n)| *n > 0).collect(), maps: maps.into_iter().filter(|(_, n)| *n > 0).collect(), allocs, bytes }
+    let (sites, maps) = iron_document::work::take();
+    let mut w: BTreeMap<&'static str, u64> = sites.into_iter().filter(|(k, n)| *n > 0 && *k != "maps").collect();
+    w.extend(maps.into_iter().filter(|(_, n)| *n > 0));
+    w.insert("allocations", allocs);
+    w.insert("bytes", bytes);
+    Work(w)
 }
 
-type Operation = (&'static str, fn(&mut Store, &Shown, NodeId, &mut f64));
-
-fn frame(store: &mut Store, now: &mut f64) {
-    *now += 1.0 / 60.0;
-    store.advance(*now);
+/// An operation: what it does before the measurement and after, and what is
+/// measured. Each leaves the store as it found it.
+struct Operation {
+    name: &'static str,
+    setup: fn(&mut Ctx),
+    run: fn(&mut Ctx),
+    teardown: fn(&mut Ctx),
 }
 
-/// Every operation, each leaving the store as it found it where it can, so
-/// the next starts from the same state at every size.
+fn nothing(_: &mut Ctx) {}
+
+fn op(name: &'static str, run: fn(&mut Ctx)) -> Operation {
+    Operation { name, setup: nothing, run, teardown: nothing }
+}
+
 fn operations() -> Vec<Operation> {
     vec![
-        ("idle", |s, _, _, now| frame(s, now)),
-        ("accumulator", |s, sh, _, now| {
-            frame(s, now);
-            let _ = s.resolved(sh.acc, path("accumulate.value"));
+        op("idle", |c| {
+            c.frame();
         }),
-        ("drag", |s, sh, _, now| {
-            s.begin_gesture(&[sh.r]);
+        Operation {
+            name: "running accumulator",
+            setup: |c| c.observer = Some(c.store.observe(everything(c.running))),
+            run: |c| {
+                c.frame();
+                assert!(c.store.resolved(c.acc, path("accumulate.value")).is_some());
+            },
+            teardown: |c| {
+                if let Some(o) = c.observer.take() {
+                    c.store.unobserve(o);
+                }
+            },
+        },
+        op("drag", |c| {
+            c.store.begin_gesture(&[c.r]);
             for k in 0..3 {
-                s.preview(sh.r, path("transform2d.x"), Value::Number(100.0 + k as f64));
-                frame(s, now);
+                c.store.preview(c.r, path("transform2d.x"), Value::Number(101.0 + k as f64));
+                c.frame();
             }
-            s.cancel_gesture();
-            frame(s, now);
+            c.store.cancel_gesture();
+            c.frame();
         }),
-        ("structural preview", |s, sh, _, now| {
-            s.begin_gesture(&[sh.n]);
+        op("structural preview", |c| {
+            c.store.begin_gesture(&[c.n]);
             for v in [4.0, 3.0] {
-                s.preview(sh.n, path("let.value"), Value::Number(v));
-                frame(s, now);
+                c.store.preview(c.n, path("let.value"), Value::Number(v));
+                c.frame();
             }
-            s.cancel_gesture();
-            frame(s, now);
+            c.store.cancel_gesture();
+            c.frame();
         }),
-        ("constant edit", |s, sh, _, now| {
+        op("constant edit", |c| {
             for x in [200.0, 100.0] {
-                s.apply(tx("x", vec![Op::Set { id: sh.r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(x)) }])).unwrap();
-                frame(s, now);
+                c.apply("x", vec![Op::Set { id: c.r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(x)) }]);
+                c.frame();
             }
         }),
-        ("structural edit", |s, sh, _, now| {
-            for v in [4.0, 3.0] {
-                s.apply(tx("n", vec![Op::Set { id: sh.n, path: path("let.value"), slot: Slot::Const(Value::Number(v)) }])).unwrap();
-                frame(s, now);
+        op("structural edit", |c| {
+            let before = c.store.tree().children(c.g).len();
+            for (v, d) in [(4.0, 1), (3.0, 0)] {
+                c.apply("n", vec![Op::Set { id: c.n, path: path("let.value"), slot: Slot::Const(Value::Number(v)) }]);
+                c.frame();
+                assert_eq!(c.store.tree().children(c.g).len(), before + d, "the repeat has {v} items");
             }
         }),
-        ("reparent", |s, sh, _, now| {
-            let doc = s.tree();
-            let back = doc.live(sh.r).unwrap().order.clone();
-            let into = iron_document::OrderKey::first();
-            s.apply(tx("in", vec![Op::Reparent { id: sh.r, parent: Some(sh.button), order: into }])).unwrap();
-            frame(s, now);
-            s.apply(tx("out", vec![Op::Reparent { id: sh.r, parent: Some(sh.comp), order: back }])).unwrap();
-            frame(s, now);
+        op("reparent", |c| {
+            let back = c.store.tree().live(c.r).unwrap().order.clone();
+            c.apply("in", vec![Op::Reparent { id: c.r, parent: Some(c.button), order: iron_document::OrderKey::first() }]);
+            c.frame();
+            c.apply("out", vec![Op::Reparent { id: c.r, parent: Some(c.perf), order: back }]);
+            c.frame();
         }),
-        ("let made", |s, sh, _, now| {
-            let plan = iron_document::edit::plan(s, &format!(r#"<edit><let in="{}" name="extra" value="1"/></edit>"#, sh.comp), None).unwrap_or_else(|f| panic!("{}", f.message()));
+        op("let made", |c| {
+            let plan = iron_document::edit::plan(&c.store, &format!(r#"<edit><let in="{}" name="extra" value="1"/></edit>"#, c.perf), None).unwrap_or_else(|f| panic!("{}", f.message()));
             let made: Vec<NodeId> = plan.ops.iter().filter_map(|o| match o { Op::Create { id, .. } => Some(*id), _ => None }).collect();
-            s.apply(tx("let", plan.ops)).unwrap();
-            frame(s, now);
-            s.apply(tx("unlet", made.into_iter().map(|id| Op::Delete { id }).collect())).unwrap();
-            frame(s, now);
+            c.apply("let", plan.ops);
+            c.frame();
+            c.apply("unlet", made.into_iter().map(|id| Op::Delete { id }).collect());
+            c.frame();
         }),
-        ("theme", |s, _, _, now| {
-            s.set_theme(true);
-            frame(s, now);
-            s.set_theme(false);
-            frame(s, now);
+        op("theme", |c| {
+            c.store.set_theme(true);
+            c.frame();
+            c.store.set_theme(false);
+            c.frame();
         }),
-        ("fire", |s, sh, _, now| {
-            let _ = s.fire(sh.button, "click", Actor::Human, 0);
-            frame(s, now);
-            s.apply(tx("n", vec![Op::Set { id: sh.n, path: path("let.value"), slot: Slot::Const(Value::Number(3.0)) }])).unwrap();
-            frame(s, now);
+        op("fire", |c| {
+            let fired = c.store.fire(c.button, "click", Actor::Human, 0).unwrap();
+            assert!(fired.is_some(), "the button's action wrote");
+            c.frame();
+            c.apply("n", vec![Op::Set { id: c.n, path: path("let.value"), slot: Slot::Const(Value::Number(3.0)) }]);
+            c.frame();
         }),
-        ("edit plan", |s, sh, _, now| {
-            let plan = iron_document::edit::plan(s, &format!(r#"<edit><set id="{}" transform2d.y="120"/></edit>"#, sh.r), None).unwrap_or_else(|f| panic!("{}", f.message()));
-            s.apply(tx("plan", plan.ops)).unwrap();
-            frame(s, now);
+        op("edit plan", |c| {
+            c.toggle = !c.toggle;
+            let y = if c.toggle { 120 } else { 100 };
+            let plan = iron_document::edit::plan(&c.store, &format!(r#"<edit><set id="{}" transform2d.y="{y}"/></edit>"#, c.r), None).unwrap_or_else(|f| panic!("{}", f.message()));
+            c.apply("plan", plan.ops);
+            c.frame();
         }),
-        ("paste", |s, sh, _, now| {
-            let frag = iron_document::copy::fragment(s, &[sh.r], "scaling").unwrap();
-            let pasted = iron_document::copy::paste(s, &frag, &iron_document::copy::Placement { parent: Some(sh.comp), ..Default::default() }, "scaling").unwrap();
+        op("paste", |c| {
+            let frag = iron_document::copy::fragment(&c.store, &[c.r], "scaling").unwrap();
+            let pasted = iron_document::copy::paste(&c.store, &frag, &iron_document::copy::Placement { parent: Some(c.perf), ..Default::default() }, "scaling").unwrap();
             let made = pasted.roots.clone();
-            s.apply(tx("paste", pasted.ops)).unwrap();
-            frame(s, now);
-            s.apply(tx("unpaste", made.into_iter().map(|id| Op::Delete { id }).collect())).unwrap();
-            frame(s, now);
+            c.apply("paste", pasted.ops);
+            c.frame();
+            c.apply("unpaste", made.into_iter().map(|id| Op::Delete { id }).collect());
+            c.frame();
         }),
-        ("undo and redo", |s, sh, _, now| {
-            s.apply(tx("x", vec![Op::Set { id: sh.r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(150.0)) }])).unwrap();
-            let _ = s.undo(0);
-            frame(s, now);
-            let _ = s.redo(0);
-            frame(s, now);
-            let _ = s.undo(0);
-            frame(s, now);
+        op("undo and redo", |c| {
+            c.apply("x", vec![Op::Set { id: c.r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(150.0)) }]);
+            assert!(c.store.undo(0).is_some_and(|r| r.is_ok()));
+            c.frame();
+            assert!(c.store.redo(0).is_some_and(|r| r.is_ok()));
+            c.frame();
+            assert!(c.store.undo(0).is_some_and(|r| r.is_ok()));
+            c.frame();
         }),
-        ("rejected edit", |s, sh, _, now| {
-            let _ = s.apply(tx("bad", vec![Op::Set { id: sh.r, path: path("transform2d.x"), slot: Slot::Const(Value::Str("not a number".into())) }]));
-            frame(s, now);
+        op("rejected edit", |c| {
+            let refused = c.store.apply(tx("bad", vec![Op::Set { id: c.r, path: path("transform2d.x"), slot: Slot::Const(Value::Str("not a number".into())) }]));
+            assert!(refused.is_err());
+            c.frame();
         }),
-        ("hidden-page edit", |s, _, hidden, now| {
-            let target = s.tree().descendants(hidden).into_iter().find(|&n| s.tree().leaf(n, path("transform2d.x")).and_then(|l| l.constant()).is_some());
-            if let Some(t) = target {
-                let x = s.tree().leaf(t, path("transform2d.x")).and_then(|l| l.constant()).cloned().unwrap();
-                s.apply(tx("hidden", vec![Op::Set { id: t, path: path("transform2d.x"), slot: Slot::Const(Value::Number(x.as_f64().unwrap_or(0.0) + 1.0)) }])).unwrap();
-                frame(s, now);
-                s.apply(tx("hidden back", vec![Op::Set { id: t, path: path("transform2d.x"), slot: Slot::Const(x) }])).unwrap();
-                frame(s, now);
+        op("hidden-page edit", |c| {
+            for x in [30.0, 10.0] {
+                c.apply("hidden", vec![Op::Set { id: c.quiet_r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(x)) }]);
+                c.frame();
             }
         }),
-        ("show and hide a page", |s, _, hidden, now| {
-            let id = s.observe(Interest::Region { composition: hidden, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
-            frame(s, now);
-            s.unobserve(id);
-            frame(s, now);
+        op("show and hide a page", |c| {
+            let o = c.store.observe(everything(c.quiet));
+            c.frame();
+            c.store.unobserve(o);
+            c.frame();
         }),
-        ("observe nodes", |s, sh, _, now| {
-            let id = s.observe(Interest::Nodes(vec![sh.r, sh.g]));
-            frame(s, now);
-            s.unobserve(id);
-            frame(s, now);
+        op("observe nodes", |c| {
+            let o = c.store.observe(Interest::Nodes(vec![c.r, c.g]));
+            c.frame();
+            c.store.unobserve(o);
+            c.frame();
         }),
-        ("scrub", |s, _, _, now| {
+        op("scrub", |c| {
             for t in [0.5, 1.0, 0.0] {
-                s.set_time(t);
-                frame(s, now);
+                c.store.set_time(t);
+                c.frame();
             }
         }),
-        ("playing", |s, _, _, now| {
-            let _ = crate::document_bridge::clock::set(s, &[("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(4.0)), ("playing", Value::Bool(true))]);
+        op("playing", |c| {
+            crate::document_bridge::clock::set(&mut c.store, &[("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(4.0)), ("playing", Value::Bool(true))]).unwrap();
             for _ in 0..3 {
-                frame(s, now);
+                c.frame();
             }
-            let _ = crate::document_bridge::clock::set(s, &[("playing", Value::Bool(false)), ("t", Value::Number(0.0))]);
-            frame(s, now);
+            crate::document_bridge::clock::set(&mut c.store, &[("playing", Value::Bool(false)), ("t", Value::Number(0.0))]).unwrap();
+            c.frame();
+        }),
+        op("save (canary)", |c| {
+            assert!(!c.store.save().is_empty());
+        }),
+        op("walk (canary)", |c| {
+            let doc = c.store.tree();
+            let n: usize = iron_document::composition::compositions(doc).into_iter().map(|k| doc.descendants(k).len()).sum();
+            assert!(n > 0);
         }),
     ]
 }
 
-/// Each operation's work at each size, after a warm-up run.
-fn measure(copies: usize, big: usize) -> Vec<(&'static str, Work)> {
-    let (mut store, shown, hidden) = fixture(copies, big);
-    let mut now = 0.0;
-    for _ in 0..30 {
-        frame(&mut store, &mut now);
-    }
+/// The fixture's kinds, and each operation's work after a warm-up run,
+/// measured from a settled store.
+fn measure(snapshot: &str, copies: usize, big: usize) -> (BTreeMap<&'static str, usize>, Vec<(&'static str, Work)>) {
+    let mut c = fixture(snapshot, copies, big);
+    let kinds = kinds(&c.store);
     let mut out = Vec::new();
-    for (name, op) in operations() {
-        op(&mut store, &shown, hidden, &mut now);
+    for o in operations() {
+        (o.setup)(&mut c);
+        (o.run)(&mut c);
+        (o.teardown)(&mut c);
+        c.settle();
+        (o.setup)(&mut c);
         take();
-        op(&mut store, &shown, hidden, &mut now);
-        out.push((name, take()));
+        (o.run)(&mut c);
+        let w = take();
+        (o.teardown)(&mut c);
+        c.settle();
+        out.push((o.name, w));
     }
-    out
+    (kinds, out)
 }
 
-/// What grew from `a` to `b`, largest growth first: any site or map visited
-/// more, or allocations beyond a small tolerance (B-tree splits vary with
-/// size). Empty when nothing did.
-fn grew(a: &Work, b: &Work) -> Vec<(u64, String)> {
+/// The counts of operation `i` that grew at both steps across `sizes`.
+fn growing(sizes: &[&Vec<(&'static str, Work)>; 3], i: usize) -> Vec<(&'static str, String)> {
+    let at = |k: usize, key: &str| sizes[k][i].1 .0.get(key).copied().unwrap_or(0);
+    let keys: BTreeSet<&'static str> = sizes.iter().flat_map(|s| s[i].1 .0.keys().copied()).collect();
     let mut out = Vec::new();
-    for (k, &n) in b.sites.iter().filter(|(k, _)| **k != "maps").chain(&b.maps) {
-        let was = a.sites.get(k).or(a.maps.get(k)).copied().unwrap_or(0);
-        if n > was {
-            out.push((n - was, format!("{k} {was} → {n}")));
+    for key in keys {
+        let slack = match key {
+            "allocations" => ALLOCS_SLACK,
+            "bytes" => BYTES_SLACK,
+            _ => 0,
+        };
+        let (a, b, c) = (at(0, key), at(1, key), at(2, key));
+        if b > a + slack && c > b + slack {
+            out.push((key, format!("{key} {a} → {b} → {c}")));
         }
     }
-    let slack = |x: u64| x + x / 20 + 16;
-    if b.allocs > slack(a.allocs) {
-        out.push((0, format!("allocations {} → {}", a.allocs, b.allocs)));
-    }
-    if b.bytes > slack(a.bytes) {
-        out.push((0, format!("bytes {} → {}", a.bytes, b.bytes)));
-    }
-    out.sort_by(|x, y| y.0.cmp(&x.0));
     out
 }
 
 #[test]
 fn work_does_not_grow_with_the_hidden_document() {
-    // Two axes from one base: more hidden pages, and one larger hidden page.
-    let base = measure(0, 0);
-    let axes = [("pages", measure(1, 0)), ("one big page", measure(0, 600))];
-    let mut growing: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    for (axis, run) in &axes {
-        for (i, (name, work)) in run.iter().enumerate() {
-            let steps = grew(&base[i].1, work);
-            if !steps.is_empty() {
-                let top: Vec<String> = steps.into_iter().take(5).map(|(_, s)| s).collect();
-                growing.entry(name).or_default().push(format!("{axis}: {}", top.join(", ")));
+    let snapshot = super::demo::template_snapshot("demo").unwrap();
+    let sizes = [(0, 0), (1, 0), (2, 0), (0, 400), (0, 800)];
+    let runs: Vec<(BTreeMap<&'static str, usize>, Vec<(&'static str, Work)>)> = std::thread::scope(|s| {
+        let snapshot = &snapshot;
+        let handles: Vec<_> = sizes.iter().map(|&(c, b)| s.spawn(move || measure(snapshot, c, b))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    // Growing the pages grows every kind.
+    println!("kinds: {:?} → {:?} → {:?}", runs[0].0, runs[1].0, runs[2].0);
+    for (kind, &n) in &runs[0].0 {
+        assert!(n > 0, "the fixture holds no {kind}");
+        assert!(runs[1].0[kind] > n && runs[2].0[kind] > runs[1].0[kind], "twinning did not grow {kind}: {n} → {} → {}", runs[1].0[kind], runs[2].0[kind]);
+    }
+    let axes = [("pages", [&runs[0].1, &runs[1].1, &runs[2].1]), ("one big page", [&runs[0].1, &runs[3].1, &runs[4].1])];
+    let mut grown: BTreeMap<(&'static str, &'static str), Vec<String>> = BTreeMap::new();
+    for (axis, sizes) in &axes {
+        for i in 0..sizes[0].len() {
+            let name = sizes[0][i].0;
+            for (key, what) in growing(sizes, i) {
+                grown.entry((name, key)).or_default().push(format!("{axis}: {what}"));
             }
         }
     }
-    println!("operations whose work grows with the hidden document (largest growth first):");
-    for (name, why) in &growing {
-        println!("  {name}: {}", why.join("; "));
+    println!("counts that grow with the hidden document:");
+    let mut last = "";
+    for ((name, _), why) in &grown {
+        if *name != last {
+            println!("  {name}:");
+            last = name;
+        }
+        println!("    {}", why.join("; "));
     }
-    let expected: BTreeMap<&str, &str> = SCALING.iter().copied().collect();
-    let unexpected: Vec<&&str> = growing.keys().filter(|k| !expected.contains_key(*k)).collect();
-    let stopped: Vec<&&str> = expected.keys().filter(|k| !growing.contains_key(*k)).collect();
+    let expected: BTreeSet<(&str, &str)> = SCALING.iter().map(|(o, k, _)| (*o, *k)).collect();
+    let unexpected: Vec<&(&str, &str)> = grown.keys().filter(|k| !expected.contains(k)).collect();
+    let stopped: Vec<&(&str, &str)> = expected.iter().filter(|k| !grown.contains_key(k)).collect();
+    if !unexpected.is_empty() {
+        println!("not in SCALING:");
+        for (o, k) in &unexpected {
+            println!("    (\"{o}\", \"{k}\", \"DS-?\"),");
+        }
+    }
+    assert!(grown.contains_key(&("save (canary)", "allocations")) && grown.contains_key(&("walk (canary)", "descendants")), "the harness no longer sees a whole-document walk");
     assert!(unexpected.is_empty() && stopped.is_empty(), "growing but not listed in SCALING: {unexpected:?}; listed but no longer growing (remove them): {stopped:?}");
 }

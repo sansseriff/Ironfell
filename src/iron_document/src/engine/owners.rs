@@ -30,9 +30,9 @@ pub(crate) struct Owners {
     /// Each owner's expansion problems.
     problems: BTreeMap<NodeId, Vec<Problem>>,
     /// How many derived nodes each owner wanted: the budget's share.
-    counts: BTreeMap<NodeId, usize>,
+    counts: crate::work::Counted<BTreeMap<NodeId, usize>, { crate::work::OWNERS_COUNTS }>,
     /// Definition -> owners whose expansion read it. Only grows.
-    by_def: BTreeMap<NodeId, BTreeSet<NodeId>>,
+    by_def: crate::work::Counted<BTreeMap<NodeId, BTreeSet<NodeId>>, { crate::work::OWNERS_BY_DEF }>,
     /// Owner -> owners whose pictures figure its derived entities. Only
     /// grows.
     readers: BTreeMap<NodeId, BTreeSet<NodeId>>,

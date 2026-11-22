@@ -57,7 +57,7 @@ work under a plan gets the next free number.
 |---|---|---|
 | `RE` | [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) (closed; `RE-4.3` is now in `handoff-render.md` §10) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
 | `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
-| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`), and `specs/structure-in-the-graph.md` §5 (`DS-9` … `DS-15`, renumbered 2026-11-22; `DS-7` brought forward) |
+| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`), and `specs/structure-in-the-graph.md` §5 (`DS-9` … `DS-16`, renumbered 2026-11-22; `DS-7` brought forward) |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
 
@@ -82,7 +82,7 @@ that orders them gives them a key.
 |---|---|---|
 | [`agent-vision.md`](specs/agent-vision.md) | Pasted/dropped raster references and GPU composition pictures for the built-in agent | Built on `t3/agent-image-vision`; 2D capture, bounded visual refinement; native/live-provider verification pending |
 | [`agent-runtimes.md`](specs/agent-runtimes.md) | Loopback runtime interoperability, Codex bootstrap, Claude CLI adapter, provider selection and 2D authoring tests | Bootstrap built 2026-11-03 in `agent-runtimes` worktree; live Codex create/edit/undo passes in worker/main modes; live Claude, native and full smoke pending |
-| [`structure-in-the-graph.md`](specs/structure-in-the-graph.md) (DS-9 to DS-15) | Every kept result is a cell: a from-scratch function over a bounded scope, rerun by the structure keys it recorded; the hand rules for what an edit affects deleted, one family at a time | Adopted 2026-11-22, rewritten the same day after a review of its direction (handoff-scaling.md §9); DS-9 done |
+| [`structure-in-the-graph.md`](specs/structure-in-the-graph.md) (DS-9 to DS-16) | Every cached derivation is a cell: a from-scratch function over a bounded scope, rerun by the keys its reads recorded; one write channel, one driver with a written order, one oracle; the hand rules deleted one family at a time | Adopted 2026-11-22, rewritten the same day after a review of its direction (handoff-scaling.md §9); DS-9 done |
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |

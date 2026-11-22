@@ -3,8 +3,8 @@
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
 6/10, Sol 6/10; both: DS-1 can start). **DS-1, DS-2 and DS-3a done 2026-11-21; DS-3b
-stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its code review fixed in `fd884ac`; the spec rewritten 2026-11-22 after a review of its direction (§9). Next: the rewritten spec to the council, then DS-10 (the oracle), then DS-11 (the layout family), from
-[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md), whose phases DS-10 to DS-15 (renumbered 2026-11-22) and DS-7, brought forward, replace the rest of DS-3b. DS-4a, DS-4b and
+stopped at part 2 (`08e0539`, 2026-11-22).** DS-9 done 2026-11-22; its code review fixed in `fd884ac`; the spec rewritten 2026-11-22 after a review of its direction (§9). Next: the rewritten spec to the council, with DS-7 (refusal by cheap snapshots) now, then DS-10 (the oracle), DS-11 (the mechanism completed: one write channel, one driver), the copies-as-views decision, and DS-12 (the layout pilot), from
+[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md), whose phases DS-10 to DS-16 (renumbered 2026-11-22) and DS-7, brought forward, replace the rest of DS-3b. DS-4a, DS-4b and
 DS-5 stay as planned here and may land any time after DS-9. Why (the user, 2026-11-22): DS-3b's
 fixes were rules for when a whole-document pass may be skipped; the cause is that cells do
 not record what they read of structure. The council reviews each phase's design and
@@ -735,3 +735,22 @@ state list, comparing derived results and checking that history stepped exactly 
 inputs changed (§4); refusal checked apart; holds derived, write-backs kept; the
 copies-as-views decision after DS-11; locality tests in every exit. Declined: making
 history cells idempotent by construction (Opus), since the oracle no longer needs it.
+
+**Review of the written order (2026-11-22): Opus 6.5/10, Sol 7/10; both: adopt with named
+changes.** Both: the core holds, and recorded reads are the general fix. Opus: the order
+is still spread over six entry points, each running its own subset of stages, so one
+`settle(mode)` driver should end every call. Writes still report through two channels
+(structure keys, and `changed` lists built from ops, with hand-placed drains), so value
+writes should report leaf keys too. Three results depend on evaluation order (the first
+claim wins, cycle blame, stale claim errors). The history check must replay the step, be
+one-way, and take inputs from the reference. Feedback through the solver has no owner. A
+bound structural field is silently read as its default. Copies as views should be decided
+before the mechanism is finished. DS-7 should start now, with refusal by re-derivation as
+its end state. Sol: solve order must follow cluster dependencies across compositions;
+candidate mates and effective clusters are separate (an ineligible mate must hold
+nothing); `version()` and absent lookups need keys; font refresh and root reordering need
+owners. Adopted: all of Opus's, as DS-11 (the mechanism completed) and DS-10; cluster
+dependencies derived per cluster, with cycles found in the cone; candidate components
+split from effective clusters; the decision on copies before DS-11; DS-7 now. Declined:
+replaying every step from the state before the call (Sol), since the one-step replay
+catches stale solves without the bit drift a full replay brings.

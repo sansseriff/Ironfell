@@ -55,7 +55,7 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
-| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model; the spec's revision next (§2, PT-4a "Left") |
+| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model, and the spec revised to match; council round 2 next |
 | PT-4b | The storage-and-query spec | Design | PT-4a written | **Drafted 2026-11-21** (`specs/patch-storage.md`); council after PT-4a's |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
 | PT-6 | Machines rebuilt on axes | Build | PT-5 | |
@@ -289,7 +289,9 @@ green):
   one placement against the hover pose, the tie flag, a removal not stale and an
   entry returning with its node.
 
-**Left for PT-4a** (the spec's text, then a second council round, then the user):
+**Left for PT-4a** (the spec's text, then a second council round, then the user).
+**Done 2026-11-21:** all eleven written into the spec (P15, P16 added; §6, §7.2 and
+§11 rewritten); patch-storage.md's index gained the layer:
 1. §6.1 and law 5: the stored (layer, rank) is strength; the keys only give a new
    patch's rank. Ties as `ties()` defines them. P15: layers.
 2. §4: regions compared as written; P10's key table as `axis_key` has it.

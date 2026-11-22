@@ -86,7 +86,7 @@ Derived from the patches, never written by hand, rebuilt from chunks at will:
 
 | Table | Key → | Answers (patches.md §10) |
 |---|---|---|
-| **by field** | (node, field) → patches setting it, with their regions and ranks | why a value is what it is; an edit's blast radius; winning regions |
+| **by field** | (node, field) → patches setting it, with their regions, layers and ranks | why a value is what it is; an edit's blast radius; winning regions |
 | **by value** | a field's value (and theme token) → (node, field, patch) | find: "everything blue" |
 | **by axis value** | an axis value → patches whose region holds it | what applies on slide 7, or in hover |
 
@@ -127,6 +127,7 @@ create table patches (
     scope_id  text not null,
     patch     text not null,
     owner     text not null,
+    scope     text not null,                -- where it is written: its layer (patches.md §6.1)
     rank      text not null collate "C",
     chunk     text not null,
     primary key (scope_id, patch)
@@ -160,10 +161,12 @@ create index on patch_entries using gin (value jsonb_path_ops);
 - **Intervals by order key.** An ordered axis's positions are order keys (as child
   order's), so inserting a slide never rewrites an interval. Moving a value changes its
   key, and the room rewrites the intervals that name it as an endpoint, which is rare.
-- **Ranks are order keys** too (patches.md P1), so they compare as text.
+- **Ranks are order keys** too (patches.md P1), so they compare as text, within a
+  layer. A patch's layer is the scope that writes it (`scope`); for one node the
+  scopes form a chain (patches.md §6.1), so layers compare by position in it.
 - **A point query** ("what applies at this point") is one indexed lookup per axis,
-  intersected; the winner per field is the highest rank among the rows that remain
-  (patches.md §6.1).
+  intersected; the winner per field is the strongest (layer, then rank) among the rows
+  that remain (patches.md §6.1).
 
 ### 5.2 Rooms
 

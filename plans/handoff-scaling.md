@@ -692,3 +692,25 @@ make structural edits grow with the active composition; solving clusters across
 compositions (Sol), in favour of checking assumption A11; per-clip animation ends with a
 maintained maximum now (Sol), left to PT-9; whether refusal is needed at all (Opus),
 which is product behaviour.
+
+**Review of the loop and the oracle (2026-11-22): Opus 7/10, Sol 6/10; both: adopt with
+named changes.** Both found that the solver and its held copies didn't fit the loop:
+expansion reads the holds, `release` writes template values back, and the cluster cells
+declare no outputs, so "order by heights" had nothing to order. Sol: the loop could stop
+with work pending (a repeat publishing item values with no copy written changes another
+repeat's count), and the oracle skipped expansion and couldn't judge the solver (two
+valid poses from two starts); the same step from the same state, with nothing cached,
+can. Opus: five round loops decide order today, not four functions; `Saved`'s field list
+is another hand list, which persistent maps would make unnecessary; the door stays open
+for clips, the host and the gate; "no values" means authored constants only. Both: name
+the costs left (blocked retries, session publish, attachment validation, the expansion
+budget, network `deref`), and stop gating phases on net lines. Adopted: a loop of five
+stages run to quiescence, with one budget, replacing the five loops; holds as state, and a
+dropped hold marks its owner (no `release`); the solve as stage 4, ordered as
+`next_to_solve` does, with ring checks per cluster; the oracle as the same call on a clone
+with every derived result dropped; the atomicity check made a failure for refusals; DS-7
+to choose between persistent maps and a journal by measuring; a design of copies as views
+before DS-15; every remaining cost given an owner; an honest account of where the speed
+comes from. Declined: clips converted here (Opus), since PT-9 replaces clips and must
+follow the rule; ordering clusters by graph heights with claimed variables (Opus), since
+the solve loop already orders them.

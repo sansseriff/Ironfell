@@ -274,6 +274,7 @@ impl<'a> Tree<'a> {
             out.push(n);
             stack.extend(self.children(n).iter().rev().copied());
         }
+        crate::work::visit(crate::work::Site::Descendants, out.len());
         out
     }
 
@@ -290,6 +291,7 @@ impl<'a> Tree<'a> {
             out.push(n);
             stack.extend(self.children(n).iter().rev().copied());
         }
+        crate::work::visit(crate::work::Site::Descendants, out.len());
         Some(out)
     }
 

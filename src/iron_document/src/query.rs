@@ -56,7 +56,7 @@ struct State {
 
 #[derive(Clone, Default)]
 pub struct Queries {
-    states: BTreeMap<NodeId, State>,
+    states: crate::work::Counted<BTreeMap<NodeId, State>, { crate::work::QUERIES }>,
     seq: u64,
 }
 

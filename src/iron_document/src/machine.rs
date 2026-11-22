@@ -249,7 +249,7 @@ struct Run {
 /// is running.
 #[derive(Clone, Default)]
 pub struct Player {
-    known: BTreeMap<(NodeId, NodeId), Known>,
+    known: crate::work::Counted<BTreeMap<(NodeId, NodeId), Known>, { crate::work::MACHINES }>,
     /// Instances whose next state change snaps instead of playing: those
     /// an undo or redo set the state of.
     pub snap: std::collections::BTreeSet<NodeId>,

@@ -62,6 +62,11 @@ mod vector;
 
 // The authored store's runtime projection: reconciler, provenance, writeback.
 pub mod document_bridge;
+#[cfg(test)]
+mod alloc_count;
+#[cfg(test)]
+#[global_allocator]
+static COUNTING: alloc_count::Counting = alloc_count::Counting;
 
 mod camera_controller;
 

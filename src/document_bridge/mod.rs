@@ -23,6 +23,8 @@ pub mod capture;
 pub mod chunks;
 pub mod clock;
 mod demo;
+#[cfg(test)]
+mod scaling;
 pub use demo::{demo_scene, showcase, template_snapshot};
 pub mod inspector;
 pub mod gas;

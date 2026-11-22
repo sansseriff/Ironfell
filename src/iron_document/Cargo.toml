@@ -41,6 +41,9 @@ iron_layout = { path = "../iron_layout" }
 # becomes a facade over two stores compared after every call, so every test
 # is a differential script. Test-only; the app never enables it.
 differential = []
+# Work counted at whole-document choke points (`work.rs`), for the scaling test
+# (plans/handoff-scaling.md §5). Test-only.
+work = []
 
 [dev-dependencies]
 # Only for the test that pins `geom::world_affine` to Bevy's own transform

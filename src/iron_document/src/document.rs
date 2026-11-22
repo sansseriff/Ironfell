@@ -373,14 +373,15 @@ impl Document {
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
-        self.nodes.values()
+        self.nodes.values().inspect(|_| crate::work::visit(crate::work::Site::Nodes, 1))
     }
 
     pub fn live_nodes(&self) -> impl Iterator<Item = &Node> {
-        self.nodes.values().filter(|n| n.is_live())
+        self.nodes.values().inspect(|_| crate::work::visit(crate::work::Site::Nodes, 1)).filter(|n| n.is_live())
     }
 
     pub fn roots(&self) -> &[NodeId] {
+        crate::work::visit(crate::work::Site::Roots, self.roots.len());
         &self.roots
     }
 
@@ -397,6 +398,7 @@ impl Document {
             out.push(n);
             stack.extend(self.children(n).iter().rev().copied());
         }
+        crate::work::visit(crate::work::Site::Descendants, out.len());
         out
     }
 
@@ -413,6 +415,7 @@ impl Document {
             out.push(n);
             stack.extend(self.children(n).iter().rev().copied());
         }
+        crate::work::visit(crate::work::Site::Descendants, out.len());
         Some(out)
     }
 
@@ -460,11 +463,11 @@ impl Document {
     }
 
     pub fn nodes_of_type(&self, ty: TypeId) -> impl Iterator<Item = NodeId> + '_ {
-        self.by_type.get(&ty).into_iter().flatten().copied()
+        self.by_type.get(&ty).into_iter().flatten().copied().inspect(|_| crate::work::visit(crate::work::Site::NodesOfType, 1))
     }
 
     pub fn nodes_with(&self, kind: FacetKind) -> impl Iterator<Item = NodeId> + '_ {
-        self.by_facet.get(&kind).into_iter().flatten().copied()
+        self.by_facet.get(&kind).into_iter().flatten().copied().inspect(|_| crate::work::visit(crate::work::Site::NodesWith, 1))
     }
 
     pub fn facet(&self, id: NodeId, kind: FacetKind) -> Option<&Facet> {
@@ -489,6 +492,7 @@ impl Document {
         self.facets.iter().flat_map(move |(kind, table)| {
             table
                 .iter()
+                .inspect(|_| crate::work::visit(crate::work::Site::BoundSlots, 1))
                 .filter(move |(id, _)| self.is_live(**id))
                 .flat_map(move |(id, comp)| {
                     comp.field_names().into_iter().filter_map(move |field| {
@@ -503,7 +507,7 @@ impl Document {
     /// `bound_slots` for one facet kind.
     pub(crate) fn bound_slots_of(&self, kind: FacetKind) -> impl Iterator<Item = (Leaf, &Expr)> {
         self.facets.get(&kind).into_iter().flat_map(move |table| {
-            table.iter().filter(move |(id, _)| self.is_live(**id)).flat_map(move |(id, comp)| {
+            table.iter().inspect(|_| crate::work::visit(crate::work::Site::BoundSlots, 1)).filter(move |(id, _)| self.is_live(**id)).flat_map(move |(id, comp)| {
                 comp.field_names().into_iter().filter_map(move |field| {
                     let expr = comp.get(field)?.expr()?;
                     let path = LeafPath::new(kind, field).expect("declared field");
@@ -594,7 +598,7 @@ impl Document {
     }
 
     pub fn relations(&self) -> impl Iterator<Item = &Relation> {
-        self.relations.values()
+        self.relations.values().inspect(|_| crate::work::visit(crate::work::Site::Relations, 1))
     }
 
     /// Edges leaving `id`.

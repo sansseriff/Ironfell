@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
-6/10, Sol 6/10; both: DS-1 can start). DS-1 next; the council reviews the code by
-groups (§6). The user asked for it (2026-11-21): "I want all costs that scale with
+6/10, Sol 6/10; both: DS-1 can start). **DS-1 done 2026-11-21**; its code review next,
+then DS-2. The council reviews the code by groups (§6). The user asked for it (2026-11-21): "I want all costs that scale with
 document size to be gone", councils on this plan and through the code.
 
 ## 0. Read first
@@ -425,6 +425,31 @@ DS-6; DS-7 and DS-8.
 
 **Final exit:** every operation of §5 has no slope, store and host, at both axes.
 DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS-6.
+
+### DS-1 as done (2026-11-21)
+
+- `iron_document::work` (feature `work`, tests only): per-thread counters at the
+  choke points (`Document::nodes`, `live_nodes`, `roots`, `descendants`,
+  `descendants_within`, `nodes_of_type`, `nodes_with`, `bound_slots`, `relations`) and
+  `Counted<M, N>`, a wrapper whose iteration counts each entry, around the graph's
+  `nodes`, `dependents`, `natives`, `unneeded`, `stale`, `runtime`, `held`, `owned`,
+  `claims`, `base_readers`, `derived`, `token_readers`, `resolved`, `candidates`, and
+  the store's `presence`, `item_memo`, `observers`, the machine player's `known`, the
+  step player's `traces` and `values`, the query player's `states`, `Clocks`'s
+  `since` and `behind`. The app's tests enable it (a dev-dependency) and count
+  allocations per thread (`src/alloc_count.rs`, a test-only global allocator).
+- `document_bridge::scaling::work_does_not_grow_with_the_hidden_document` (about 70 s,
+  debug): the demo, twinned once (every composition's contents pasted into a twin:
+  constraints, islands, 3D, embeds, clips, machines, pictured entities) and with one
+  600-rect hidden page, against the plain demo; one shown composition `perf`; 19
+  operations. **All 19 grow**, each listed in `SCALING` with the phase that should stop
+  it; the test fails when an unlisted one grows or a listed one stops. What grows is §3's
+  list: e.g. an idle frame visits every node (the clock lookup), `let made` visits roots
+  106,208 times (rescope's providers) and 367,024 with one twin.
+- **Not covered yet** (added by the phase that touches them): a `compose` plan, a
+  solver refusal after expansion, deleting and duplicating a page, a scoped agent view, a
+  capture, a query's reply on a paused page, a hidden-to-shown publish, a fixture without
+  constraints, and the host operations (DS-8).
 
 ## 7. Risks
 

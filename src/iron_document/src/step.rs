@@ -28,9 +28,9 @@ use crate::value::Value;
 #[derive(Clone, Default)]
 pub struct Steps {
     /// Each trace's changes, oldest first: when, and the value from then.
-    traces: BTreeMap<NodeId, VecDeque<(f64, Value)>>,
+    traces: crate::work::Counted<BTreeMap<NodeId, VecDeque<(f64, Value)>>, { crate::work::STEPS }>,
     /// Each accumulator's value.
-    values: BTreeMap<NodeId, Value>,
+    values: crate::work::Counted<BTreeMap<NodeId, Value>, { crate::work::STEPS }>,
     last: Option<f64>,
 }
 

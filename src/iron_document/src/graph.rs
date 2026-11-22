@@ -26,6 +26,7 @@ use crate::expr::{Expr, Leaf};
 use crate::facet::FacetKind;
 use crate::value::Slot;
 use crate::value::Value;
+use crate::work::{Counted, GRAPH_BASE_READERS, GRAPH_CANDIDATES, GRAPH_CLAIMS, GRAPH_DEPENDENTS, GRAPH_DERIVED, GRAPH_HELD, GRAPH_NATIVES, GRAPH_NODES, GRAPH_OWNED, GRAPH_RESOLVED, GRAPH_RUNTIME, GRAPH_STALE, GRAPH_TOKEN_READERS, GRAPH_UNNEEDED};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Who publishes a runtime signal. Three producers are built in; a host
@@ -437,10 +438,10 @@ struct BoundNode {
 
 #[derive(Clone, Debug, Default)]
 pub struct Reactive {
-    nodes: BTreeMap<Leaf, BoundNode>,
+    nodes: Counted<BTreeMap<Leaf, BoundNode>, GRAPH_NODES>,
     /// Any leaf -> the cells that read it.
-    dependents: BTreeMap<Leaf, BTreeSet<CellId>>,
-    resolved: BTreeMap<Leaf, Value>,
+    dependents: Counted<BTreeMap<Leaf, BTreeSet<CellId>>, GRAPH_DEPENDENTS>,
+    resolved: Counted<BTreeMap<Leaf, Value>, GRAPH_RESOLVED>,
     overlay: BTreeMap<Leaf, Value>,
     /// The runtime layer (vision 10 §4): named signals published by
     /// producers, read beneath bindings and above authored constants, never
@@ -448,9 +449,9 @@ pub struct Reactive {
     /// (`Store::resolve_physics`) are two producers; a host system (a Bevy
     /// simulation, a Model) is another. A leaf claimed by two producers keeps
     /// the first claim and reports the second (`signal_errors`).
-    runtime: BTreeMap<Leaf, Signal>,
+    runtime: Counted<BTreeMap<Leaf, Signal>, GRAPH_RUNTIME>,
     /// Which leaves each producer currently holds, for whole-set republish.
-    held: BTreeMap<ProducerId, BTreeSet<Leaf>>,
+    held: Counted<BTreeMap<ProducerId, BTreeSet<Leaf>>, GRAPH_HELD>,
     /// Leaves a producer asked for while another held them, by producer.
     signal_errors: BTreeMap<Leaf, String>,
     changes: BTreeMap<Leaf, Value>,
@@ -476,7 +477,7 @@ pub struct Reactive {
     pub(crate) propagations: u64,
     /// The signals connections and anchors derive, as last computed: what
     /// `restructure` compares against.
-    derived: BTreeMap<Leaf, Expr>,
+    derived: Counted<BTreeMap<Leaf, Expr>, GRAPH_DERIVED>,
     /// Each anchor's chain of transformed ancestors as its positions in
     /// `derived` were made from (`anchor::chain`): a restructure makes them
     /// again only for an anchor whose chain changed.
@@ -485,7 +486,7 @@ pub struct Reactive {
     /// placements, made again whole by a restructure that rederives.
     rest: BTreeSet<Leaf>,
     /// Bound leaves whose expression reads context (`@name`).
-    token_readers: BTreeSet<Leaf>,
+    token_readers: Counted<BTreeSet<Leaf>, GRAPH_TOKEN_READERS>,
     /// Bindings that failed on a tracked-read cycle or did not settle.
     /// Nothing tells them when that ends (the read that closed the cycle
     /// was never made an edge), so `restructure` runs them again (the
@@ -496,10 +497,10 @@ pub struct Reactive {
     /// Closed downwards: whatever reads a cell outside it is outside it too,
     /// so a needed cell never reads a stale one. The store sets it
     /// (`set_unneeded`); empty while everything is observed.
-    unneeded: BTreeSet<CellId>,
+    unneeded: Counted<BTreeSet<CellId>, GRAPH_UNNEEDED>,
     /// Unneeded cells whose inputs changed since they were last evaluated:
     /// they hold their last value (§8.9) until needed again.
-    stale: BTreeSet<CellId>,
+    stale: Counted<BTreeSet<CellId>, GRAPH_STALE>,
     /// Whether necessity is out of date: `unneeded` was emptied for
     /// exactness (a transaction, a structure change), or a tracked read
     /// left a cell only it had made needed, since the store last set it.
@@ -517,16 +518,16 @@ pub struct Reactive {
     /// The cells that could be unneeded (those of hidden nodes not rooted)
     /// as the store last decided: when a tracked read leaves one, it may
     /// be unneeded now, and the store decides necessity again.
-    candidates: BTreeSet<CellId>,
+    candidates: Counted<BTreeSet<CellId>, GRAPH_CANDIDATES>,
     /// The native cells, by key.
-    natives: BTreeMap<NativeKey, NativeCell>,
+    natives: Counted<BTreeMap<NativeKey, NativeCell>, GRAPH_NATIVES>,
     /// Each leaf a native may write, to its native: a read of it is a read
     /// of that cell, for heights, priming and necessity.
-    owned: BTreeMap<Leaf, NativeKey>,
+    owned: Counted<BTreeMap<Leaf, NativeKey>, GRAPH_OWNED>,
     /// The leaves each native holds a claim on.
-    claims: BTreeMap<NativeKey, BTreeSet<Leaf>>,
+    claims: Counted<BTreeMap<NativeKey, BTreeSet<Leaf>>, GRAPH_CLAIMS>,
     /// Natives that read each leaf beneath their own claim.
-    base_readers: BTreeMap<Leaf, BTreeSet<NativeKey>>,
+    base_readers: Counted<BTreeMap<Leaf, BTreeSet<NativeKey>>, GRAPH_BASE_READERS>,
     /// Natives whose last run kept their claims and why (`Failure::KeepLast`).
     pub native_problems: BTreeMap<NativeKey, String>,
     /// Cells made since the last pass that the next one runs
@@ -713,7 +714,7 @@ impl Reactive {
             }
             stack.extend(self.reads_of(c).into_iter().filter(|d| candidates.contains(d) && !needed.contains(d)));
         }
-        self.candidates = candidates.clone();
+        self.candidates = candidates.clone().into();
         candidates.retain(|l| !needed.contains(l));
         candidates
     }
@@ -724,7 +725,7 @@ impl Reactive {
         self.relaxed = false;
         let wake: BTreeSet<CellId> = self.stale.iter().filter(|c| !unneeded.contains(c)).copied().collect();
         self.stale.retain(|l| unneeded.contains(l));
-        self.unneeded = unneeded;
+        self.unneeded = unneeded.into();
         if wake.is_empty() {
             return false;
         }

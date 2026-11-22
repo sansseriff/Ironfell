@@ -21,9 +21,9 @@ pub(crate) struct Clocks {
     /// The entities some composition pictures: each has its own clock.
     pictured: BTreeSet<NodeId>,
     /// When each paused clock stopped, in presentation time.
-    since: BTreeMap<NodeId, f64>,
+    since: crate::work::Counted<BTreeMap<NodeId, f64>, { crate::work::CLOCKS }>,
     /// How long each clock spent paused before its current pause.
-    behind: BTreeMap<NodeId, f64>,
+    behind: crate::work::Counted<BTreeMap<NodeId, f64>, { crate::work::CLOCKS }>,
     /// The gate's last decision, the clocks to pause and the pictured
     /// entities, and what it was decided from: the document's and the
     /// graph's stamps and the compositions observed. Deciding walks every

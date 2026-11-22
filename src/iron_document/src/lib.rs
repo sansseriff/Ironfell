@@ -17,6 +17,8 @@
 //! ```
 
 pub mod facet;
+#[doc(hidden)]
+pub mod work;
 pub mod reads;
 mod engine;
 mod clocks;
@@ -351,8 +353,8 @@ struct Saved {
     grouping_error: Option<String>,
     geometry: geom::Revisions,
     repeats: expand::Items,
-    item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
-    presence: BTreeMap<NodeId, Presence>,
+    item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
+    presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
     repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
     truncated: Vec<expand::Problem>,
     expansion_problems: Vec<expand::Problem>,
@@ -488,7 +490,7 @@ pub struct StoreCore {
     queries: query::Queries,
     /// Items entering and leaving, by owner (a repeat or a conditional):
     /// presentation state (reactivity.md §13, phase 7).
-    presence: BTreeMap<NodeId, Presence>,
+    presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
     presence_at: Option<f64>,
     /// Each composition's and pictured entity's clock, which the gate
     /// pauses while nothing shows or reads it (clocks.rs).
@@ -501,7 +503,7 @@ pub struct StoreCore {
     evaluated_at: u64,
     /// What the host shows (§8.2), and whether everything counts as shown
     /// (`observe_all`: the default, and the differential reference).
-    observers: BTreeMap<ObserverId, Interest>,
+    observers: work::Counted<BTreeMap<ObserverId, Interest>, { work::STORE_OBSERVERS }>,
     next_observer: u64,
     observe_all: bool,
     /// What the last `advance` found live, and the queries then waiting:
@@ -517,7 +519,7 @@ pub struct StoreCore {
     repeats: expand::Items,
     /// What each repeat without enter or exit timing settled
     /// to last, and from what: a cache, a pure function of its key.
-    item_memo: BTreeMap<NodeId, (ItemsKey, ItemsOf)>,
+    item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
     /// The across/through network as of a count of document
     /// writes (`Document::edits`): a cache.
     network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
@@ -915,20 +917,20 @@ impl StoreCore {
             machines: machine::Player::default(),
             steps: step::Steps::default(),
             queries: query::Queries::default(),
-            presence: BTreeMap::new(),
+            presence: Default::default(),
             presence_at: None,
             clocks: clocks::Clocks::default(),
             advanced_at: None,
             evaluated_at: 0,
             advanced: (BTreeSet::new(), Vec::new()),
-            observers: BTreeMap::new(),
+            observers: Default::default(),
             next_observer: 0,
             observe_all: true,
             interaction: BTreeMap::new(),
             expansion_problems: Vec::new(),
             repeats: BTreeMap::new(),
             repeat_inputs: None,
-            item_memo: BTreeMap::new(),
+            item_memo: Default::default(),
             network: None,
             layout_at: None,
             structure_gen: 0,

@@ -1122,6 +1122,31 @@ fn an_always_running_page_keeps_running_while_hidden() {
     assert_eq!(store.resolved(n["$tr"], path("trace.out")), Some(Value::Bool(true)), "the change arrived a second later");
 }
 
+/// The gate keeps its decision through value writes (the playhead's `t`
+/// every frame while playing), and decides again when one of the two leaves
+/// it reads is set: `run = always` on a hidden page set mid-run starts its
+/// clock (`op::reshapes`).
+#[test]
+fn setting_run_to_always_on_a_hidden_page_starts_it() {
+    let (mut store, _all, _p, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"/>
+        <composition id="$b" name="b" dims="2d"><accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/></composition>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).unwrap().as_f64().unwrap();
+    for k in 0..=3 {
+        store.set_time(k as f64 * 0.1);
+        store.advance(k as f64 * 0.1);
+    }
+    assert_eq!(acc(&store), 0.0, "hidden and unread: held");
+    let run: LeafPath = "composition.run".parse().unwrap();
+    store.apply(tx("always", vec![Op::Set { id: n["$b"], path: run, slot: Slot::Const(Value::Enum("always".into())) }])).unwrap();
+    for k in 4..=12 {
+        store.set_time(k as f64 * 0.1);
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > 0.5, "run = always set mid-run: the accumulator stepped: {}", acc(&store));
+}
+
 /// §8.7's idle sweep: at rest, an unobserved composition's stale pictures
 /// are brought up to date a few at a time, and then nothing is woken.
 #[test]

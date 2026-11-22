@@ -3060,14 +3060,24 @@ impl StoreCore {
     /// running reads it or its composition's `run` is `always` (PT-1.3).
     /// Nothing is paused while everything is observed.
     fn gate(&mut self, now: f64) {
-        let key: clocks::GateKey = (self.docs.edited, self.reactive.wired(), if self.observe_all { Vec::new() } else { self.observed_compositions() });
+        let key: clocks::GateKey = (self.docs.reshaped, self.reactive.wired(), if self.observe_all { Vec::new() } else { self.observed_compositions() });
         let (paused, pictured) = match self.clocks.gated.take() {
             Some((k, paused, pictured)) if k == key && !self.observe_all => (paused, pictured),
-            _ => self.paused(),
+            _ => {
+                self.clocks.decisions += 1;
+                self.paused()
+            }
         };
         self.clocks.gated = Some((key, paused.clone(), pictured.clone()));
         let doc = Tree::of(&self.docs);
         self.clocks.set(doc, now, paused, pictured);
+    }
+
+    /// How many times `advance`'s gate decided which clocks to pause, rather
+    /// than reusing its last decision: a cost check (a frame that changes
+    /// nothing the gate reads should not decide).
+    pub fn gate_decisions(&self) -> u64 {
+        self.clocks.decisions
     }
 
     /// The clocks to pause, and the entities some composition pictures.

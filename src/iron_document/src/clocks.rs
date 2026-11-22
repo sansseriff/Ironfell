@@ -29,11 +29,13 @@ pub(crate) struct Clocks {
     /// graph's stamps and the compositions observed. Deciding walks every
     /// hidden composition and its readers (8 ms a frame on the demo with one
     /// composition shown, 2026-11-21), and a frame that changes none of
-    /// these, such as a drag's, decides the same.
+    /// these, such as a drag's or the playhead moving, decides the same.
     pub(crate) gated: Option<(GateKey, BTreeSet<NodeId>, BTreeSet<NodeId>)>,
+    /// How many times the gate decided rather than reused (`Store::gate_decisions`).
+    pub(crate) decisions: u64,
 }
 
-/// What the gate decides from: `Docs::edited`, `Reactive::wired`, and the
+/// What the gate decides from: `Docs::reshaped`, `Reactive::wired`, and the
 /// compositions observed.
 pub(crate) type GateKey = (u64, u64, Vec<NodeId>);
 

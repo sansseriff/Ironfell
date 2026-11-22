@@ -207,7 +207,9 @@ pub(crate) fn apply_op(
     stamp: Version,
 ) -> Result<Vec<Op>, ApplyError> {
     let cx = Ctx { index, stamp };
-    docs.edited = crate::stamp();
+    if reshapes(op) {
+        docs.reshaped = crate::stamp();
+    }
     match op {
         Op::Create {
             id,
@@ -243,6 +245,19 @@ pub(crate) fn apply_op(
 
 /// `apply_op` on a scratch document that holds no copies apart from it (a
 /// plan's working copy).
+/// Whether `op` can change what the gate decides from (`Store::paused`):
+/// structure, facets and relations, and of the leaves only a composition's
+/// `run` and an embed's `source`. Setting any other leaf, such as the
+/// playhead's `t` every frame while playing, does not, so the gate keeps its
+/// decision (8 ms a frame on the demo otherwise, 2026-11-21). A new leaf the
+/// gate reads joins this list.
+fn reshapes(op: &Op) -> bool {
+    match op {
+        Op::Set { path, .. } => matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
+        _ => true,
+    }
+}
+
 pub(crate) fn apply_op_to(doc: &mut crate::Document, index: usize, op: &Op, stamp: Version) -> Result<Vec<Op>, ApplyError> {
     let mut docs = Docs::new(std::mem::replace(doc, crate::Document::new()), false);
     let out = apply_op(&mut docs, index, op, stamp);

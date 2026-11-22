@@ -119,13 +119,18 @@ Tasks, in order; each is committed alone.
     user's `__iron.timings`: `frame` p50 22 ms in the demo, about 1 ms of it in
     timed phases).
   - **Fixed 2026-11-21:** the gate keeps its decision (`Clocks::gated`) until the
-    document (`Docs::edited`, stamped by every op and rollback), the wiring
+    document's shape (`Docs::reshaped`, stamped by every op except a `Set` of a leaf
+    the gate does not read, `op::reshapes`, and by every rollback), the wiring
     (`Reactive::wired`, stamped when an edge or a native changes, tracked reads
     included) or the compositions observed change. A drag in a new composition in
-    the demo: `advance` 8.1 → 0.1 ms p50 (`demo::tests::drag_in_a_new_composition_time`,
-    ignored, release). Test: `reactivity::a_preview_that_starts_reading_a_hidden_accumulator_runs_it`
-    (fails without the tracked-read stamp). `advance` is now a phase in
-    `__iron.timings`.
+    the demo: `advance` 8.1 → 0.1 ms p50; the playhead moving (which writes the
+    clock's `t` every frame, and so re-decided every frame until `reshapes`, found
+    from the user's trace of a played plot): 8.0 → 0.4 ms
+    (`demo::tests::drag_in_a_new_composition_time`, ignored, release). Tests:
+    `demo::tests::a_drag_and_playback_in_a_new_composition_keep_the_gate_s_decision`
+    (`Store::gate_decisions` stays put), `reactivity::a_preview_that_starts_reading_a_hidden_accumulator_runs_it`
+    and `reactivity::setting_run_to_always_on_a_hidden_page_starts_it` (each fails
+    with its stamp removed). `advance` is now a phase in `__iron.timings`.
 - **PT-1.3, the override:** a composition setting that keeps it running while hidden,
   in the composition settings menu. **Done 2026-11-20**, with PT-1.2:
   - The existing **Run** setting carries it. `run = always`, which already meant

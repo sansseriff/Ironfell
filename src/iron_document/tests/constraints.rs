@@ -736,3 +736,19 @@ fn an_unrelated_edit_runs_no_constraint_native() {
     assert_eq!(store.reactive().runs_of(cluster), cluster_before, "nor the cluster's watcher");
     assert!(before.iter().all(|r| r.is_some()), "the natives exist: {before:?}");
 }
+
+/// A formula on a field that decides structure (`constraint.enabled`) is
+/// reported on its leaf, not silently read as its default (DS-10a, decided
+/// by the user: such fields become bindable in DS-13 and DS-16).
+#[test]
+fn a_formula_on_a_structural_field_is_reported() {
+    let mut p = pendulum();
+    p.store.apply(tx("bind", vec![Op::Set { id: p.links[0], path: path("constraint.enabled"), slot: bind("1 > 0") }])).unwrap();
+    let problems = p.store.problems();
+    assert!(problems.iter().any(|q| q.node == p.links[0] && q.kind == "binding" && q.message.contains("decides structure")), "{problems:?}");
+    assert_eq!(p.store.clusters().list.len(), 1, "the constraint still groups, enabled as set");
+    // A bound kind is reported once, on its leaf, not again as unknown.
+    p.store.apply(tx("kind", vec![Op::Set { id: p.links[1], path: path("constraint.kind"), slot: bind("'distance'") }])).unwrap();
+    let problems = p.store.problems();
+    assert_eq!(problems.iter().filter(|q| q.node == p.links[1]).count(), 1, "{problems:?}");
+}

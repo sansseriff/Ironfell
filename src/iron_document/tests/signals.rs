@@ -125,8 +125,12 @@ fn a_published_signal_reads_beneath_bindings_and_above_constants() {
     assert!(matches!(store.handle(gauge, path("slider.value")), Handle::Direct));
 }
 
+/// Two producers on one leaf: the higher ranked drives it (here the clip,
+/// over a host), whichever asked first, and the other's request waits and
+/// is reported; when the clip lets go, the host's request drives it at
+/// once (DS-10a).
 #[test]
-fn two_producers_on_one_leaf_is_an_error_the_first_claim_wins() {
+fn two_producers_on_one_leaf_the_higher_rank_drives_it() {
     let Scene { mut store, rect, gauge, .. } = scene();
     let gas = store.register_producer("gas");
     store.set_time(2.0);
@@ -139,12 +143,13 @@ fn two_producers_on_one_leaf_is_an_error_the_first_claim_wins() {
     let err = &store.signal_errors()[&leaf(rect, "transform2d.x")];
     assert!(err.contains("already driven by producer 0"), "{err}");
 
-    // Once the clip releases the leaf, the next publish takes it.
+    // Once the clip releases the leaf, the waiting request drives it at
+    // once, not on gas's next publish.
     store.set_time(0.0);
-    assert_eq!(f64_of(&store, rect, "transform2d.x"), 50.0);
-    store.publish(gas, BTreeMap::from([(leaf(rect, "transform2d.x"), Value::Number(0.0))]));
     assert_eq!(f64_of(&store, rect, "transform2d.x"), 0.0);
     assert!(store.signal_errors().is_empty());
+    store.publish(gas, BTreeMap::from([(leaf(rect, "transform2d.x"), Value::Number(0.0))]));
+    assert_eq!(f64_of(&store, rect, "transform2d.x"), 0.0);
     // And the gauge, no longer named, was released.
     assert_eq!(f64_of(&store, gauge, "slider.value"), 0.25);
 }

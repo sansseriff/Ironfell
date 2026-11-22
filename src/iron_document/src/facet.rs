@@ -1179,6 +1179,15 @@ pub struct LeafPath {
 }
 
 impl LeafPath {
+    /// Whether structure reads this field (which constraints group, which
+    /// template a picture expands): read as its constant until DS-13 and
+    /// DS-16 make a binding on it take effect, and a binding on it is
+    /// reported, not ignored (structure-in-the-graph.md §3.4, decided by
+    /// the user).
+    pub fn is_structural(&self) -> bool {
+        matches!((self.facet, self.field), (FacetKind::Constraint, "kind" | "enabled") | (FacetKind::Use, "notation"))
+    }
+
     /// A path into a declared field, or into any argument of a dynamic
     /// facet (whether a node has that parameter is checked at use).
     pub fn new(facet: FacetKind, field: &str) -> Result<LeafPath, LeafError> {

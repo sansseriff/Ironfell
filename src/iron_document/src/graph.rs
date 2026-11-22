@@ -63,6 +63,32 @@ impl ProducerId {
     pub const FIRST_HOST: ProducerId = ProducerId(12);
 }
 
+/// Which of two producers asking for one leaf drives it: the lower rank
+/// (DS-10a, a fixed order instead of whichever asked first). What the
+/// document's structure decides comes first: layout (decided by the user:
+/// a laid-out child stays in its stack, and a clip on it waits), then the
+/// network, items and state; then what runs in time; then hosts, in the
+/// order they registered. A producer added here takes a rank on purpose,
+/// not by its id.
+fn rank(p: ProducerId) -> (u8, u32) {
+    let r = match p {
+        ProducerId::LAYOUT => 0,
+        ProducerId::NETWORK => 1,
+        ProducerId::ITEMS => 2,
+        ProducerId::STATE => 3,
+        ProducerId::SELECTION => 4,
+        ProducerId::THEME => 5,
+        ProducerId::MACHINES => 6,
+        ProducerId::STEPS => 7,
+        ProducerId::PRESENCE => 8,
+        ProducerId::CLIPS => 9,
+        ProducerId::QUERIES => 10,
+        ProducerId::EVENTS => 11,
+        _ => return (12, p.0),
+    };
+    (r, 0)
+}
+
 /// One published value, and who published it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Signal {
@@ -484,12 +510,20 @@ pub struct Reactive {
     /// producers, read beneath bindings and above authored constants, never
     /// serialised. Clips (`time.rs`) and the across/through network
     /// (`Store::resolve_physics`) are two producers; a host system (a Bevy
-    /// simulation, a Model) is another. A leaf claimed by two producers keeps
-    /// the first claim and reports the second (`signal_errors`).
+    /// simulation, a Model) is another. A leaf two producers ask for is
+    /// driven by the higher ranked (`rank`), whichever asked first; the
+    /// other's request waits (`waiting`) and is reported (`signal_errors`).
     runtime: Counted<BTreeMap<Leaf, Signal>, GRAPH_RUNTIME>,
-    /// Which leaves each producer currently holds, for whole-set republish.
+    /// Requests on a leaf that a higher-ranked producer, or a binding,
+    /// holds: kept, so that the next is promoted the moment the holder lets
+    /// go (DS-10a: who drives a leaf doesn't depend on order).
+    waiting: BTreeMap<Leaf, BTreeMap<ProducerId, Value>>,
+    /// Which leaves each producer asks for, driving or waiting, for
+    /// whole-set republish.
     held: Counted<BTreeMap<ProducerId, BTreeSet<Leaf>>, GRAPH_HELD>,
-    /// Leaves a producer asked for while another held them, by producer.
+    /// The leaves asked for by more than one producer, or bound and asked
+    /// for: a function of `runtime`, `waiting` and the bindings
+    /// (`conflict`).
     signal_errors: BTreeMap<Leaf, String>,
     changes: BTreeMap<Leaf, Value>,
     /// Every leaf whose resolved value moved since `take_moved`. Unlike
@@ -1011,36 +1045,16 @@ impl Reactive {
         let was: BTreeSet<Leaf> = self.held.remove(&producer).unwrap_or_default();
         let mut now: BTreeSet<Leaf> = BTreeSet::new();
         for (leaf, value) in values {
-            if self.nodes.contains_key(&leaf) {
-                self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
-                continue;
+            if self.offer(leaf, producer, value) {
+                changed.push(leaf);
             }
-            match self.runtime.get(&leaf) {
-                Some(s) if s.producer != producer => {
-                    self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
-                    continue;
-                }
-                Some(s) if s.value == value => {}
-                _ => {
-                    if !self.runtime.contains_key(&leaf) {
-                        self.claim_came_or_went(leaf);
-                    }
-                    self.runtime.insert(leaf, Signal { value, producer });
-                    changed.push(leaf);
-                }
-            }
-            self.signal_errors.remove(&leaf);
             now.insert(leaf);
         }
         for leaf in was.difference(&now) {
-            if self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
-                self.runtime.remove(leaf);
-                self.claim_came_or_went(*leaf);
+            if self.withdraw(*leaf, producer) {
                 changed.push(*leaf);
             }
         }
-        // Another producer's errors on leaves this one released may now be
-        // stale; they clear on that producer's next publish.
         if !now.is_empty() {
             self.held.insert(producer, now);
         }
@@ -1067,33 +1081,16 @@ impl Reactive {
         let mut refused: Vec<Leaf> = Vec::new();
         let mut held = self.held.remove(&producer).unwrap_or_default();
         for (leaf, value) in set {
-            if self.nodes.contains_key(&leaf) {
-                self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
+            if self.offer(leaf, producer, value) {
+                changed.push(leaf);
+            }
+            if self.runtime.get(&leaf).is_none_or(|s| s.producer != producer) {
                 refused.push(leaf);
-                continue;
             }
-            match self.runtime.get(&leaf) {
-                Some(s) if s.producer != producer => {
-                    self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
-                    refused.push(leaf);
-                    continue;
-                }
-                Some(s) if s.value == value => {}
-                _ => {
-                    if !self.runtime.contains_key(&leaf) {
-                        self.claim_came_or_went(leaf);
-                    }
-                    self.runtime.insert(leaf, Signal { value, producer });
-                    changed.push(leaf);
-                }
-            }
-            self.signal_errors.remove(&leaf);
             held.insert(leaf);
         }
         for leaf in unset {
-            if held.remove(leaf) && self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
-                self.runtime.remove(leaf);
-                self.claim_came_or_went(*leaf);
+            if held.remove(leaf) && self.withdraw(*leaf, producer) {
                 changed.push(*leaf);
             }
         }
@@ -1233,6 +1230,20 @@ impl Reactive {
             }
         }
         self.compute_heights();
+        // Who drives a leaf doesn't depend on order (DS-10a): a producer on
+        // a leaf now bound waits; one waiting on a leaf no longer bound
+        // drives it.
+        let demoted: Vec<Leaf> = self.runtime.keys().filter(|l| self.nodes.contains_key(l)).copied().collect();
+        for leaf in demoted {
+            let old = self.runtime.remove(&leaf).expect("listed");
+            self.waiting.entry(leaf).or_default().insert(old.producer, old.value);
+            self.conflict(leaf);
+        }
+        let freed: Vec<Leaf> = self.waiting.keys().filter(|l| !self.nodes.contains_key(l)).copied().collect();
+        for leaf in freed {
+            self.promote(leaf);
+            self.conflict(leaf);
+        }
         // A slot that stopped being bound reads as its constant again; say so.
         for leaf in old_bound {
             if !self.nodes.contains_key(&leaf) {
@@ -1478,11 +1489,23 @@ impl Reactive {
         let tracks = tracks_reads(doc, leaf, &expr);
         let height = 1 + deps.iter().filter_map(|d| self.cell_of(*d)).map(|c| self.height_of(c)).max().unwrap_or(0);
         self.nodes.insert(leaf, BoundNode { expr: std::sync::Arc::new(expr), deps, ctx, tracks, tracked: BTreeSet::new(), height });
+        // A bound leaf is the binding's: a producer driving it waits, as it
+        // would had it asked after the binding came (DS-10a).
+        if let Some(old) = self.runtime.remove(&leaf) {
+            self.waiting.entry(leaf).or_default().insert(old.producer, old.value);
+            self.claim_came_or_went(leaf);
+        }
+        self.conflict(leaf);
     }
 
     /// Remove `leaf`'s cell and its edges.
     fn drop_cell(&mut self, leaf: Leaf) {
         let Some(old) = self.nodes.remove(&leaf) else { return };
+        // A request the binding held off drives it now (DS-10a).
+        if self.promote(leaf) {
+            self.claim_came_or_went(leaf);
+        }
+        self.conflict(leaf);
         self.wired = crate::stamp();
         let cell = CellId::Leaf(leaf);
         for d in old.deps.iter().chain(&old.tracked) {
@@ -1855,7 +1878,13 @@ impl Reactive {
                     }
                     read_with(overlay, runtime, resolved, nodes, doc, l)
                 };
-                let out = expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| match crate::types::declared(doc, leaf) {
+                let out = expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| {
+                    if leaf.path.is_structural() {
+                        Err(crate::expr::EvalError::Type(format!("{} decides structure and is read as its set value; a formula here is not used yet", leaf.path)))
+                    } else {
+                        Ok(v)
+                    }
+                }).and_then(|v| match crate::types::declared(doc, leaf) {
                     // A boundary leaf with a declared type checks what it
                     // computes or receives (types-and-units.md §3.3, §3.5).
                     Some((ty, owner)) => ty
@@ -2300,39 +2329,16 @@ impl Reactive {
                 debug_assert!(false, "{k:?} wrote {leaf}, outside its outputs");
                 continue;
             }
-            if self.nodes.contains_key(&leaf) {
-                self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
-                continue;
-            }
-            match self.runtime.get(&leaf) {
-                Some(s) if s.producer != producer => {
-                    self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
-                    continue;
-                }
-                Some(s) if s.value == value => {}
-                _ => {
-                    if !self.runtime.contains_key(&leaf) {
-                        self.claim_came_or_went(leaf);
-                    }
-                    self.runtime.insert(leaf, Signal { value, producer });
-                    changed.push(leaf);
-                }
-            }
-            // Layout's claims clear the errors on every leaf layout holds,
-            // below.
-            if producer != ProducerId::LAYOUT {
-                self.signal_errors.remove(&leaf);
+            if self.offer(leaf, producer, value) {
+                changed.push(leaf);
             }
             now.insert(leaf);
         }
         for leaf in was.difference(&now) {
-            if self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
-                self.runtime.remove(leaf);
-                self.claim_came_or_went(*leaf);
+            if self.withdraw(*leaf, producer) {
                 changed.push(*leaf);
             }
         }
-        let laid_out = producer == ProducerId::LAYOUT && (!changed.is_empty() || was != now);
         let held = self.held.entry(producer).or_default();
         for l in &was {
             held.remove(l);
@@ -2343,9 +2349,6 @@ impl Reactive {
         }
         if !now.is_empty() {
             self.claims.insert(k, now);
-        }
-        if laid_out {
-            self.clear_layout_errors();
         }
         for &l in &changed {
             if !self.overlay.contains_key(&l)
@@ -2453,7 +2456,6 @@ impl Reactive {
         }
         if !changed.is_empty() {
             self.invalidate(doc, changed);
-            self.clear_layout_errors();
         }
         moving
     }
@@ -2537,15 +2539,98 @@ impl Reactive {
         }
     }
 
-    /// Clear the claim errors on every leaf layout holds, when a layout
-    /// claim moved: as a publish of every placement does. Walks the errors,
-    /// which are few, not the placements.
-    fn clear_layout_errors(&mut self) {
-        if self.signal_errors.is_empty() {
+    /// `producer` asks to drive `leaf` with `value`. The higher ranked of
+    /// it and the leaf's holder drives it, whichever asked first; the other
+    /// waits (`waiting`). A bound leaf is the binding's: every request on
+    /// it waits. Whether the driven value changed.
+    fn offer(&mut self, leaf: Leaf, producer: ProducerId, value: Value) -> bool {
+        let changed = if self.nodes.contains_key(&leaf) {
+            self.waiting.entry(leaf).or_default().insert(producer, value);
+            false
+        } else {
+            match self.runtime.get(&leaf) {
+                Some(s) if s.producer == producer => {
+                    let changed = s.value != value;
+                    if changed {
+                        self.runtime.insert(leaf, Signal { value, producer });
+                    }
+                    changed
+                }
+                Some(s) if rank(s.producer) < rank(producer) => {
+                    self.waiting.entry(leaf).or_default().insert(producer, value);
+                    false
+                }
+                Some(_) => {
+                    let old = self.runtime.insert(leaf, Signal { value, producer }).expect("held");
+                    let w = self.waiting.entry(leaf).or_default();
+                    w.remove(&producer);
+                    w.insert(old.producer, old.value);
+                    true
+                }
+                None => {
+                    if let Some(w) = self.waiting.get_mut(&leaf) {
+                        w.remove(&producer);
+                    }
+                    self.runtime.insert(leaf, Signal { value, producer });
+                    self.claim_came_or_went(leaf);
+                    true
+                }
+            }
+        };
+        self.conflict(leaf);
+        changed
+    }
+
+    /// `producer` no longer asks for `leaf`. If it drove it, the best
+    /// waiting request is promoted at once (DS-10a). Whether the driven
+    /// value changed.
+    fn withdraw(&mut self, leaf: Leaf, producer: ProducerId) -> bool {
+        let changed = if self.runtime.get(&leaf).is_some_and(|s| s.producer == producer) {
+            self.runtime.remove(&leaf);
+            if !self.promote(leaf) {
+                self.claim_came_or_went(leaf);
+            }
+            true
+        } else {
+            if let Some(w) = self.waiting.get_mut(&leaf) {
+                w.remove(&producer);
+            }
+            false
+        };
+        self.conflict(leaf);
+        changed
+    }
+
+    /// Drive an undriven, unbound `leaf` with its best waiting request, if
+    /// it has one.
+    fn promote(&mut self, leaf: Leaf) -> bool {
+        if self.nodes.contains_key(&leaf) || self.runtime.contains_key(&leaf) {
+            return false;
+        }
+        let Some(w) = self.waiting.get_mut(&leaf) else { return false };
+        let Some(&best) = w.keys().min_by_key(|p| rank(**p)) else { return false };
+        let value = w.remove(&best).expect("present");
+        self.runtime.insert(leaf, Signal { value, producer: best });
+        true
+    }
+
+    /// `leaf`'s claim error, from who drives it and who waits: none, or one
+    /// naming them. Tidies an empty waiting list.
+    fn conflict(&mut self, leaf: Leaf) {
+        let waiting: Vec<ProducerId> = self.waiting.get(&leaf).map(|w| w.keys().copied().collect()).unwrap_or_default();
+        if waiting.is_empty() {
+            self.waiting.remove(&leaf);
+            self.signal_errors.remove(&leaf);
             return;
         }
-        let Some(held) = self.held.get(&ProducerId::LAYOUT) else { return };
-        self.signal_errors.retain(|l, _| !held.contains(l));
+        let names = waiting.iter().map(|p| p.0.to_string()).collect::<Vec<_>>().join(", ");
+        let message = if self.nodes.contains_key(&leaf) {
+            format!("{leaf} is bound; producer {names} cannot drive it")
+        } else {
+            let by = self.runtime.get(&leaf).map(|s| s.producer.0).unwrap_or_default();
+            format!("{leaf} is already driven by producer {by}; producer {names} cannot also drive it")
+        };
+        self.signal_errors.insert(leaf, message);
     }
 
     /// A claim on `leaf` came or went: the natives watching it run in the
@@ -2675,15 +2760,13 @@ impl Reactive {
                         passed.entry(to).or_default().insert(l);
                     }
                     _ => {
-                        if self.runtime.get(&l).is_some_and(|s| s.producer == producer) {
-                            self.runtime.remove(&l);
-            self.claim_came_or_went(l);
-                            if let Some(h) = self.held.get_mut(&producer) {
-                                h.remove(&l);
-                                if h.is_empty() {
-                                    self.held.remove(&producer);
-                                }
+                        if let Some(h) = self.held.get_mut(&producer) {
+                            h.remove(&l);
+                            if h.is_empty() {
+                                self.held.remove(&producer);
                             }
+                        }
+                        if self.withdraw(l, producer) {
                             released.push(l);
                         }
                     }
@@ -3194,19 +3277,28 @@ mod tests {
     }
 
     #[test]
-    fn the_first_claim_on_a_leaf_wins_between_a_host_and_a_native() {
+    fn a_contested_leaf_goes_to_the_higher_rank_whichever_asked_first() {
         let (mut s, n) = doc(r#"<rect id="$a" w="1" h="1"/><rect id="$b" w="1" h="1"/><rect id="$d" w="1" h="1"/>"#);
         let (a, b, d) = (n["$a"], n["$b"], n["$d"]);
+        // The host registered first ranks above the test native's producer
+        // (900): it drives the leaf in either order (DS-10a).
         let host = s.register_producer("host");
         // Host first.
         s.publish(host, BTreeMap::from([(leaf(b, "size.h"), Value::Number(9.0))]));
         let _ = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, true);
         assert_eq!(num(&s, leaf(b, "size.h")), Some(9.0));
         assert!(s.reactive.signal_errors().contains_key(&leaf(b, "size.h")));
-        // Native first.
+        // Native first: the same.
         let _ = native(&mut s, 1, vec![leaf(a, "size.w")], vec![leaf(d, "size.h")], Mode::Sum, true);
-        s.publish(host, BTreeMap::from([(leaf(d, "size.h"), Value::Number(9.0))]));
         assert_eq!(num(&s, leaf(d, "size.h")), Some(1.0));
-        assert!(s.reactive.driven_by(leaf(d, "size.h"), TEST));
+        s.publish(host, BTreeMap::from([(leaf(b, "size.h"), Value::Number(9.0)), (leaf(d, "size.h"), Value::Number(9.0))]));
+        assert_eq!(num(&s, leaf(d, "size.h")), Some(9.0));
+        assert!(s.reactive.signal_errors().contains_key(&leaf(d, "size.h")));
+        // The host lets go: the native's waiting request drives both at
+        // once, not on its next run, and the conflicts clear.
+        s.publish(host, BTreeMap::new());
+        assert!(s.reactive.driven_by(leaf(b, "size.h"), TEST) && s.reactive.driven_by(leaf(d, "size.h"), TEST));
+        assert_eq!(num(&s, leaf(d, "size.h")), Some(1.0));
+        assert!(s.reactive.signal_errors().is_empty(), "{:?}", s.reactive.signal_errors());
     }
 }

@@ -262,3 +262,32 @@ fn a_running_clip_leaves_a_paused_clip_s_value_alone() {
     store.set_time(1.);
     assert_eq!(x_of(&store, invisible), 123.);
 }
+
+/// A clip on a child a stack lays out: layout drives the child's x, the
+/// clip's request waits and is reported, the same after an edit as after a
+/// load (DS-10a, decided by the user: layout outranks clips). Before, a
+/// loaded document let the clip win and an edited one let layout win.
+#[test]
+fn layout_outranks_a_clip_on_a_laid_out_child_edited_or_loaded() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let c = facet::Composition { dims: Slot::Const(Value::Enum("2d".into())), ..Default::default() }.wrap();
+    let name = facet::Name { text: Slot::Const(Value::Str("sheet".into())) }.wrap();
+    store.apply(tx("sheet", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![c, name] }])).unwrap();
+    let built = markup::ops(r#"<group id="$g" x="0" y="0" layout.mode="stack_x" layout.gap="10"><rect id="$a" w="10" h="10"/><rect id="$b" w="10" h="10"/></group><timeline id="$t"><clip id="$c" clip.prop="transform2d.x"><key key.t="0" key.value="500"/><key key.t="2" key.value="600"/></clip></timeline>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let n = built.named;
+    let rel = store.authored().next_relation_id();
+    let mut ops = built.ops;
+    ops.push(Op::Link { rel: Relation { id: rel, from: n["c"], to: n["b"], rel: RelKind::Animates, data: BTreeMap::new() } });
+    store.apply(tx("stack and clip", ops)).unwrap_or_else(|e| panic!("{e:?}"));
+    store.set_time(1.0);
+    let check = |store: &Store, how: &str| {
+        assert_eq!(x_of(store, n["b"]), 20.0, "{how}: layout places b");
+        let x = Leaf { node: n["b"], path: path("transform2d.x") };
+        assert!(store.signal_errors().get(&x).is_some_and(|e| e.contains("already driven")), "{how}: the clip's request is reported: {:?}", store.signal_errors());
+    };
+    check(&store, "edited");
+    let mut loaded = Store::load(&store.save()).unwrap();
+    loaded.set_time(1.0);
+    check(&loaded, "loaded");
+}

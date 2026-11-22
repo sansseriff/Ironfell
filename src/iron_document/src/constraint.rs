@@ -106,6 +106,11 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
     for f in ["kind", "enabled"] {
         let _ = read_value(Leaf { node: id, path: crate::facet::LeafPath::new(crate::facet::FacetKind::Constraint, f).expect("declared") });
     }
+    // A bound kind is reported on its own leaf (`LeafPath::is_structural`),
+    // not again as an unknown kind here.
+    if c.kind.expr().is_some() {
+        return Ok(None);
+    }
     let kind = c.kind.constant().and_then(|v| v.as_str()).unwrap_or("");
     let spec = spec(kind).ok_or_else(|| {
         let names: Vec<&str> = KINDS.iter().map(|s| s.kind).collect();

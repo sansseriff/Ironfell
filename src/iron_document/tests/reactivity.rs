@@ -1271,6 +1271,30 @@ fn a_hidden_accumulator_a_shown_picture_reads_keeps_stepping() {
     assert_eq!(x(&store), x(&all));
 }
 
+/// The gate keeps its decision while nothing it decides from changes
+/// (`Clocks::gated`: a drag's frames recompute nothing), and decides again
+/// when a read changes outside a transaction: a preview that points a shown
+/// picture's tracked read at a hidden accumulator starts that composition's
+/// clock.
+#[test]
+fn a_preview_that_starts_reading_a_hidden_accumulator_runs_it() {
+    let (mut store, _, _, n) = split(
+        r#"<let id="$w" name="w" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$m" name="m" x="{= deref($w, 'accumulate.value', -1)}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><accumulate id="$acc" name="acc" initial="0" next="{= $acc + $acc.accumulate.dt}"/></composition>"#,
+    );
+    let x = |s: &Store| s.resolved(n["$m"], path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    store.advance(0.0);
+    store.advance(0.1);
+    assert_eq!(x(&store), -1.0);
+    store.preview(n["$w"], path("let.value"), Value::Ref(n["$acc"]));
+    store.advance(0.2);
+    let first = x(&store);
+    store.advance(0.3);
+    store.advance(0.4);
+    assert!(x(&store) > first, "the hidden accumulator a preview made a shown picture read held still: {first} then {}", x(&store));
+}
+
 /// A preview's layout reads outside the graph too: a handle on a shown
 /// slider whose maximum is where a hidden stack places its second child
 /// holds an edit to the maximum the preview made.

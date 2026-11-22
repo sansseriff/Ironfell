@@ -39,11 +39,15 @@ pub(crate) struct Docs {
     /// While a transaction is open, what each of its deletes replaced in
     /// `gone`, so a rollback takes them back out.
     gone_journal: Option<Vec<(NodeId, Option<crate::changes::Went>)>>,
+    /// A stamp taken whenever an op is applied or rolled back, unique
+    /// across stores (`crate::stamp`): what derived state cached across
+    /// frames keys on (`Store::gate`).
+    pub(crate) edited: u64,
 }
 
 impl Docs {
     pub(crate) fn new(authored: Document, apart: bool) -> Docs {
-        Docs { authored, copies: Document::new(), apart, gone: Default::default(), gone_journal: None }
+        Docs { authored, copies: Document::new(), apart, gone: Default::default(), gone_journal: None, edited: crate::stamp() }
     }
 
     /// Delete one live node, its children already gone: a copy kept apart
@@ -93,6 +97,7 @@ impl Docs {
     }
 
     pub(crate) fn rollback(&mut self) {
+        self.edited = crate::stamp();
         self.authored.rollback();
         self.copies.rollback();
         for (id, was) in self.gone_journal.take().into_iter().flatten().rev() {

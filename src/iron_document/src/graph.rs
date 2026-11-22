@@ -538,6 +538,10 @@ pub struct Reactive {
     /// Counts the times cells were made or remade: a binding made since a
     /// native last ran may close a cycle through what it already read.
     structure: u64,
+    /// A stamp taken whenever an edge (who reads what) or a native changes,
+    /// unique across graphs (`crate::stamp`): the gate's cache key
+    /// (`Store::gate`), so it decides again only when readers change.
+    wired: u64,
     /// The inputs the store set (`set_input`).
     inputs: BTreeMap<InputKey, Held>,
     /// The natives that read each input.
@@ -570,6 +574,11 @@ impl Clone for Escaped {
 }
 
 impl Reactive {
+    /// The wiring stamp: changes whenever who reads what does.
+    pub(crate) fn wired(&self) -> u64 {
+        self.wired
+    }
+
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
@@ -1041,6 +1050,7 @@ impl Reactive {
         self.pinned.clear();
         self.candidates.clear();
         self.structure += 1;
+        self.wired = crate::stamp();
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -1255,6 +1265,9 @@ impl Reactive {
         for c in &primed {
             let CellId::Leaf(l) = c else { continue };
             let old: Vec<Leaf> = self.nodes.get_mut(l).map(|n| std::mem::take(&mut n.tracked).into_iter().collect()).unwrap_or_default();
+            if !old.is_empty() {
+                self.wired = crate::stamp();
+            }
             for t in old {
                 if let Some(ds) = self.dependents.get_mut(&t) {
                     ds.remove(c);
@@ -1275,6 +1288,7 @@ impl Reactive {
     fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: Expr, tokens: &BTreeMap<String, Leaf>) {
         self.drop_cell(leaf);
         self.structure += 1;
+        self.wired = crate::stamp();
         let mut deps = expr.deps();
         let names = expr.tokens();
         if !names.is_empty() {
@@ -1293,6 +1307,7 @@ impl Reactive {
     /// Remove `leaf`'s cell and its edges.
     fn drop_cell(&mut self, leaf: Leaf) {
         let Some(old) = self.nodes.remove(&leaf) else { return };
+        self.wired = crate::stamp();
         let cell = CellId::Leaf(leaf);
         for d in old.deps.iter().chain(&old.tracked) {
             if let Some(ds) = self.dependents.get_mut(d) {
@@ -1684,6 +1699,9 @@ impl Reactive {
                                 self.relaxed = true;
                             }
                         }
+                        if tracked != old {
+                            self.wired = crate::stamp();
+                        }
                         for new in tracked.difference(&old) {
                             self.dependents.entry(*new).or_default().insert(cell);
                         }
@@ -1835,6 +1853,9 @@ impl Reactive {
         }
         // Its edges: what it read this time.
         let old = std::mem::take(&mut self.natives.get_mut(&k).expect("native").reads);
+        if old != reads {
+            self.wired = crate::stamp();
+        }
         for gone in old.difference(&reads) {
             if let Some(ds) = self.dependents.get_mut(gone) {
                 ds.remove(&cell);
@@ -2291,6 +2312,7 @@ impl Reactive {
         let mut released: Vec<Leaf> = Vec::new();
         let mut runs_of: BTreeMap<NativeKey, u64> = BTreeMap::new();
         self.structure += 1;
+        self.wired = crate::stamp();
         for (k, _) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
             let cell = CellId::Native(*k);

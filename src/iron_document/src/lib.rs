@@ -3060,7 +3060,12 @@ impl StoreCore {
     /// running reads it or its composition's `run` is `always` (PT-1.3).
     /// Nothing is paused while everything is observed.
     fn gate(&mut self, now: f64) {
-        let (paused, pictured) = self.paused();
+        let key: clocks::GateKey = (self.docs.edited, self.reactive.wired(), if self.observe_all { Vec::new() } else { self.observed_compositions() });
+        let (paused, pictured) = match self.clocks.gated.take() {
+            Some((k, paused, pictured)) if k == key && !self.observe_all => (paused, pictured),
+            _ => self.paused(),
+        };
+        self.clocks.gated = Some((key, paused.clone(), pictured.clone()));
         let doc = Tree::of(&self.docs);
         self.clocks.set(doc, now, paused, pictured);
     }
@@ -4475,4 +4480,13 @@ fn item_keys(elements: &[Value], listed: bool, key: Option<&Value>) -> Result<Ve
         return Err(format!("two items share the key {twice}"));
     }
     Ok(keys)
+}
+
+/// A number no earlier call returned, in this process: change stamps that
+/// stay distinct across stores and graphs (`Docs::edited`,
+/// `Reactive::wired`), so a cache keyed on them never matches state it was
+/// not computed from.
+pub(crate) fn stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

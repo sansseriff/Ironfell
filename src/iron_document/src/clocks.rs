@@ -24,7 +24,18 @@ pub(crate) struct Clocks {
     since: BTreeMap<NodeId, f64>,
     /// How long each clock spent paused before its current pause.
     behind: BTreeMap<NodeId, f64>,
+    /// The gate's last decision, the clocks to pause and the pictured
+    /// entities, and what it was decided from: the document's and the
+    /// graph's stamps and the compositions observed. Deciding walks every
+    /// hidden composition and its readers (8 ms a frame on the demo with one
+    /// composition shown, 2026-11-21), and a frame that changes none of
+    /// these, such as a drag's, decides the same.
+    pub(crate) gated: Option<(GateKey, BTreeSet<NodeId>, BTreeSet<NodeId>)>,
 }
+
+/// What the gate decides from: `Docs::edited`, `Reactive::wired`, and the
+/// compositions observed.
+pub(crate) type GateKey = (u64, u64, Vec<NodeId>);
 
 impl Clocks {
     /// Pause the clocks in `paused` at `now` and run the others, given the

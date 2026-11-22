@@ -207,6 +207,7 @@ pub(crate) fn apply_op(
     stamp: Version,
 ) -> Result<Vec<Op>, ApplyError> {
     let cx = Ctx { index, stamp };
+    docs.edited = crate::stamp();
     match op {
         Op::Create {
             id,

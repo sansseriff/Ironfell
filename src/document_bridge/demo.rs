@@ -1766,6 +1766,81 @@ mod tests {
         assert_eq!(at(&store), start, "the hidden Lorenz page stepped");
     }
 
+    /// A drag in a new composition, in an empty scope and in the demo: the
+    /// two compositions are the same, so the store's share of a frame should
+    /// be too. Per frame: preview x and y, then `advance`. `ALL=1` observes
+    /// every composition too, as if every tab were a view.
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin drag_in_a_new_composition -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn drag_in_a_new_composition_time() {
+        use iron_document::facet::{self, Size, Transform2d};
+        use iron_document::{Actor, Interest, LeafStruct, Op, OrderKey, Slot, Store, TransactionInput, TypeId, Value};
+        let all = std::env::var_os("ALL").is_some();
+        for kind in ["empty", "demo"] {
+            let mut store = Store::load(&super::template_snapshot(kind).unwrap()).unwrap();
+            let (comp, rect) = {
+                let doc = store.authored();
+                let ids = doc.next_ids(2);
+                (ids[0], ids[1])
+            };
+            let order = {
+                let doc = store.tree();
+                doc.roots().iter().filter(|r| !r.is_session()).filter_map(|&r| doc.live(r)).map(|r| r.order.clone()).max().map_or_else(OrderKey::first, |k| OrderKey::after(&k))
+            };
+            let mut c = facet::Composition::default();
+            c.dims = Slot::Const(Value::Enum("2d".into()));
+            let mut t = Transform2d::default();
+            t.x = Slot::Const(Value::Number(100.0));
+            t.y = Slot::Const(Value::Number(100.0));
+            let mut sz = Size::default();
+            sz.w = Slot::Const(Value::Number(150.0));
+            sz.h = Slot::Const(Value::Number(100.0));
+            let ops = vec![
+                Op::Create { id: comp, ty: TypeId::lookup("composition").unwrap(), parent: None, order, facets: vec![{ let mut n = facet::Name::default(); n.text = Slot::Const(Value::Str("perf".into())); n.wrap() }, c.wrap()] },
+                Op::Create { id: rect, ty: TypeId::lookup("rect").unwrap(), parent: Some(comp), order: OrderKey::first(), facets: vec![t.wrap(), sz.wrap()] },
+            ];
+            store.apply(TransactionInput { label: "perf".into(), actor: Actor::System, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
+            store.set_observe_all(false);
+            store.set_motion(true);
+            let everything = [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0];
+            let comps = if all { iron_document::composition::compositions(store.tree()) } else { vec![comp] };
+            for c in comps {
+                store.observe(Interest::Region { composition: c, rect: everything, zoom: 1.0 });
+            }
+            for i in 0..60 {
+                store.advance(i as f64 / 60.0);
+            }
+            let x: iron_document::LeafPath = "transform2d.x".parse().unwrap();
+            let y: iron_document::LeafPath = "transform2d.y".parse().unwrap();
+            store.begin_gesture(&[rect]);
+            let (mut prev, mut adv) = (Vec::new(), Vec::new());
+            for k in 0..600 {
+                let now = 1.0 + k as f64 / 60.0;
+                let s = std::time::Instant::now();
+                store.preview(rect, x, Value::Number(100.0 + k as f64 * 0.5));
+                store.preview(rect, y, Value::Number(100.0 + k as f64 * 0.25));
+                prev.push(s.elapsed().as_secs_f64() * 1e3);
+                let s = std::time::Instant::now();
+                store.advance(now);
+                adv.push(s.elapsed().as_secs_f64() * 1e3);
+            }
+            let q = |v: &mut Vec<f64>, f: f64| {
+                v.sort_by(f64::total_cmp);
+                v[((v.len() - 1) as f64 * f) as usize]
+            };
+            println!(
+                "{kind}{}: {} live nodes; preview p50 {:.3} p95 {:.3} ms; advance p50 {:.3} p95 {:.3} ms",
+                if all { " (all observed)" } else { "" },
+                store.tree().live_nodes().count(),
+                q(&mut prev, 0.5),
+                q(&mut prev, 0.95),
+                q(&mut adv, 0.5),
+                q(&mut adv, 0.95)
+            );
+        }
+    }
+
     /// Baseline (reactive-engine handoff §4.1, task 1): loading the demo
     /// document, the demo scene and the showcase as a first visit gets.
     /// Ignored; run with

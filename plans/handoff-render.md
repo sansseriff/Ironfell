@@ -33,7 +33,8 @@ the measuring agent fell into. §7–9 are verification records of finished incr
   when the URL has `stress`).
 - Phase timers, `src/perf.rs`, read with `await __iron.timings(reset)` (FFI
   `document_timings`): `sync`, `gesture_reconcile`, `display_list`, `extract`, `encode`,
-  `render`, `pick`, `overlay_geometry`, `bounds`, `frame`, `changed_frame`. Spans are placed in
+  `render`, `pick`, `overlay_geometry`, `bounds`, `advance` (`Store::advance`, in
+  `document_bridge/motion.rs`), `frame`, `changed_frame`. Spans are placed in
   `document_bridge/mod.rs` (sync_document: `sync`, or `gesture_reconcile` for its post-tool pass when only previews drain), `render.rs`
   (render_document_layer), `vector/hybrid.rs` (extract_layers, prepare_scene,
   render_scene), `bevy_app/picking.rs` (pick_document_2d_system), `src/lib.rs`

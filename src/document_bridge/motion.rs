@@ -65,7 +65,10 @@ pub fn advance(mut store: ResMut<DocumentStore>, time: Res<Time>, events: Res<cr
     if !store.0.motion_enabled() {
         store.0.set_motion(true);
     }
-    let out = store.bypass_change_detection().0.advance(time.elapsed_secs_f64());
+    let out = {
+        let _t = crate::perf::span(crate::perf::Phase::Advance);
+        store.bypass_change_detection().0.advance(time.elapsed_secs_f64())
+    };
     if !out.queries.is_empty() {
         let requests = out.queries.into_iter().map(|r| crate::host_events::QueryRequest { node: r.node.to_string(), seq: r.seq, model: r.model, input: iron_document::query::to_plain(&r.input) }).collect();
         events.push(crate::host_events::EngineEvent::Queries { requests });

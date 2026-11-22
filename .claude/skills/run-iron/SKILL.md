@@ -1503,7 +1503,9 @@ from the console. `await __iron.timings(reset)` reads per-phase CPU times
 `encode` (content views), `overlay_encode` (editor-feedback views), `render`, `pick`,
 `overlay_geometry`, `bounds`, `propagate` (Bevy's transform propagation, timed from
 outside its set; every frame), `produce` (a Bevy-side producer's step and publish,
-only while one runs), `action` (a document's own `drag` or `wheel` action,
+only while one runs), `advance` (`Store::advance`: glides, machines, traces,
+accumulators, presence, the playhead and the gate that pauses hidden compositions;
+every frame), `action` (a document's own `drag` or `wheel` action,
 `Store::pointer_action`, with the repeats it re-expands), and whole frames as `frame` and `changed_frame`
 (a frame in which some view, content or overlay, re-encoded). Each phase records only frames on
 which it did work.

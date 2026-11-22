@@ -112,10 +112,20 @@ Tasks, in order; each is committed alone.
     - `reactivity::a_hidden_page_s_trace_keeps_its_change_in_flight`;
     - `reactivity::an_accumulator_in_a_hidden_composition_holds_still`, now through
       observers.
-  - **Cost:** the gate scans every hidden composition each frame, not only those
-    with an accumulator. On the demo with one page shown, `advance` is 0.72 ms p50
-    in release, against 0.68 ms before. How much of the 0.7 ms is the gate is not
-    measured; caching its result is open.
+  - **Cost, as built:** the gate scanned every hidden composition and its readers
+    each frame. The 0.72 ms measured then had every page observed, so nothing was
+    hidden. With one composition shown, as a user works, it was **8.1 ms a frame**
+    natively (~20 ms in wasm), at rest and while dragging (found 2026-11-21 from the
+    user's `__iron.timings`: `frame` p50 22 ms in the demo, about 1 ms of it in
+    timed phases).
+  - **Fixed 2026-11-21:** the gate keeps its decision (`Clocks::gated`) until the
+    document (`Docs::edited`, stamped by every op and rollback), the wiring
+    (`Reactive::wired`, stamped when an edge or a native changes, tracked reads
+    included) or the compositions observed change. A drag in a new composition in
+    the demo: `advance` 8.1 → 0.1 ms p50 (`demo::tests::drag_in_a_new_composition_time`,
+    ignored, release). Test: `reactivity::a_preview_that_starts_reading_a_hidden_accumulator_runs_it`
+    (fails without the tracked-read stamp). `advance` is now a phase in
+    `__iron.timings`.
 - **PT-1.3, the override:** a composition setting that keeps it running while hidden,
   in the composition settings menu. **Done 2026-11-20**, with PT-1.2:
   - The existing **Run** setting carries it. `run = always`, which already meant

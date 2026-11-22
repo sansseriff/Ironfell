@@ -57,6 +57,7 @@ work under a plan gets the next free number.
 |---|---|---|
 | `RE` | [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) (closed; `RE-4.3` is now in `handoff-render.md` §10) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
 | `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
+| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`) |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
 

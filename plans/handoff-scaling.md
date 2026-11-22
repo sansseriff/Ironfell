@@ -1,8 +1,9 @@
 # Handoff: costs that scale with the document
 
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
-keys") · **Status:** plan, revised after council round 1 (Opus 5/10, Sol 5/10); round 2 next,
-then DS-1. The user asked for it (2026-11-21): "I want all costs that scale with
+keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
+6/10, Sol 6/10; both: DS-1 can start). DS-1 next; the council reviews the code by
+groups (§6). The user asked for it (2026-11-21): "I want all costs that scale with
 document size to be gone", councils on this plan and through the code.
 
 ## 0. Read first
@@ -70,6 +71,12 @@ item names what triggers it.
 - **The idle sweep** clones `unneeded` each round and sorts every stale cell.
 - Structure no longer relaxes (`need_what_reads_reach`, fd2db00), but a cell only a
   removed one needed stays needed until the next sweep.
+- **Fallbacks that relax the whole graph:** `pipeline_from` after four rounds ("derive
+  from an exact graph"), `current()` after four rounds, `scratch()`, and
+  `apply_session`'s cycle check, which needs every edge as it is now.
+- **Stale marking pushes into every reader of a changed leaf**, needed or not: a theme
+  token, palette entry or `@name` context is read on every page, so changing one visits
+  `dependents[leaf]`, document-sized.
 
 ### 3.2 The visibility gate
 
@@ -121,8 +128,12 @@ item names what triggers it.
   clones the whole `Reactive` graph, clusters, geometry, repeats, item memo and presence,
   and drops them on commit (`Saved` drop 432, `Reactive::clone` 217 samples at +3); in
   `run`, `nodes_with(Attachment)` and `owners.held()`; `time::sample` (above).
-- **Every `edit`, `compose` and `parts` plan:** `scratch()` clones `Docs`, `Reactive` and
-  `Owners`, then relaxes.
+- **Every `edit`, `compose` and `parts` plan:** `scratch()` clones `Docs`, `Reactive`,
+  `Owners` and the players, then relaxes; some compose and parts paths clone the
+  document directly.
+- **Every pipeline with constraints:** `resolve_clusters_live` clones the cluster list
+  and checks `unmoved` for every cluster; `post_apply` walks them all.
+- **Rare:** interaction-derived `let` validation (`check_binding`) scans `bound_slots()`.
 
 ### 3.6 Host side
 
@@ -166,32 +177,49 @@ Whole-document, by when it runs:
 
 ### 4.1 Cell necessity as counts
 
-Each cell keeps a **need count**: its needed readers' current edges into it, plus its
-holds. Needed means a count above zero.
+Each cell keeps a **need count**: its needed readers' edges into it, plus its holds.
+Needed means a count above zero.
 
-- **Holds:** the cells of shown compositions (an observer added or dropped adds or
-  removes them: that composition's cost); the cells of running compositions' roots
-  (§4.4); a gesture's previewed leaves, released when the gesture ends, is cancelled or
-  rolls back; an operation's pulls (§4.2), released when the operation ends unless an
-  owner keeps them (the player for its running entity, layout for its running
-  composition). `pinned` goes.
+- **Holds:**
+  - the cells of the **shown set**: shown compositions and what their embeds show (as
+    §4.3 computes it), and the subtrees of the entities they picture through `Figures`
+    (the host draws an entity's plot by reading the document, not through edges);
+  - the cells of the **free owner** (model nodes no composition pictures, the timeline,
+    loose roots), held whole, as today;
+  - the roots of running owners (§4.4);
+  - a gesture's previewed leaves, released when it ends, is cancelled, suspended or
+    rolls back;
+  - an operation's pulls (§4.2), released when the operation ends unless an owner keeps
+    them (the player for its running entity, layout for its running composition).
+    `pinned` goes.
 - **Edges:** a binding's static deps and its tracked reads; a native's reads and its base
-  reads; a native is one cell for all its outputs, claim transfers included. Within a
-  pass, increments apply at once and decrements after the pass (restructure clears
-  tracked sets and natives re-record their reads, which would otherwise cascade cells to
-  unneeded mid-pass). A count rising from zero raises its reads' counts and, if the cell
-  is stale, evaluates it once they are current; one falling to zero lowers them.
-- **Cycles** at cell level are binding errors or native R6 waits; an R6 cycle that loses
-  its last hold from outside drops, since holds come only from outside the cycle.
-- **Stale marking stays as push** along the change's cone (it touches the readers at
-  the boundary of what is needed, which is the cone, not the document);
-  `changed_at`/`computed_at` timestamps are not adopted now.
-- **The idle sweep** becomes a queue: stale unneeded cells with a pending problem are
-  queued when marked, and a frame takes up to its budget, never cloning or sorting the
-  set.
-- **Replaces** `Store::necessity`, `Reactive::necessity`, `relaxed`, `pinned`, `relax`
-  and `need_what_reads_reach`. **The old sweep stays as a test oracle:** after every
-  operation in the differential suite, the counts' needed set equals the sweep's.
+  reads. **A native is counted by its outputs:** a native reserves its outputs when it
+  is made (RE-5.6's first prerequisite, moved here), and a needed reader of any output
+  counts toward the native whether or not the native currently claims it; heights and
+  cycle checks keep using claims. When a claim moves between a native, a producer and a
+  binding, the needed readers of that leaf move their counts to the new source.
+- **Order within a pass:** increments apply at once, decrements after the pass, on
+  stable cell identities. An R6 waiter's hold on what it could not read is scoped to
+  the pass and is not a counted edge, so a cycle cannot hold itself once nothing outside
+  does.
+- **Rising from zero** a cell raises its reads' counts and is evaluated once they are
+  current: unconditionally, the cost of showing it (§2 allows it). **Falling to zero**
+  lowers them.
+- **Stale marking visits needed readers only.** Each leaf's dependents are split into
+  needed and unneeded readers, moved when a count crosses zero; a change pushes to the
+  needed ones. An unneeded cell is not touched by changes (spec §6.1) and is evaluated
+  when it is needed again. There is no stale set.
+- **The idle sweep** keeps only its diagnostic role, budgeted: cells whose problems may
+  be out of date are queued when they become unneeded with a problem, and a frame takes
+  up to its budget.
+- **Replaces** `Store::necessity`, `Reactive::necessity`, `relaxed`, `pinned`, `relax`,
+  the stale set and `need_what_reads_reach`.
+- **The oracle** (tests only): after each operation, reachability from the holds over
+  `reads_of` equals the needed set; every cell's count equals a recount; forward and
+  reverse edges agree; every needed cell is current. It runs in a variant of the
+  differential suite and the random scripts with `observe_all(false)`, random observe
+  and unobserve steps, and pages left on Auto (the default suite observes everything,
+  where the check is vacuous).
 
 ### 4.2 Exact reads without `exact()`
 
@@ -199,63 +227,83 @@ A transaction, an action, a session write and a plan read only what they read, c
 
 - **Store operations:** a read-only pull phase before `docs.begin()` under `current()`:
   `run`'s `expand::translate`, `machine::record`, `gesture::conflict`; `fire_at`'s
-  `action_writes` and `handle::resolve_target`; `apply_session`'s binding checks (cycle
-  checks kept). `after_transaction`'s `settle_repeats` reads are recorded.
-- **The machine, step and query players** pull their inputs before they change state or
+  `action_writes` and `handle::resolve_target`. `after_transaction`'s `settle_repeats`
+  reads are recorded.
+- **`apply_session`'s cycle check** pulls the upstream cone of the new binding's reads
+  before checking.
+- **The players** (machine, step, query) pull their inputs before they change state or
   send a request.
-- **The host:** `Store::pull(leaves)` (and `resolved_current`) replaces the 16
-  `store.0.exact()` call sites in `engine_api.rs` that read a few leaves after it
-  (inspector set, bind, unbind and patch, run mode, text style, table edits, detach,
-  link, to-path, component and authoring, latency).
-- **Whole-document reads stay whole:** `export_svg` and the agent's whole-document view
-  (`document_view`) keep a whole-document catch-up, renamed `exact_all`, as §2 allows.
-- **`scratch()`** clones what it plans against: §4.6.
-- Every outside-the-graph read is listed in DS-4b, each with its pull.
+- **The host:** sites that read a few leaves use `Store::pull(leaves)` (inspector set,
+  bind, unbind and patch, run mode, text style, table edits, latency); sites that read
+  subtrees (detach, to-path, the component and authoring sites) run under
+  `current(|s| …)`, recording their reads.
+- **`document_view`** pulls its query's scope; only an unscoped view, and `export_svg`,
+  pay the whole-document catch-up, renamed `exact_all` (§2).
+- **No whole-graph fallback:** `current()` and `pipeline_from` pull the escaped set in a
+  bounded loop; past four rounds they report a problem instead of relaxing.
+- **Interim (DS-4a, before DS-4b):** `exact()` becomes a hold on every cell, released
+  when the operation ends; escaped reads are holds scoped to the operation.
+- Every outside-the-graph read is listed in DS-4b with its pull.
 
 ### 4.3 The gate: a composition graph and a traversal
 
-Running is decided per owner (composition or pictured entity), not from cell counts:
+Running is decided per **owner**: a composition, a pictured entity, or the free owner.
 
-- **Cross-owner read edges, keyed on leaves:** for every graph edge whose reader runs in
-  owner A and whose leaf (any leaf: a constant, a published value such as an
-  accumulator's or a trace's output, a channel) sits in owner B ≠ A, a count on (A, B).
-  Kept as edges are made and removed; nothing walks a composition.
-- **Running** is a traversal from the seeds over the (A, B) edges: shown compositions
-  (with what their embeds show) except an `on_demand` one holding an accumulator with
-  no open path (`paused()`'s `holding`/`still`), `run = always` compositions, and free
-  readers (model nodes no composition pictures, the timeline, loose roots). An entity is
-  reached through its `Figures` links from a running composition and through read edges.
-  The store's own whole-document natives (`Clusters`, `Validate`, `Pins`, at node 0) are
-  not seeds.
-- **Cost:** the traversal visits the running set and its edges, recomputed only when a
-  seed changes or an (A, B) count crosses zero; nothing hidden and unread is visited.
-  Mutually reading hidden pages pause once no seed reaches them.
-- **Clocks change by delta:** `Clocks::set` takes what started and stopped.
+- **Each node's owner is cached:** its composition, else its nearest pictured ancestor
+  entity, else free. A reparent or a `Figures` link or unlink re-keys the subtree's
+  edges (the cost of the subtree).
+- **Cross-owner read edges, keyed on leaves:** every graph edge, needed or not, whose
+  reader runs in owner A and whose leaf (any leaf: a constant, a published value such as
+  an accumulator's or a trace's output, a channel) sits in owner B ≠ A adds to a count
+  on (A, B). A native runs in every owner it writes, or its own node's when it writes
+  none. A rooted island links every owner it touches both ways: it integrates as a unit,
+  so an island touching a running owner runs whole, as today.
+- **Seeds**, from store-side indexes (embeds by home and by source, accumulators per
+  composition, the set of Always compositions), not scans: the shown set; an
+  accumulator reached only through an `on_demand` path holds (`paused()`'s
+  `holding`/`still`: shown and open-path reachability are kept apart); `run = always`;
+  the free owner. `observe_all` runs everything. The store's own whole-document natives
+  (`Clusters`, `Validate`, `Pins`) are not readers for the gate: a deliberate change from
+  today, where node 0 counts as free.
+- **Running** is the traversal from the seeds over (A, B) edges and from a running
+  composition to the entities it pictures. It runs at `advance`'s gate point, as today,
+  only when a seed changes or an (A, B) count crosses zero, and visits the old and new
+  running sets and their edges. Mutually reading hidden pages pause once no seed
+  reaches them.
+- **Outputs** are the running set's delta: `Clocks` starts and stops those owners; a
+  clock not running is paused from when it stopped. Nothing document-sized is handed
+  over or cloned.
 - **Deleted:** `Store::paused`'s walks, `Clocks::gated`, `Reactive::reader_nodes`,
   `Docs::reshaped`, `Reactive::wired`, `op::reshapes`.
 
-### 4.4 Roots: consumers and scheduled work
+### 4.4 Roots
 
-`ROOTED` by facet kind is replaced by roots that name a consumer:
+`ROOTED` by facet kind is replaced by this table; the owner is "running" in §4.3's sense
+(free included).
 
-- **In a running composition:** state and what moves it: `accumulate`, `trace`,
-  `machine` with its entity's `args`, `transition`, `tween`, `channel`; `query`; session
-  `let`s; structure (`repeat`, `when`, `item`), settled as now; ports and equations of
-  islands that touch a running composition.
-- **Everywhere:** constraints and cluster nodes (a pose depends on the pose before;
-  spec §8.3; their cost is their changes, not the document).
-- **In a paused composition:** nothing else. Work that must still happen there is
-  scheduled, not rooted: a trace records an input change (on the input's change); a
-  query with a request out or a debounce running (its deadline); a keyed or externally
-  driven machine (its input's change). Structure in a paused composition settles when a
-  pull reaches its subtree or an op addresses its copies; a layout native has an edge to
-  each repeat native in its subtree, so a shown reader of a hidden stack's placement
-  pulls the repeat first.
-- **Prerequisites, before any native is unrooted** (RE-5.6's reasons): a native reserves
-  its outputs when made, so an unrun one still claims them; a capture (`capture.rs`)
-  observes what it draws.
-- **Clips:** clips whose targets are in paused owners are not sampled or published;
-  they are sampled when their owner resumes (DS-2, before any root changes).
+| Kinds | Disposition | Their reader outside the graph |
+|---|---|---|
+| `accumulate`, `trace`, `machine`, `transition`, `tween`, `channel`, a machine entity's `args` | **Rooted everywhere** (with their input cones): a paused owner's steppers hold, but a trace must hear its input change and a machine its state change; their cost is their inputs' changes, which a paused page does not make | the step and machine players |
+| `query` | Rooted everywhere, behaviour unchanged (presentation-time debounce) | the query player |
+| `constraint`, `constraints`, cluster nodes | Rooted everywhere: a pose depends on the pose before (spec §8.3) | the solver natives |
+| session `let`s, `selection`, `write` | Rooted in running owners | selection, actions |
+| `repeat`, `when`, `item` | Rooted in running owners; in a paused one, settled when a pull reaches its subtree or an op addresses its copies | `settle_repeats` |
+| `port`, `equation`, `connection` | Rooted in islands touching a running owner | the network |
+| `embed`, `embed_camera`, `composition` | Rooted everywhere (cheap, structural; the gate and the host read them) | the gate, the host |
+| `anchor`, `attachment` | Rooted everywhere (read by `regraph` and validation) | `regraph`, validation |
+| `clock`, `clip`, `key`, `timing`, `track` | Rooted everywhere (the timeline is free) | `time::sample`, the timeline |
+| `let` (not session), `args` (not a machine entity's) | **Unrooted**: needed only when read | — |
+
+- **What changes:** non-session `let`s and plain `args` (what §3.3 measured) are no longer
+  rooted; repeats, conditionals and items stop being rooted in paused owners.
+- **Clips in a paused owner hold their value** and are sampled when the owner resumes
+  (or when an exact pull reads them); the §8.8 reference holds them the same way.
+- **Layout and repeats:** a layout native has a necessity-only edge to the repeat natives
+  in its subtree (counted for need, excluded from heights and cycle checks), so a shown
+  reader of a hidden stack's placement pulls the repeat first without closing a cycle
+  (repeats may read placements, spec §9.2).
+- **Captures:** `capture.rs` observes what it draws (RE-5.6's second prerequisite), and
+  whether a capture seeds the gate is decided in DS-6a.
 
 ### 4.5 Indexes for the scans
 
@@ -278,16 +326,20 @@ Running is decided per owner (composition or pictured entity), not from cell cou
 - **Heights:** `compute_heights` replaced by raising along the cone (`raise`) in every
   case; the fixpoint kept as a test oracle.
 - **Per-pipeline kinds:** selection, contexts, palette published for what changed.
+- **Clusters:** `resolve_clusters_live` and `post_apply` take the dirty cluster keys,
+  not a clone of the list with an `unmoved` check on each.
 - **Published maps:** compared and replaced by the entries that changed.
 
 ### 4.6 Transactions and plans
 
-- **The snapshot narrowed:** `can_refuse` is decided for the transaction's cone (the
-  clusters it touches), not "any constraint anywhere": a constant edit in `perf` takes
-  none. Where one is still needed, it covers the clusters touched, not the store.
-- **`scratch()`** clones the store's large maps; if DS-1's counts show it scaling after
-  the above, persistent maps (structural sharing) for `Docs`, `Reactive` and `Owners`.
-  No transaction journal.
+- **No snapshot:** a refused transaction aborts the document journal (`docs.begin()`,
+  `rollback`, as now) and re-derives the cone it touched from the restored document:
+  `regraph` of its ops and their inverses, `invalidate` of the changed leaves, the
+  pipeline. Deterministic: a refused transaction does not advance time. `Saved` goes.
+  Test: a solver refusal after expansion restores every value, copy and edge.
+- **Plans** (`edit`, `compose`, `parts`) run as a transaction on the store that is then
+  aborted the same way, instead of on `scratch()`'s clones; the paths that clone the
+  document directly go too.
 - `nodes_with(Attachment)` and `owners.held()` in `run`: indexed.
 
 ### 4.7 Host side
@@ -303,58 +355,75 @@ Each pass of §3.6 starts from the shown compositions or from what changed (the 
   `rebuild_root` without the full scans; a template change rebuilds what places it.
 - **Paint order:** kept per composition; a structural change renumbers the parent's
   children, not the document.
-- **3D:** shapes and planes iterated from the shown 3D compositions' entities (an index
-  by composition), not a global query.
-- **Timeline:** `sync_themed` only when clips or the clock changed.
+- **3D:** shapes, planes and the per-camera content scan (`scene3d.rs` ~557) iterated
+  from the shown 3D compositions' entities (an index by composition).
+- **Timeline:** `sync_themed` replans the lanes whose clips, keys, machines, axis or theme
+  changed, and on a scrub of pinned state; not on every sync.
+- **`gas::find` and `interaction.rs`:** indexed.
 
-Cut (bounded or not document-sized): `materialize::decide_modes` (capped at 2,000),
-`gas::find`, `interaction.rs`, the history-log filter.
+Cut: `materialize::decide_modes` (capped at 2,000), the history-log filter (grows with
+history, not the document), and Bevy's own visibility work over hidden 3D entities
+(culling them is a separate decision).
 
 ## 5. Verification
 
-- **Work counted at the choke points, not per pass:** a debug counter (`#[doc(hidden)]`)
-  incremented by `Tree::nodes_of_type`, `nodes_with`, `relations`, `descendants`,
-  `live_nodes`, `bound_slots`, and by iteration over the graph's large maps (`nodes`,
-  `dependents`, `natives`, `unneeded`, `stale`) and the store's (`presence`, machines,
-  clips); and a counting global allocator in the test binary (bytes and allocations).
-- **The scaling test** builds the scenario at +0, +3 and +6 gallery copies and asserts
-  **no slope**: each operation's work and allocation equal across the three sizes,
-  within a stated constant for operations whose own target grows (showing a tab).
-- **Operations covered:** idle; drag; structural preview; constant edit; structural edit;
-  reparent; link and unlink; a `let` made (rescope); `fire_at`; a session write; an
-  `edit` and a `compose` plan (scratch); undo and redo; a rejected edit; showing and
-  hiding a tab; a theme change; playing and scrubbing; a gesture cancelled. Each in a
-  document with constraints and one without.
-- **Correctness:** the differential suite with the necessity oracle (§4.1) and the
-  heights oracle (§4.5) checked after every operation; the plain suite; the §8.8 property
-  **with paused pages** (a variant whose pages are not Always, compared with a reference
-  stepped on each page's own clock, as `a_hidden_plot_s_transition_holds_part_way` does);
-  its 1,000-seed ignored run; the 10,000 random scripts; the host reference.
+- **Work counted at the choke points:** a debug counter (`#[doc(hidden)]`) incremented by
+  `Tree::nodes_of_type`, `nodes_with`, `relations`, `descendants`, `live_nodes`,
+  `bound_slots`, `roots`, and by every iteration of the store's and graph's large maps,
+  wrapped in a counting newtype (not a list of fields); and a counting global allocator
+  in the test binary, with a small tolerance (B-tree splits vary with size).
+- **The scaling test**, two axes: many hidden pages (+0, +3, +6 copies of a fixture set)
+  and one large hidden page. The fixture holds every kind §3 names: constraints, network
+  islands, clips targeting hidden pages, machines, queries, embeds, a 3D composition,
+  pictured entities, repeats. **No slope:** each operation's work and allocation equal
+  across sizes, within a stated constant for operations whose own target grows. Idle is
+  measured after the sweep's queue is empty.
+- **Operations:** idle; a running accumulator on the shown page; drag; structural
+  preview; constant edit; structural edit; reparent; link and unlink; a `let` made; a
+  theme change; `fire_at`; a session write; an `edit` and a `compose` plan; paste; undo
+  and redo; a rejected edit and a solver refusal after expansion; an agent transaction on
+  a hidden page; showing, hiding, deleting and duplicating a page; selection and hover;
+  a scoped agent view; observing nodes (`Interest::Nodes`); a capture; playing,
+  scrubbing within one keyed transition; a query's reply on a paused page; a
+  hidden-to-shown publish; a gesture cancelled. Each with constraints and without. Host
+  operations are probed directly (DS-8).
+- **Correctness:** the differential suite and the random scripts in their default mode
+  and in the partial-observation variant with the oracle (§4.1); the heights oracle
+  (edge order, not only minimal heights); the plain suite; the §8.8 property with paused
+  pages, its reference stepping each page on its own clock and holding paused clips;
+  its 1,000-seed run; the 10,000 random scripts; the host reference.
 - **Specific tests:** two hidden pages reading each other pause once unseen; a meter on a
-  shown page keeps a hidden laser running (published values); `on_demand` with an
-  accumulator; an entity pictured in two pages; a hidden constraint does not run its page;
-  after a long script of edits the needed set returns to its baseline (no pin drift).
-- **Timing:** `document_scaling_time` (ignored, release): at +6 each operation within
-  1.2× of +0. In the app, `single-tab.txt` gains the gallery three times over: `advance`
-  and `frame` within 1.5× of the plain demo's.
+  shown page keeps a hidden laser running; `on_demand` behind an Auto ancestor; an
+  entity pictured in two pages; a reparent and a `Figures` change re-key the gate; a
+  hidden constraint does not run its page; a shown page's placed plot is current; a
+  native made unneeded still claims its outputs; after a long script of edits the needed
+  set returns to its baseline.
+- **Timing:** `document_scaling_time` (ignored, release) at +6 within 1.2× of +0;
+  `single-tab.txt` with the gallery three times over, `advance` and `frame` within 1.5×
+  of the plain demo's.
 
 ## 6. Phases
 
-Each phase is committed alone with its tests and its rows of the scaling test, and gets
-a council review of its code before the next starts.
+Each phase is committed alone with its tests and retires its rows of the scaling test.
+The council reviews the code by groups: DS-1; DS-2 and DS-3; DS-4a and DS-4b; DS-5 and
+DS-6; DS-7 and DS-8.
 
 | Key | Builds | Exit |
 |---|---|---|
-| DS-1 | §5's counters, allocator and scaling test over every operation, failing where today's costs are, each failure naming its passes | The test runs; its failures are §3's list |
-| DS-2 | Per frame: presence, machines, steps, queries, clock (§4.5); clips of paused owners not sampled, the `Animates` index, clip ends (§4.4, §4.5); the gate's clones and `Clocks::set` by delta (§4.3); the idle sweep as a queue (§4.1) | Idle, drag and playing have no slope |
-| DS-3 | Per change: ports, repeats, layout, `regraph`'s scans, heights, per-pipeline kinds, published maps (§4.5) | Structural preview has no slope but for the gate's decision |
-| DS-4a | Cell necessity as counts, the old sweep as an oracle (§4.1) | The oracle agrees on every operation of the differential suite and the random scripts |
-| DS-4b | `exact()` replaced (§4.2), the 16 host sites on `Store::pull` | Constant and structural edits have no slope but for the snapshot; no pin drift |
-| DS-5 | The gate as a composition graph and traversal (§4.3) | Every gate test of §5 and PT-1.2; the gate's whole-document code deleted |
-| DS-6 | Roots as consumers (§4.4), after its two prerequisites | The §8.8 property with paused pages; playing and every edit have no slope |
-| DS-7 | The snapshot narrowed, `scratch()`, `run`'s scans (§4.6) | Every store operation has no slope |
-| DS-8 | The host side (§4.7), one commit per trigger: per frame, per geometry change, per structural change | `single-tab.txt` on the triple gallery passes |
+| DS-1 | §5's counters, allocator, fixture and scaling test over every operation, failing where today's costs are, each failure naming its passes | The test runs; its failures are §3's list |
+| DS-2 | Per frame: presence, machines, steps, queries, the clock; clip sampling for running owners, the `Animates` index, clip ends; the gate's clones and `Clocks::set` by delta | Idle, drag and playing lose their per-frame counters |
+| DS-3a | Per pipeline: ports, selection, contexts, palette, published maps, clusters' dirty keys | Value changes lose their counters |
+| DS-3b | Per structural change: repeats, layout, `regraph`'s scans | Structural changes lose theirs but for necessity and the gate |
+| DS-3c | Heights by `raise` along the cone, the fixpoint as an oracle | No `compute_heights` outside tests |
+| DS-4a | Cell necessity as counts (§4.1): holds, output reservation, needed dependents, the idle queue, the interim `exact()` | The oracle in the partial-observation variant, on every operation |
+| DS-4b | `exact()` replaced (§4.2), the host sites moved, no whole-graph fallback | Edits lose their necessity counters; no pin drift |
+| DS-5 | The gate (§4.3) | Every gate test of §5 and PT-1.2; its whole-document code deleted |
+| DS-6a | Captures observe what they draw | Capture tests |
+| DS-6b | Roots (§4.4), one kind group per commit | The §8.8 property with paused pages; playing loses its counters |
+| DS-7 | Refusal by journal and re-derivation, plans as aborted transactions (§4.6) | Rejected edits and plans lose their counters |
+| DS-8 | The host side (§4.7), one commit per trigger: per frame, per geometry change, per structural change | Host probes flat |
 
+**Final exit:** every operation of §5 has no slope, store and host, at both axes.
 DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS-6.
 
 ## 7. Risks
@@ -366,7 +435,7 @@ DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS
   removed names its reader.
 - **Scope:** the engine's core again. Anything not in §3 is out.
 
-## 8. Decisions (council round 1's recommendations, adopted)
+## 8. Decisions (council rounds 1 and 2, adopted)
 
 1. Cell necessity as counts (§4.1); running status by traversal over a composition
    graph (§4.3), not by counts.
@@ -375,7 +444,10 @@ DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS
 3. The gate from leaf-keyed cross-owner edges and a traversal from the seeds (§4.3).
 4. Roots: §4.4's list; constraints everywhere; nothing else in a paused composition but
    scheduled work.
-5. No transaction journal: the snapshot narrowed instead (§4.6).
+5. No snapshot and no transaction journal: refusal restores the document journal and
+   re-derives the cone; plans run as aborted transactions (§4.6).
+6. Free cells held whole; trace, accumulate and machine rooted everywhere; hidden
+   physics islands touching a running owner run whole, as today.
 
 ## 9. Council
 
@@ -388,3 +460,16 @@ verification needs choke-point counters, an allocator, more operations and pause
 pages in the §8.8 property. Opus: narrow the snapshot instead of a journal. Sol: root
 consumers and scheduled work, not kinds; paused pages still have scheduled work. All
 adopted above.
+
+**Round 2 (2026-11-21): Opus 6/10, Sol 6/10; both: DS-1 can start.** Adopted: holds
+include entities pictured by shown pages and the free owner; natives counted by their
+outputs with reservation moved to DS-4a, and claim moves transfer counts; stale marking
+only to needed readers (no stale set; unconditional evaluation on need); R6 holds
+scoped to the pass; the oracle by reachability and exact recount, run with partial
+observation; the gate's owners cached and re-keyed, every edge counted, natives in every
+owner they write, islands whole, seeds and outputs from indexes and deltas; stepper
+kinds rooted everywhere, a per-kind roots table; clips in paused owners hold; the
+layout→repeat edge necessity-only; refusal by journal and re-derivation instead of a
+snapshot, plans as aborted transactions; the remaining fallbacks and inventory items;
+adversarial fixtures, two scaling axes, many more operations; DS-3 and DS-6 split;
+council reviews by groups.

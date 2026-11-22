@@ -3,10 +3,10 @@
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
 6/10, Sol 6/10; both: DS-1 can start). **DS-1, DS-2 and DS-3a done 2026-11-21; DS-3b
-stopped at part 2 (`08e0539`, 2026-11-22).** Next: council round 1 on
-[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md) (draft), whose phases
-DS-9 to DS-14 come before DS-4 and replace the rest of DS-3b, and DS-4a, DS-4b and DS-5 as
-separate phases (their designs, §4.1 to §4.3, stand). Why (the user, 2026-11-22): DS-3b's
+stopped at part 2 (`08e0539`, 2026-11-22).** Next: council round 2 on
+[`specs/structure-in-the-graph.md`](specs/structure-in-the-graph.md) (draft; round 1 Opus
+5/10, Sol 5/10), whose phases DS-9 to DS-14 replace the rest of DS-3b. DS-4a, DS-4b and
+DS-5 stay as planned here and may land any time after DS-9. Why (the user, 2026-11-22): DS-3b's
 fixes were rules for when a whole-document pass may be skipped; the cause is that cells do
 not record what they read of structure. The council reviews the code by groups (that
 spec's §8). The user asked for it (2026-11-21): "I want all costs that scale with

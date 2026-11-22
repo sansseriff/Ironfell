@@ -1,6 +1,6 @@
-# Structure in the graph: one rule for when, one loop for order
+# Structure in the graph: one rule for when, one written order
 
-**Status:** adopted 2026-11-22, and revised three times that day after reviews of its direction.
+**Status:** adopted 2026-11-22, and revised four times that day after reviews of its direction.
 DS-9 is built (§9). This spec replaces reactive-engine.md §7.2, its table of what each op
 affects. It changes the order of [`handoff-scaling.md`](../handoff-scaling.md), the `DS`
 track: DS-3b stops at part 2 (`08e0539`), and this spec's phases replace the rest of it.
@@ -27,7 +27,7 @@ it ends up:
 |---|---|---|
 | Layout roots, pinned parts, glide specs | `sync_layout`'s candidate set, `layout_touched`, `prime_layout`, `prime_reorders` | makers (DS-11) |
 | Constraint grouping and validation | `regraph`'s `regroup`, `in_reach`, `moved`; `prime_grouping`; `solve::grouping_reach`; `evaluate`'s Clusters rule (`graph.rs`, a changed tracked read re-primes `Clusters`) | a partition maker plus per-cluster cells (DS-12) |
-| Cluster natives, `committed`, solve order (`next_to_solve`) | `sync_cluster_natives` after every grouping run; Kahn's sort in `clusters_with` | the partition maker; the solve in the loop's stage 4 (DS-12) |
+| Cluster natives, `committed`, solve order (`next_to_solve`) | `sync_cluster_natives` after every grouping run; Kahn's sort in `clusters_with` | the partition maker; the cluster order as a cell; the solve in stage 4 (DS-12) |
 | The contexts library | `resolve_contexts`, a scan of every `context` node in each pipeline | a cell (DS-12, which reads `plug.mate`) |
 | Drawn repeats and their natives | `update_drawn`'s op match, `ensure_drawn`, `repeat_natives`, `repeat_dirty` | makers (DS-15) |
 | A repeat's settle | `REPEAT_INPUTS`, a hand list of the inputs to compare | the repeat native's recorded reads (DS-15) |
@@ -38,9 +38,11 @@ it ends up:
 | Instance arguments' boundary checks | `regraph`'s `defs` → `naming` scan | wiring cells (DS-14) |
 | Templates | `Tree::scope_stamp` per definition (`engine/template.rs`), read with no key | cells (DS-15) |
 | Copies to re-expand | `Owners::affected` (120 lines), its `Which::All` fallback and the budget fallback that expands everything | expansion by recorded reads (DS-15) |
-| Copies the solver holds | `owners.hold`, `keep_solved`, `release` writing template values back, `apply_recorded` | holds as state (§3.4); a dropped hold marks its owner for expansion (DS-12) |
+| Which copies the solver holds | `owners.hold`, from each grouping run | derived from the partition, compared by the oracle (DS-12) |
 | Blocked bindings | retried across the graph when wiring changes (`graph.rs`, the blocked retry) | wiring keys (DS-14) |
 | Attachment validation | `attachment::validate` over every attachment in each transaction | a validation cell per composition (DS-12) |
+| Layout's glide targets | a sweep of every glide target on each layout run (`glided`) | per layout root (DS-11) |
+| The pins of parts no layout holds | `PinsNative`, over the whole document | a maker per composition (DS-11) |
 | Whether a transaction is structural at all | `after_transaction`'s op classifier | gone with `regraph` (DS-15) |
 
 These stay outside the rule, and each has an owner:
@@ -51,17 +53,21 @@ These stay outside the rule, and each has an owner:
 | The host's change feed | `geom::Revisions::note_ops`, `classify` | the host is DS-8 |
 | Graph heights | `compute_heights` | DS-3c |
 | The gate's decision | `Clocks::gated`, `Docs::reshaped`, `op::reshapes` | DS-5 |
-| Necessity, `ROOTED` | the sweep | DS-4a, DS-4b |
+| Necessity, `ROOTED` | the sweep; `pipeline_from`'s and `current`'s rounds, which exist because code outside the graph reads cells nothing needed | DS-4a, DS-4b (handoff-scaling.md §4.2) |
+| The solver's write-backs | `keep_solved`, `release`, `apply_recorded`: recorded writes of solved values, so undo puts them back | writers of stage 4 (§3.2), kept; DS-12's design places each |
+| Edit-path validation | `run`'s `undeclares` op match before `expand::check_context` | one-off reads of the edit; its op match is a guess like the others, replaced in DS-14 by checking the contexts a declaration's readers use |
 
-**The order of derived work** is decided by five loops of its own, each with a round limit:
-- `pipeline_from`'s four rounds, which relax the whole graph past the limit;
-- `current`'s four rounds;
-- `resolve_physics`' `LAYOUT_ROUNDS`;
-- `settle_repeats`' rounds (`REPEAT_CHANGES`, `feedback`, `restless`);
-- `post_apply`'s solve loop (`next_to_solve`).
+**The order of derived work** is nowhere written down. It is implied by the calls in
+`regraph`, `after_transaction`, `post_apply`, `apply_session` and `settle_repeats`, and
+by three loops that write results back, each with its own failure rule:
+- `settle_repeats`' rounds: feedback is counted per repeat (`REPEAT_CHANGES`), and only
+  the offending repeat is held;
+- `post_apply`'s solve loop (`next_to_solve`): an unsatisfiable solve refuses the
+  transaction;
+- `resolve_physics`' rounds (`LAYOUT_ROUNDS`).
 
-They are spread over `regraph`, `after_transaction`, `post_apply`, `apply_session` and
-`settle_repeats`. §3.2 replaces them with one loop.
+§3.2 writes the order down and checks it. Each of these three loops keeps its own
+failure rule.
 
 **Each refresh rule is a guess** about which edits can change its result, and each has
 to stay complete as features are added. They don't stay complete. About half the bugs
@@ -124,11 +130,11 @@ engine. Features don't change it:
    `remove_node`, `restore_node`, `write_node`, `place`, `unplace`, `insert_facet`,
    `remove_facet`, `facet_mut`, and the relation and index writers. The graph reports
    its wiring keys where it changes a binding, a claim or a tracked read.
-3. **Order.** One loop, with five stages and their declared inputs (§3.2). It replaces
-   the five round-limited loops of today. A maker's reader can't read a value, by type.
+3. **Order.** One table of stages, each with what it may read (§3.2). A maker's reader
+   can't read a value, by type, and each writer keeps its own failure rule.
 
 A new feature adds facets, types and cells. It goes through the same reads and writes,
-and it takes its place in the loop by its kind, so it needs no rule. **The door stays
+and it takes its place in the order by its kind, so it needs no rule. **The door stays
 open where this spec does not reach, and each opening has an owner:**
 - clips (PT-9);
 - the host's change feed (DS-8);
@@ -158,56 +164,53 @@ The type and facet indexes become **per top-level root**. A node's root follows 
 authored parent, or for a copy its owner's. So moves, undo and expansion keep membership
 right, and moving a subtree reindexes that subtree, which is the cone of the move.
 
-### 3.2 The loop
+### 3.2 The order
 
 Derived work that writes into the document can't be a cell, because a cell must not
-write its own inputs. So the engine has **one loop**, and each stage of it is either a set
-of cells or one of the writers that exist today:
+write its own inputs. Those writers already exist. What is missing is a written order
+that they and the cells keep. This table is that order:
 
 | Stage | What runs | Reads | Writes |
 |---|---|---|---|
 | 0. Inputs | what enters from outside: the transaction's ops, a session write, the playhead, host publishes, the selection's and session state's publish, the theme, fonts, a layout preview, drivers and fingers | — | the document, and input leaves |
-| 1. Expand | owners' copies of instances and definitions (`Owners`), outer owners first | structure; the solver's holds (state) | copies |
+| 1. Expand | owners' copies of instances and definitions (`Owners`), outer owners first; in undo, redo and replay, the recorded writes to copies after it | structure; the solved values in the document | copies |
 | 2. Make | **makers**: cells whose value is a set of cells to have | structure, authored constants and the contexts library; **no evaluated leaf**, by type | the graph's native set and wiring, as one batch |
-| 3. Evaluate | value cells: bindings and natives (layouts, clusters' change tests, repeats, islands) | values, structure and wiring | values and claims |
-| 4. Write back | `settle_repeats` (copies and item values from counts), and the solve (in a transaction: dirty clusters solved against their drivers, as `post_apply` does; in a gesture or on the playhead: previews, as `resolve_clusters_live` does) | values; state (poses, holds) | copies, item values, poses, holds |
+| 3. Evaluate | value cells: bindings and natives (layouts, clusters' change tests, the cluster order, repeats, islands) | values, structure and wiring | values and claims |
+| 4. Write back | `settle_repeats` (copies and item values from counts); the solve (`post_apply` in a transaction, `resolve_clusters_live` in a gesture or on the playhead), with `keep_solved`, `release` and `apply_recorded` | values; state | copies, item values, solved values |
 
-- **Makers read no evaluated leaf.** They read only authored constants, through
-  `Facet` keys, and a bound slot reads as its default. This is today's behaviour:
+**The rules of the order:**
+- **Makers read no evaluated leaf.** They read only authored constants, through `Facet`
+  keys, and a bound slot reads as its default. This is today's behaviour:
   `constraint.kind` and `enabled` count only as constants, and layout roots depend only
-  on structure (`layout::structural_roots`).
-- **Rule of order.** Within a round, a stage reads derived results only from earlier
-  stages or earlier rounds. Any stage may read state (§3.4). The solver's holds are
-  state, so stage 1 reading them is no backward edge.
-- **Holds.** When a hold is dropped, the copy's owner is marked, and stage 1 expands it
-  again without the hold. That deletes `release` as a writer of its own.
-- **Quiescence.** The loop runs until nothing is marked. A writer that produces what is
-  already kept writes nothing:
-  - a settled repeat gives the same copies;
-  - a converged cluster solved from its own pose doesn't move.
-
-  So the loop stops when no stage has anything left to do.
-- **Solve order.** In stage 4 the solve takes the next dirty cluster after each
-  write-back, as `next_to_solve` does today. A cluster B that reads cluster A's variable
-  through a binding is marked by that write and solved after it. Rings of clusters are
-  reported by the per-cluster wiring check (DS-12), not discovered by the budget.
-  Clusters don't claim their variables.
-- **The budget.** One budget per transaction replaces the five loops' limits. When it
-  runs out, the state reached is kept and a problem names what was still marked, as
-  `restless` does today. This is for feedback the engine already detects: a repeat
-  whose copies change what decides its count.
+  on facet presence (`layout::structural_roots`).
+- **Earlier stages only.** Within a pass, a stage reads derived results only from
+  earlier stages, or from the passes before. Any stage may read state (§3.4).
+- **A writer's own writes don't mark it.** A cluster's change test reads its own
+  variables, so without this rule its write-back would ask for a second solve. Today
+  `pose()` clears `ran` to prevent that.
+- **Each writer keeps its own loop and failure rule:**
+  - feedback is counted per repeat;
+  - the solve takes a dirty cluster with no dirty cluster upstream of it, in the cluster
+    order;
+  - an unsatisfiable solve refuses a transaction and keeps the last pose live;
+  - after each solve write, its cone is evaluated before the next solve, as today.
+- **Another pass** runs while a writer wrote something that marked a cell. Structure
+  still depends on values across passes (counts make copies, copies feed makers). So the
+  loop ends because the writers detect feedback, not because the order is stratified,
+  and each writer reports its own.
+- **The cluster order is a derived cell** in stage 3, per composition. It reads the
+  partition and the wiring of the clusters' inputs (`transitive_deps`, keyed), and it
+  keeps Kahn's sort and its error for clusters that depend on each other.
 - **Reconciliation is one batch.** A maker's diff (natives to make and drop, outputs
   reserved, claims handed from a dropped native to its replacement) is applied by one
-  `set_natives` call, as today's batched claim handoff does. A reservation is wiring;
-  an active claim is a value of stage 3.
+  `set_natives` call, as today's batched claim handoff does.
 - **A deleted node** reports every leaf it held as changed, at the choke point. So a
   binding that read one of them runs again with no structural key.
-- **Within stage 3**, wiring that changes (a tracked read moving, a claim made) reaches
-  cells of stage 3 only. No maker reads it: the partition gives up `is_free` and the
-  solve order, which become per-cluster cells (DS-12).
+- **Need:** "marked" means "marked and needed". What isn't needed stays marked until it
+  is, which is DS-4a's and DS-4b's design, not this spec's.
 
-The stage order is written once, as this table. It is not a list of ops, and a cell's
-stage is its kind.
+The order is written once, as this table. It isn't a list of ops: a cell's stage is its
+kind. No phase merges the writers' loops into one.
 
 ### 3.3 Refusal
 
@@ -215,9 +218,10 @@ Today `Saved` clones the graph and about thirty store fields for every transacti
 document holding a constraint. That costs in proportion to the whole document, and its
 field list is another hand list. There are two candidates, and DS-7 decides between them
 by measuring:
-- **Persistent maps** (`im` or `imbl`) for the graph's and the store's tables. `Saved`
-  stays as it is, and a clone becomes nearly free. Every field is covered by
-  construction, at the price of slower map operations.
+- **Persistent maps** (`im` or `imbl`) for the graph's and the store's large tables,
+  nested ones included. Then `Saved` becomes a clone of the whole store, not a list of
+  fields, and the clone is cheap. Every field is covered by construction, at the price
+  of slower map operations.
 - **A journal of the graph's own mutations**: `set_cell`, `drop_cell`, `set_natives`,
   key → readers, reservations, claims, errors, pending queues and each cell's first
   value change. It is undone in reverse, as the document's journal is. It is opened
@@ -230,70 +234,88 @@ and report a problem) is product behaviour, and it is out of scope.
 
 ### 3.4 State is not a derivation
 
-These kept results depend on their own history, and each declares it:
+These kept results depend on their own history, and each one is declared:
 
-| State | Kept in | Read by |
-|---|---|---|
-| The solver's poses and holds, `committed` | the document's solved leaves, `Owners::solved` | stage 1 (holds), stage 4 |
-| Islands' last solutions | the islands (`Native::history`, `previous()`) | stage 3 |
-| A failed binding's last good value | the graph | stage 3 |
-| Players: machines, steps, queries, presence, clips | the players | stage 0, woken by leaf changes |
-| Session state | `session_state` | stage 0 |
+| State | Kept in |
+|---|---|
+| Solved values | the document's leaves on held copies and operands |
+| Islands' last solutions | the islands (`Native::history`, `previous()`) |
+| A failed binding's last good value | the graph |
+| Live-solve previews (the next frame's warm start) | the overlay |
+| Glides and motion in flight | the graph's glide state |
+| Players: machines, steps, queries, presence, clips | the players |
+| Clocks' paused-from times | the clocks |
+| Session state | `session_state` |
 
-Bookkeeping isn't state: repeat memos, wake sets and dirty flags can be rebuilt from
-the document and the state, and the oracle rebuilds them (§4).
+**Derived, though it looks like state:**
+- which copies are held (from the partition);
+- `committed` together with the change test's run bit, which say whether a pose has
+  been invalidated;
+- repeat memos, wake sets, dirty flags, `restless` and `feedback`.
 
-## 4. One oracle: the same step, with nothing cached
+Each of these is derived again from the document and the state, and the oracle
+compares them (§4).
+
+## 4. One oracle for derived results
 
 The differential suite compares two incremental stores, so a bug they share passes it.
 DS-9's structure oracle reimplements layout's claim rules: it can pass stale output and
 panic on a valid bound leaf, and each family would need its own.
 
-**The oracle** (feature `fresh-oracle`, implying `differential`) replaces them. Before
-every facade call, it clones the subject into a reference, keeping all state (§3.4) and
-dropping every derived result and all bookkeeping:
-- every cell and maker is marked;
-- every owner is marked for expansion;
-- the indexes are rebuilt from the node table;
-- memos, wake sets and dirty flags are cleared.
+**The oracle** (feature `fresh-oracle`, implying `differential`) replaces them. After
+every facade call it builds a reference:
+- the reference is **a fresh store, built from the document**;
+- the state listed in §3.4 is **moved in from the subject, by a declared list**;
+- every derived result is recomputed.
 
-Then the same call runs on both stores, and their snapshots must be equal:
-- values and errors;
-- dependency edges, forward and reverse;
-- claims and reservations;
-- native extras;
-- copies and the document.
+It is built from a list of what to keep, not a list of what to drop. So a cache someone
+forgets is missing from the reference and fails loudly, instead of being shared with it
+and hiding the bug. The reference and the subject must then agree in two ways:
 
-The reference computes everything. The subject computes only what its keys and marks
-say, from the same history: the same poses, last solutions, last good values and
-players. So a difference is a missed key, or a cell that isn't a function of what it
-read. The oracle checks *when* each cell runs, not *what* it computes. It shares the
-computing functions with the store, and none of the decisions about when to run them.
+1. **Derived results equal:**
+   - values and errors of needed cells;
+   - dependency edges, forward and reverse;
+   - claims and reservations;
+   - native extras;
+   - makers' outputs, hold membership, the cluster order and the indexes.
 
-- **History cells.** A history cell (an island, the solver) gives the same result from
-  the same previous state and the same inputs. So it needs no exclusion, unless it is
-  nondeterministic, and then that is a bug.
-- **Refusal:** a call that fails leaves the subject equal to its clone before the call.
-  This is the harness's atomicity check, today only measured (`IRON_ATOMICITY`,
-  `intended::NOT_ATOMIC`), made a failure for refused transactions.
-- **Named exclusions:**
-  - a repeat marked `restless` or `depth_blocked`, which by definition isn't settled;
-  - a cluster that didn't converge and kept its last pose.
+   These have no history, so a difference is a missed key or a cell that isn't a
+   function of what it read.
+2. **History stepped exactly when its inputs changed.** A history cell (an island, a
+   cluster's solve) is compared differently. Each records the values of its inputs when
+   it last stepped. If they still equal its inputs now, the subject was right not to
+   step it, and the reference keeps its state as is. If they differ, the subject must
+   have stepped it.
 
-  Both are compared for their problems only.
-- **The canary:** a build with one choke point silenced must fail the oracle on a named
-  test. DS-9's canary on `set_order` moves to it, and each phase adds one for its
-  family.
+   History cells aren't idempotent: re-solving a converged cluster from its own pose
+   changes low bits (measured: 173 of 200 cases, about 1.7e-11). So "taking another
+   step changes nothing" would be a false check.
 
-**Rejected after a spike (2026-11-22): a store built afresh from the document.**
-Comparing with `StoreCore::with_document` of the authored document, solved as a host's
-first frame does, failed 72 of 494 tests. Nearly all of the differences were state the
-document doesn't hold, by design (§3.4). Loading isn't the definition of correct for a
-store with history; the same step from the same state is.
+**Refusal is checked apart:** a call that fails leaves the subject equal to its clone
+before the call, pending notifications included. This is the harness's atomicity check,
+today only measured (`IRON_ATOMICITY`, `intended::NOT_ATOMIC`). It becomes a failure
+with DS-7.
+
+**Named exclusions:**
+- a repeat held as `restless` or `depth_blocked`, compared for its problem only;
+- a cluster that didn't converge and kept its last pose, compared for its problem only;
+- a cut by the global expansion budget (`NODE_BUDGET`), until DS-15 makes the budget
+  per root.
+
+**The canary:** a build with one choke point silenced must fail the oracle on a named
+test. DS-9's canary on `set_order` moves to it, and each phase adds one for its family.
+
+"One oracle" means one for derived results. DS-4's necessity oracle and DS-5's gate
+check stay, and they check other things.
+
+**Rejected after a spike (2026-11-22): the document alone as the reference.** Comparing
+with `StoreCore::with_document` of the authored document, solved as a host's first frame
+does, failed 72 of 494 tests. Nearly all of the differences were state the document
+doesn't hold, by design (§3.4). Hence the declared state list.
 
 **Decision point (DS-10):** the oracle runs across the suite with only the named
-exclusions, and the canary fails as it should. If not, the verification story is
-revised before any family is converted.
+exclusions, and the canary fails as it should. If not, the verification story is revised
+before any family is converted.
 
 ## 5. Phases: one family at a time, each deleting its rules
 
@@ -302,8 +324,10 @@ its scope and its keys. It deletes that family's rules in the same change. Every
 has the same exit:
 - the oracle (§4) is silent across the suite with the rules gone;
 - the family's canary fails as it should;
-- the scaling test's rows for that family don't grow, and neither does counted work in
-  a 1,000-item active composition;
+- **locality, tested and not inferred from keys:** the scaling test's rows for that family
+  don't grow with hidden compositions. Counted work doesn't grow with unrelated units
+  inside the active composition (a 1,000-item one), nor with joins and splits across
+  compositions;
 - the family's refresh rules and caches are deleted, as listed below.
 
 Each phase reports its net lines, but they aren't a gate. DS-10 and DS-7 add more than
@@ -315,12 +339,12 @@ renumbered on 2026-11-22; reviews before then use DS-10 to DS-14 for the old pha
 | Phase | Family | Deleted |
 |---|---|---|
 | **DS-10** | The oracle (§4) and its canary; `Cx` limited to recorded reads (`Cx::graph()` deleted, wiring reads keyed, `previous()` behind `history`, `scope_stamp` asserted) | `check_keyed_layouts`, the grouping oracle, the `structure-oracle` feature |
-| **DS-11** | Layout: roots, pins, pinned parts and glide specs as makers per composition, read through `With(root, layout)`; claim handoffs in one batch | `sync_layout`, `layout_touched`, `layout_roots`, `pinned_by_use`, `prime_layout`, `prime_reorders`, `regraph`'s `shaped` |
-| **DS-12** | Grouping split. The partition is a maker per composition: constraints, relations, which anchors mate; no values. Roles, frames, validation, and the check that clusters form no ring through bindings, are per-cluster cells. The solve joins the loop's stage 4 (§3.2). Holds are state, and a dropped hold marks its owner. The contexts library is a cell, and attachment validation is a cell per composition | `prime_grouping`, `grouping_reach`, `Grouping::reach`, `regroup`, `in_reach`, `moved`, `evaluate`'s Clusters rule, `sync_cluster_natives`, Kahn's sort, `release`, `owners.held()`'s collection per transaction, `resolve_contexts`' scan, `attachment::validate`'s scan |
+| **DS-11** | Layout: roots, pins (`PinsNative` per composition), pinned parts and glide specs as makers per composition, read through `With(root, layout)`; glide targets per layout root; claim handoffs in one batch; what reservations as wiring change in `is_free` | `sync_layout`, `layout_touched`, `layout_roots`, `pinned_by_use`, `prime_layout`, `prime_reorders`, `regraph`'s `shaped`, `glided`'s sweep |
+| **DS-12** | Grouping split. The partition is a maker per composition: constraints, relations, which anchors mate; no values. Mates are partitioned by their candidate ends, and their frames and eligibility are evaluated per cluster. Roles, frames and validation are per-cluster cells; malformed or disabled constraints are validated outside the partition. The cluster order is a cell (Kahn's sort kept). Hold membership is derived from the partition. The contexts library is a cell, keyed per context name, and attachment validation is a cell per composition | `prime_grouping`, `grouping_reach`, `Grouping::reach`, `regroup`, `in_reach`, `moved`, `evaluate`'s Clusters rule, `sync_cluster_natives`, `owners.held()`'s collection per transaction, `resolve_contexts`' scan, `attachment::validate`'s scan |
 | **DS-7** | Refusal by persistent maps or the graph's journal (§3.3), any time after DS-10 | `Saved`'s clone, `can_refuse` |
 | **DS-13** | The network, connections' signals, anchors' positions and followers. An island spanning roots is one cell, made by the maker of the lowest root it touches. A network `deref` is scoped to the unknowns it can name | `restructure`'s rederive, `chains`, `rest`, `network_shaped`, `rewires_network`, `sync_islands` |
 | **DS-14** | Binding wiring and the inputs: `@name` scope, theme tokens, boundary checks, blocked bindings retried by wiring keys, the selection's and session state's publish | `Rescope`, `regraph`'s `names`/`under`/`defs`, `tokens_shaped`, `retokens`, `token_leaves`, `theme_at`, the blocked retry over the graph, `publish_selection`'s and `publish_state`'s scans |
-| **DS-15** | The loop whole, with repeats and expansion. Drawn repeats are makers, repeat inputs are recorded reads, templates and owners go by recorded reads, and the expansion budget is per top-level root, so a cut doesn't depend on other compositions | `update_drawn`, `ensure_drawn`, `repeat_natives`, `REPEAT_INPUTS`, `scope_stamp`, `Owners::affected` and its fallbacks, `pipeline_from`'s and `current`'s rounds, `regraph`, `after_transaction`'s classifier |
+| **DS-15** | Repeats and expansion (or copies as views, §5's decision). Drawn repeats are makers, repeat inputs are recorded reads, templates and owners go by recorded reads, and the expansion budget is per top-level root, so a cut doesn't depend on other compositions | `update_drawn`, `ensure_drawn`, `repeat_natives`, `REPEAT_INPUTS`, `scope_stamp`, `Owners::affected` and its fallbacks, `regraph`, `after_transaction`'s classifier |
 
 **The order.**
 - **DS-10 first:** the oracle has to exist before any rule is deleted, and limiting
@@ -329,8 +353,8 @@ renumbered on 2026-11-22; reviews before then use DS-10 to DS-14 for the old pha
   code, so it's the cheapest full proof that deletion happens.
 - **DS-12 then:** it fixes the open bug, a binding retargeted onto a cluster's variable
   that isn't regrouped.
-- **DS-13 to DS-15:** in the order of what the scaling test names. DS-15 comes last,
-  because the loop can be whole only once every family is in it.
+- **DS-13 to DS-15:** in the order of what the scaling test names. DS-15 comes last:
+  it holds `regraph`'s last rules.
 
 **Decision points and named tests.**
 - **After DS-10:** the oracle runs, or the verification story is revised.
@@ -346,10 +370,14 @@ renumbered on 2026-11-22; reviews before then use DS-10 to DS-14 for the old pha
   the partition span the roots its constraints join. Solve order crosses compositions
   through bindings, and stage 4's solve-the-next-dirty-cluster carries it.
 - **DS-7 exits on refusal** after an expansion, after a claim change and after a
-  maker's batch.
-- **Before DS-15:** a short design of copies as computed views, not written nodes (§8),
-  set against converting `Owners`. Copies as views would remove stage 1 and most of
-  stage 4. If they are cheaper than DS-15, DS-15 becomes them.
+  maker's batch. Its transaction boundary comes before `run`'s first effect (today
+  `run` relaxes and expands before `Saved` is taken). It covers `restless`, `feedback`
+  and the machines' clock, which `Saved` misses today.
+- **After DS-11, before DS-12:** a short design of copies as computed views, not
+  written nodes (§8), set against converting `Owners`. The solver writes into copies,
+  and that is the source of the holds, `keep_solved`, `release` and most of stage 4's
+  ordering. Copies as views would remove stage 1 and most of stage 4. If they are
+  cheaper, DS-12 and DS-15 are designed for them.
 
 **Planned in handoff-scaling.md and unchanged:** DS-3c (heights by `raise`), DS-4a,
 DS-4b, DS-5, DS-6 and DS-8, as well as DS-7's other half (plans as aborted
@@ -391,12 +419,12 @@ transactions). Structural keys are neither necessity edges nor gate edges.
 
 ## 7. Size
 
-- **Deleted** by DS-10 to DS-15 and DS-7: about 1,300 lines. These are the rule
-  functions in §1's first table, the five round loops, `release`, the structure and
-  grouping oracles, and `Saved`'s clone.
+- **Deleted** by DS-10 to DS-15 and DS-7: about 1,100 lines. These are the rule
+  functions in §1's first table, the structure and grouping oracles, and `Saved`'s
+  clone. The writers' loops stay.
 - **Added:** about 900 to 1,200 lines:
   - the scoped indexes and keys, ~150;
-  - the loop and the makers' batch, ~200;
+  - the makers' batch and the order's checks, ~120;
   - makers adapted from functions that exist now (`structural_roots`, `drawn_repeats`,
     `island_natives`, the partition out of `clusters_with`), ~150;
   - per-cluster roles and order, ~100;
@@ -411,14 +439,14 @@ because it redid everything over the whole document on every edit. The compariso
 matters is with getting the same performance by rules, which is today's code. Against
 that:
 - about twenty refresh mechanisms become one;
-- the order of derived work is written down in one table, where today five loops spread
-  over five functions decide it;
+- the order of derived work is written down in one table and checked, where today it is
+  implied by calls in five functions;
 - verification has one oracle instead of one per family.
 
 ## 8. Risks
 
 - **Stratification doesn't hold.** If a maker turns out to need values (DS-12's
-  partition is the test), it moves to stage 3 as a per-unit cell, or the loop's design
+  partition is the test), it moves to stage 3 as a per-unit cell, or the order's design
   is revised. The type check on makers' readers makes this visible, not silent.
 - **Makers too coarse.** A maker that walks a whole composition instead of reading its
   scoped index costs O(composition) per structural edit. Each design names its maker's

@@ -714,3 +714,24 @@ before DS-15; every remaining cost given an owner; an honest account of where th
 comes from. Declined: clips converted here (Opus), since PT-9 replaces clips and must
 follow the rule; ordering clusters by graph heights with claimed variables (Opus), since
 the solve loop already orders them.
+
+**Review of the loop to quiescence (2026-11-22): Opus 7/10, Sol 7/10; both: adopt with
+named changes.** Both: recorded reads are right, but merging the writers' loops into one
+under one budget would change behaviour. An unsatisfiable solve refuses, a live solve
+keeps its pose, and repeat feedback is held per repeat; a shared budget lets one
+composition's feedback cut another's. Opus: `pipeline_from`'s and `current`'s rounds
+exist for reads outside the graph and belong to DS-4b; history cells aren't idempotent
+(measured: re-solving a converged cluster from its own pose changed bits in 173 of 200
+cases), so an oracle that steps them where the subject didn't fails correct code; a
+cluster's write-back marks its own change test; the solve needs Kahn's order; hold
+membership is derived; undo needs `release`'s recorded writes; build the oracle's
+reference from a list of what to keep; decide copies as views before DS-12. Sol:
+separate recomputation from state transitions; make locality an exit test with unrelated
+units inside the active composition and joins across roots; put refusal's boundary before
+`run`'s first effect; place `glided`'s sweep. Adopted: the order as a written, checked
+table, with each writer keeping its loop and failure rule (§3.2); the cluster order as a
+cell; a writer's own writes don't mark it; the oracle as a fresh store with a declared
+state list, comparing derived results and checking that history stepped exactly when its
+inputs changed (§4); refusal checked apart; holds derived, write-backs kept; the
+copies-as-views decision after DS-11; locality tests in every exit. Declined: making
+history cells idempotent by construction (Opus), since the oracle no longer needs it.

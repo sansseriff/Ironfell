@@ -460,6 +460,12 @@ pub struct Reactive {
     /// geometry revisions (`geom::Revisions`), so the two consumers never
     /// starve each other.
     touched: BTreeSet<Leaf>,
+    /// Leaves a player waits on, and those of them changed since it last
+    /// looked (`watch`, `take_woken`).
+    watched: BTreeSet<Leaf>,
+    woken: BTreeSet<Leaf>,
+    watched_nodes: BTreeSet<NodeId>,
+    woken_nodes: BTreeSet<NodeId>,
     /// Leaves reported as changed on request with no change of value
     /// (`mark`): `Changes::marks`.
     marked: BTreeSet<Leaf>,
@@ -1009,6 +1015,58 @@ impl Reactive {
         self.invalidate(doc, changed);
     }
 
+    /// Change part of what `producer` publishes: `set` publishes those
+    /// leaves (as `publish` does each), `unset` withdraws those it held;
+    /// everything else it publishes stands. What a stepper that changes a
+    /// few leaves a frame uses, rather than replacing its whole map (DS-2).
+    pub fn publish_delta(&mut self, doc: Tree<'_>, producer: ProducerId, set: BTreeMap<Leaf, Value>, unset: &[Leaf]) {
+        let mut changed: Vec<Leaf> = Vec::new();
+        let mut held = self.held.remove(&producer).unwrap_or_default();
+        for (leaf, value) in set {
+            if self.nodes.contains_key(&leaf) {
+                self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
+                continue;
+            }
+            match self.runtime.get(&leaf) {
+                Some(s) if s.producer != producer => {
+                    self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
+                    continue;
+                }
+                Some(s) if s.value == value => {}
+                _ => {
+                    if !self.runtime.contains_key(&leaf) {
+                        self.claim_came_or_went(leaf);
+                    }
+                    self.runtime.insert(leaf, Signal { value, producer });
+                    changed.push(leaf);
+                }
+            }
+            self.signal_errors.remove(&leaf);
+            held.insert(leaf);
+        }
+        for leaf in unset {
+            if held.remove(leaf) && self.runtime.get(leaf).is_some_and(|s| s.producer == producer) {
+                self.runtime.remove(leaf);
+                self.claim_came_or_went(*leaf);
+                changed.push(*leaf);
+            }
+        }
+        if !held.is_empty() {
+            self.held.insert(producer, held);
+        }
+        if changed.is_empty() {
+            return;
+        }
+        for &l in &changed {
+            if !self.overlay.contains_key(&l)
+                && let Some(v) = self.read(doc, l)
+            {
+                self.note(l, v);
+            }
+        }
+        self.invalidate(doc, changed);
+    }
+
     /// Release everything `producer` publishes.
     pub fn retract(&mut self, doc: Tree<'_>, producer: ProducerId) {
         self.publish(doc, producer, BTreeMap::new());
@@ -1488,6 +1546,7 @@ impl Reactive {
     /// Report a leaf as changed with no change to its value: something it
     /// derives (a text's glyphs, when a font arrives) moved.
     pub(crate) fn mark(&mut self, leaf: Leaf, _value: Value) {
+        self.wake(leaf);
         self.touched.insert(leaf);
         self.marked.insert(leaf);
     }
@@ -1506,8 +1565,51 @@ impl Reactive {
 
     /// The one place a resolved change is recorded.
     fn note(&mut self, leaf: Leaf, value: Value) {
+        self.wake(leaf);
         self.touched.insert(leaf);
         self.changes.insert(leaf, value);
+    }
+
+    /// A leaf changed: the watched leaf, and the watched node that owns it
+    /// (itself, or the instance an expanded copy belongs to), are woken.
+    fn wake(&mut self, leaf: Leaf) {
+        if self.watched.contains(&leaf) {
+            self.woken.insert(leaf);
+        }
+        if !self.watched_nodes.is_empty() {
+            let owner = leaf.node.expanded_parts().map_or(leaf.node, |(o, _)| o);
+            if self.watched_nodes.contains(&owner) {
+                self.woken_nodes.insert(owner);
+            }
+        }
+    }
+
+    /// Wait on `nodes` (the machine player's instances): a change to any
+    /// leaf of one, or of an expanded copy it owns, wakes it.
+    pub(crate) fn watch_nodes(&mut self, nodes: BTreeSet<NodeId>) {
+        self.woken_nodes.retain(|n| nodes.contains(n));
+        self.watched_nodes = nodes;
+    }
+
+    /// The watched nodes woken since the last take.
+    pub(crate) fn take_woken_nodes(&mut self) -> BTreeSet<NodeId> {
+        std::mem::take(&mut self.woken_nodes)
+    }
+
+    /// Wait on `leaves` (a held trace's input): a change to one is kept
+    /// until `take_woken`, so a player need not visit what did not change.
+    pub(crate) fn watch(&mut self, leaves: BTreeSet<Leaf>) {
+        self.woken.retain(|l| leaves.contains(l));
+        self.watched = leaves;
+    }
+
+    /// The nodes whose watched leaves of `kind` changed since the last
+    /// take; those of other kinds stay for their own player.
+    pub(crate) fn take_woken(&mut self, kind: crate::facet::FacetKind) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = self.woken.iter().filter(|l| l.path.facet == kind).map(|l| l.node).collect();
+        self.woken.retain(|l| l.path.facet != kind);
+        out.dedup();
+        out
     }
 
 

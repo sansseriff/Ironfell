@@ -58,6 +58,15 @@ struct State {
 pub struct Queries {
     states: crate::work::Counted<BTreeMap<NodeId, State>, { crate::work::QUERIES }>,
     seq: u64,
+    /// The queries to visit at the next advance: an input changed, an
+    /// answer arrived, or the document's structure changed (DS-2: a query
+    /// at rest is not visited each frame).
+    dirty: std::collections::BTreeSet<NodeId>,
+    /// The queries waiting: a request out, or one to go once the input
+    /// rests (visited each frame, for their debounce).
+    waiting: std::collections::BTreeSet<NodeId>,
+    /// What the queries last published, by leaf.
+    shown: BTreeMap<Leaf, Value>,
 }
 
 fn leaf(node: NodeId, field: &'static str) -> Leaf {
@@ -68,15 +77,17 @@ fn leaf(node: NodeId, field: &'static str) -> Leaf {
 pub const OUTPUTS: [&str; 4] = ["value", "status", "error", "stale"];
 
 impl Queries {
-    /// What to publish at `now` (seconds on the host's clock), and the
-    /// requests that became due. `wanted` says whether anything reads a
-    /// query.
+    /// What changed to publish at `now` (seconds on the host's clock), and
+    /// the requests that became due, visiting the dirty and the waiting
+    /// queries only. `wanted` says whether anything reads a query.
     pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, wanted: &dyn Fn(NodeId) -> bool, now: f64) -> (BTreeMap<Leaf, Value>, Vec<Request>) {
-        let nodes: Vec<NodeId> = doc.nodes_with(FacetKind::Query).filter(|&n| doc.is_live(n)).collect();
-        self.states.retain(|n, _| nodes.contains(n));
+        let visit: Vec<NodeId> = std::mem::take(&mut self.dirty).into_iter().chain(self.waiting.iter().copied()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
         let mut out = BTreeMap::new();
         let mut due = Vec::new();
-        for n in nodes {
+        for n in visit {
+            if !doc.is_live(n) {
+                continue;
+            }
             let st = self.states.entry(n).or_default();
             let model = read(leaf(n, "model")).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
             // A failed input asks nothing: the query keeps what it has.
@@ -101,22 +112,58 @@ impl Queries {
                 due.push(Request { node: n, seq: self.seq, model: model.clone(), input: input.clone() });
             }
             st.waiting = st.pending.is_some() || (st.asked != st.seen && st.seen.as_ref().is_some_and(|(m, _)| !m.is_empty()) && wanted(n));
+            if st.waiting {
+                self.waiting.insert(n);
+            } else {
+                self.waiting.remove(&n);
+            }
             let status = match (&st.pending, &st.error, &st.value) {
                 (Some(_), _, _) => "pending",
                 (None, Some(_), _) => "error",
                 (None, None, Some(_)) => "ready",
                 _ => "idle",
             };
-            out.insert(leaf(n, "status"), Value::Enum(status.into()));
-            out.insert(leaf(n, "error"), Value::Str(st.error.clone().unwrap_or_default()));
-            out.insert(leaf(n, "stale"), Value::Bool(st.value.is_some() && st.answers != st.seen));
+            let mut put = |l: Leaf, v: Value| {
+                if self.shown.get(&l) != Some(&v) {
+                    self.shown.insert(l, v.clone());
+                    out.insert(l, v);
+                }
+            };
+            put(leaf(n, "status"), Value::Enum(status.into()));
+            put(leaf(n, "error"), Value::Str(st.error.clone().unwrap_or_default()));
+            put(leaf(n, "stale"), Value::Bool(st.value.is_some() && st.answers != st.seen));
             // Before the first answer, the placeholder: readers always
             // have a value of the answer's shape.
             if let Some(v) = st.value.clone().or_else(|| read(leaf(n, "initial"))) {
-                out.insert(leaf(n, "value"), v);
+                put(leaf(n, "value"), v);
             }
         }
         (out, due)
+    }
+
+    /// Visit `nodes` at the next advance.
+    pub fn touch(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
+        self.dirty.extend(nodes);
+    }
+
+    /// The leaves a query is visited again when they change.
+    pub fn input_leaves(n: NodeId) -> [Leaf; 4] {
+        ["model", "input", "debounce", "initial"].map(|f| leaf(n, f))
+    }
+
+    /// Forget the queries no longer live (`live` holds every one), and
+    /// visit every live one at the next advance (what reads them may have
+    /// changed with the structure): what they published, to withdraw.
+    pub fn prune(&mut self, live: &std::collections::BTreeSet<NodeId>) -> Vec<Leaf> {
+        let gone: Vec<NodeId> = self.states.keys().copied().filter(|n| !live.contains(n)).collect();
+        let mut out = Vec::new();
+        for n in gone {
+            self.states.remove(&n);
+            self.waiting.remove(&n);
+            out.extend(OUTPUTS.map(|f| leaf(n, f)).into_iter().filter(|l| self.shown.remove(l).is_some()));
+        }
+        self.dirty.extend(live.iter().copied());
+        out
     }
 
     /// The host's answer to request `seq` of `node`. False when it was not
@@ -124,6 +171,7 @@ impl Queries {
     pub fn resolve(&mut self, node: NodeId, seq: u64, result: Result<Value, String>) -> bool {
         let Some(st) = self.states.get_mut(&node).filter(|s| s.pending == Some(seq)) else { return false };
         st.pending = None;
+        self.dirty.insert(node);
         match result {
             Ok(v) => {
                 st.value = Some(v);
@@ -137,7 +185,7 @@ impl Queries {
 
     /// Whether any request is unanswered: the host keeps frames coming.
     pub fn pending(&self) -> impl Iterator<Item = NodeId> + '_ {
-        self.states.iter().filter(|(_, s)| s.waiting).map(|(n, _)| *n)
+        self.waiting.iter().copied()
     }
 }
 

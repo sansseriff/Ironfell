@@ -222,9 +222,15 @@ pub fn length(keys: &[KeyAt]) -> f64 {
 }
 
 pub fn sample(doc: Tree<'_>, t: f64) -> Sample {
+    let Some(clip_ty) = TypeId::lookup("clip") else { return Sample::default() };
+    sample_clips(doc, t, doc.nodes_of_type(clip_ty))
+}
+
+/// `sample` for the clips given only (the running ones, DS-2): what they
+/// drive and their errors.
+pub fn sample_clips(doc: Tree<'_>, t: f64, clips: impl IntoIterator<Item = NodeId>) -> Sample {
     let mut out = Sample::default();
-    let Some(clip_ty) = TypeId::lookup("clip") else { return out };
-    for clip_id in doc.nodes_of_type(clip_ty) {
+    for clip_id in clips {
         let Some(clip) = doc.get::<Clip>(clip_id) else { continue };
         let start = start(doc, clip_id);
         let prop = clip.prop.constant().and_then(|v| v.as_str()).unwrap_or("");

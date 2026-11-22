@@ -355,6 +355,9 @@ struct Saved {
     repeats: work::Counted<expand::Items, { work::STORE_REPEATS }>,
     item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
     presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
+    /// The repeats in `presence` with an item entering or leaving: what the
+    /// presence stepper visits each frame (DS-2), not every repeat.
+    presence_moving: BTreeSet<NodeId>,
     repeat_inputs: Option<Vec<(NodeId, [Option<Value>; 4])>>,
     truncated: Vec<expand::Problem>,
     expansion_problems: Vec<expand::Problem>,
@@ -380,6 +383,7 @@ impl Saved {
             repeats: s.repeats.clone(),
             item_memo: s.item_memo.clone(),
             presence: s.presence.clone(),
+            presence_moving: s.presence_moving.clone(),
             repeat_inputs: s.repeat_inputs.clone(),
             truncated: s.truncated.clone(),
             expansion_problems: s.expansion_problems.clone(),
@@ -404,6 +408,7 @@ impl Saved {
         s.repeats = self.repeats;
         s.item_memo = self.item_memo;
         s.presence = self.presence;
+        s.presence_moving = self.presence_moving;
         s.repeat_inputs = self.repeat_inputs;
         s.truncated = self.truncated;
         s.expansion_problems = self.expansion_problems;
@@ -486,11 +491,26 @@ pub struct StoreCore {
     machines: machine::Player,
     /// Traces and accumulators (step.rs): presentation state.
     steps: step::Steps,
+    /// The traces and accumulators on running clocks, as the gate last
+    /// decided: what the step player visits each frame (DS-2).
+    running_steps: (Vec<NodeId>, Vec<NodeId>),
+    /// The machine player visits every instance at its next advance: the
+    /// structure changed (DS-2: otherwise only what changed).
+    machines_full: bool,
+    /// The clips animating something on a running clock, and the
+    /// compositions they animate, as the gate last decided.
+    running_clips: Vec<NodeId>,
+    animated: BTreeSet<NodeId>,
+    /// Where the last clip ends, kept until the clips or keys change.
+    clips_end: Option<f64>,
     /// Queries to Models (query.rs): presentation state.
     queries: query::Queries,
     /// Items entering and leaving, by owner (a repeat or a conditional):
     /// presentation state (reactivity.md §13, phase 7).
     presence: work::Counted<BTreeMap<NodeId, Presence>, { work::STORE_PRESENCE }>,
+    /// The repeats in `presence` with an item entering or leaving: what the
+    /// presence stepper visits each frame (DS-2), not every repeat.
+    presence_moving: BTreeSet<NodeId>,
     presence_at: Option<f64>,
     /// Each composition's and pictured entity's clock, which the gate
     /// pauses while nothing shows or reads it (clocks.rs).
@@ -631,8 +651,14 @@ impl StoreCore {
             motion: Motion::default(),
             machines: self.machines.clone(),
             steps: self.steps.clone(),
+            running_steps: self.running_steps.clone(),
+            machines_full: true,
+            running_clips: Vec::new(),
+            animated: BTreeSet::new(),
+            clips_end: None,
             queries: self.queries.clone(),
             presence: self.presence.clone(),
+            presence_moving: self.presence_moving.clone(),
             presence_at: self.presence_at,
             clocks: self.clocks.clone(),
             advanced_at: self.advanced_at,
@@ -916,8 +942,14 @@ impl StoreCore {
             motion: Motion::default(),
             machines: machine::Player::default(),
             steps: step::Steps::default(),
+            running_steps: Default::default(),
+            machines_full: true,
+            running_clips: Vec::new(),
+            animated: BTreeSet::new(),
+            clips_end: None,
             queries: query::Queries::default(),
             presence: Default::default(),
+            presence_moving: BTreeSet::new(),
             presence_at: None,
             clocks: clocks::Clocks::default(),
             advanced_at: None,
@@ -1381,7 +1413,7 @@ impl StoreCore {
         if let Ok(c) = self.ensure_clock() {
             let _ = self.apply_session(vec![Op::Set { id: c, path: clock_path("t"), slot: Slot::Const(Value::Number(t)) }]);
         }
-        self.resample();
+        self.resample_running();
         self.pipeline();
     }
 
@@ -1414,7 +1446,8 @@ impl StoreCore {
         let id = *self.docs.authored.next_session_ids(ops.len() + 1).last().expect("one id");
         let mut clock = FacetKind::Clock.default_facet();
         let _ = clock.set("t", Slot::Const(Value::Number(self.time)));
-        let last = Tree::of(&self.docs).live_nodes().filter(|n| n.parent == Some(root)).map(|n| n.order.clone()).max();
+        let doc = Tree::of(&self.docs);
+        let last = doc.children(root).iter().filter_map(|&n| doc.live(n)).map(|n| n.order.clone()).max();
         let order = last.map_or_else(OrderKey::first, |o| OrderKey::after(&o));
         ops.push(Op::Create { id, ty: ty("clock"), parent: Some(root), order, facets: vec![clock] });
         self.apply_session(ops)?;
@@ -1432,14 +1465,40 @@ impl StoreCore {
             return false;
         }
         self.time = t;
-        self.resample();
+        self.resample_running();
         true
     }
 
+    /// Sample every clip and publish what they drive: after the
+    /// structure changed (a clip, a key or a link made or gone).
     fn resample(&mut self) {
         let sample = time::sample(Tree::of(&self.docs), self.time);
         self.time_errors = sample.errors;
         self.reactive.publish(Tree::of(&self.docs), ProducerId::CLIPS, sample.values);
+        self.clips_end = None;
+    }
+
+    /// Sample the clips animating something on a running clock (as the
+    /// gate last decided), publishing what changed: the playhead moving, a
+    /// constant set. A clip on a paused page holds its value until its page
+    /// runs again, when the gate decides again and every clip is sampled
+    /// (DS-2).
+    fn resample_running(&mut self) {
+        // Before the gate has decided, and with everything observed, every
+        // clip runs.
+        if self.observe_all || self.clocks.gated.is_none() {
+            return self.resample();
+        }
+        let clips = self.running_clips.clone();
+        let sample = time::sample_clips(Tree::of(&self.docs), self.time, clips.iter().copied());
+        for c in &clips {
+            self.time_errors.remove(c);
+        }
+        self.time_errors.extend(sample.errors);
+        if !sample.values.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::CLIPS, sample.values, &[]);
+        }
+        self.clips_end = None;
     }
 
     /// Name a host producer of runtime signals (a simulation, a Model) and
@@ -2087,7 +2146,7 @@ impl StoreCore {
                 let mut got = ItemsOf { keys: Vec::new(), values: Vec::new(), problems: Vec::new() };
                 if !is_repeat {
                     let wanted = if shown { vec![("on".to_owned(), Value::Bool(true))] } else { Vec::new() };
-                    let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
+                    let all = settle_presence(&mut self.presence, &mut self.presence_moving, r, wanted, enter_ms, exit_ms);
                     for (k, (key, element)) in all.iter().enumerate() {
                         let Some(scope) = NodeId::item_scope(r, key) else { continue };
                         got.values.push((Leaf { node: scope, path: item("value") }, element.clone()));
@@ -2121,7 +2180,7 @@ impl StoreCore {
                     let here = wanted.len();
                     // Those leaving come after, keeping the element and index
                     // they had.
-                    let all = settle_presence(&mut self.presence, r, wanted, enter_ms, exit_ms);
+                    let all = settle_presence(&mut self.presence, &mut self.presence_moving, r, wanted, enter_ms, exit_ms);
                     for (k, (key, element)) in all.iter().enumerate() {
                         let Some(scope) = NodeId::item_scope(r, key) else { continue };
                         got.values.push((Leaf { node: scope, path: item("value") }, element.clone()));
@@ -2159,6 +2218,8 @@ impl StoreCore {
             expand::sort_problems(&mut truncated);
             self.truncated = truncated;
             self.presence.retain(|r, _| inputs.iter().any(|(n, _)| n == r));
+            let presence = &self.presence;
+            self.presence_moving.retain(|r| presence.contains_key(r));
             self.repeat_inputs = Some(inputs);
             let structural = counts != *self.repeats;
             if structural {
@@ -2224,7 +2285,8 @@ impl StoreCore {
     fn publish_presence(&mut self) {
         let leaf = |node: NodeId, f: &str| Leaf { node, path: LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf") };
         let mut values = BTreeMap::new();
-        for (r, p) in &self.presence {
+        for r in &self.presence_moving {
+            let Some(p) = self.presence.get(r) else { continue };
             for (key, e) in &p.items {
                 let Some(scope) = NodeId::item_scope(*r, key).filter(|s| Tree::of(&self.docs).is_live(*s)) else { continue };
                 if e.p < 1.0 || e.leaving {
@@ -2249,9 +2311,14 @@ impl StoreCore {
         let mut gone = false;
         let mut active = Vec::new();
         let (doc, clocks) = (Tree::of(&self.docs), &self.clocks);
-        for (r, p) in &mut self.presence {
+        let moving: Vec<NodeId> = self.presence_moving.iter().copied().collect();
+        for r in moving {
+            let Some(p) = self.presence.get_mut(&r) else {
+                self.presence_moving.remove(&r);
+                continue;
+            };
             // On a paused clock (clocks.rs) items hold where they are.
-            if clocks.held(doc, *r) {
+            if clocks.held(doc, r) {
                 continue;
             }
             let (enter_ms, exit_ms) = (p.enter_ms, p.exit_ms);
@@ -2268,7 +2335,9 @@ impl StoreCore {
                 }
             });
             if p.items.values().any(|e| e.leaving || e.p < 1.0) {
-                active.push(*r);
+                active.push(r);
+            } else {
+                self.presence_moving.remove(&r);
             }
         }
         if gone {
@@ -2765,6 +2834,9 @@ impl StoreCore {
     }
 
     pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
+        // Which instances are watched is the gate's to keep (`gate`); a
+        // caller playing machines alone asks it here.
+        self.gate(now);
         // A pin whose state is gone (deleted, or a rename undone) lets go.
         if let Some(pin) = &self.machines.pinned
             && !machine::state_names(Tree::of(&self.docs), pin.machine).contains(&pin.state)
@@ -2779,24 +2851,33 @@ impl StoreCore {
         const ROUNDS: usize = 8;
         let mut running = Vec::new();
         let mut moving = None;
+        // Every instance after a structural change (the gate decided),
+        // else those whose leaves or copies changed (the graph wakes them,
+        // `watch_nodes`), and the player's own moving and clocked ones.
+        let mut visit: Option<BTreeSet<NodeId>> = if std::mem::take(&mut self.machines_full) { None } else { Some(self.reactive.take_woken_nodes()) };
         for round in 0..=ROUNDS {
-            let (values, now_running) = {
+            let (set, unset, now_running) = {
                 let reactive = &self.reactive;
                 let doc = Tree::of(&self.docs);
                 let read = |l: Leaf| reactive.read(doc, l);
                 let clocks = &self.clocks;
-                self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, e, now), clocks.held(doc, e)))
+                self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, e, now), clocks.held(doc, e)), visit.as_ref())
             };
             running = now_running;
             // A leaf publishing refuses (bound, or another producer's) is a
             // signal error, never shown: it is not still moving.
-            let shown = self.reactive.published_by(ProducerId::MACHINES);
             let refused = self.reactive.signal_errors();
-            moving = values.iter().find(|(l, v)| shown.get(l) != Some(v) && !refused.contains_key(l)).map(|(l, _)| l.node).or_else(|| shown.keys().find(|l| !values.contains_key(l)).map(|l| l.node));
-            if moving.is_none() || round == ROUNDS {
+            moving = set.keys().find(|l| !refused.contains_key(l)).map(|l| l.node).or_else(|| unset.first().map(|l| l.node));
+            if moving.is_none() {
                 break;
             }
-            self.publish(ProducerId::MACHINES, values);
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
+            self.pipeline();
+            if round == ROUNDS {
+                break;
+            }
+            // The next round: the instances what was just published reached.
+            visit = Some(self.reactive.take_woken_nodes());
         }
         self.machines_unsettled = moving.map(|node| expand::Problem { node, kind: "machine", message: format!("machines driving one another still change after {ROUNDS} rounds at one time") });
         running
@@ -2805,7 +2886,17 @@ impl StoreCore {
     /// Publish how each query stands at `now` (seconds, the host's clock)
     /// and answer the requests that became due, for the host to carry out
     /// and answer with `resolve_query` (query.rs).
+    /// The nodes whose watched leaves of `kind` changed (a held trace's
+    /// input, a query's): the graph keeps one list, taken by both players.
+    fn take_woken(&mut self, kind: FacetKind) -> Vec<NodeId> {
+        self.reactive.take_woken(kind)
+    }
+
     pub fn advance_queries(&mut self, now: f64) -> Vec<query::Request> {
+        // Which queries are live is the gate's to keep (`gate`).
+        self.gate(now);
+        let woken = self.take_woken(FacetKind::Query);
+        self.queries.touch(woken);
         let (values, due) = {
             let reactive = &self.reactive;
             let doc = Tree::of(&self.docs);
@@ -2813,8 +2904,9 @@ impl StoreCore {
             let wanted = |n: NodeId| query::OUTPUTS.iter().any(|f| reactive.is_read(Leaf { node: n, path: LeafPath { facet: FacetKind::Query, field: f } }));
             self.queries.advance(doc, &read, &wanted, now)
         };
-        if values != self.reactive.published_by(ProducerId::QUERIES) {
-            self.publish(ProducerId::QUERIES, values);
+        if !values.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
+            self.pipeline();
         }
         due
     }
@@ -2840,39 +2932,53 @@ impl StoreCore {
         // Each accumulator's formula reads the step's length, so it is
         // published before the formulas are read: but only while one of
         // them is moving. Frame times jitter, and republishing a length
-        // nothing uses would redraw every frame (step.rs `restless`).
+        // nothing uses would redraw every frame (step.rs `restless`). Only
+        // the steppers on running clocks are visited (the gate decides
+        // which, `gate`), and only what changed is published (DS-2).
+        // Which run is the gate's to say; a caller stepping alone (not
+        // through `advance`) asks it here. A cache hit costs nothing.
+        self.gate(now);
         let dt = self.steps.tick(now);
-        let leaves = step::Steps::dt_leaves(Tree::of(&self.docs));
-        if !leaves.is_empty() {
-            let mut shown = self.reactive.published_by(ProducerId::STEPS);
-            let positive = |v: Option<&Value>| v.and_then(Value::as_f64).is_some_and(|x| x > 0.0);
-            if leaves.iter().any(|l| !positive(shown.get(l))) {
-                for l in &leaves {
-                    if !positive(shown.get(l)) {
-                        shown.insert(*l, Value::Number(1.0 / 60.0));
-                    }
+        let (traces, accs) = self.running_steps.clone();
+        if !accs.is_empty() {
+            let first = Value::Number(1.0 / 60.0);
+            let mut set = BTreeMap::new();
+            for &n in &accs {
+                if !self.steps.dt_of(n).is_some_and(|x| x > 0.0) {
+                    set.insert(step::Steps::dt_leaf(n), first.clone());
+                    self.steps.shown_dt(n, first.clone());
                 }
-                self.reactive.publish(Tree::of(&self.docs), ProducerId::STEPS, shown.clone());
+            }
+            if !set.is_empty() {
+                self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, set, &[]);
             }
             let restless = {
                 let (reactive, doc) = (&self.reactive, Tree::of(&self.docs));
-                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), &self.clocks)
+                self.steps.restless(doc, &|l: Leaf| reactive.read(doc, l), &accs)
             };
             if restless {
-                shown.extend(leaves.iter().map(|l| (*l, Value::Number(dt))));
-                self.reactive.publish(Tree::of(&self.docs), ProducerId::STEPS, shown);
+                let mut set = BTreeMap::new();
+                for &n in &accs {
+                    if self.steps.dt_of(n) != Some(dt) {
+                        set.insert(step::Steps::dt_leaf(n), Value::Number(dt));
+                        self.steps.shown_dt(n, Value::Number(dt));
+                    }
+                }
+                if !set.is_empty() {
+                    self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, set, &[]);
+                }
             }
         }
-        let dts: BTreeMap<Leaf, Value> = self.reactive.published_by(ProducerId::STEPS).into_iter().filter(|(l, _)| leaves.contains(l)).collect();
-        let (mut values, active) = {
+        let woken: Vec<NodeId> = self.take_woken(FacetKind::Trace).into_iter().filter(|n| !traces.contains(n)).collect();
+        let (values, active) = {
             let reactive = &self.reactive;
             let doc = Tree::of(&self.docs);
             let read = |l: Leaf| reactive.read(doc, l);
-            self.steps.advance(doc, &read, now, &self.clocks)
+            self.steps.advance(doc, &read, now, &self.clocks, &traces, &accs, &woken)
         };
-        values.extend(dts);
-        if values != self.reactive.published_by(ProducerId::STEPS) {
-            self.publish(ProducerId::STEPS, values);
+        if !values.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
+            self.pipeline();
         }
         active
     }
@@ -3082,16 +3188,58 @@ impl StoreCore {
     /// Nothing is paused while everything is observed.
     fn gate(&mut self, now: f64) {
         let key: clocks::GateKey = (self.docs.reshaped, self.reactive.wired(), if self.observe_all { Vec::new() } else { self.observed_compositions() });
-        let (paused, pictured) = match self.clocks.gated.take() {
-            Some((k, paused, pictured)) if k == key && !self.observe_all => (paused, pictured),
-            _ => {
-                self.clocks.decisions += 1;
-                self.paused()
-            }
-        };
-        self.clocks.gated = Some((key, paused.clone(), pictured.clone()));
+        // Nothing the decision reads changed: the clocks stand as they are,
+        // and nothing is cloned or walked (DS-2).
+        if !self.observe_all && self.clocks.gated.as_ref().is_some_and(|(k, ..)| *k == key) {
+            return;
+        }
+        self.clocks.decisions += 1;
+        let (paused, pictured) = self.paused();
         let doc = Tree::of(&self.docs);
-        self.clocks.set(doc, now, paused, pictured);
+        self.clocks.set(doc, now, &paused, &pictured);
+        self.clocks.gated = Some((key, paused, pictured));
+        // Which steppers run, for the step player; a held trace is woken by
+        // a change to its input. Steppers gone are withdrawn.
+        let live = |kind| doc.nodes_with(kind).filter(|&n| doc.is_live(n)).collect::<Vec<NodeId>>();
+        let (traces, accs) = (live(FacetKind::Trace), live(FacetKind::Accumulate));
+        let held = |n: &NodeId| self.clocks.held(doc, *n);
+        let queries: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Query).filter(|&n| doc.is_live(n)).collect();
+        let mut watched: BTreeSet<Leaf> = traces.iter().filter(|n| held(n)).flat_map(|&n| step::Steps::input_leaves(n)).collect();
+        watched.extend(queries.iter().flat_map(|&n| query::Queries::input_leaves(n)));
+        let all: BTreeSet<NodeId> = traces.iter().chain(&accs).copied().collect();
+        self.running_steps = (traces.into_iter().filter(|n| !held(n)).collect(), accs.into_iter().filter(|n| !held(n)).collect());
+        self.reactive.watch(watched);
+        let gone = self.steps.prune(&all);
+        if !gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, BTreeMap::new(), &gone);
+        }
+        // The clips that animate something running, and where: what the
+        // playhead samples and wakes each frame. Every clip is sampled now,
+        // so one on a page that just resumed shows its time.
+        let clip = TypeId::lookup("clip").expect("registered");
+        let mut running_clips = Vec::new();
+        let mut animated = BTreeSet::new();
+        for c in doc.nodes_of_type(clip).filter(|&c| doc.is_live(c)) {
+            let targets: Vec<NodeId> = doc.relations_from(c).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).map(|r| r.to).collect();
+            if targets.iter().any(|&t| !self.clocks.held(doc, t)) {
+                running_clips.push(c);
+                animated.extend(targets.iter().filter_map(|&t| composition::composition_of(doc, t)));
+            }
+        }
+        self.running_clips = running_clips;
+        self.animated = animated;
+        // Every instance is visited once; then each is woken by a change to
+        // its own leaves or its copies'.
+        self.machines_full = true;
+        let entity = TypeId::lookup("entity").expect("registered");
+        self.reactive.watch_nodes(doc.nodes_of_type(entity).filter(|&e| doc.is_live(e)).collect());
+        let gone = self.queries.prune(&queries);
+        if !gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, BTreeMap::new(), &gone);
+        }
+        if !self.observe_all {
+            self.resample();
+        }
     }
 
     /// How many times `advance`'s gate decided which clocks to pause, rather
@@ -3233,7 +3381,7 @@ impl StoreCore {
         }
         // What the clips animate, while the playhead moves.
         if playing {
-            live.extend(doc.relations().filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).filter_map(|r| comp(r.to)));
+            live.extend(self.animated.iter().copied());
         }
         let (was_live, was_waiting) = std::mem::take(&mut self.advanced);
         // Anything moving keeps time going, whether or not it is drawn in a
@@ -3277,7 +3425,14 @@ impl StoreCore {
                 t = lo + (t - hi) % (hi - lo);
             }
         } else {
-            let end = timeline_view::clips_end(self);
+            let end = match self.clips_end {
+                Some(e) => e,
+                None => {
+                    let e = timeline_view::clips_end(self);
+                    self.clips_end = Some(e);
+                    e
+                }
+            };
             if t >= end {
                 t = end;
                 stop = true;
@@ -3573,9 +3728,12 @@ impl StoreCore {
         self.session_version
     }
 
+    /// The first live node of a type, from the type index: the clock, the
+    /// session root, the selection (each of which there is one of).
     fn live_of_type(&self, name: &str) -> Option<NodeId> {
         let ty = TypeId::lookup(name)?;
-        Tree::of(&self.docs).live_nodes().find(|n| n.ty == ty).map(|n| n.id)
+        let doc = Tree::of(&self.docs);
+        doc.nodes_of_type(ty).find(|&n| doc.is_live(n))
     }
 
     /// The selected nodes, in pick order, with how each was reached
@@ -3672,7 +3830,7 @@ impl StoreCore {
             self.reactive.invalidate(Tree::of(&self.docs), changed);
             // A set on a clip's timing, or a link, changes the sample too.
             // Cheap enough to do unconditionally: clips are few.
-            self.resample();
+            self.resample_running();
         }
         // Repeats whose count this changed get their copies, as part of
         // this transaction's derived structure.
@@ -4450,7 +4608,7 @@ struct ItemsKey {
     max: usize,
 }
 
-fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<(String, Value)>, enter_ms: f64, exit_ms: f64) -> Vec<(String, Value)> {
+fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, moving: &mut BTreeSet<NodeId>, r: NodeId, wanted: Vec<(String, Value)>, enter_ms: f64, exit_ms: f64) -> Vec<(String, Value)> {
     let first = !all.contains_key(&r);
     let p = all.entry(r).or_default();
     (p.enter_ms, p.exit_ms) = (enter_ms, exit_ms);
@@ -4472,6 +4630,11 @@ fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, r: NodeId, wanted: Vec<
         e.leaving = true;
         exit_ms > 0.0 && e.p > 0.0
     });
+    if p.items.values().any(|e| e.leaving || e.p < 1.0) {
+        moving.insert(r);
+    } else {
+        moving.remove(&r);
+    }
     let mut out = wanted;
     let leaving: Vec<(String, Value)> = p.items.iter().filter(|(_, e)| e.leaving).map(|(k, e)| (k.clone(), e.value.clone())).collect();
     out.extend(leaving);

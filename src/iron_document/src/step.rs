@@ -31,6 +31,9 @@ pub struct Steps {
     traces: crate::work::Counted<BTreeMap<NodeId, VecDeque<(f64, Value)>>, { crate::work::STEPS }>,
     /// Each accumulator's value.
     values: crate::work::Counted<BTreeMap<NodeId, Value>, { crate::work::STEPS }>,
+    /// What the steppers last published, by leaf: what a step compares with
+    /// so it publishes only what changed.
+    shown: BTreeMap<Leaf, Value>,
     last: Option<f64>,
 }
 
@@ -99,17 +102,12 @@ impl Steps {
         dt
     }
 
-    /// The `dt` leaf of every live accumulator.
-    pub fn dt_leaves(doc: Tree<'_>) -> Vec<Leaf> {
-        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).map(|n| leaf(n, FacetKind::Accumulate, "dt")).collect()
-    }
-
-    /// Whether any accumulator would move this step, read with the step
+    /// Whether any of `running` would move this step, read with the step
     /// length now published (any length above 0 answers the same for a
     /// formula at rest). The store publishes the real length only then, so
     /// an accumulator at rest changes nothing from frame to frame.
-    pub(crate) fn restless(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, clocks: &Clocks) -> bool {
-        doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n) && !clocks.held(doc, n)).any(|n| {
+    pub(crate) fn restless(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, running: &[NodeId]) -> bool {
+        running.iter().any(|&n| {
             let f = |field| leaf(n, FacetKind::Accumulate, field);
             let Some(v) = self.values.get(&n) else { return true };
             if read(f("reset")).and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -119,21 +117,55 @@ impl Steps {
         })
     }
 
-    /// Step every trace and accumulator to `now` (presentation time), each
-    /// on its own clock (clocks.rs). Answers what to publish beside the step
-    /// lengths, and the nodes still changing. On a paused clock an
-    /// accumulator holds its value and a trace's changes stay in flight: no
-    /// view shows them, so they do not advance behind the picture, and
-    /// neither counts as changing.
-    pub(crate) fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clocks: &Clocks) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+    /// The `dt` leaf of accumulator `n`.
+    pub fn dt_leaf(n: NodeId) -> Leaf {
+        leaf(n, FacetKind::Accumulate, "dt")
+    }
+
+    /// The leaves a held trace wakes on: what it records, and its delay.
+    pub fn input_leaves(n: NodeId) -> [Leaf; 2] {
+        [leaf(n, FacetKind::Trace, "of"), leaf(n, FacetKind::Trace, "delay")]
+    }
+
+    /// Forget the steppers no longer live (`live` holds every one): what
+    /// they published, to withdraw.
+    pub(crate) fn prune(&mut self, live: &std::collections::BTreeSet<NodeId>) -> Vec<Leaf> {
+        let mut gone = Vec::new();
+        let traces: Vec<NodeId> = self.traces.keys().copied().filter(|n| !live.contains(n)).collect();
+        for n in traces {
+            self.traces.remove(&n);
+            gone.extend(["out", "dash", "ages", "values"].map(|f| leaf(n, FacetKind::Trace, f)));
+        }
+        let accs: Vec<NodeId> = self.values.keys().copied().filter(|n| !live.contains(n)).collect();
+        for n in accs {
+            self.values.remove(&n);
+            gone.extend(["value", "dt"].map(|f| leaf(n, FacetKind::Accumulate, f)));
+        }
+        gone.retain(|l| self.shown.remove(l).is_some());
+        gone
+    }
+
+    /// Step the traces and accumulators given to `now` (presentation time),
+    /// each on its own clock (clocks.rs): the running ones (`traces`,
+    /// `accs`) and the held traces whose input changed (`woken`), which
+    /// record it at their frozen time. A held stepper is not visited
+    /// otherwise: its value and its trace's changes in flight stand, as
+    /// published (DS-2: nothing visits a paused page each frame). Answers
+    /// what changed, to publish, and the nodes still changing.
+    pub(crate) fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clocks: &Clocks, traces: &[NodeId], accs: &[NodeId], woken: &[NodeId]) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
         let presentation = now;
         let mut out = BTreeMap::new();
         let mut active = Vec::new();
-
-        let live = |kind| doc.nodes_with(kind).filter(|&n| doc.is_live(n)).collect::<Vec<_>>();
-        let traces = live(FacetKind::Trace);
-        self.traces.retain(|n, _| traces.contains(n));
-        for n in traces {
+        let mut put = |shown: &mut BTreeMap<Leaf, Value>, l: Leaf, v: Value| {
+            if shown.get(&l) != Some(&v) {
+                shown.insert(l, v.clone());
+                out.insert(l, v);
+            }
+        };
+        for &n in traces.iter().chain(woken) {
+            if !doc.is_live(n) {
+                continue;
+            }
             let now = clocks.time(doc, n, presentation);
             let f = |field| leaf(n, FacetKind::Trace, field);
             let delay = read(f("delay")).and_then(|v| v.as_f64()).filter(|d| d.is_finite()).unwrap_or(0.0).max(0.0);
@@ -153,18 +185,25 @@ impl Steps {
                 ring.pop_front();
             }
             let Some((_, oldest)) = ring.front() else { continue };
-            out.insert(f("out"), oldest.clone());
-            out.insert(f("dash"), Value::Str(dash(ring, now, delay)));
-            out.insert(f("ages"), Value::series(ring.iter().rev().map(|(t, _)| (now - t).min(delay)).collect::<Vec<f64>>(), crate::units::Dim::NONE));
-            out.insert(f("values"), Value::list(ring.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>()));
-            if ring.len() > 1 && !clocks.held(doc, n) {
+            let (oldest, dash, ages, values) = (
+                oldest.clone(),
+                Value::Str(dash(ring, now, delay)),
+                Value::series(ring.iter().rev().map(|(t, _)| (now - t).min(delay)).collect::<Vec<f64>>(), crate::units::Dim::NONE),
+                Value::list(ring.iter().rev().map(|(_, v)| v.clone()).collect::<Vec<_>>()),
+            );
+            let busy = ring.len() > 1;
+            put(&mut self.shown, f("out"), oldest);
+            put(&mut self.shown, f("dash"), dash);
+            put(&mut self.shown, f("ages"), ages);
+            put(&mut self.shown, f("values"), values);
+            if busy && !clocks.held(doc, n) {
                 active.push(n);
             }
         }
-
-        let accs = live(FacetKind::Accumulate);
-        self.values.retain(|n, _| accs.contains(n));
-        for n in accs {
+        for &n in accs {
+            if !doc.is_live(n) {
+                continue;
+            }
             let f = |field| leaf(n, FacetKind::Accumulate, field);
             let reset = read(f("reset")).and_then(|v| v.as_bool()).unwrap_or(false);
             let before = self.values.get(&n).cloned();
@@ -177,9 +216,20 @@ impl Steps {
             if before.as_ref() != Some(&value) {
                 active.push(n);
             }
-            out.insert(f("value"), value.clone());
+            put(&mut self.shown, f("value"), value.clone());
             self.values.insert(n, value);
         }
         (out, active)
+    }
+
+    /// Note a step length published for accumulator `n`, so `prune`
+    /// withdraws it with the rest.
+    pub(crate) fn shown_dt(&mut self, n: NodeId, dt: Value) {
+        self.shown.insert(leaf(n, FacetKind::Accumulate, "dt"), dt);
+    }
+
+    /// The step length last published for accumulator `n`.
+    pub(crate) fn dt_of(&self, n: NodeId) -> Option<f64> {
+        self.shown.get(&leaf(n, FacetKind::Accumulate, "dt")).and_then(Value::as_f64)
     }
 }

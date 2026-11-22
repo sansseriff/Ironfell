@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-21 · **Branch:** `master` · **Keys:** `DS-n` (plans/README.md, "Work
 keys") · **Status:** plan, revised after council rounds 1 (Opus 5/10, Sol 5/10) and 2 (Opus
-6/10, Sol 6/10; both: DS-1 can start). **DS-1 done 2026-11-21**; its code review next,
-then DS-2. The council reviews the code by groups (§6). The user asked for it (2026-11-21): "I want all costs that scale with
+6/10, Sol 6/10; both: DS-1 can start). **DS-1 and DS-2 done 2026-11-21**; DS-3 next, then
+the council's review of DS-1 to DS-3. The council reviews the code by groups (§6). The user asked for it (2026-11-21): "I want all costs that scale with
 document size to be gone", councils on this plan and through the code.
 
 ## 0. Read first
@@ -470,6 +470,41 @@ DS-2, DS-3 and DS-7 do not depend on the core; DS-4a precedes DS-4b, DS-5 and DS
   solver refusal after expansion, deleting and duplicating a page, a scoped agent view, a
   capture, a query's reply on a paused page, a hidden-to-shown publish, a fixture without
   constraints, link and unlink, selection and hover, and the host operations (DS-8).
+
+### DS-2 as done (2026-11-21)
+
+Per frame, nothing visits what is at rest or paused:
+- **The gate's cache hit does nothing** (no clone, no `Clocks::set`); a decision passes
+  its sets by reference. Each decision now also lists the steppers on running clocks,
+  the clips animating something running and the compositions they animate, watches a
+  held trace's input and delay and every query's inputs, and has the machine player
+  visit every instance once.
+- **The graph wakes players** (`watch`, `watch_nodes`, `take_woken`,
+  `take_woken_nodes`): a watched leaf, or any leaf of a watched node or of an expanded
+  copy it owns, is woken when `note` or `mark` sees it change. **`publish_delta`** sets
+  and withdraws single leaves of a producer's map.
+- **Presence:** only repeats with an item entering or leaving (`presence_moving`, kept
+  by `settle_presence`).
+- **Steps:** only the running traces and accumulators, and held traces woken by their
+  input; the step length is published for running accumulators only (it was published
+  for every accumulator every frame, re-evaluating held ones); outputs by difference.
+- **Queries:** only those whose inputs changed, whose answer arrived, or that are
+  waiting; `pending()` from the waiting set; outputs by difference.
+- **Machines:** only instances woken (their leaves or copies changed), moving
+  (a transition, or reported running), clocked when the playhead moved, or all after a
+  structural change; outputs by difference, kept per instance.
+- **Clips:** the playhead and a constant edit sample only running clips; every clip
+  after structure or a gate decision; `Animates` from the decision's list; the end of
+  the last clip cached until the clips change.
+- **The clock** is found through the type index (`live_of_type`), not a scan of
+  every node; `ensure_clock` orders by the session root's children.
+- **Result:** the idle frame has no slope at all; 101 (operation, count) pairs left
+  `SCALING`. In the app (`single-tab.txt`, wasm): a drag's `advance` 0.49 → 0.04 ms,
+  playing 3.21 → 0.67 ms. Differential (490), plain (486), app lib (20), smoke, fiber,
+  pulses, idle and single-tab pass.
+- **Left for later phases:** a drag's clusters list (DS-3a); playing's natives and
+  ports scans (DS-3a, DS-3b); the gate deciding after an observer change (DS-5); theme
+  tokens' readers (DS-4a).
 
 ## 7. Risks
 

@@ -43,17 +43,17 @@ impl Clocks {
     /// Pause the clocks in `paused` at `now` and run the others, given the
     /// entities some composition pictures. The clocks of compositions and
     /// entities that are gone are forgotten.
-    pub fn set(&mut self, doc: Tree<'_>, now: f64, paused: BTreeSet<NodeId>, pictured: BTreeSet<NodeId>) {
+    pub fn set(&mut self, doc: Tree<'_>, now: f64, paused: &BTreeSet<NodeId>, pictured: &BTreeSet<NodeId>) {
         let resumed: Vec<NodeId> = self.since.keys().filter(|k| !paused.contains(k)).copied().collect();
         for k in resumed {
             let stopped = self.since.remove(&k).unwrap_or(now);
             *self.behind.entry(k).or_default() += (now - stopped).max(0.0);
         }
-        for k in paused {
+        for &k in paused {
             self.since.entry(k).or_insert(now);
         }
         self.behind.retain(|k, _| doc.is_live(*k));
-        self.pictured = pictured;
+        self.pictured = pictured.clone();
     }
 
     /// The clock `node` steps on: its composition, else the pictured entity

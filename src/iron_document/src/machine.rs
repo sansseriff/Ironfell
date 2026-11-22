@@ -263,6 +263,18 @@ pub struct Player {
     /// The parts the state editor shows open inside a transition (their
     /// properties' rows); the others show one row each (session only).
     pub open: std::collections::BTreeSet<NodeId>,
+    /// The instances visited every frame: a transition under way, or one
+    /// reported running at their last visit (DS-2: an instance at rest is
+    /// visited only when something it reads changes).
+    moving: std::collections::BTreeSet<NodeId>,
+    /// The instances whose state is keyed on the timeline: visited when the
+    /// playhead moves.
+    clocked: std::collections::BTreeSet<NodeId>,
+    /// The playhead's time at the last advance.
+    last_clock: Option<f64>,
+    /// What each instance (and a pinned state, under its main) last
+    /// published: an advance publishes what changed.
+    shown: BTreeMap<NodeId, BTreeMap<Leaf, Value>>,
 }
 
 /// What a running transition reports, for a probe or a view.
@@ -283,14 +295,32 @@ impl Player {
     /// paused (clocks.rs): a transition starts and plays on its entity's
     /// clock, so one on a paused clock holds part-way, and is not reported
     /// running, until its clock runs again.
-    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64, time: &dyn Fn(NodeId, f64) -> (f64, bool)) -> (BTreeMap<Leaf, Value>, Vec<Running>) {
+    pub fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clock: f64, time: &dyn Fn(NodeId, f64) -> (f64, bool), visit: Option<&std::collections::BTreeSet<NodeId>>) -> (BTreeMap<Leaf, Value>, Vec<Leaf>, Vec<Running>) {
         let snap = std::mem::take(&mut self.snap);
         let mut seen = std::collections::BTreeSet::new();
         let mut running = Vec::new();
-        // The machines (an instance's copies) with a transition under way.
-        let mut busy = std::collections::BTreeSet::new();
         let entity_ty = crate::registry::TypeId::lookup("entity").expect("registered");
-        for e in doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect::<Vec<_>>() {
+        // The instances to visit: every one (`visit` is `None`: the
+        // structure changed), else those named, those moving, and the
+        // clocked ones when the playhead moved.
+        let clock_moved = self.last_clock != Some(clock);
+        self.last_clock = Some(clock);
+        let entities: Vec<NodeId> = match visit {
+            None => doc.nodes_of_type(entity_ty).filter(|&e| doc.is_live(e)).collect(),
+            Some(v) => {
+                let mut set: std::collections::BTreeSet<NodeId> = v.iter().chain(&self.moving).copied().collect();
+                if clock_moved {
+                    set.extend(self.clocked.iter().copied());
+                }
+                set.into_iter().filter(|&e| doc.is_live(e) && doc.node(e).is_some_and(|n| n.ty == entity_ty)).collect()
+            }
+        };
+        let full = visit.is_none();
+        if full {
+            self.clocked.clear();
+        }
+        for &e in &entities {
+            self.clocked.remove(&e);
             let Some(def) = crate::expand::linked_definition(doc, e) else { continue };
             for (m, port) in machines(doc, def) {
                 let Ok(path) = LeafPath::new(crate::facet::FacetKind::Args, &port) else { continue };
@@ -301,9 +331,9 @@ impl Player {
                 // forwards and backwards.
                 if let Some((values, run)) = clocked(doc, read, def, mc, Leaf { node: e, path }, clock) {
                     seen.insert((e, m));
+                    self.clocked.insert(e);
                     if let Some(r) = run {
                         running.push(Running { entity: e, transition: r.0, progress: r.1, from: r.2.clone(), to: r.3.clone() });
-                        busy.insert(mc);
                     }
                     self.known.insert((e, m), Known { state, values, run: None, at: None, down: false });
                     continue;
@@ -349,58 +379,117 @@ impl Player {
                 }
             }
         }
-        self.known.retain(|key, _| seen.contains(key));
-        // A pinned state shows on its main, which reads the definition's own
-        // channels.
-        let mut pinned_out = BTreeMap::new();
-        if let Some(pin) = &self.pinned
-            && let Some(p) = pinned_pose(doc, read, pin)
-        {
-            let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
-            for (c, v) in p {
-                if differs(&v, &rest_of(doc, c)) {
-                    pinned_out.insert(Leaf { node: c, path: value_path }, v);
-                }
-            }
+        // A machine no longer there: on a full visit, every one not seen;
+        // otherwise those of the visited instances not seen.
+        let gone: Vec<(NodeId, NodeId)> = if full {
+            self.known.keys().copied().filter(|k| !seen.contains(k)).collect()
+        } else {
+            entities.iter().flat_map(|&e| self.known.range((e, NodeId::from_raw(0))..).map(|(k, _)| *k).take_while(move |k| k.0 == e).collect::<Vec<_>>()).filter(|k| !seen.contains(k)).collect()
+        };
+        for k in gone {
+            self.known.remove(&k);
         }
-        let mut out = BTreeMap::new();
         let value_path: LeafPath = "channel.value".parse().expect("declared leaf");
-        for (&(e, m), k) in self.known.iter_mut() {
-            if k.run.is_some() {
-                busy.insert(copy_of(doc, Some(e), m));
-            }
-            if let Some(run) = &k.run {
-                let (t, held) = time(e, now);
-                let p = ((t - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
-                for (&c, to) in &run.to {
-                    let from = run.from.get(&c).unwrap_or(to);
-                    k.values.insert(c, mix(from, to, run.plan.shaped(c, p)));
-                }
-                if p >= 1.0 {
-                    k.values = run.to.clone();
-                    k.run = None;
-                } else if !held {
-                    running.push(Running { entity: e, transition: run.plan.transition, progress: p, from: run.states.0.clone(), to: run.states.1.clone() });
-                }
-            }
-            for (&c, v) in &k.values {
-                if differs(v, &rest_of(doc, c))
-                    && let Some(copy) = NodeId::expanded(e, c)
-                {
-                    out.insert(Leaf { node: copy, path: value_path }, v.clone());
-                }
-            }
-        }
-        out.extend(pinned_out);
-        // Only while moving, so a resting instance publishes nothing.
         let running_path: LeafPath = "machine.running".parse().expect("declared leaf");
-        for mc in busy {
-            if doc.facet(mc, crate::facet::FacetKind::Machine).is_some() {
-                out.insert(Leaf { node: mc, path: running_path }, Value::Bool(true));
+        // What each visited instance publishes now: its channels away from
+        // rest, and its machines with a transition under way.
+        let mut outputs: BTreeMap<NodeId, BTreeMap<Leaf, Value>> = BTreeMap::new();
+        self.moving.clear();
+        for &e in &entities {
+            let mut out = BTreeMap::new();
+            let mut busy = std::collections::BTreeSet::new();
+            let keys: Vec<(NodeId, NodeId)> = self.known.range((e, NodeId::from_raw(0))..).map(|(k, _)| *k).take_while(|k| k.0 == e).collect();
+            for (e, m) in keys {
+                let k = self.known.get_mut(&(e, m)).expect("listed");
+                if k.run.is_some() {
+                    busy.insert(copy_of(doc, Some(e), m));
+                }
+                if let Some(run) = &k.run {
+                    let (t, held) = time(e, now);
+                    let p = ((t - run.start) * 1000.0 / run.plan.ms).clamp(0.0, 1.0);
+                    for (&c, to) in &run.to {
+                        let from = run.from.get(&c).unwrap_or(to);
+                        k.values.insert(c, mix(from, to, run.plan.shaped(c, p)));
+                    }
+                    if p >= 1.0 {
+                        k.values = run.to.clone();
+                        k.run = None;
+                    } else if !held {
+                        running.push(Running { entity: e, transition: run.plan.transition, progress: p, from: run.states.0.clone(), to: run.states.1.clone() });
+                    }
+                }
+                if k.run.is_some() {
+                    self.moving.insert(e);
+                }
+                for (&c, v) in &k.values {
+                    if differs(v, &rest_of(doc, c))
+                        && let Some(copy) = NodeId::expanded(e, c)
+                    {
+                        out.insert(Leaf { node: copy, path: value_path }, v.clone());
+                    }
+                }
+            }
+            // Only while moving, so a resting instance publishes nothing.
+            for mc in busy {
+                if doc.facet(mc, crate::facet::FacetKind::Machine).is_some() {
+                    out.insert(Leaf { node: mc, path: running_path }, Value::Bool(true));
+                }
+            }
+            outputs.insert(e, out);
+        }
+        // One reported running (a clocked or driven machine part way) is
+        // visited again next frame, as one with a transition is.
+        self.moving.extend(running.iter().map(|r| r.entity));
+        // A pinned state shows on its main, which reads the definition's own
+        // channels: under the main's key, every frame while pinned.
+        if let Some(pin) = &self.pinned {
+            let mut out = BTreeMap::new();
+            if let Some(p) = pinned_pose(doc, read, pin) {
+                for (c, v) in p {
+                    if differs(&v, &rest_of(doc, c)) {
+                        out.insert(Leaf { node: c, path: value_path }, v);
+                    }
+                }
+            }
+            outputs.insert(pin.machine, out);
+        }
+        let pinned_key = self.pinned.as_ref().map(|p| p.machine);
+        // What changed against what was shown: set the new, withdraw the
+        // gone. On a full visit, an instance gone withdraws all it showed.
+        let mut set = BTreeMap::new();
+        let mut unset = Vec::new();
+        if full {
+            let stale: Vec<NodeId> = self.shown.keys().copied().filter(|k| !outputs.contains_key(k) && Some(*k) != pinned_key).collect();
+            for k in stale {
+                unset.extend(self.shown.remove(&k).into_iter().flat_map(|m| m.into_keys()));
             }
         }
+        // A pin let go withdraws what it showed.
+        let unpinned: Vec<NodeId> = self.shown.keys().copied().filter(|k| !outputs.contains_key(k) && Some(*k) != pinned_key && doc.node(*k).is_some_and(|n| n.ty != entity_ty)).collect();
+        for k in unpinned {
+            unset.extend(self.shown.remove(&k).into_iter().flat_map(|m| m.into_keys()));
+        }
+        for (k, now_out) in outputs {
+            let was = self.shown.remove(&k).unwrap_or_default();
+            for l in was.keys() {
+                if !now_out.contains_key(l) {
+                    unset.push(*l);
+                }
+            }
+            for (l, v) in &now_out {
+                if was.get(l) != Some(v) {
+                    set.insert(*l, v.clone());
+                }
+            }
+            if !now_out.is_empty() {
+                self.shown.insert(k, now_out);
+            }
+        }
+        // A leaf set by one key and withdrawn by another (a pin and its
+        // instance) is set.
+        unset.retain(|l| !set.contains_key(l));
         self.running = running.clone();
-        (out, running)
+        (set, unset, running)
     }
 }
 

@@ -159,6 +159,25 @@ necessity edges nor gate edges:** reading another page's structure (an embed's m
 does not make its cells needed or wake it; only leaf reads count, as §4.1 and §4.3 say.
 The gate's stamp (`Docs::reshaped`, `op::reshapes`) goes with DS-5, not before.
 
+### 3.7 Undo, redo and refusal
+
+Transactions apply in place (RE-2a, `d9ec4ea`): `Document`'s mutators write a journal that
+`abort` undoes in reverse, checked under `differential` against a shadow copy taken at
+`begin`. A refusal in `post_apply` also restores the graph and store state from `Saved`,
+cloned per transaction when the document holds a constraint (`Saved::of`, `lib.rs:4323`).
+Undo and redo apply a recorded transaction's inverse or ops through `run`.
+
+- **Undo and redo** are edits: their writes go through the choke points and fire keys
+  like any other. Nothing changes.
+- **The journal** stays the undo mechanism and is not the change feed (§3.3). What this
+  adds to `Document` (the per-composition indexes) is journaled like the existing
+  indexes, so `abort` restores it bit for bit and the shadow check covers it.
+- **`Saved`** grows: recorded keys and key → readers live in `Reactive`, which it clones.
+  DS-9 measures the clone; if it matters, DS-7 (refusal by the document journal and
+  re-derivation, no snapshot) moves before DS-12. The touched-key log is what DS-7
+  re-derives from: the keys an aborted transaction touched name exactly the cells to
+  put back.
+
 ## 4. Size
 
 Rough, from the code at `08e0539`. Tests not counted; this adds about 600 to 900 lines of

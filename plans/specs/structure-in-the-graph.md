@@ -592,78 +592,113 @@ snapshot as now → with it skipped):
 
 What remains of the slope is necessity and the gate (DS-4a, DS-4b, DS-5).
 
-**What `post_apply` does instead of failing:**
+**What `post_apply` does instead of failing** (revised after review, 2026-11-22):
 
-| Today it refuses with | After DS-7 |
-|---|---|
-| `Unsatisfiable`: a cluster's solve didn't converge | The cluster keeps its pose as it was before the solve, with the transaction's own writes to its leaves kept. Its problem goes on the cluster's constraints (`problems()`, kind `"constraint"`), naming the residual and the likely culprits, as the error says today. Other clusters solve as usual |
-| `Cycle`: clusters depend on each other through bindings (`regroup`) | The last good grouping stays, as `rebuild_clusters` already keeps it, and the cycle is a problem on each cluster in it |
-| `BadConstraint`: a constraint can't be read (`validated`) | That constraint is left out of the grouping, and its problem goes on it. This also covers a binding on `kind` or `enabled` until DS-13 makes those bindable |
-| `exact` not honoured | Moves to the edit's plan (below) |
-| an `ApplyError` from `release` (an internal write that can't fail on a live copy) | An `expect` |
-
-`post_apply` returns the summary, which keeps `unmet`, and no longer returns errors.
-
-**The agent's exact edits.** `<edit exact="true">` is planned on a scratch store, verb by
-verb (`edit::Planner::push`), before it is applied. After its last verb, the planner
-looks at the scratch apply's `SolverSummary::unmet`. If any is non-empty, the plan fails
-with today's message ("exact transaction not honoured: …"), and the real store is never
-touched. `TransactionInput::exact` and the `exact` argument go. A plan's scratch store
-is a copy, so the check costs what planning already costs.
+- **A cluster whose solve fails** keeps the values it had when its solve began. Those
+  include the transaction's own writes to its leaves, so after a drag that over-asks,
+  the constraint shows violated, and the problem says so. Its solution isn't written.
+  It is *posed* (into `committed`), as a converged one is. So it isn't solved again
+  until its change test runs, which means until one of its inputs changes. Neither an
+  unrelated edit nor a live frame retries it.
+- **A cluster's problem is derived, not remembered.** It reads "these constraints
+  don't hold at the current pose", from the residuals at the current values. It is
+  computed by the cluster's change-test cell whenever that cell runs, and listed by
+  `problems()` (kind `"constraint"`, on the cluster's constraints). Undo, redo, replay
+  and load, which don't solve, show the right problem with no extra rule. The solver's
+  own culprits are added when the last solve failed.
+- **Grouping is total.** `constraint::all` and `validate_all` report per constraint,
+  instead of stopping at the first error. A constraint that can't be read is left out
+  of the grouping, with its problem on it; of a duplicate pair ("already constrained
+  by"), the one with the higher id is left out. Clusters in a cycle through bindings
+  are formed, marked failed, left unsolved, and carry the cycle problem. Only the
+  members of a strongly connected component are blamed: clusters merely downstream of
+  one are solved after it as usual. No "last good grouping" is kept, so the grouping
+  is a function of the document and wiring.
+- **The agent's exact edits** use the store's `retract`. An exact transaction applies
+  as any other. If the solve left a request unmet, it is retracted at once (undone and
+  dropped from history), and the call returns today's error ("exact transaction not
+  honoured: …"). This judges the one joint solve at the store's real state, and needs
+  no change to the planner or the bridge. A failed solve with no unmet request isn't an
+  exact failure: it applies, with its problem, like any edit.
+- **Writes that can't fail** become `expect`s: the solver's write-back and `release`'s.
+- **The agent hears of new problems:** `Applied` carries the problems the transaction
+  added, and the `<applied>` reply lists them. `manifest.ts`'s note that a cycle
+  through a cluster "is rejected" becomes "is applied and reported".
 
 **Deleted:**
-- `Saved`, with its `of` and `restore` (about 90 lines);
+- `Saved`, with its `of` and `restore`;
 - `can_refuse`;
 - the refusal branch in `apply` and its fallback rebuild;
-- `TransactionInput::exact`;
-- `ErrorKind::Unsatisfiable`, and `Cycle` and `BadConstraint` where only `post_apply`
-  makes them (`run`'s own checks keep theirs).
+- `grouping_error`'s "last good" retention;
+- `Unsatisfiable` from `post_apply` (it stays for exact edits);
+- `Cycle` and `BadConstraint` from `post_apply`. `run`'s own `Cycle` checks stay (`op.rs`
+  let cycles, reparent cycles).
 
-**Unchanged:**
-- `run`'s checks, which refuse before anything is derived using only the document's
-  journal (`abort`);
-- the atomicity measurement for those (`IRON_ATOMICITY`).
+**Tests.** These change to "applies, keeps its pose, reports, undoes":
+- `constraints.rs`' refusals;
+- `anchors.rs:296`;
+- `atomicity.rs:129`;
+- `rollback.rs`' solver-refusal tests: `solver_refusals_*`, `an_unsolvable_*`,
+  `a_solver_refusal_*`, and the layout and keyed-layout runs in a refused transaction.
 
-**Tests.** About 23 assertions expect a refusal (`tests/constraints.rs`, `anchors.rs`,
-`rollback.rs`, `atomicity.rs`, `reactive.rs`, `embeds.rs`, `spine.rs`). Each becomes:
-- the edit applies;
-- the cluster keeps its pose;
-- the problem is reported;
-- undo puts the edit back.
-
-`rollback.rs`'s tests of putting derived state back after a refusal are deleted with the
-refusal. Their subject is gone.
+`rollback.rs`' tests of `run`'s own abort stay. New tests:
+- a failed cluster with a directly edited variable, beside an independent cluster that
+  still solves, then undone and redone;
+- a cycle cluster with a downstream one that still solves;
+- a bad constraint beside good ones;
+- an exact edit retracted.
 
 **Exit:**
-- the suite, the differential suite with `IRON_OWNER_CHECK`, and the structure oracle
+- the suite, the differential suite with `IRON_OWNER_CHECK` and the structure oracle
   pass;
-- an unsatisfiable edit applies and reports;
-- an exact edit that constraints would move is refused at planning;
-- `document_scaling_time`'s constant edit at +3 is at most 5.5 ms;
+- `document_scaling_time`'s constant edit at +3 is at most 5.5 ms, on the same probe
+  (`apply` plus `advance`);
 - the smoke and `single-tab.txt` pass.
 
 ## 11. DS-10's design: the oracle (draft, 2026-11-22)
 
 **1. Order-free results first** (§3.4, decided by the user). Without these, the oracle
 would need exclusions.
-- **Contested leaves.** In `Reactive::claim`, today, a leaf already driven by another
-  producer refuses the newcomer. Instead, **the lower `ProducerId` wins**, whichever ran
-  first. The order is the ids' order: clips, network, layout, machines, theme, items,
-  state, selection, steps, queries, presence, events, then hosts in registration order.
-  A clip therefore wins over a layout on a laid-out child, as it usually does today
-  because clips are sampled first. The loser gets today's error, and the loser's error
-  is recomputed whenever either one claims. So an error on a released leaf no longer
-  waits for its producer's next publish.
-- **Cycles.** Today a read that would close a cycle blocks the reading cell only (spec
-  §6.3), so which binding is blamed depends on order. Instead, the walk that finds the
-  cycle (`graph.rs`, the deref and native read checks) returns its path. Every cell on
-  it is failed with the cycle error and keeps its last good value. A test for each
-  order: the same cells fail whichever is edited first.
+- **Contested leaves** (revised after review). Each producer gets an explicit
+  `rank()`, not its id's order. **Layout outranks clips** (decided by the user,
+  2026-11-22): a laid-out child stays in its stack, and the clip reports "driven by
+  layout". Today a freshly loaded document lets the clip win and an edited one lets
+  layout win. The graph keeps every producer's *request* per contested leaf
+  (`publish`, `publish_delta`, `claim`), the winner by rank drives it, and when the
+  winner releases, the next request is promoted at once, not on its producer's next
+  publish. A displaced native's claims are updated without running it.
+- **Cycles** (revised after review). Today a read that would close a cycle blocks the
+  reading cell only (spec §6.3), so which binding is blamed depends on order. Instead,
+  the graph keeps a **cycle set**: the strongly connected component of attempted reads,
+  found from the walk that detects the cycle. Every member stays failed with the cycle
+  error while the cycle stands, and keeps its last good value. A native on it keeps its
+  last claims. Members' reads into the set are held outside the height graph, so which
+  edge was refused doesn't depend on order. Members are retried when their wiring
+  changes. A test for each order: the same cells fail whichever is edited first.
 - **Structural fields.** The schema marks `constraint.kind` and `enabled` and
   `use.notation` as structural. A binding on one is reported as a problem on its leaf,
   until DS-13 and DS-16 make them work. It is no longer read silently as its default.
 
-**2. The reference store.** Under the feature `fresh-oracle` (implying `differential`),
+**DS-10 is split (after review).** **DS-10a** is part 1: order-free results. It changes
+behaviour, and its own tests stand without the oracle. **DS-10b** is parts 2 to 5, and it
+starts with a spike over session writes, paused playback, undo and replay. The review
+found that, as drafted below, the reference would disagree wherever constraints or
+islands exist. So DS-10b's design is revised from the spike, with these changes already
+known:
+- state is applied at build time, one `build(doc, state)`, field by field, not whole
+  structs;
+- an exhaustive destructure of `StoreCore`, `Reactive` and `Owners` classes every
+  field at compile time;
+- the reference settles with clusters off, and takes `committed` from the history
+  check;
+- a history cell fails when its latest record's inputs, drivers and fingers differ from
+  the reference's current inputs;
+- requests and cycle sets are state;
+- the canaries cover the rule paths (`sync_layout`, the priming) under a new gate, and
+  grow with each family;
+- the existing oracles stay until their coverage is replaced.
+
+**2. The reference store (draft, before review).** Under the feature `fresh-oracle` (implying `differential`),
 after every facade call that isn't mid-gesture, `Store::agree` builds a reference:
 1. It calls `StoreCore::with_document` on the subject's authored document.
 2. It moves in the subject's **declared state** through one function,

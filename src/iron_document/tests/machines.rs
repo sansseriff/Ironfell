@@ -255,7 +255,7 @@ fn an_instance_times_its_transitions_by_an_input_or_an_override() {
 /// backwards; a key's span retimes that one occurrence; undo restores it.
 #[test]
 fn keyed_state_scrubs_and_one_occurrence_retimes() {
-    let Card { mut store, entity, fade, .. } = card();
+    let Card { mut store, entity, fade, u, .. } = card();
     let ids = store.authored().next_ids(4);
     let (timeline, clip, k0, k1) = (ids[0], ids[1], ids[2], ids[3]);
     let key = |t: f64, v: &str| {
@@ -298,6 +298,17 @@ fn keyed_state_scrubs_and_one_occurrence_retimes() {
     assert!((at(&mut store, 3.0) - 0.5).abs() < 1e-9, "half-way through the slow occurrence");
     store.undo(0).unwrap().unwrap();
     assert_eq!(at(&mut store, 3.0), 0.0, "undo restores the transition's own length");
+    // Retimed again with the playhead parked, the gate deciding (one view
+    // on the bench): the instance at rest is visited all the same (council
+    // review of DS-2, Opus).
+    let bench = store.tree().live(u).unwrap().parent.unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: bench, rect: [-1000.0, -1000.0, 2000.0, 2000.0], zoom: 1.0 });
+    store.advance(104.0);
+    assert_eq!(channel(&store, entity, fade), 0.0);
+    store.apply(tx("retime", vec![Op::Set { id: k1, path: path("key.span"), slot: n(2.0) }])).unwrap();
+    store.advance(105.0);
+    assert!((channel(&store, entity, fade) - 0.5).abs() < 1e-9, "retimed with the playhead parked");
 }
 
 /// A parent over its children (machines.md §10): two cards nested in a

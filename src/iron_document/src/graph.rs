@@ -1060,17 +1060,20 @@ impl Reactive {
     /// leaves (as `publish` does each), `unset` withdraws those it held;
     /// everything else it publishes stands. What a stepper that changes a
     /// few leaves a frame uses, rather than replacing its whole map (DS-2).
-    pub fn publish_delta(&mut self, doc: Tree<'_>, producer: ProducerId, set: BTreeMap<Leaf, Value>, unset: &[Leaf]) {
+    pub fn publish_delta(&mut self, doc: Tree<'_>, producer: ProducerId, set: BTreeMap<Leaf, Value>, unset: &[Leaf]) -> Vec<Leaf> {
         let mut changed: Vec<Leaf> = Vec::new();
+        let mut refused: Vec<Leaf> = Vec::new();
         let mut held = self.held.remove(&producer).unwrap_or_default();
         for (leaf, value) in set {
             if self.nodes.contains_key(&leaf) {
                 self.signal_errors.insert(leaf, format!("{leaf} is bound; producer {} cannot drive it", producer.0));
+                refused.push(leaf);
                 continue;
             }
             match self.runtime.get(&leaf) {
                 Some(s) if s.producer != producer => {
                     self.signal_errors.insert(leaf, format!("{leaf} is already driven by producer {}; producer {} cannot also drive it", s.producer.0, producer.0));
+                    refused.push(leaf);
                     continue;
                 }
                 Some(s) if s.value == value => {}
@@ -1096,7 +1099,7 @@ impl Reactive {
             self.held.insert(producer, held);
         }
         if changed.is_empty() {
-            return;
+            return refused;
         }
         for &l in &changed {
             if !self.overlay.contains_key(&l)
@@ -1106,6 +1109,7 @@ impl Reactive {
             }
         }
         self.invalidate(doc, changed);
+        refused
     }
 
     /// Release everything `producer` publishes.
@@ -1539,6 +1543,10 @@ impl Reactive {
         let mut dirty: BTreeSet<CellId> = BTreeSet::new();
         let changed: Vec<Leaf> = changed.into_iter().collect();
         for l in &changed {
+            // A player waiting on it (a query's constant input, a trace's
+            // delay) hears of it as of a value a cell wrote (council review
+            // of DS-2).
+            self.wake(*l);
             if let Some(ds) = self.dependents.get(l) {
                 primed.extend(ds.iter().copied());
             }
@@ -2483,6 +2491,12 @@ impl Reactive {
     pub(crate) fn native_current(&self, k: NativeKey) -> bool {
         let c = CellId::Native(k);
         self.natives.contains_key(&k) && !self.unneeded.contains(&c) && !self.stale.contains(&c) && !self.pending.contains(&c)
+    }
+
+    /// The leaves native `k` holds a claim on.
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn claims_of(&self, k: NativeKey) -> BTreeSet<Leaf> {
+        self.claims.get(&k).cloned().unwrap_or_default()
     }
 
     /// What native `k` handed the store at its last run.

@@ -362,3 +362,22 @@ fn a_keyed_layout_run_in_a_refused_transaction_is_put_back() {
     store.apply(tx("swap", vec![swap])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!((x(&store, s["a"]), x(&store, s["b"])), (Some(20.0), Some(0.0)), "laid out again");
 }
+
+/// Two clusters, the second's distance bound to where the first puts its
+/// point: a change to the first's distance moves its point, and the second
+/// solves again in the same commit (council review of DS-9, Sol: the
+/// clusters to solve were taken before the first's write woke the second).
+#[test]
+fn a_cluster_that_reads_another_s_variable_solves_after_it() {
+    let (mut store, comp) = sheet();
+    let a = pair(&mut store, comp);
+    let b = pair(&mut store, comp);
+    store.apply(tx("tie", vec![Op::Set { id: b["d"], path: path("constraint.value"), slot: bind(&format!("{}.transform2d.x", a["q"])) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let x = |store: &Store, id: NodeId| store.resolved(id, path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+    let y = |store: &Store, id: NodeId| store.resolved(id, path("transform2d.y")).and_then(|v| v.as_f64()).unwrap();
+    let dist = |store: &Store, p: NodeId, q: NodeId| ((x(store, q) - x(store, p)).powi(2) + (y(store, q) - y(store, p)).powi(2)).sqrt();
+    store.apply(tx("wider", vec![Op::Set { id: a["d"], path: path("constraint.value"), slot: num(80.0) }])).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!((dist(&store, a["p"], a["q"]) - 80.0).abs() < 1e-6);
+    let want = x(&store, a["q"]);
+    assert!((dist(&store, b["p"], b["q"]) - want).abs() < 1e-6, "the second cluster at {}, its distance {want}", dist(&store, b["p"], b["q"]));
+}

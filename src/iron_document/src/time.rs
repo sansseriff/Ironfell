@@ -29,6 +29,10 @@ pub struct Sample {
     pub values: BTreeMap<Leaf, Value>,
     /// Keyed by clip node.
     pub errors: BTreeMap<NodeId, String>,
+    /// Every leaf a sampled clip drives, whether or not it gave a value at
+    /// this time (before its first key, a refused key): what one that gave
+    /// none withdraws.
+    pub targets: std::collections::BTreeSet<Leaf>,
 }
 
 pub fn ease(name: &str, u: f64) -> f64 {
@@ -256,6 +260,7 @@ pub fn sample_clips(doc: Tree<'_>, t: f64, clips: impl IntoIterator<Item = NodeI
             }
             let offset = rel.data.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let leaf = Leaf { node: rel.to, path };
+            out.targets.insert(leaf);
             match doc.leaf(rel.to, path) {
                 None => {
                     out.errors.insert(clip_id, format!("{} has no {}", rel.to, path));

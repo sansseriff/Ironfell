@@ -103,6 +103,38 @@ fn playhead_samples_clips_and_bindings_follow() {
     assert!(store.time_errors().is_empty(), "{:?}", store.time_errors());
 }
 
+/// With the gate deciding (not everything observed), scrubbing back before
+/// a clip's first key puts the authored value back: the running clip
+/// withdraws what it gave (council review of DS-2, Sol).
+#[test]
+fn scrubbing_before_the_first_key_withdraws_the_clip() {
+    let Scene { mut store, rect, .. } = scene("linear");
+    store.set_observe_all(false);
+    store.advance(0.0);
+    store.set_time(2.0);
+    store.advance(0.1);
+    assert_eq!(x_of(&store, rect), 200.0);
+    store.set_time(0.5);
+    store.advance(0.2);
+    assert_eq!(x_of(&store, rect), 50.0, "before the clip starts the authored value shows");
+}
+
+/// A clip's `prop` set to another leaf: the old one goes back to its
+/// authored value (council review of DS-2, Opus).
+#[test]
+fn a_clip_retargeted_lets_go_of_its_old_leaf() {
+    let Scene { mut store, rect, clip, .. } = scene("linear");
+    store.set_observe_all(false);
+    store.advance(0.0);
+    store.set_time(2.0);
+    store.advance(0.1);
+    assert_eq!(x_of(&store, rect), 200.0);
+    store.apply(tx("retarget", vec![Op::Set { id: clip, path: path("clip.prop"), slot: Slot::Const(Value::Str("transform2d.y".into())) }])).unwrap();
+    store.advance(0.2);
+    assert_eq!(x_of(&store, rect), 50.0);
+    assert_eq!(store.resolved(rect, path("transform2d.y")).and_then(|v| v.as_f64()), Some(200.0));
+}
+
 #[test]
 fn easing_and_offsets_apply() {
     let Scene { mut store, rect, clip, rel, .. } = scene("ease_in");

@@ -289,6 +289,26 @@ pub struct Running {
 }
 
 impl Player {
+    /// Forget having shown `leaves`, which the graph refused: a later visit
+    /// publishes them again (council review of DS-2).
+    pub(crate) fn unshow(&mut self, leaves: &[Leaf]) {
+        if leaves.is_empty() {
+            return;
+        }
+        for shown in self.shown.values_mut() {
+            for l in leaves {
+                shown.remove(l);
+            }
+        }
+    }
+
+    /// Visit the clocked instances at the next advance, whether or not the
+    /// playhead moved: what they read of the timeline (a key's `t` or
+    /// `span`, a clip's start) changed (council review of DS-2).
+    pub(crate) fn reclock(&mut self) {
+        self.last_clock = None;
+    }
+
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
     /// `time` is each entity's time at `now` and whether its clock is

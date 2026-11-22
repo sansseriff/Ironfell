@@ -716,6 +716,46 @@ fn a_query_asks_when_read_debounces_and_drops_a_late_answer() {
     assert_eq!(store.history().past().len(), history + 3, "answers are never transactions");
 }
 
+/// A query's constant input set by a transaction asks again: the edit
+/// wakes the query as a value a cell wrote would (council review of DS-2).
+#[test]
+fn a_query_s_constant_input_set_asks_again() {
+    let (mut store, comp, n) = sheet(
+        r##"<query id="$q" name="q" model="sim" input="5"/>
+        <text id="$t" name="t" content="{= fmt($q)}"/>"##,
+    );
+    // Observed as a view shows it: what wakes it is what it waits on.
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let first = store.advance_queries(0.0);
+    assert_eq!(first.len(), 1);
+    assert!(store.resolve_query(n["q"], first[0].seq, Ok(query::from_plain(&serde_json::json!(15.0)))));
+    store.advance_queries(0.1);
+    assert!(store.advance_queries(0.2).is_empty());
+    store.apply(tx("input", vec![Op::Set { id: n["q"], path: path("query.input"), slot: Slot::Const(Value::Number(6.0)) }])).unwrap();
+    // Asked once the input has rested for the default debounce (0.2 s).
+    store.advance_queries(0.3);
+    let again = store.advance_queries(0.6);
+    assert_eq!(again.len(), 1, "the new input is asked");
+    assert_eq!(query::to_plain(&again[0].input), serde_json::json!(6.0));
+}
+
+/// A repeat's `max` set, alone or with a structural op beside it, settles
+/// its items again (council review of DS-3b: `max` was not compared).
+#[test]
+fn a_repeat_s_max_set_settles_its_items() {
+    let (mut store, comp, n) = sheet(r##"<group id="$rows" name="rows" repeat.count="3"><rect name="row" w="5" h="5"/></group>"##);
+    assert_eq!(named(&store, n["rows"], "row").len(), 3);
+    store.apply(tx("max", vec![Op::Set { id: n["rows"], path: path("repeat.max"), slot: Slot::Const(Value::Number(1.0)) }])).unwrap();
+    assert_eq!(named(&store, n["rows"], "row").len(), 1);
+    let id = store.authored().next_id();
+    store.apply(tx("max, and a group", vec![
+        Op::Set { id: n["rows"], path: path("repeat.max"), slot: Slot::Const(Value::Number(2.0)) },
+        Op::Create { id, ty: TypeId::lookup("group").unwrap(), parent: Some(comp), order: OrderKey::first(), facets: vec![] },
+    ])).unwrap();
+    assert_eq!(named(&store, n["rows"], "row").len(), 2);
+}
+
 /// Phase 7 (reactivity.md §13): an item that joins a repeat rises into
 /// view, one that leaves is kept while it fades and then goes, and one
 /// wanted again while leaving turns back from where it is. A conditional's

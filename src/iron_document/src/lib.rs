@@ -361,7 +361,7 @@ struct Saved {
     /// The repeats in `presence` with an item entering or leaving: what the
     /// presence stepper visits each frame (DS-2), not every repeat.
     presence_moving: BTreeSet<NodeId>,
-    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 4]>,
+    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 7]>,
     /// The drawn repeats and conditionals (`None` until first found), the
     /// ones to read at the next settle, each one's problems and the item
     /// leaves it published, and the repeat natives to make and drop
@@ -583,10 +583,6 @@ pub struct StoreCore {
     /// The across/through network as of a count of document
     /// writes (`Document::edits`): a cache.
     network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
-    /// Counts structural changes (`regraph`): the layout and repeat natives
-    /// are made again only when it moved.
-    structure_gen: u64,
-    /// The structural change the layout natives were made for.
     /// The structural roots, each with the nodes its layout covers; each
     /// `use`'s pinned parts; the nodes structural changes shaped since the
     /// last `sync_layout`; and the x-placed nodes of each root (for glide
@@ -600,7 +596,7 @@ pub struct StoreCore {
     /// `key` and `when.is` as last settled: what `settle_repeats` compares
     /// before doing any work. `None` after structure changed, until the
     /// next settle.
-    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 4]>,
+    repeat_inputs: BTreeMap<NodeId, [Option<Value>; 7]>,
     /// The drawn repeats and conditionals (`None` until first found), the
     /// ones to read at the next settle, each one's problems and the item
     /// leaves it published, and the repeat natives to make and drop
@@ -708,8 +704,10 @@ impl StoreCore {
             steps: self.steps.clone(),
             running_steps: self.running_steps.clone(),
             machines_full: true,
-            running_clips: Vec::new(),
-            animated: BTreeSet::new(),
+            // What runs, as the gate decided (it is copied): a plan that
+            // edits a key samples the clips it runs (council review of DS-2).
+            running_clips: self.running_clips.clone(),
+            animated: self.animated.clone(),
             clips_end: None,
             theme_at: None,
             token_leaves: None,
@@ -733,7 +731,6 @@ impl StoreCore {
             pinned_by_use: self.pinned_by_use.clone(),
             layout_touched: self.layout_touched.clone(),
             glide_nodes: self.glide_nodes.clone(),
-            structure_gen: self.structure_gen,
             repeat_inputs: self.repeat_inputs.clone(),
             drawn: self.drawn.clone(),
             repeat_dirty: self.repeat_dirty.clone(),
@@ -784,7 +781,6 @@ impl StoreCore {
         let ops: Vec<&Op> = ops.collect();
         self.update_drawn(ops.iter().copied());
         let ops = ops.into_iter();
-        self.structure_gen += 1;
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
         // The nodes a structural op made, moved, removed or reshaped, and
         // their parents (the inverse ops name the old ones): what a layout
@@ -1045,11 +1041,13 @@ impl StoreCore {
     /// Whether `post_apply` could refuse what is in the document now: a
     /// constraint can be malformed, close a cycle through a cluster, or fail
     /// to solve, and so can a mate a connection implies between plugged
-    /// anchors (`plug::implied_mates`), with no constraint node at all.
+    /// anchors (`plug::implied_mates`), with no constraint node at all: only
+    /// where an anchor and a connection both are (council review of DS-9:
+    /// any anchor made every edit of a circuit snapshot the graph).
     fn can_refuse(&self) -> bool {
         let doc = Tree::of(&self.docs);
-        let ty = TypeId::lookup("constraint").expect("registered");
-        doc.nodes_of_type(ty).any(|n| doc.is_live(n)) || doc.nodes_with(FacetKind::Anchor).any(|a| doc.is_live(a))
+        let live = |ty: &str| doc.nodes_of_type(TypeId::lookup(ty).expect("registered")).any(|n| doc.is_live(n));
+        live("constraint") || (live("connection") && doc.nodes_with(FacetKind::Anchor).any(|a| doc.is_live(a)))
     }
 
     /// Keep what `run` applied.
@@ -1146,7 +1144,6 @@ impl StoreCore {
             pinned_by_use: None,
             layout_touched: BTreeSet::new(),
             glide_nodes: BTreeMap::new(),
-            structure_gen: 0,
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
             truncated: Vec::new(),
@@ -1198,8 +1195,12 @@ impl StoreCore {
     #[cfg(feature = "differential")]
     fn check_grouping(&self) {
         let doc = Tree::of(&self.docs);
-        if let Ok(fresh) = solve::clusters(doc, &self.reactive, self.contexts()) {
-            assert!(self.grouping_error.is_none() && fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>());
+        match (solve::clusters(doc, &self.reactive, self.contexts()), &self.grouping_error) {
+            (Ok(fresh), None) => assert!(fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>()),
+            (Err(_), Some(_)) => {}
+            // A refusal the grouping missed, or one it keeps that is gone
+            // (council review of DS-9, Sol: the oracle ignored fresh errors).
+            (fresh, kept) => panic!("the grouping was not run, but grouping from scratch gives {:?} where it kept {kept:?}", fresh.map(|c| c.list.len())),
         }
     }
 
@@ -1245,6 +1246,13 @@ impl StoreCore {
             self.sync_cluster_natives();
         }
         Ok(())
+    }
+
+    /// The next cluster after `after` in solve order whose solve could move
+    /// something, asked again after each solve: a cluster's write can wake
+    /// a later one that reads it (council review of DS-9, Sol).
+    fn next_to_solve(&self, drivers: &[solve::Driver], after: Option<usize>) -> Option<usize> {
+        self.to_solve(drivers).into_iter().find(|&i| after.is_none_or(|a| i > a))
     }
 
     /// The clusters, in solve order, whose solve could move something: a
@@ -1318,8 +1326,10 @@ impl StoreCore {
         // The clusters that could have moved: their watching native ran,
         // a finger holds them, or they have not been committed; the rest
         // are as their last solve left them (DS-3a: no pass over all).
-        let clusters: Vec<solve::Cluster> = self.to_solve(&[]).into_iter().map(|i| self.clusters.list[i].clone()).collect();
-        for c in &clusters {
+        let mut solved_to = None;
+        while let Some(i) = self.next_to_solve(&[], solved_to) {
+            solved_to = Some(i);
+            let c = &self.clusters.list[i].clone();
             if self.unmoved(c, &[]) {
                 continue;
             }
@@ -1697,7 +1707,6 @@ impl StoreCore {
         let sample = time::sample(Tree::of(&self.docs), self.time);
         self.time_errors = sample.errors;
         self.reactive.publish(Tree::of(&self.docs), ProducerId::CLIPS, sample.values);
-        self.clips_end = None;
     }
 
     /// Sample the clips animating something on a running clock (as the
@@ -1717,10 +1726,25 @@ impl StoreCore {
             self.time_errors.remove(c);
         }
         self.time_errors.extend(sample.errors);
-        if !sample.values.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::CLIPS, sample.values, &[]);
+        // What a running clip drives but gave nothing for now (before its
+        // first key) goes back to what it is without the clip (council
+        // review of DS-2).
+        let gone: Vec<Leaf> = sample.targets.iter().filter(|l| !sample.values.contains_key(l)).copied().collect();
+        if !sample.values.is_empty() || !gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::CLIPS, sample.values, &gone);
         }
-        self.clips_end = None;
+    }
+
+    /// Whether `ops` change a clip, a key, a timing or a track: what every
+    /// clip's sample and the clips' end read. A playhead move does not.
+    fn touches_clips<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool {
+        let kinds = [FacetKind::Clip, FacetKind::Key, FacetKind::Timing, FacetKind::Track];
+        ops.into_iter().any(|op| match op {
+            Op::Set { path, .. } => kinds.contains(&path.facet),
+            Op::AddFacet { facet, .. } => kinds.contains(&facet.kind()),
+            Op::RemoveFacet { kind, .. } => kinds.contains(kind),
+            _ => false,
+        })
     }
 
     /// Name a host producer of runtime signals (a simulation, a Model) and
@@ -2345,12 +2369,12 @@ impl StoreCore {
                     changed_repeats.insert(*r);
                 }
             }
-            let inputs: Vec<(NodeId, [Option<Value>; 4])> = here
+            let inputs: Vec<(NodeId, [Option<Value>; 7])> = here
                 .iter()
-                .map(|&r| (r, [path("each"), path("count"), path("key"), when].map(|p| self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: p }))))
+                .map(|&r| (r, REPEAT_INPUTS.map(|(k, f)| self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: LeafPath::new(k, f).expect("declared leaf") }))))
                 .collect();
             // `Value`'s `==` holds NaN equal to NaN ("no series").
-            let inputs: Vec<(NodeId, [Option<Value>; 4])> = inputs.into_iter().filter(|(r, v)| self.repeat_inputs.get(r) != Some(v) || !self.repeats.contains_key(r)).collect();
+            let inputs: Vec<(NodeId, [Option<Value>; 7])> = inputs.into_iter().filter(|(r, v)| self.repeat_inputs.get(r) != Some(v) || !self.repeats.contains_key(r)).collect();
             if inputs.is_empty() && gone.is_empty() {
                 continue;
             }
@@ -2358,7 +2382,7 @@ impl StoreCore {
             // of its inputs: what it gave last is reused while they hold
             // (reactive-engine handoff §4.4, stage 3b).
             let mut results: Vec<(NodeId, ItemsOf)> = Vec::with_capacity(inputs.len());
-            for (r, [each, count, key, shown]) in &inputs {
+            for (r, [each, count, key, shown, ..]) in &inputs {
                 let r = *r;
                 if self.restless.contains(&r)
                     && let Some((_, got)) = self.item_memo.get(&r)
@@ -2505,6 +2529,15 @@ impl StoreCore {
                 round_start = applied.len();
                 applied.extend(ops);
             }
+            if structural {
+                // The new structure into the graph before anything this
+                // round publishes evaluates: a layout over the new items
+                // has them reserved first (council review of DS-9). New
+                // items may hold repeats: `regraph` draws them, and they are
+                // read in the next round.
+                let these: Vec<Op> = applied[round_start..].to_vec();
+                self.regraph(these.iter());
+            }
             unset.retain(|l| !set.contains_key(l));
             if !set.is_empty() || !unset.is_empty() {
                 self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::ITEMS, set, &unset);
@@ -2512,10 +2545,6 @@ impl StoreCore {
             // An item that has just joined starts unseen, in this same pass.
             self.publish_presence();
             if structural {
-                // New items may hold repeats: `regraph` draws them, and
-                // they are read in the next round.
-                let these: Vec<Op> = applied[round_start..].to_vec();
-                self.regraph(these.iter());
                 self.resample();
                 self.publish_state();
             }
@@ -3120,34 +3149,18 @@ impl StoreCore {
         }
     }
 
+    /// Every layout root's glide specs, found afresh (motion turned on),
+    /// with the nodes each root glides recorded, so a root rebuilt later
+    /// drops its own (council review of DS-3b).
     fn glide_specs(&mut self) {
-        if self.reactive.glide.is_none() {
-            return;
-        }
-        let doc = Tree::of(&self.docs);
-        let x: LeafPath = "transform2d.x".parse().expect("declared leaf");
-        let nodes: BTreeSet<NodeId> = self
-            .reactive
-            .native_keys()
-            .filter(|k| matches!(k, graph::NativeKey::Layout(_)))
-            .filter_map(|k| self.reactive.native(k))
-            .flat_map(|n| n.outputs().iter().filter(|l| l.path == x).map(|l| l.node).collect::<Vec<_>>())
-            .collect();
-        let resolver = contexts::Resolver::new(doc, self.contexts());
-        let mut specs = BTreeMap::new();
-        for node in nodes {
-            let chain = contexts::chain_of(doc, node);
-            if chain.is_empty() {
-                continue;
-            }
-            let declared = resolver.get(&chain, chain.len() - 1, contexts::Field::PLACEMENT);
-            if let Some(m) = contexts::motion(&declared).filter(|m| matches!(m.when, "any" | "layout") && m.ms > 0.0) {
-                specs.insert(node, (m.ms, m.ease));
-            }
-        }
-        if let Some(g) = self.reactive.glide.as_mut() {
-            g.specs = specs;
-        }
+        let Some(g) = self.reactive.glide.as_mut() else { return };
+        g.specs.clear();
+        self.glide_nodes.clear();
+        let roots: Vec<NodeId> = self.reactive.native_keys().filter_map(|k| match k {
+            graph::NativeKey::Layout(r) => Some(r),
+            _ => None,
+        }).collect();
+        self.glide_specs_of(&roots);
     }
 
     /// Advance components' state machines to `now` (seconds, the host's
@@ -3230,7 +3243,8 @@ impl StoreCore {
             if moving.is_none() {
                 break;
             }
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
+            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
+            self.machines.unshow(&refused);
             self.pipeline();
             if round == ROUNDS {
                 break;
@@ -3264,7 +3278,8 @@ impl StoreCore {
             self.queries.advance(doc, &read, &wanted, now)
         };
         if !values.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
+            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
+            self.queries.unshow(&refused);
             self.pipeline();
         }
         due
@@ -3336,7 +3351,8 @@ impl StoreCore {
             self.steps.advance(doc, &read, now, &self.clocks, &traces, &accs, &woken)
         };
         if !values.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
+            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
+            self.steps.unshow(&refused);
             self.pipeline();
         }
         active
@@ -3975,10 +3991,14 @@ impl StoreCore {
             }
             found
         };
+        // A node's children too: whether a child is a root depends on
+        // whether its parent lays out, so a `layout` facet added to or taken
+        // from `t` makes or unmakes the roots just below it.
         let mut candidates: BTreeSet<NodeId> = BTreeSet::new();
         for &t in touched.iter().chain(&changed_parts) {
             candidates.insert(t);
             candidates.extend(top(t));
+            candidates.extend(doc.children(t).iter().copied());
         }
         let mut want: Vec<(graph::NativeKey, std::sync::Arc<dyn graph::Native>)> = Vec::new();
         let mut drop: Vec<graph::NativeKey> = Vec::new();
@@ -4073,7 +4093,9 @@ impl StoreCore {
 
     /// The structure oracle (structure-in-the-graph.md §3.5): every keyed
     /// layout that is up to date, laid out again from the store as it is
-    /// now, must give what its native claims, and the same tables' grids.
+    /// now, must give what its native claims, claim nothing more, and give
+    /// the same tables' grids. (A layout run has no errors to compare: it
+    /// always places.)
     /// What a missed key leaves stale fails here, whatever primed it or
     /// not. Skipped mid-glide, when claims are eased.
     #[cfg(feature = "structure-oracle")]
@@ -4100,8 +4122,13 @@ impl StoreCore {
                     return Err(format!("layout of {root}: {leaf} is {kept:?}, laid out again {v:?}"));
                 }
             }
+            // Nor does it claim what laying out again no longer places (a
+            // child gone out of flow).
+            if let Some(extra) = self.reactive.claims_of(k).into_iter().find(|l| !values.contains_key(l)) {
+                return Err(format!("layout of {root} claims {extra}, which laying out again does not place"));
+            }
             let kept = self.reactive.native_extra_of(k).and_then(|e| e.downcast_ref::<BTreeMap<NodeId, table::Grid>>());
-            if kept.is_some_and(|g| *g != grids) {
+            if kept.map_or(!grids.is_empty(), |g| *g != grids) {
                 return Err(format!("layout of {root}: its tables' grids differ laid out again"));
             }
         }
@@ -4287,6 +4314,13 @@ impl StoreCore {
             // The first provider among siblings answers `@name`.
             Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
         });
+        // A clip, key, timing or track changed, or the structure: the
+        // clips' end, and the clocked machine instances, read again.
+        let clips = Self::touches_clips(tx.ops.iter().chain(expanded.iter()));
+        if structural || clips {
+            self.clips_end = None;
+            self.machines.reclock();
+        }
         if structural {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
@@ -4309,9 +4343,14 @@ impl StoreCore {
             self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
             self.drain_touched();
             self.reactive.invalidate(Tree::of(&self.docs), changed);
-            // A set on a clip's timing, or a link, changes the sample too.
-            // Cheap enough to do unconditionally: clips are few.
-            self.resample_running();
+            // A clip's own leaves set (its `prop`, a key): every clip is
+            // sampled, so what one stops driving is withdrawn; otherwise
+            // the running ones (a constant one reads may have changed).
+            if clips {
+                self.resample();
+            } else {
+                self.resample_running();
+            }
         }
         // Repeats whose count this changed get their copies, as part of
         // this transaction's derived structure: those whose natives ran, or
@@ -4419,9 +4458,10 @@ impl StoreCore {
                 self.abort(rollback);
                 match saved {
                     Some(saved) => saved.restore(self),
-                    // Not reached: without a constraint or an anchor
-                    // nothing refuses.
+                    // Not reached: without a constraint, or an anchor and
+                    // a connection, nothing refuses.
                     None => {
+                        assert!(!cfg!(feature = "differential"), "a refusal with nothing that can refuse: {e:?}");
                         self.reactive.rebuild(Tree::of(&self.docs));
                         self.resample();
                         self.rebuild_clusters();
@@ -4635,8 +4675,10 @@ impl StoreCore {
             })
             .collect();
         let mut summary = SolverSummary::default();
-        let clusters: Vec<solve::Cluster> = self.to_solve(&drivers).into_iter().map(|i| self.clusters.list[i].clone()).collect();
-        for c in &clusters {
+        let mut solved_to = None;
+        while let Some(i) = self.next_to_solve(&drivers, solved_to) {
+            solved_to = Some(i);
+            let c = &self.clusters.list[i].clone();
             if self.unmoved(c, &drivers) {
                 continue;
             }
@@ -5025,21 +5067,33 @@ struct Present {
 /// dropped), and one wanted again while leaving turns back from where it
 /// is. Answers the keys to expand, the wanted ones first, with each one's
 /// element.
+/// What a repeat or conditional settles from (`settle_repeats`): its items'
+/// source, whether it shows, how many at most, and its enter and exit
+/// timings. Its native reads them all, so a change of any settles it again
+/// (council review of DS-3b: `max` and the timings were left out).
+const REPEAT_INPUTS: [(facet::FacetKind, &str); 7] = [
+    (facet::FacetKind::Repeat, "each"),
+    (facet::FacetKind::Repeat, "count"),
+    (facet::FacetKind::Repeat, "key"),
+    (facet::FacetKind::When, "is"),
+    (facet::FacetKind::Repeat, "max"),
+    (facet::FacetKind::Repeat, "enter_ms"),
+    (facet::FacetKind::Repeat, "exit_ms"),
+];
+
 /// A drawn repeat or conditional as a native cell (reactive-engine handoff
-/// §4.10, RE-5.4): it reads what `settle_repeats` compares (`each`, `count`,
-/// `key`, `when`) and writes nothing. That it ran says its inputs changed, so
-/// a settle with none run looks at no repeat.
+/// §4.10, RE-5.4): it reads what `settle_repeats` compares
+/// (`REPEAT_INPUTS`) and writes nothing. That it ran says its inputs
+/// changed, so a settle with none run looks at no repeat.
 #[derive(Debug)]
 struct RepeatNative {
-    leaves: [Leaf; 4],
+    leaves: [Leaf; 7],
     outputs: BTreeSet<Leaf>,
 }
 
 impl RepeatNative {
     fn new(r: NodeId) -> RepeatNative {
-        let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
-        let when = LeafPath::new(facet::FacetKind::When, "is").expect("declared leaf");
-        let leaves = [path("each"), path("count"), path("key"), when].map(|p| Leaf { node: r, path: p });
+        let leaves = REPEAT_INPUTS.map(|(k, f)| Leaf { node: r, path: LeafPath::new(k, f).expect("declared leaf") });
         RepeatNative { leaves, outputs: BTreeSet::new() }
     }
 }

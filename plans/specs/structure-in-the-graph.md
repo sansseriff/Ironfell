@@ -283,7 +283,9 @@ evaluates; cost budgets named. All adopted (§3, §4).
 ## 11. DS-9 as built (2026-11-22)
 
 - **Keys and the recording tree** (`structure.rs`, `tree.rs`): `Node`, `Children`,
-  `FacetSet`, `Facet`; `Tree::recording`; `Tree::has` for presence. Every other `Tree` read
+  `FacetSet`, `Facet`; `Tree::recording`; `Tree::has` for presence, used by layout's
+  `lays_out`, `container`, its `layout_item` check and `geom::local_affine`. A run's keys
+  go into a fresh `Vec`, not a reused buffer as §3.2 said. Every other `Tree` read
   on a recording tree fails a debug assertion (`unkeyed`).
 - **The touched-key log** (`document.rs`): noted in `write_node`, `insert_node`,
   `remove_node`, `restore_node`, `place`, `unplace`, `insert_facet`, `remove_facet`,
@@ -323,3 +325,44 @@ evaluates; cost budgets named. All adopted (§3, §4).
   build (492, fonts 38 with the canary), the scaling test, smoke, regression, and
   `single-tab.txt` in wasm (drag `advance` p50 0.03 ms, under the 0.1 ms budget; playing
   0.09 ms) pass.
+
+## 12. Council code review of DS-9 with DS-2 and DS-3 (2026-11-22): Opus 6/10, Sol 5/10
+
+Both: DS-9's mechanism holds (Opus traced every write path to a drain before the next
+`begin`). The findings were in DS-2's and DS-3's code, untested because the tests ran
+with everything observed and none added or removed a `layout` facet. Fixed, each with a
+test that fails without the fix:
+
+- **A nested layout root** was not made or dropped when its parent gained or lost a
+  `layout` facet (both; "owned twice" in debug): `sync_layout` looks at a touched node's
+  children too (`layout::a_layout_given_to_and_taken_from_a_parent_moves_the_root`).
+- **A repeat whose layout reads its item** ran the old layout over new children (Sol;
+  an output assertion): `settle_repeats` regraphs before it publishes a round
+  (`layout::a_stack_whose_gap_reads_its_own_item_settles`).
+- **A cluster reading another's variable** was left unsolved (Sol): `post_apply` and the
+  live solve take the next cluster after each write (`next_to_solve`;
+  `rollback::a_cluster_that_reads_another_s_variable_solves_after_it`).
+- **A constant edit woke no player** (both): `invalidate` wakes each changed leaf
+  (`reactivity::a_query_s_constant_input_set_asks_again`, one view observed).
+- **`repeat.max` and the enter and exit timings** were not compared (both):
+  `REPEAT_INPUTS` (`reactivity::a_repeat_s_max_set_settles_its_items`).
+- **Clips:** a running clip withdraws what it drives and gave nothing for (scrubbing
+  before its first key; Sol); a clip's own leaves set resample every clip (a `prop`
+  retargeted; Opus); the clips' end is cleared only when clips or structure change, not
+  by every playhead move (both); clocked machine instances are revisited when clips
+  change (`Player::reclock`; Opus) (`time::scrubbing_before_the_first_key_withdraws_the_clip`,
+  `time::a_clip_retargeted_lets_go_of_its_old_leaf`, `machines::keyed_state_scrubs_and_one_occurrence_retimes`).
+- **`can_refuse`** counts anchors only where a connection is (both: any anchor made a
+  circuit snapshot the graph on every edit); the fallback without `Saved` fails under
+  `differential` (Opus).
+- **The oracle** checks claims both ways (Opus); the grouping oracle fails on an error
+  the kept grouping lacks (Sol).
+- **Smaller:** glide specs found afresh when motion turns on record their nodes; players
+  forget leaves the graph refused (`publish_delta` returns them); `scratch()` keeps the
+  running clips; `structure_gen` deleted.
+
+Left for DS-10: a binding retargeted onto a cluster's variable is not regrouped (Sol), the
+grouping reach's gap that DS-10's recorded wiring reads close. Left for DS-12:
+`sync_layout`'s pass over every pinned part, and `update_drawn`'s look at every gone
+node (Opus).
+

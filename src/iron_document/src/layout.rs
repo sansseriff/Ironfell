@@ -59,7 +59,9 @@ pub struct Preview {
 
 /// The container a group's `layout` facet describes, if it lays out.
 fn container(store: &dyn Reads, id: NodeId) -> Option<Container> {
-    store.tree().facet(id, FacetKind::Layout)?;
+    if !store.tree().has(id, FacetKind::Layout) {
+        return None;
+    }
     let mode = match word(store, id, "layout.mode").as_str() {
         "stack_x" => Mode::StackX,
         "stack_y" => Mode::StackY,
@@ -205,7 +207,7 @@ impl Builder<'_> {
         let fill = |leaf: &str| word(store, id, leaf) == "fill";
         let mut item = Item { align_self: align(&word(store, id, "layout_item.align")), ..Item::default() };
         let mut fills = [fill("layout_item.w"), fill("layout_item.h")];
-        if store.tree().facet(id, FacetKind::LayoutItem).is_some() {
+        if store.tree().has(id, FacetKind::LayoutItem) {
             let place = |start: &str, span: &str| {
                 let s = num(store, id, start, 0.0).round();
                 (s >= 1.0).then(|| Area { start: s as u16 - 1, span: num(store, id, span, 1.0).round().max(1.0) as u16 })
@@ -376,7 +378,7 @@ impl Reads for Fresh<'_> {
 /// table.
 pub(crate) fn lays_out(doc: DocTree<'_>, n: NodeId) -> bool {
     doc.live(n).is_some_and(|x| match x.ty.name() {
-        "group" => doc.facet(n, FacetKind::Layout).is_some(),
+        "group" => doc.has(n, FacetKind::Layout),
         "table" => true,
         _ => false,
     })

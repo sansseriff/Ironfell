@@ -551,3 +551,52 @@ fn a_child_taken_out_of_a_stack_lays_it_out_again() {
     store.apply(tx("absolute", vec![Op::AddFacet { id: b, facet: item.wrap() }])).unwrap();
     assert_eq!(num(&store, c, "transform2d.y"), 10.0);
 }
+
+/// A plain group made a stack takes over the stack inside it, which stops
+/// being a root; taken back (and by undo and redo), the inner stack lays
+/// out on its own again (council review of DS-9, Opus and Sol).
+#[test]
+fn a_layout_given_to_and_taken_from_a_parent_moves_the_root() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0">
+        <group id="$r" name="r" x="0" y="0" size.w="10" size.h="10" layout.mode="stack_x">
+          <rect id="$a" name="a" w="10" h="10"/><rect id="$b" name="b" w="10" h="10"/>
+        </group>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (g, b) = (plan.aliases["$g"], plan.aliases["$b"]);
+    store.apply(tx("nested", plan.ops)).unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0);
+    store.apply(tx("outer stack", vec![Op::AddFacet { id: g, facet: Layout { mode: e("stack_y"), ..Layout::default() }.wrap() }])).unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0, "laid out inside the outer stack's run");
+    store.apply(tx("no outer stack", vec![Op::RemoveFacet { id: g, kind: FacetKind::Layout }])).unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0, "a root again");
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0);
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0);
+    store.redo(0).unwrap().unwrap();
+    store.redo(0).unwrap().unwrap();
+    assert_eq!(num(&store, b, "transform2d.x"), 10.0);
+}
+
+/// A stack that repeats its child, its gap read from its own item: settling
+/// makes the copies and publishes the item, and the stack's layout runs
+/// with its new children reserved (council review of DS-9, Sol).
+#[test]
+fn a_stack_whose_gap_reads_its_own_item_settles() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" layout.mode="stack_x" repeat.each="{= list(5, 7)}" layout.gap="{= $g.repeat.item}">
+        <rect name="r" w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let g = plan.aliases["$g"];
+    store.apply(tx("repeat", plan.ops)).unwrap();
+    // Its template child and the two items, laid out side by side.
+    let xs: Vec<f64> = store.tree().children(g).iter().map(|&c| num(&store, c, "transform2d.x")).collect();
+    assert!(xs.len() == 3 && xs.windows(2).all(|w| w[1] > w[0]), "{xs:?}");
+}

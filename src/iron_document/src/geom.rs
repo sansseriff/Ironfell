@@ -95,7 +95,7 @@ impl Affine2 {
 /// A node's own transform, read through `read`. A node without a
 /// `transform2d` facet is the identity, as in the bridge.
 pub fn local_affine(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine2 {
-    if doc.facet(id, FacetKind::Transform2d).is_none() {
+    if !doc.has(id, FacetKind::Transform2d) {
         return Affine2::IDENTITY;
     }
     let num = |field: &str, default: f64| {
@@ -188,7 +188,7 @@ impl Affine3 {
 
 /// A node's own 3D transform. A node without `transform3d` is the identity.
 pub fn local_affine3(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, id: NodeId) -> Affine3 {
-    if doc.facet(id, FacetKind::Transform3d).is_none() {
+    if !doc.has(id, FacetKind::Transform3d) {
         return Affine3::IDENTITY;
     }
     let vec = |field: &str, default: [f64; 3]| {

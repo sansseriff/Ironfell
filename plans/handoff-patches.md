@@ -55,8 +55,8 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
-| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model, and the spec revised; round 2 (Opus 6/10, Sol 6/10) fixed in both; round 3 with PT-4b's first |
-| PT-4b | The storage-and-query spec | Design | PT-4a written | **Drafted 2026-11-21** (`specs/patch-storage.md`); council after PT-4a's |
+| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model, and the spec revised; round 2 (Opus 6/10, Sol 6/10) fixed in both; round 3 (Opus 8/10, Sol 7/10) **not yet fixed**: paused 2026-11-21 for a performance report (below) |
+| PT-4b | The storage-and-query spec | Design | PT-4a written | **Drafted 2026-11-21** (`specs/patch-storage.md`); round 1 (Opus 5/10, Sol 4.5/10) **not yet fixed**: paused (below) |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
 | PT-6 | Machines rebuilt on axes | Build | PT-5 | |
 | PT-7 | Instances on the instance axis | Build | PT-5 | |
@@ -347,6 +347,48 @@ examples, 19 properties, all green) and in the spec:
   endpoints' values; PT-5's read contract (one point per composition, other observers
   values only); the picture axis moved to §13; markup saves ids; PT-8's UI items cut
   from the spec.
+
+**Paused 2026-11-21** at the user's request, to look into dragging in a new composition
+being slower in the demo than in an empty scope. Resume here: fix round 3's and PT-4b's
+round 1 findings (below), then stop for the user's approval.
+
+**Council round 3 (2026-11-21): Opus 8/10, Sol 7/10.** Round 2's fixes hold. Left:
+1. **Rank minting** (both): rank keys carry the minting client's number, as node ids
+   do (scopes.md D2); paste and import re-mint, keeping relative order; the taken-rank
+   refusal is enforced at the op (`Op::Add`, `Op::Rank`, load, replay, undo), not only
+   in `reorder`; a swap of two ranks is one transaction.
+2. **The layer chain with variants at every level** (Opus): at each level outward,
+   the definition then its variants, innermost first; a placement of V counts as one
+   of D when anchoring D's patches.
+3. **What a point read resolves** (Sol): the active chain and local coordinates per
+   occurrence; presence and dependencies at the point asked; a sibling-variant fixture
+   and a read at a point where a child is absent from the live one.
+4. **Lint and locality contracts** (Sol): find and the blast radius intersect the
+   winning region with the target's presence and field; `dead` needs a non-empty
+   region; void boxes get one default key.
+5. Can wait: re-ranking on a slide move (PT-9); whether the drag reads under the whole
+   session layer or only its preview (PT-7); tombstones never collected in PT-5; P11's
+   tiebreak among several local axes; the doc comment of
+   `one_placement_still_overrides_the_hover_pose`; narrative retiming as a region edit
+   and reorder together (PT-9).
+
+**PT-4b council round 1 (2026-11-21): Opus 5/10, Sol 4.5/10.** Left:
+1. **A missing patch chunk is a silent wrong value** (both): bounds go stale when an
+   axis value moves; dropped remote ops can widen a patch onto the shown point; loading
+   needs to repeat after structure resolves and to cover each node's layer chain. The
+   invariant: a client holds every patch chunk whose bounds may hold a point it shows.
+   Keep a versioned tail for unloaded content (Sol).
+2. **The SQL cannot answer §10** (both): instance exclusions, time ranges, ordered
+   sets, missing-axis rows (an anti-join), layers (the room computes strength; SQL only
+   narrows), `btree_gist`.
+3. **Does Postgres earn its place** (Opus): the room holds the whole `Store`; cut §5.1
+   to the chunk catalogue unless a query only Postgres can answer is named.
+4. **Region sync is incomplete** (both): rank minting; a set-selection op for a form
+   change; cofinite widening; crossed endpoints refused; tombstone collection at
+   compaction only.
+5. Chunk ownership by writing scope, never splitting a patch; content-defined chunk
+   boundaries; bounds as the longest common suffix; chunk GC by reachability; cut the
+   Bloom filter and "a placed instance's own nodes".
 
 ### PT-4b: the storage-and-query spec
 

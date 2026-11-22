@@ -1940,6 +1940,52 @@ mod tests {
         }
     }
 
+    /// A tick change every frame: the Lorenz page shown alone, its ρ slider
+    /// previewed between 28 and 40, which rescales the butterfly plot's axes
+    /// so its tick labels come and go each frame (a structural change, as
+    /// the "x against time" plot's scrolling axis makes every second or
+    /// two). `FRAMES=n` keeps going, for a sampling profiler.
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin tick_change -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn tick_change_time() {
+        use iron_document::{Interest, Store, Value, composition, narrative};
+        let mut store = Store::load(&super::template_snapshot("demo").unwrap()).unwrap();
+        let (lorenz, rho) = {
+            let doc = store.tree();
+            let lorenz = composition::compositions(doc).into_iter().find(|&c| narrative::name(doc, c) == "lorenz").unwrap();
+            let rho = doc.descendants(lorenz).into_iter().find(|&n| narrative::name(doc, n) == "rho").unwrap();
+            (lorenz, rho)
+        };
+        store.set_observe_all(false);
+        store.set_motion(true);
+        store.observe(Interest::Region { composition: lorenz, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
+        for k in 0..30 {
+            store.advance(k as f64 / 60.0);
+        }
+        let frames: usize = std::env::var("FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(300);
+        let (mut still, mut ticking) = (Vec::new(), Vec::new());
+        store.begin_gesture(&[rho]);
+        for k in 0..frames {
+            let now = 1.0 + k as f64 / 60.0;
+            let s = std::time::Instant::now();
+            store.advance(now);
+            still.push(s.elapsed().as_secs_f64() * 1e3);
+        }
+        for k in 0..frames {
+            let now = 10.0 + k as f64 / 60.0;
+            let s = std::time::Instant::now();
+            store.preview(rho, "slider.value".parse().unwrap(), Value::Number(if k % 2 == 0 { 40.0 } else { 28.0 }));
+            store.advance(now);
+            ticking.push(s.elapsed().as_secs_f64() * 1e3);
+        }
+        let p50 = |v: &mut Vec<f64>| {
+            v.sort_by(f64::total_cmp);
+            v[v.len() / 2]
+        };
+        println!("lorenz, ρ still: frame p50 {:.3} ms; ρ alternating 28/40 (ticks change every frame): p50 {:.3} ms", p50(&mut still), p50(&mut ticking));
+    }
+
     /// Baseline (reactive-engine handoff §4.1, task 1): loading the demo
     /// document, the demo scene and the showcase as a first visit gets.
     /// Ignored; run with

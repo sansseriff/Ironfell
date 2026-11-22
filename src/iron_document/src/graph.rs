@@ -1150,8 +1150,6 @@ impl Reactive {
     /// signals and followers are made again whole, and positions for each
     /// anchor whose chain of transformed ancestors changed.
     pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: bool, rederive: bool) {
-        // New cells may read unneeded ones: start from every cell current.
-        self.relax(doc);
         let start = first_leaf;
         // The leaves to look at again: every binding the nodes had or have,
         // and every derived signal that came, went or changed.
@@ -1301,7 +1299,39 @@ impl Reactive {
             self.compute_heights();
         }
         let dirty = self.readers(&primed);
+        // New cells may read unneeded ones: what the cells about to run
+        // read, transitively, is needed again, the stale ones brought up to
+        // date first. Only that: a tick label made in a shown plot reaches
+        // what that plot reads, not the document (until 2026-11-21 every
+        // cell was needed again here, and necessity then decided over the
+        // whole document, ~1.5 ms a structural change on the demo). A cell
+        // only a removed one needed stays needed until necessity next
+        // decides (`Store::necessity`, after a transaction or an observer
+        // change): a little extra work, never a stale read.
+        self.need_what_reads_reach(doc, &dirty);
         self.evaluate(doc, &dirty, &primed);
+    }
+
+    /// Make needed every unneeded cell the needed ones of `cells` read,
+    /// directly or through others, bringing the stale ones up to date.
+    fn need_what_reads_reach(&mut self, doc: Tree<'_>, cells: &BTreeSet<CellId>) {
+        if self.unneeded.is_empty() {
+            return;
+        }
+        let mut reached: BTreeSet<CellId> = BTreeSet::new();
+        let mut stack: Vec<CellId> = cells.iter().filter(|c| !self.unneeded.contains(c)).copied().collect();
+        while let Some(c) = stack.pop() {
+            for d in self.reads_of(c) {
+                if self.unneeded.contains(&d) && reached.insert(d) {
+                    stack.push(d);
+                }
+            }
+        }
+        if reached.is_empty() {
+            return;
+        }
+        let keep: BTreeSet<CellId> = self.unneeded.difference(&reached).copied().collect();
+        self.set_unneeded(doc, keep);
     }
 
     /// Make or replace the cell for `leaf`, reading `expr`.

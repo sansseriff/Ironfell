@@ -141,6 +141,15 @@ Tasks, in order; each is committed alone.
     them, PT-1.1): playing in a new tab of the demo 0.55 → 0.41 ms natively. The rest
     is hidden pages' clips evaluating their plots' `ROOTED` cells (lets, args,
     repeats), which PT-10 replaces.
+  - **And a structural change no longer relaxes the whole graph** (2026-11-21):
+    `Reactive::restructure` began with `relax`, every cell needed again and
+    necessity re-decided over the document at the next `advance` (phase 4's
+    builder's decision, reactive-engine handoff §4.9 step 2). It now makes needed only
+    what the cells about to run read (`need_what_reads_reach`): ticks changing every
+    frame on the Lorenz page 4.17 → 2.84 ms (`demo::tests::tick_change_time`). Still
+    whole-document: every transaction (`exact`), and the gate (0.9 ms a structural
+    change). The spec's own design (§6.1, needed-counts kept per edge and observer)
+    would remove both; offered to the user, not started.
   - **The harness missed all of this:** every page observed (the gate returns at
     once) and `showcase=0` (no gallery). `run-iron/single-tab.txt` now covers one tab
     open in the whole demo: a drag, playback, and the Lorenz page at rest.

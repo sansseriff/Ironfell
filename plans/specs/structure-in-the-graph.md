@@ -1,7 +1,7 @@
 # Structure in the graph: one reader of the document
 
-**Status:** draft, revised 2026-11-22 after council rounds 1 (Opus 5/10, Sol 5/10) and 2
-(Opus 6/10, Sol 6/10); §10. Not adopted. It changes the order of
+**Status:** draft, revised 2026-11-22 after council rounds 1 (Opus 5/10, Sol 5/10), 2
+(Opus 6/10, Sol 6/10) and 3 (Opus 7/10, Sol 7/10); §10. Not adopted. It changes the order of
 [`handoff-scaling.md`](../handoff-scaling.md) (the `DS` track): DS-3b stops at part 2
 (`08e0539`), and this spec's phases, DS-9 to DS-14, replace the rest of DS-3b. DS-4a,
 DS-4b and DS-5 stay as planned there and do not wait for these (§6). It replaces
@@ -57,7 +57,12 @@ reports what it touched, and that marks stale exactly the cells that read it.**
 
 ## 3. The mechanism (DS-9)
 
+Line numbers below are as of `13c6500`; functions are named so they survive edits.
+
 ### 3.1 Keys
+
+DS-9 has only the keys its slice reads. Each later phase adds the keys its cells need,
+with its own oracle (§5).
 
 | Key | Recorded by | Fired by |
 |---|---|---|
@@ -65,127 +70,108 @@ reports what it touched, and that marks stale exactly the cells that read it.**
 | `Children(n)` | `children` (authored and copies merged), `descendants` (each node walked) | a child placed or unplaced under `n`, in either document |
 | `FacetSet(n)` | `has(n, kind)` (new: presence only), `facets_of` | a facet added to or removed from `n`, including by `restore_node` |
 | `Facet(n, kind)` | `facet`, `get`, `leaf`, and `facets_of` for each facet it yields: presence **and content** | add, remove, or any field written (`facet_mut`) |
-| `Relations(n)` | `relations_from`, `relations_to` (unfiltered, as the API is) | a relation with an end at `n` linked or unlinked |
-| `Relation(id)` | `relation` | that relation linked or unlinked |
-| `Rooted(owner)` | `rooted` | a relation of that owner linked or unlinked |
-| `Type(t)`, `With(kind)` | `nodes_of_type`, `nodes_with` | the type or facet index's membership changed |
-| `Roots` | `roots`, `last_root` | the root list changed |
-| `Whole` | `nodes`, `live_nodes`, `relations`, `bound_slots`, `expanded_ids` | any structural write, and any slot made, replaced or cleared as an expression |
-| `Wired` | the graph's topology as natives read it (`is_bound`, `transitive_deps`; `Cx::graph()`'s uses) | `Reactive::wired` changing |
 
+- **Any other `Tree` method on a recording tree panics under test** (relations, type and
+  facet indexes, roots, whole-document iterators): a read DS-9 has no key for is caught,
+  not missed.
 - **`Facet` is coarse on purpose:** a facet read through `Tree` depends on the whole
-  facet. A presence check reads `has`, which records `FacetSet` only, so a transform
-  `Set` does not rerun a reader that asked only whether a transform is there (DS-10
-  converts grouping's `facet(..).is_some()` reads, `solve.rs:275`, `constraint.rs:147`,
-  `plug.rs:287`). A hot field read through `Tree` reruns its reader on every write; the
-  cost test (§3.5) names it, and the fix is a leaf read through `Cx::read`.
-- **`Cx::read` and `Cx::constant` stay per leaf.** `read_with` and `beneath`
-  (`graph.rs:2676`, `418`) read through an unrecorded tree, and record only `Node(n)` and
-  `FacetSet(n)`, so a leaf that comes into being (`Create`, `AddFacet`, undo's
-  `restore_node`) reaches a reader that read it absent.
-- **Scopes are deferred.** Every type and facet key is document-wide in DS-9; no DS-9 or
-  DS-10 reader needs less. Per-composition indexes come with the first maker that needs
-  them (DS-12).
-- **`Whole`** is allowed only to cells on a named list; in tests a recording reader panics
-  on it otherwise.
+  facet. A presence check reads `has`, which records `FacetSet` only. DS-9 converts the
+  slice's own presence reads to `has` (`layout::lays_out`, `geom::local_affine`, the
+  `LayoutItem` checks). A hot field read through `Tree` reruns its reader on every write;
+  the fix is a leaf read through `Cx::read`.
+- **`Cx::read` and `Cx::constant` stay per leaf.** `read_with` and `beneath` read through
+  an unrecorded tree and record only `Node(n)` and `FacetSet(n)`, so a leaf that comes into
+  being (`Create`, `AddFacet`, undo's `restore_node`) reaches a reader that read it absent.
 
 ### 3.2 The recording reader
 
-`Tree` gains an optional recorder; about 45 methods record. `Cx::tree()` hands a native a
-recording `Tree`, so the code natives already run (layout, `constraint::all`,
-`plug::implied_mates`, the network) records its reads unchanged.
+`Tree` gains an optional recorder. **In DS-9 only `NativeKey::Layout` cells whose layout is
+not pinned get a recording tree**, and keys act only on them; every other cell (`Pins`,
+pinned layouts, `Clusters`, `Cluster`, `Validate`, islands, repeats) runs as today.
 
-- **Always recorded.** Values steer control flow (a `deref` target, a constraint's `kind`,
-  an anchor's `port`, a layout mode), so every run records. The keys go into a reused
-  buffer, sorted and hashed; key → readers changes only when the hash differs from the
-  cell's last run. Correctness rests on exact key-set equality; the hash is only a fast
-  path.
+- **Always recorded.** Values steer control flow (a layout mode, a `deref` target), so
+  every run records, into a reused buffer, sorted and deduplicated. key → readers is
+  updated only when the list differs from the cell's last run (an exact comparison).
+- **Dropped with the cell:** `set_natives` removes a dropped or replaced native's
+  key → readers entries, as it does its `dependents`; `Reactive::rebuild` clears them.
 
 ### 3.3 Writes: the touched-key log
 
 The rollback journal is not the feed: it holds before-images, records nothing outside an
-open transaction (`rec`, `document.rs:672`), and is dropped at commit; session ops,
-loading and settling copies write outside it. Instead:
+open transaction (`Document::rec`), and is dropped at commit; session ops, loading and
+settling copies write outside it. Instead:
 
 - **The mutation choke points** of `Document` (`insert_node`, `restore_node`, `tombstone`,
-  `remove_node`, `set_parent`, `set_order`, `insert_facet`, `remove_facet`, `facet_mut`,
-  `insert_relation`, `remove_relation`, and the type, facet and relation-end indexes) push
-  §3.1's keys into an always-on **touched-key log**, in both documents, apart from the
-  undo journal. `facet_mut` fires `Facet(n, kind)` only; `With` comes from the facet
-  index, so a `Set` fires no `With`. `restore_node` fires `FacetSet` and `Facet` for every
-  facet it removes or puts back.
-- **A delete** fires `Node` for every node whose liveness changes (a tombstone keeps its
-  facets and relations). `Docs::gone` stays as what readers of a gone node read.
-- **The log's position is journaled:** `Docs::begin` records it and `Docs::rollback`
-  truncates to it (`tree.rs:98`, `110`), so `run`'s error path and a refusal both leave
-  nothing undelivered from the undone writes. `scratch()` clones it empty, as the journal.
+  `remove_node`, `set_parent`, `set_order`, `insert_facet`, `remove_facet`, `facet_mut`)
+  push §3.1's keys into an always-on **touched-key log**, in both documents, apart from the
+  undo journal. `facet_mut` fires `Facet(n, kind)` only. `restore_node` fires `FacetSet`
+  and `Facet` for every facet it removes or puts back. A delete fires `Node` for every node
+  whose liveness changes.
+- **A drain only marks:** it puts the readers of the drained keys into the graph's
+  `pending`, as `prime_natives` does, and evaluates nothing itself.
+- **Drained where the graph is primed today, and only there:** in `regraph`, after
+  `sync_layout` and `sync_repeats`, where `prime_layout` is called now; and just before the
+  non-structural `invalidate` calls (in `after_transaction`'s else branch, the session
+  path, and `apply_recorded`/`release`). So outputs are reconciled before any keyed
+  native runs, and nothing is drained inside `run`. `settle_repeats`, `apply_recorded`,
+  `release`, undo, redo and session ops all reach one of these. A session reorder, whose
+  changed-leaf list is empty, still evaluates once after its drain.
+- **Empty at `begin`:** the log is asserted empty at `Docs::begin` and cleared by
+  `Docs::rollback`, so a refused or failed transaction's keys never reach the graph, and
+  nothing about the log needs journaling. `scratch()` clones it empty. Load clears it and
+  builds every cell fresh.
 
-**Drained**, at these points only, each before the first evaluation that can see the
-writes:
-
-1. `after_transaction`'s start, before the overlay is cleared (`lib.rs:4193`): the
-   transaction's ops and expansion, once `run` has succeeded. Never inside `run`, whose
-   checks can still roll the document back without the graph.
-2. Each `settle_repeats` round, before its publish (`lib.rs:2477`).
-3. After each cluster's write-back in `post_apply`, before the next cluster reads.
-4. After `apply_recorded` and `release` (undo, redo and replay's copy writes).
-5. After session ops commit.
-6. Load: a clean baseline. The log is cleared and every cell is built fresh.
-
-A drain hands the keys to the graph, which marks their readers stale and evaluates them in
-the same pass as `invalidate` today.
-
-**Refusal.** `Saved` is taken after `run` (`lib.rs:4323`). Keys drained after it reach
-cells whose state `Saved` restores, and the journal's truncation drops any not yet
-drained, so a refused transaction leaves no keys behind. `Saved` clones key → readers with
-the rest of `Reactive`; DS-9 measures it. Journaling the graph instead of cloning it is
-DS-7's.
+**Refusal.** `Saved` is taken after `run` and restores the graph, key → readers with it.
+Its cost with recorded keys is reported, not a gate. Two refusal paths are covered by
+tests: a refusal after a key-driven layout run, and a solver refusal through implied
+mates with no `constraint` node, where `can_refuse` is false today and the fallback
+rebuilds from the attempted edit's natives; DS-9 makes `can_refuse` count plugged anchors
+too.
 
 ### 3.4 The slice
 
 DS-9 puts **existing, unpinned layout natives** on keys alone:
 
-- `prime_layout`'s structural priming and `prime_reorders`' call to it are deleted
-  (`lib.rs:4009`, `4044`); a layout native reruns because a key it recorded fired.
+- `regraph`'s call to `prime_layout` primes only `Pins` and the pinned layouts on the walk;
+  unpinned ones rerun because a key they recorded fired. `prime_reorders`, which only calls
+  `prime_layout`, likewise keeps only the pinned part.
 - **Kept on their path:** `layout_touched` and `sync_layout`, which decide which roots
-  exist (maker work, DS-12); `Pins`, whose `constrained` scans every `use`
-  (`layout.rs:542`) and would record document-wide keys.
-- Everything else keeps its rules. The mechanism runs beside them, in shadow (§3.5).
+  exist and reserve their outputs (maker work, DS-12); `Pins` and pinned layouts, whose
+  `constrained` scans every `use`.
 
 ### 3.5 Verification
 
 The differential suite compares two incremental stores that keep copies differently
-(`differential/mod.rs:137`). It is not a rebuild from scratch, and a missed key in shared
-code passes it. So DS-9 adds, under a feature of its own (`structure-oracle`), once per
-operation:
+(`differential/mod.rs`, `call`). It is not a rebuild from scratch, and a missed key in
+shared code passes it. So DS-9 adds, under a feature of its own (`structure-oracle`), once
+per operation:
 
-- **A reference for the slice:** every layout native rebuilt from the current tree and
-  run on a scratch `Reactive` with glides off, its claims (placements), errors and extra
-  (table grids) compared with the kept native's.
-- **Keys predict, rules act:** while a rule still acts, each cell it marks and the keys do
-  not is rerun on a scratch `Reactive` and compared the same way; a difference is a key
-  gap, reported with the op. This finds gaps before each later phase deletes its rule.
-- **A canary:** a test build that drops one kind of key makes the reference comparison
-  fail. If it does not, the oracle is not checking.
-- **Cost:** key visits, index updates and retained keys per cell run and per frame,
-  native and wasm. Budget: `single-tab.txt` drag `advance` p50 under 0.1 ms in wasm (0.04
-  today); a drag inside an observed 800-node stack, proven to rerun its layout, and the
-  same stack's preview, each within 1.3× of today; the `Saved` clone with recorded keys.
-- **No slope:** the scaling test at both axes. A row a phase claims to retire is checked
-  by trace (`trace_one_count`), since another scan can keep a row alive.
+- **A reference for the slice:** after the facade's comparison, for every
+  `layout::structural_roots(tree)`, `layout::lay_out(&StoreCore, root)` (the store
+  implements `Reads` with `Cx`'s `layout_base`) is compared with the kept native's claims
+  (as glide targets, not eased values), errors and table grids. It re-derives which roots
+  exist as well, with no scratch store.
+- **A canary:** a test build with one choke point silenced (`set_order`, then
+  `insert_facet`) must fail the reference on two named tests: a sibling reorder in a stack
+  with glides off, and a `layout_item` facet added. If it does not, the oracle is not
+  checking.
+- **Cost, native release and wasm:** the median per-frame time (`advance` plus the
+  pipeline) of a drag inside an observed 800-node stack, shown to rerun its layout, and the
+  median `preview` call on that stack, each within 1.3× of `13c6500`; `single-tab.txt` drag
+  `advance` p50 under 0.1 ms in wasm (0.04 today).
+- **No slope:** the scaling test at both axes.
 
-**DS-9's exit:** the reference and the shadow silent over the suite; the canary fails as
-it should; the cost within budget; `prime_layout`'s priming gone. DS-9's commit maps every
-`SCALING` row tagged DS-3b to the phase that retires it.
+**DS-9's exit:** the reference silent over the suite; the canary failing both tests; the
+cost within budget; unpinned layouts primed by keys alone.
 
 ## 4. DS-9's size
 
 | | Lines |
 |---|---|
-| Added: keys, the recording `Tree`, hashing, key → readers | ~350–450 |
-| Added: the touched-key log, its journaled position, the drains | ~150–200 |
-| Added: the oracle, reference and canary (feature-gated) | ~200–300 |
-| Removed: `prime_layout`'s structural priming, `prime_reorders`' call | ~30 |
+| Added: four keys, the recording `Tree`, key → readers, `has` | ~250–350 |
+| Added: the touched-key log, its drains, the `begin` assertion | ~100–150 |
+| Added: the reference and the canary (feature-gated) | ~80–150 |
+| Removed: unpinned priming from `prime_layout` and `prime_reorders` | ~20 |
 
 DS-9 adds a mechanism and deletes almost nothing; the deletions come in DS-10 to DS-14.
 **The whole plan, from the code at `08e0539`:** about 900–1,100 lines removed and
@@ -198,11 +184,11 @@ result.
 ## 5. Later phases, and what each design must answer
 
 Each is designed in a short addendum, reviewed at its group (§8), then built. Each deletes
-a rule only in the phase that replaces it, after the shadow (§3.5) has been silent for it.
+a rule only in the phase that replaces it, after that phase's oracle has been silent for it.
 
 | Key | Builds | Must answer (council rounds 1 and 2) |
 |---|---|---|
-| DS-10 | Grouping and validation as recorded cells; `prime_grouping` and the grouping reach deleted | Whether `Wired` is fine enough: a `transitive_deps` walk must hear of a rewired intermediate leaf, unbound ones included |
+| DS-10 | Grouping and validation as recorded cells, with the keys they read (relations, types, `Wired` for the graph's topology) and a shadow: each cell a rule marks and the keys do not is rerun, a difference being a key gap; `prime_grouping` and the grouping reach deleted | Whether `Wired` is fine enough: a `transitive_deps` walk must hear of a rewired intermediate leaf, unbound ones included |
 | DS-11 | Bindings: wiring as a kept result; the theme publish and the network as cells; rescope, `token_readers_by`, the definition rule, and the network and token stamps deleted | Who makes and drops binding cells (a drained `Facet` diffed against its bound slots, `facet_mut` hands out `&mut`); `@name` keyed by a name → providers index, not `provided`'s walk to the roots, which would record `Roots`; the `tokens` map passed in from outside the recorder; wiring and evaluation subscribed apart, wiring committed through the edge, cycle and height path |
 | DS-3c | Heights by `raise` along the cone (handoff-scaling.md) | As planned there |
 | DS-12 | The maker; `layout_touched`, `sync_layout`, `sync_repeats`, `update_drawn`, `sync_islands`, `sync_cluster_natives` deleted; per-composition indexes | Cells made mid-pass; a maker pulled when a child or reservation does not yet exist, its necessity and height, kept out of the gate; reservations reconciled through the batched claim handoff (`graph.rs:2502`); a shown cell reading the copies of a repeat in a paused page |
@@ -231,8 +217,8 @@ apply a recorded transaction's inverse or ops through `run`.
 
 - **Undo and redo** are edits: their writes go through the choke points and fire keys like
   any other, drained at §3.3's points 1 and 4.
-- **The journal** stays the undo mechanism. The log's position is journaled with it
-  (§3.3).
+- **The journal** stays the undo mechanism. The touched-key log is empty at every
+  `begin` and cleared by rollback (§3.3).
 - **`Saved`** clones key → readers with the graph. DS-9 measures it; if it matters, DS-7
   (refusal by journal and re-derivation, no snapshot) comes forward, journaling the
   graph's own changes as the document's are.
@@ -253,13 +239,13 @@ Reviews by group, both members (Opus 5.5 and Sol 6.2, high), read-only:
 ## 9. Risks
 
 - **Recording's cost.** A layout over 500 nodes makes 2.5k–5k reads, ~50–150 µs to sort
-  and hash (an estimate); updating key → readers costs more, and the hash check skips it
-  on value-only reruns. If over budget: smaller keys, or hot fields read as leaves.
+  and compare (an estimate); updating key → readers costs more, and the comparison skips
+  it on value-only reruns. If over budget: smaller keys, or hot fields read as leaves.
 - **Coarse keys.** `Facet` content, `Whole` and unscoped type reads rerun readers more
   than a leaf would: visible and named by the tests, never stale.
-- **Escapes.** A kept result outside `Cx` escapes the rule. DS-9 lists every kept set in
-  the store as a cell, a one-off, or one of DS-4/5's, and the shadow reruns what the rules
-  mark.
+- **Escapes.** A kept result outside `Cx` escapes the rule. Each phase lists the kept sets
+  in the store it touches as a cell, a one-off, or one of DS-4/5's, as it puts cells on keys;
+  each phase's oracle reruns what its rules mark.
 - **Scope.** The engine's core again. Grouping's split, clips and the host are out.
 
 ## 10. Council
@@ -282,3 +268,14 @@ log's position journaled; `has` for presence and `Cx::read` per leaf (§3.1); `B
 phases' open questions listed for their own designs (§5). Fixed in code at once: `Saved`
 now restores the layout roots, pinned parts and glide nodes DS-3b part 2 added
 (`tests/rollback.rs`, a layout made in a refused transaction).
+
+**Round 3 (2026-11-22): Opus 7/10, Sol 7/10, on DS-9 alone.** Both: draining before
+`sync_layout` would run old layout natives against new children (an output assertion),
+so a drain only marks, where the graph is primed today; `prime_layout` is also the only
+structural trigger for `Pins` and pinned layouts, which keep it; the oracle's reference
+must not share the invalidation it checks; the canary must silence a choke point, not a
+key kind. Opus: keys act only on unpinned layout cells in DS-9; the reference is
+`layout::lay_out` on the store; an empty log at `begin` instead of a journaled position;
+the shadow moves to DS-10; the key table shrinks to the four the slice uses; no hash.
+Sol: refusal through implied mates with no constraint node; a session reorder still
+evaluates; cost budgets named. All adopted (§3, §4).

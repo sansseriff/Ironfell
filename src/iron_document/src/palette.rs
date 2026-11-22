@@ -193,8 +193,13 @@ fn used(ops: &[Op]) -> Vec<String> {
 /// and every missing built-in token, so a document's theme is whole). Ids
 /// start after any `ops` create.
 pub fn ensure_ops(doc: Tree<'_>, ops: &[Op]) -> Vec<Op> {
-    let have = tokens(doc);
+    // The ops first: most name no built-in token, and then no token is
+    // looked up (plans/handoff-scaling.md DS-3a).
     let names = used(ops);
+    if !names.iter().any(|n| BUILT_IN.iter().any(|(b, _, _)| b == n)) {
+        return Vec::new();
+    }
+    let have = tokens(doc);
     if !names.iter().any(|n| !have.contains_key(n) && BUILT_IN.iter().any(|(b, _, _)| b == n)) {
         return Vec::new();
     }

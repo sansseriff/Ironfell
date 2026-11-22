@@ -503,6 +503,8 @@ pub struct StoreCore {
     animated: BTreeSet<NodeId>,
     /// Where the last clip ends, kept until the clips or keys change.
     clips_end: Option<f64>,
+    /// The tokens' stamp and the scheme the theme was last published for.
+    theme_at: Option<(u64, bool)>,
     /// Queries to Models (query.rs): presentation state.
     queries: query::Queries,
     /// Items entering and leaving, by owner (a repeat or a conditional):
@@ -656,6 +658,7 @@ impl StoreCore {
             running_clips: Vec::new(),
             animated: BTreeSet::new(),
             clips_end: None,
+            theme_at: None,
             queries: self.queries.clone(),
             presence: self.presence.clone(),
             presence_moving: self.presence_moving.clone(),
@@ -947,6 +950,7 @@ impl StoreCore {
             running_clips: Vec::new(),
             animated: BTreeSet::new(),
             clips_end: None,
+            theme_at: None,
             queries: query::Queries::default(),
             presence: Default::default(),
             presence_moving: BTreeSet::new(),
@@ -1014,6 +1018,9 @@ impl StoreCore {
         }
         if let Ok(c) = self.grouped() {
             self.owners.hold(c.copies());
+            // `committed` names current clusters only: `resolve_clusters_live`
+            // counts on it.
+            self.committed.retain(|k| c.at.contains_key(k));
             self.clusters = c;
             self.sync_cluster_natives();
         }
@@ -1096,7 +1103,17 @@ impl StoreCore {
         if self.clusters.list.is_empty() {
             return report;
         }
-        let clusters = self.clusters.list.clone();
+        // The clusters that could have moved: their watching native ran,
+        // a finger holds them, or they have not been committed; the rest
+        // are as their last solve left them (DS-3a: no pass over all).
+        let mut keys: BTreeSet<NodeId> = self.reactive.ran_clusters().collect();
+        keys.extend(self.fingers.iter().filter_map(|f| self.clusters.by_node.get(&f.node).copied()));
+        if self.committed.len() < self.clusters.list.len() {
+            keys.extend(self.clusters.at.keys().filter(|k| !self.committed.contains(k)).copied());
+        }
+        let mut order: Vec<usize> = keys.iter().filter_map(|k| self.clusters.at.get(k).copied()).collect();
+        order.sort_unstable();
+        let clusters: Vec<solve::Cluster> = order.into_iter().map(|i| self.clusters.list[i].clone()).collect();
         for c in &clusters {
             if self.unmoved(c, &[]) {
                 continue;
@@ -3471,6 +3488,13 @@ impl StoreCore {
 
     /// Publish each token's colour for the theme (`ProducerId::THEME`).
     fn resolve_theme(&mut self) {
+        // The tokens and the scheme as last published: nothing to do (no
+        // pass over the tokens on every pipeline, DS-3a).
+        let key = (self.docs.tokens_shaped, self.dark);
+        if self.theme_at == Some(key) {
+            return;
+        }
+        self.theme_at = Some(key);
         let values = palette::publish(Tree::of(&self.docs), self.dark);
         if values == self.reactive.published_by(ProducerId::THEME) {
             return;
@@ -3528,7 +3552,7 @@ impl StoreCore {
     /// is depends only on structure and slots, so it is kept until the
     /// document is written again.
     fn network_now(&mut self) -> (std::sync::Arc<crate::port::Network>, bool) {
-        let edits = self.docs.edits();
+        let edits = self.docs.network_shaped;
         match &self.network {
             Some((at, net)) if *at == edits => (net.clone(), false),
             _ => {

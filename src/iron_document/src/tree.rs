@@ -45,11 +45,20 @@ pub(crate) struct Docs {
     /// unique across stores (`crate::stamp`). The gate's cache key
     /// (`Store::gate`).
     pub(crate) reshaped: u64,
+    /// A stamp taken whenever an op that can change the port network is
+    /// applied (`op::rewires_network`: structure, relations, a port's,
+    /// connection's or equation's leaf), and on every rollback: what the
+    /// network is cached against (`Store::network_now`), so a constant
+    /// edit or the playhead does not rebuild it (DS-3a).
+    pub(crate) network_shaped: u64,
+    /// Likewise for the theme's tokens (`op::retokens`): what the theme's
+    /// published colours are cached against (`Store::resolve_theme`).
+    pub(crate) tokens_shaped: u64,
 }
 
 impl Docs {
     pub(crate) fn new(authored: Document, apart: bool) -> Docs {
-        Docs { authored, copies: Document::new(), apart, gone: Default::default(), gone_journal: None, reshaped: crate::stamp() }
+        Docs { authored, copies: Document::new(), apart, gone: Default::default(), gone_journal: None, reshaped: crate::stamp(), network_shaped: crate::stamp(), tokens_shaped: crate::stamp() }
     }
 
     /// Delete one live node, its children already gone: a copy kept apart
@@ -100,6 +109,8 @@ impl Docs {
 
     pub(crate) fn rollback(&mut self) {
         self.reshaped = crate::stamp();
+        self.network_shaped = crate::stamp();
+        self.tokens_shaped = crate::stamp();
         self.authored.rollback();
         self.copies.rollback();
         for (id, was) in self.gone_journal.take().into_iter().flatten().rev() {

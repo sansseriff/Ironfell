@@ -506,6 +506,26 @@ Per frame, nothing visits what is at rest or paused:
   ports scans (DS-3a, DS-3b); the gate deciding after an observer change (DS-5); theme
   tokens' readers (DS-4a).
 
+### DS-3a as done (2026-11-21)
+
+Per pipeline:
+- **The port network** is cached against its own document stamp
+  (`Docs::network_shaped`, `op::rewires_network`: structure, or a port's,
+  connection's or equation's leaf), not against every edit, so the playhead's `t` and
+  a constant edit no longer rebuild it.
+- **The constraint clusters:** `resolve_clusters_live` solves only those whose watching
+  native ran, under a finger, or not yet committed (indexed by key and by node,
+  `Clusters::at`, `by_node`), not a clone of the list checked one by one; `committed`
+  is pruned to current clusters wherever they are replaced.
+- **The theme** is published again only when its tokens (`Docs::tokens_shaped`) or the
+  scheme change; `palette::ensure_ops` looks at the ops before any token.
+- **A diagnostic:** `scaling::trace_one_count` (`WORK_TRACE=<count>`,
+  `WORK_OP=<operation>`) prints the call stacks behind a count, through
+  `work::trace`.
+- **Result:** a drag, playing and scrubbing have no slope at all. What a constant edit
+  still grows by, traced: `expand::drawn_repeats` (every group, in `settle_repeats` after
+  every transaction) and `published_by(ITEMS)` (DS-3b); the necessity sweep (DS-4).
+
 ## 7. Risks
 
 - **Counts drift:** the oracle (§4.1) after every operation in tests.

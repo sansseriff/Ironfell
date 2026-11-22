@@ -41,11 +41,28 @@ pub struct Clusters {
     pub list: crate::work::Counted<Vec<Cluster>, { crate::work::STORE_CLUSTERS }>,
     /// Variable leaf → cluster id, for `.by` markers.
     pub var_cluster: BTreeMap<Leaf, NodeId>,
+    /// Each cluster's place in `list`, by key, and the cluster each node
+    /// is in: so a solve of what moved finds it without a pass over all
+    /// (plans/handoff-scaling.md DS-3a).
+    pub at: BTreeMap<NodeId, usize>,
+    pub by_node: BTreeMap<NodeId, NodeId>,
 }
 
 impl Clusters {
+    /// `list` and its indexes.
+    pub fn new(list: Vec<Cluster>, var_cluster: BTreeMap<Leaf, NodeId>) -> Clusters {
+        let at = list.iter().enumerate().map(|(i, c)| (c.key(), i)).collect();
+        let by_node = list.iter().flat_map(|c| c.nodes.iter().map(move |&n| (n, c.key()))).collect();
+        Clusters { list: list.into(), var_cluster, at, by_node }
+    }
+
+    /// The cluster with key `key`.
+    pub fn by_key(&self, key: NodeId) -> Option<&Cluster> {
+        self.at.get(&key).and_then(|&i| self.list.get(i))
+    }
+
     pub fn containing(&self, node: NodeId) -> Option<&Cluster> {
-        self.list.iter().find(|c| c.nodes.contains(&node))
+        self.by_node.get(&node).and_then(|&k| self.by_key(k))
     }
 
     /// The copies some cluster holds: their transform is the solver's,
@@ -301,7 +318,7 @@ pub(crate) fn clusters_with(doc: Tree<'_>, reactive: &crate::graph::Reactive, li
     }
     let ordered: Vec<Cluster> = order.into_iter().map(|i| list[i].clone()).collect();
     let var_cluster = ordered.iter().flat_map(|c| c.vars.iter().map(move |v| (*v, c.id))).collect();
-    Ok(Clusters { list: ordered.into(), var_cluster })
+    Ok(Clusters::new(ordered, var_cluster))
 }
 
 /// Where a residual gets a transform leaf from: the solver's variable

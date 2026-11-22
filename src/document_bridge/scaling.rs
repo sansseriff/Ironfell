@@ -37,8 +37,6 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("constant edit", "store.clusters", "DS-3a"),
     ("constant edit", "store.item_memo", "DS-3b"),
     ("constant edit", "store.presence", "DS-2"),
-    ("drag", "allocations", "DS-2"),
-    ("drag", "store.clusters", "DS-3a"),
     ("edit plan", "allocations", "DS-7"),
     ("edit plan", "bytes", "DS-7"),
     ("edit plan", "descendants", "DS-4a, DS-5"),
@@ -134,11 +132,6 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("paste", "store.clusters", "DS-3a"),
     ("paste", "store.item_memo", "DS-3b"),
     ("paste", "store.presence", "DS-2"),
-    ("playing", "allocations", "DS-6b"),
-    ("playing", "bytes", "DS-6b"),
-    ("playing", "graph.natives", "DS-3a"),
-    ("playing", "nodes_of_type", "DS-3b"),
-    ("playing", "store.clusters", "DS-3a"),
     ("rejected edit", "allocations", "DS-7"),
     ("rejected edit", "bytes", "DS-7"),
     ("rejected edit", "clocks", "DS-2"),
@@ -187,15 +180,9 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("running accumulator", "queries", "DS-2"),
     ("running accumulator", "relations", "DS-3b"),
     ("running accumulator", "roots", "DS-3b"),
-    ("running accumulator", "store.clusters", "DS-3a"),
     ("save (canary)", "allocations", "canary: must always grow"),
     ("save (canary)", "bytes", "canary: must always grow"),
     ("save (canary)", "relations", "canary: must always grow"),
-    ("scrub", "allocations", "DS-6b"),
-    ("scrub", "bytes", "DS-6b"),
-    ("scrub", "graph.natives", "DS-3a"),
-    ("scrub", "nodes_of_type", "DS-3b"),
-    ("scrub", "store.clusters", "DS-3a"),
     ("show and hide a page", "allocations", "DS-4a"),
     ("show and hide a page", "bytes", "DS-4a"),
     ("show and hide a page", "clocks", "DS-2"),
@@ -245,7 +232,6 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("structural preview", "queries", "DS-2"),
     ("structural preview", "relations", "DS-3b"),
     ("structural preview", "roots", "DS-3b"),
-    ("structural preview", "store.clusters", "DS-3a"),
     ("structural preview", "store.item_memo", "DS-3b"),
     ("structural preview", "store.presence", "DS-2"),
     ("structural preview", "store.repeats", "DS-3b"),
@@ -667,6 +653,32 @@ fn growing(sizes: &[&Vec<(&'static str, Work)>; 3], i: usize) -> Vec<(&'static s
         }
     }
     out
+}
+
+/// Which passes add to one count in one operation: `WORK_TRACE=<count>`
+/// `WORK_OP=<operation>` (`COPIES=n`, default 1), printing each stack and
+/// the work it added. A diagnostic, ignored.
+///   WORK_TRACE=nodes_of_type WORK_OP="constant edit" cargo test -p ironfell --lib --features native --target aarch64-apple-darwin trace_one_count -- --ignored --nocapture
+#[test]
+#[ignore]
+fn trace_one_count() {
+    let (Ok(count), Ok(name)) = (std::env::var("WORK_TRACE"), std::env::var("WORK_OP")) else { return };
+    let copies: usize = std::env::var("COPIES").ok().and_then(|c| c.parse().ok()).unwrap_or(1);
+    let snapshot = super::demo::template_snapshot("demo").unwrap();
+    let mut c = fixture(&snapshot, copies, 0);
+    let o = operations().into_iter().find(|o| o.name == name).expect("an operation of that name");
+    (o.setup)(&mut c);
+    (o.run)(&mut c);
+    (o.teardown)(&mut c);
+    c.settle();
+    (o.setup)(&mut c);
+    iron_document::work::trace(Box::leak(count.into_boxed_str()));
+    (o.run)(&mut c);
+    let mut stacks: Vec<(String, u64)> = iron_document::work::take_trace().into_iter().collect();
+    stacks.sort_by(|a, b| b.1.cmp(&a.1));
+    for (stack, n) in stacks.iter().take(15) {
+        println!("{n:>8}  {stack}");
+    }
 }
 
 #[test]

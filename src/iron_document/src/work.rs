@@ -125,12 +125,61 @@ pub const PRODUCER_PUBLISHED: usize = 29;
 #[inline(always)]
 pub fn visit(site: Site, n: usize) {
     #[cfg(feature = "work")]
-    COUNTS.with(|c| {
-        let c = &c[site as usize];
-        c.set(c.get() + n as u64);
-    });
+    {
+        COUNTS.with(|c| {
+            let c = &c[site as usize];
+            c.set(c.get() + n as u64);
+        });
+        trace_hit(site.name(), n);
+    }
     #[cfg(not(feature = "work"))]
     let _ = (site, n);
+}
+
+#[cfg(feature = "work")]
+thread_local! {
+    /// The count being traced (`trace`), and the stacks that hit it, by
+    /// the store functions on them.
+    static TRACING: std::cell::RefCell<Option<(&'static str, BTreeMap<String, u64>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Record, on this thread, the call stacks that add to the count `name`
+/// (a site or a map), until `take_trace`: which pass a count comes from.
+/// Diagnostic only: it allocates.
+#[cfg(feature = "work")]
+pub fn trace(name: &'static str) {
+    TRACING.with(|t| *t.borrow_mut() = Some((name, BTreeMap::new())));
+}
+
+/// The stacks recorded since `trace`, each with the work it added.
+#[cfg(feature = "work")]
+pub fn take_trace() -> BTreeMap<String, u64> {
+    TRACING.with(|t| t.borrow_mut().take().map(|(_, m)| m).unwrap_or_default())
+}
+
+#[cfg(feature = "work")]
+fn trace_hit(name: &'static str, n: usize) {
+    let on = TRACING.with(|t| t.try_borrow().ok().and_then(|t| t.as_ref().map(|(k, _)| *k == name)).unwrap_or(false));
+    if !on || n == 0 {
+        return;
+    }
+    let bt = std::backtrace::Backtrace::force_capture().to_string();
+    let frames: Vec<String> = bt
+        .lines()
+        .filter_map(|l| l.trim().split_once(": ").map(|(_, f)| f.to_owned()))
+        .filter(|f| f.contains("iron_document") && !f.contains("work::") && !f.starts_with("core::") && !f.starts_with("alloc::") && !f.starts_with("<core::") && !f.starts_with("<alloc::") && !f.starts_with("<&mut") && !f.contains("{closure") && !f.contains("inspect"))
+        .map(|f| f.replace("iron_document::", "").replace("<StoreCore>::", "Store::").replace("<graph::Reactive>::", "Reactive::"))
+        .map(|f| f.rsplit_once("::h").map_or(f.clone(), |(a, _)| a.to_owned()))
+        .take(6)
+        .collect();
+    let key = frames.join(" < ");
+    TRACING.with(|t| {
+        if let Ok(mut t) = t.try_borrow_mut()
+            && let Some((_, m)) = t.as_mut()
+        {
+            *m.entry(key).or_default() += n as u64;
+        }
+    });
 }
 
 /// Count `n` entries of the map named `MAP_NAMES[map]`.
@@ -143,6 +192,7 @@ pub fn visit_map(map: usize, n: usize) {
             let c = &c[map.min(MAP_NAMES.len() - 1)];
             c.set(c.get() + n as u64);
         });
+        trace_hit(MAP_NAMES[map.min(MAP_NAMES.len() - 1)], n);
     }
     #[cfg(not(feature = "work"))]
     let _ = (map, n);

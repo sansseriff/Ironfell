@@ -2427,6 +2427,15 @@ impl Reactive {
 
     /// Whether cluster `k`'s native ran since `clear_ran` (something of it
     /// changed).
+    /// The cluster natives that ran since their cluster last solved
+    /// (`clear_ran`): the clusters something of which changed.
+    pub(crate) fn ran_clusters(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.ran.iter().filter_map(|k| match k {
+            NativeKey::Cluster(c) => Some(*c),
+            _ => None,
+        })
+    }
+
     pub(crate) fn ran(&self, k: NativeKey) -> bool {
         self.ran.contains(&k)
     }

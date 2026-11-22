@@ -210,6 +210,12 @@ pub(crate) fn apply_op(
     if reshapes(op) {
         docs.reshaped = crate::stamp();
     }
+    if rewires_network(op) {
+        docs.network_shaped = crate::stamp();
+    }
+    if retokens(op) {
+        docs.tokens_shaped = crate::stamp();
+    }
     match op {
         Op::Create {
             id,
@@ -254,6 +260,25 @@ pub(crate) fn apply_op(
 fn reshapes(op: &Op) -> bool {
     match op {
         Op::Set { path, .. } => matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
+        _ => true,
+    }
+}
+
+/// Whether `op` can change the port network (`port::network`): structure
+/// and relations, and a port's, connection's or equation's leaf (whether
+/// one is bound decides an unknown). A constant elsewhere cannot.
+fn rewires_network(op: &Op) -> bool {
+    match op {
+        Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Connection | FacetKind::Equation),
+        _ => true,
+    }
+}
+
+/// Whether `op` can change the theme's tokens: structure, or a token's
+/// leaf.
+fn retokens(op: &Op) -> bool {
+    match op {
+        Op::Set { path, .. } => path.facet == FacetKind::Token,
         _ => true,
     }
 }

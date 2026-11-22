@@ -1986,6 +1986,91 @@ mod tests {
         println!("lorenz, ρ still: frame p50 {:.3} ms; ρ alternating 28/40 (ticks change every frame): p50 {:.3} ms", p50(&mut still), p50(&mut ticking));
     }
 
+    /// What grows with the hidden document: the demo with `k` extra copies
+    /// of the gallery's pages, all hidden, and one small shown
+    /// composition where the work happens. Each operation's cost should not
+    /// depend on `k`. `SIZES=1,2,4` (extra copies) and `FRAMES`.
+    ///   cargo test -p ironfell --lib --features native --release --target aarch64-apple-darwin document_scaling -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn document_scaling_time() {
+        use iron_document::{Actor, Interest, Op, Slot, Store, TransactionInput, Value};
+        let sizes: Vec<usize> = std::env::var("SIZES").ok().map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or(vec![0, 1, 3]);
+        let frames: usize = std::env::var("FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(200);
+        let tx = |label: &str, ops: Vec<Op>| TransactionInput { label: label.into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false };
+        for extra in sizes {
+            let mut store = Store::load(&super::template_snapshot("demo").unwrap()).unwrap();
+            // Another copy of the gallery's nine pages, as new pages.
+            let timeline = {
+                let doc = store.tree();
+                doc.nodes_of_type(iron_document::TypeId::lookup("timeline").unwrap()).find(|&t| doc.is_live(t)).unwrap()
+            };
+            for _ in 0..extra {
+                for src in super::GALLERY {
+                    let (more, _) = iron_document::edit::transaction(&store, &src.replace("#TIMELINE", &timeline.to_string()), "gallery", Actor::System).unwrap();
+                    store.apply(more).unwrap();
+                }
+            }
+            let plan = iron_document::edit::plan(
+                &store,
+                r#"<edit><composition id="$c" name="perf" dims="2d"><let id="$n" name="n" value="3"/><rect id="$r" name="r" x="100" y="100" w="150" h="100"/><group id="$g" name="g" repeat.count="{= $n.let.value}"><rect name="cell" x="{= $g.repeat.index * 20}" y="300" w="10" h="10"/></group></composition></edit>"#,
+                None,
+            )
+            .unwrap_or_else(|f| panic!("{}", f.message()));
+            store.apply(tx("perf", plan.ops)).unwrap();
+            let (c, n, r) = (plan.aliases["$c"], plan.aliases["$n"], plan.aliases["$r"]);
+            store.clear_history();
+            store.set_observe_all(false);
+            store.set_motion(true);
+            store.observe(Interest::Region { composition: c, rect: [f64::MIN / 4.0, f64::MIN / 4.0, f64::MAX / 2.0, f64::MAX / 2.0], zoom: 1.0 });
+            let mut now = 0.0;
+            let mut tick = || {
+                now += 1.0 / 60.0;
+                now
+            };
+            for _ in 0..30 {
+                let t = tick();
+                store.advance(t);
+            }
+            let p50 = |mut v: Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            // `ONLY=<operation>` times just that one, for a sampling profiler.
+            let only = std::env::var("ONLY").ok();
+            let time = |store: &mut Store, name: &str, f: &mut dyn FnMut(&mut Store, usize)| {
+                if only.as_deref().is_some_and(|o| o != name) {
+                    return 0.0;
+                }
+                let mut v = Vec::new();
+                for k in 0..frames {
+                    let s = std::time::Instant::now();
+                    f(store, k);
+                    v.push(s.elapsed().as_secs_f64() * 1e3);
+                }
+                p50(v)
+            };
+            let x: iron_document::LeafPath = "transform2d.x".parse().unwrap();
+            let let_value: iron_document::LeafPath = "let.value".parse().unwrap();
+            let idle = time(&mut store, "idle", &mut |s, _| { let t = tick(); s.advance(t); });
+            s_begin(&mut store, r);
+            let drag = time(&mut store, "drag", &mut |s, k| { s.preview(r, x, Value::Number(100.0 + k as f64)); let t = tick(); s.advance(t); });
+            let structural = time(&mut store, "structural", &mut |s, k| { s.preview(n, let_value, Value::Number(if k % 2 == 0 { 4.0 } else { 3.0 })); let t = tick(); s.advance(t); });
+            store.cancel_gesture();
+            let edit = time(&mut store, "edit", &mut |s, k| { s.apply(tx("x", vec![Op::Set { id: r, path: x, slot: Slot::Const(Value::Number(200.0 + k as f64)) }])).unwrap(); let t = tick(); s.advance(t); });
+            let structural_edit = time(&mut store, "structural_edit", &mut |s, k| { s.apply(tx("n", vec![Op::Set { id: n, path: let_value, slot: Slot::Const(Value::Number(if k % 2 == 0 { 4.0 } else { 3.0 })) }])).unwrap(); let t = tick(); s.advance(t); });
+            crate::document_bridge::clock::set(&mut store, &[("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(4.0)), ("playing", Value::Bool(true))]).unwrap();
+            let playing = time(&mut store, "playing", &mut |s, _| { let t = tick(); s.advance(t); });
+            println!(
+                "+{extra} copies, {} live nodes: idle {idle:.3}  drag {drag:.3}  structural preview {structural:.3}  constant edit {edit:.3}  structural edit {structural_edit:.3}  playing {playing:.3} ms (p50)",
+                store.tree().live_nodes().count()
+            );
+        }
+        fn s_begin(store: &mut iron_document::Store, r: iron_document::NodeId) {
+            store.begin_gesture(&[r]);
+        }
+    }
+
     /// Baseline (reactive-engine handoff §4.1, task 1): loading the demo
     /// document, the demo scene and the showcase as a first visit gets.
     /// Ignored; run with

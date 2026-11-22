@@ -74,6 +74,9 @@ pub enum Strength {
     Stored,
 }
 
+/// One axis's key for a selection: larger is more specific.
+pub type AxisKey = (i64, i64, Vec<i64>);
+
 /// One axis's key for a selection, from the selection as written (so it
 /// does not change as the axis grows): larger is more specific, and a
 /// selection strictly within another (`Sel::within`) has a larger key.
@@ -82,18 +85,21 @@ pub enum Strength {
 ///   to be inserted), fewer values first;
 /// - unordered: a finite set before a cofinite one; fewer values in a set,
 ///   more excluded from a cofinite one;
-/// - instance: more steps fixed; a named set (a class) before a pattern of
-///   the same length; fewer members; more patterns excluded.
-pub fn axis_key(space: &Space, axis: AxisId, sel: &Sel) -> (i64, i64, i64) {
+/// - instance: more steps fixed; then the exclusions that remove something,
+///   reduced (one that extends another removes nothing more), counted by
+///   length, shortest first: a shorter exclusion removes more, so counting
+///   them alone could put a wider pattern above a narrower one (round 2).
+///   There are no classes: a variant is a layer (patches.md §6.1).
+pub fn axis_key(space: &Space, axis: AxisId, sel: &Sel) -> AxisKey {
     let Some(ax) = space.axes.get(&axis) else {
-        return (i64::MIN, i64::MIN, i64::MIN);
+        return (i64::MIN, i64::MIN, vec![i64::MIN]);
     };
     if sel.void(ax) {
-        return (i64::MAX, i64::MAX, i64::MAX);
+        return (i64::MAX, i64::MAX, vec![i64::MAX]);
     }
     let cut = |v: crate::axis::ValueId| 2 * ax.position(v).map_or(i64::MAX / 4, |p| p as i64);
     match (ax.kind, sel) {
-        (Kind::Ordered, Sel::All) => (i64::MIN, -i64::MAX, i64::MIN / 2),
+        (Kind::Ordered, Sel::All) => (i64::MIN, -i64::MAX, vec![i64::MIN / 2]),
         (Kind::Ordered, Sel::Range(lo, hi)) => {
             let lo = match lo {
                 Bound::Open => i64::MIN,
@@ -105,39 +111,57 @@ pub fn axis_key(space: &Space, axis: AxisId, sel: &Sel) -> (i64, i64, i64) {
                 Bound::Incl(v) => cut(*v),
                 Bound::Excl(v) => cut(*v) - 1,
             };
-            (lo, -hi, if lo == hi { -1 } else { i64::MIN / 2 })
+            (lo, -hi, vec![if lo == hi { -1 } else { i64::MIN / 2 }])
         }
         (Kind::Ordered, Sel::Set(s)) => {
             let cuts: Vec<i64> = s.iter().map(|v| cut(*v)).collect();
             (
                 cuts.iter().copied().min().unwrap_or(0),
                 -cuts.iter().copied().max().unwrap_or(0),
-                -(s.len() as i64),
+                vec![-(s.len() as i64)],
             )
         }
-        (Kind::Unordered, Sel::Set(s)) => (1, -(s.len() as i64), 0),
-        (Kind::Unordered, Sel::Not(t)) => (0, t.len() as i64, 0),
-        (Kind::Unordered, Sel::All) => (0, 0, 0),
-        // Only an excluded pattern that extends the tail removes anything.
-        (Kind::Path, Sel::Suffix { tail, not }) => (
-            tail.len() as i64,
-            0,
-            not.iter()
-                .filter(|n| n.len() > tail.len() && n[n.len() - tail.len()..] == tail[..])
-                .count() as i64,
-        ),
-        (Kind::Path, Sel::Set(s)) => {
-            let shortest = s.iter().map(|v| ax.path(*v).len()).min().unwrap_or(0);
-            (shortest as i64, 1, -(s.len() as i64))
-        }
-        (Kind::Path, Sel::All) => (0, 0, 0),
+        (Kind::Unordered, Sel::Set(s)) => (1, -(s.len() as i64), Vec::new()),
+        (Kind::Unordered, Sel::Not(t)) => (0, t.len() as i64, Vec::new()),
+        (Kind::Unordered, Sel::All) => (0, 0, Vec::new()),
+        (Kind::Path, Sel::Suffix { tail, not }) => (tail.len() as i64, 0, exclusions(tail, not)),
+        (Kind::Path, Sel::All) => (0, 0, Vec::new()),
         // Forms an axis of this kind does not take.
-        _ => (i64::MIN, i64::MIN, i64::MIN),
+        _ => (i64::MIN, i64::MIN, vec![i64::MIN]),
     }
 }
 
+/// A suffix pattern's exclusions as a key: of those that extend `tail`,
+/// the ones no other extends, counted per length from `tail`'s length + 1,
+/// trailing zeros dropped. If one pattern is strictly within another with
+/// the same tail, at the shortest length where their reduced exclusions
+/// differ it has every one the other has and more.
+fn exclusions(tail: &[u32], not: &[Vec<u32>]) -> Vec<i64> {
+    let ends = |p: &[u32], t: &[u32]| p.len() >= t.len() && p[p.len() - t.len()..] == *t;
+    let mut ext: Vec<&Vec<u32>> = not
+        .iter()
+        .filter(|n| n.len() > tail.len() && ends(n, tail))
+        .collect();
+    ext.sort();
+    ext.dedup();
+    let reduced: Vec<&Vec<u32>> = ext
+        .iter()
+        .copied()
+        .filter(|n| !ext.iter().any(|m| m.len() < n.len() && ends(n, m)))
+        .collect();
+    let mut out = Vec::new();
+    for n in reduced {
+        let i = n.len() - tail.len() - 1;
+        if out.len() <= i {
+            out.resize(i + 1, 0);
+        }
+        out[i] += 1;
+    }
+    out
+}
+
 /// Every axis's key, in deciding order.
-pub fn keys(space: &Space, region: &Product) -> Vec<(i64, i64, i64)> {
+pub fn keys(space: &Space, region: &Product) -> Vec<AxisKey> {
     space
         .deciding()
         .into_iter()

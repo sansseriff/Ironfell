@@ -220,12 +220,58 @@ fn a_later_start_wins_on_one_axis() {
     }
 }
 
-/// An instance's override against its definition's hover pose: at
-/// (this instance, hover) neither region contains the other, and the axis
-/// order decides. With instances first, the instance wins, as today (its
-/// constant replaces the channel binding) and as an id beats `:hover`.
+/// An instance's override against its definition's hover pose: the
+/// override is written outside the definition (the document), the pose
+/// inside it, so the override is the stronger layer and wins at every
+/// state, whatever the axis order and whichever was written first. So does
+/// a slide's patch written in the document, which is why a deck that sets a
+/// part's leaf loses that part's hover feedback on that slide unless its
+/// region leaves `hover` out (round 2).
 #[test]
-fn an_instance_override_beats_the_definition_s_pose_by_axis_order() {
+fn an_outer_layer_beats_the_definition_s_pose_at_every_state() {
+    const STATE: AxisId = AxisId(1);
+    let (rest, hover) = (10, 11);
+    let fill = key(0, 2);
+    let hovered = || Product::all().with(STATE, Sel::Set(BTreeSet::from([ValueId(hover)])));
+    for strength in BOTH {
+        for order in [vec![INST, STATE, SLIDE], vec![SLIDE, STATE, INST]] {
+            for pose_first in [true, false] {
+                let mut s = Space::default();
+                s.axes
+                    .insert(INST, instances(&[(20, vec![1]), (21, vec![2])]));
+                let mut st = Axis::new(Kind::Unordered);
+                st.push(ValueId(rest), Vec::new());
+                st.push(ValueId(hover), Vec::new());
+                s.axes.insert(STATE, st);
+                s.axes.insert(SLIDE, ordered(3));
+                s.order = order.clone();
+                let mut w = World::new(s, doc(1, &[(fill, 0)]), strength);
+                if pose_first {
+                    add_in(&mut w, 0, hovered(), &[(fill, 2)]);
+                    add_in(&mut w, 1, suffix(&[1]), &[(fill, 3)]);
+                } else {
+                    add_in(&mut w, 1, suffix(&[1]), &[(fill, 3)]);
+                    add_in(&mut w, 0, hovered(), &[(fill, 2)]);
+                }
+                add_in(&mut w, 1, only(C), &[(fill, 4)]);
+                let got = [(20, hover, A), (21, hover, A), (20, rest, A), (21, hover, C)]
+                    .map(|(i, st, sl)| {
+                        w.value(&at(&[(INST, i), (STATE, st), (SLIDE, sl)]), fill)
+                            .unwrap()
+                    });
+                assert_eq!(got[..3], [3, 2, 3], "{strength:?}, {order:?}");
+                assert_eq!(got[3], 4, "{strength:?}, {order:?}: the slide's patch");
+            }
+        }
+    }
+}
+
+/// Within one layer the axis order decides where neither region contains
+/// the other: the document's per-instance patch against the document's own
+/// pose for hover. With instances first, the instance wins, as an id beats
+/// `:hover`.
+#[test]
+fn in_one_layer_the_axis_order_decides() {
     const STATE: AxisId = AxisId(1);
     let (rest, hover) = (10, 11);
     let fill = key(0, 2);
@@ -256,35 +302,64 @@ fn an_instance_override_beats_the_definition_s_pose_by_axis_order() {
     }
 }
 
-/// A class (instances named one by one) against a nesting pattern on the
-/// same axis. A class holds only the instances it names, never one placed
-/// later, so it is more specific than a pattern no longer than its members'
-/// paths: it wins where both apply, across contexts or not.
+/// A variant is a layer between its base definition and what places it
+/// (patches.md §6.1), and its patches are anchored in it: they apply in
+/// each placement of the variant and nowhere else, so this world is the
+/// variant's placements (`o1`, `o5`). The base's patch, the variant's and
+/// the document's override on `o1` are three layers: the override beats the
+/// variant on its own instance, and the variant beats the base. No class is
+/// needed, and placing the variant again changes no region.
 #[test]
-fn a_class_against_a_nesting_pattern() {
+fn an_override_on_a_variant_s_instance_beats_the_variant() {
     let colour = key(0, 2);
-    let (m1, m2, m3) = (20, 21, 22);
+    let (o1, o5) = (20, 21);
     for strength in BOTH {
         let mut s = Space::default();
-        s.axes.insert(
-            INST,
-            instances(&[(m1, vec![5, 1]), (m2, vec![6, 1]), (m3, vec![7, 9])]),
-        );
-        for class in [vec![m1, m2, m3], vec![m1, m2]] {
+        s.axes
+            .insert(INST, instances(&[(o1, vec![1]), (o5, vec![5])]));
+        for override_first in [true, false] {
             let mut w = World::new(s.clone(), doc(1, &[(colour, 0)]), strength);
-            add(&mut w, suffix(&[1]), &[(colour, 1)]);
-            add(
-                &mut w,
-                Product::all().with(INST, Sel::Set(class.iter().map(|v| ValueId(*v)).collect())),
-                &[(colour, 2)],
-            );
+            if override_first {
+                add_in(&mut w, 2, suffix(&[1]), &[(colour, 3)]);
+            }
+            add_in(&mut w, 0, Product::all(), &[(colour, 1)]);
+            add_in(&mut w, 1, Product::all(), &[(colour, 2)]);
+            if !override_first {
+                add_in(&mut w, 2, suffix(&[1]), &[(colour, 3)]);
+            }
             assert_eq!(
-                [m1, m2, m3].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap()),
-                [2, 2, if class.len() == 3 { 2 } else { 0 }],
-                "{strength:?}, {class:?}"
+                [o1, o5].map(|v| w.value(&at(&[(INST, v)]), colour).unwrap()),
+                [3, 2],
+                "{strength:?}"
+            );
+            let mut g = w.clone();
+            g.space
+                .axes
+                .get_mut(&INST)
+                .unwrap()
+                .push(ValueId(22), vec![9]);
+            assert_eq!(
+                g.value(&at(&[(INST, 22)]), colour),
+                Some(2),
+                "{strength:?}: a new placement of the variant"
             );
         }
     }
+}
+
+/// Deleting C leaves `{C}` and `[C, C]` the same region as written, and
+/// neither the empty one: tombstones are values as written (round 2: the
+/// three relations were not transitive).
+#[test]
+fn a_deleted_value_stays_a_value_as_written() {
+    let mut s = Space::default();
+    s.axes.insert(SLIDE, ordered(4));
+    s.axes.get_mut(&SLIDE).unwrap().delete(ValueId(C));
+    let set = |v: &[u32]| Product::all().with(SLIDE, Sel::Set(v.iter().map(|x| ValueId(*x)).collect()));
+    assert!(set(&[C]).same(&only(C), &s));
+    assert!(!set(&[C]).same(&set(&[]), &s));
+    assert!(!only(C).same(&set(&[]), &s));
+    assert!(set(&[C]).is_empty(&s), "no point takes it");
 }
 
 /// The note's §5 flow, and its central flaw (§11.1). At C the user sets C's
@@ -510,4 +585,22 @@ fn a_removal_is_not_stale_and_an_entry_returns_with_its_node() {
     w.doc.base.insert(key(2, PRESENT), 1);
     assert_eq!(w.value(&at(&[(SLIDE, A)]), key(2, 2)), Some(7));
     assert!(w.stale().is_empty());
+}
+
+/// `*/j not */b/j` is strictly within `*/j not {*/a/b/j, */c/b/j}`: one
+/// shorter exclusion removes more than two longer ones. Its key must be the
+/// larger (Sol's round 2 counterexample to counting exclusions).
+#[test]
+fn one_short_exclusion_is_narrower_than_two_long_ones() {
+    let (a, b, c, j) = (1, 2, 3, 4);
+    let mut s = Space::default();
+    s.axes.insert(
+        INST,
+        instances(&[(20, vec![a, b, j]), (21, vec![c, b, j]), (22, vec![9, b, j]), (23, vec![j])]),
+    );
+    let pat = |not: Vec<Vec<u32>>| Product::all().with(INST, Sel::Suffix { tail: vec![j], not });
+    let narrow = pat(vec![vec![b, j]]);
+    let wide = pat(vec![vec![a, b, j], vec![c, b, j]]);
+    assert!(narrow.within(&wide, &s) && !wide.within(&narrow, &s));
+    assert!(patch::keys(&s, &narrow) > patch::keys(&s, &wide));
 }

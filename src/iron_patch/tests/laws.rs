@@ -39,7 +39,7 @@ const INSTANCES: AxisId = AxisId(2);
 
 /// Two or three axes: slides (ordered, maybe with a deleted or moved
 /// value), states (unordered), instances (paths: `bench/o1/j`, `o2/j`,
-/// `bench/o1/k`, `k`), in a random deciding order.
+/// `bench/o1/k`, `k`, `rack/o1/j`, `bay/o2/j`), in a random deciding order.
 fn space(r: &mut Rng) -> Space {
     let mut s = Space::default();
     let mut slides = Axis::new(Kind::Ordered);
@@ -67,6 +67,8 @@ fn space(r: &mut Rng) -> Space {
             (21, vec![4, 3]),
             (22, vec![1, 2, 5]),
             (23, vec![5]),
+            (24, vec![6, 2, 3]),
+            (25, vec![7, 4, 3]),
         ] {
             inst.push(ValueId(v), p);
         }
@@ -111,10 +113,8 @@ fn sel(r: &mut Rng, axis: AxisId) -> Sel {
                 Sel::Not(subset(r, &[10, 11, 12]))
             }
         }
+        // Patterns only: there are no classes (a variant is a layer).
         _ => {
-            if r.chance(20) {
-                return Sel::Set(subset(r, &[20, 21, 22, 23]));
-            }
             let tail = r.pick(&[
                 vec![3],
                 vec![2, 3],
@@ -124,11 +124,20 @@ fn sel(r: &mut Rng, axis: AxisId) -> Sel {
                 vec![2, 5],
                 vec![],
             ]);
-            let not = if r.chance(30) {
-                vec![r.pick(&[vec![1, 2, 3], vec![4, 3], vec![2, 5]])]
-            } else {
-                Vec::new()
-            };
+            // Up to three exclusions of different lengths, so one may
+            // remove more than several others (round 2's key).
+            let mut not = Vec::new();
+            for _ in 0..r.below(4) {
+                not.push(r.pick(&[
+                    vec![2, 3],
+                    vec![1, 2, 3],
+                    vec![6, 2, 3],
+                    vec![4, 3],
+                    vec![7, 4, 3],
+                    vec![2, 5],
+                    vec![1, 2, 5],
+                ]));
+            }
             Sel::Suffix { tail, not }
         }
     }
@@ -190,8 +199,7 @@ fn entries(r: &mut Rng) -> BTreeMap<Key, i64> {
     e
 }
 
-/// The layer views in these scripts write in: the outermost, so nothing
-/// they meet is set by an outer scope.
+/// The layer the growth property's views write in: the outermost.
 const VIEW: u32 = 2;
 
 fn layer(r: &mut Rng) -> u32 {
@@ -571,17 +579,27 @@ fn a_drag_obeys_the_lens_laws() {
                 field: r.pick(&FIELDS),
             };
             let e = edit_region(&mut r, &w, &x);
+            // Views in every layer, so the refusal is exercised too.
+            let view = r.below(3) as u32;
             if let Some(now) = w.raw(&x, key) {
                 assert_eq!(
-                    edit::drag(&w, &x, &e, key, now, VIEW),
+                    edit::drag(&w, &x, &e, key, now, view),
                     Ok(Vec::new()),
                     "{strength:?}, seed {seed}: GetPut"
                 );
             }
             let v = 10 + r.below(5) as i64;
             let before = w.snapshot();
-            let ops = edit::drag(&w, &x, &e, key, v, VIEW)
-                .unwrap_or_else(|f| panic!("{strength:?}, seed {seed}: {f}"));
+            let ops = match edit::drag(&w, &x, &e, key, v, view) {
+                Ok(ops) => ops,
+                Err(f) => {
+                    assert!(
+                        w.winner(&x, key).is_some_and(|p| p.layer > view),
+                        "{strength:?}, seed {seed}: refused without an outer winner: {f}"
+                    );
+                    continue;
+                }
+            };
             let original = w.clone();
             for op in &ops {
                 if let Op::Entry { patch, .. } = op {
@@ -625,15 +643,17 @@ fn a_drag_obeys_the_lens_laws() {
                 "{strength:?}, seed {seed}: blast radius"
             );
             // PutPut: a second drag writes what the first made, and the two
-            // equal one drag to the second value.
-            let again = edit::drag(&w, &x, &e, key, v + 1, VIEW).unwrap();
+            // equal one drag to the second value, which differs from the
+            // value before the first (back to it, one drag writes nothing
+            // and two leave the first's patch: round 2).
+            let again = edit::drag(&w, &x, &e, key, v + 1, view).unwrap();
             assert!(
                 !again.iter().any(|o| matches!(o, Op::Add { .. })),
                 "{strength:?}, seed {seed}: PutPut added a patch"
             );
             w.apply_all(&again);
             let mut once = original.clone();
-            let single = edit::drag(&once, &x, &e, key, v + 1, VIEW).unwrap();
+            let single = edit::drag(&once, &x, &e, key, v + 1, view).unwrap();
             once.apply_all(&single);
             assert_eq!(
                 once.snapshot(),
@@ -661,7 +681,11 @@ fn split_on_the_same_region_and_an_allowed_merge_keep_every_value() {
             let before = w.snapshot();
             let p = r.pick(&w.patches).clone();
             let keys: Vec<Key> = p.entries.keys().copied().filter(|_| r.chance(50)).collect();
-            let undo = w.apply_all(&edit::split(&w, p.id, &keys, p.region.clone()));
+            let Ok(ops) = edit::split(&w, p.id, &keys, p.region.clone()) else {
+                assert!(!p.writable, "{strength:?}, seed {seed}: split refused");
+                continue;
+            };
+            let undo = w.apply_all(&ops);
             assert_eq!(before, w.snapshot(), "{strength:?}, seed {seed}: split");
             // Merge it back, or any pair on equal regions.
             let pairs: Vec<(PatchId, PatchId)> = w
@@ -713,12 +737,14 @@ fn undo_restores_everything() {
                     (1, _) => vec![Op::Remove(r.pick(&w.patches).id)],
                     (2, _) => edit::set_region(r.pick(&w.patches).id, product(&mut r, &w.space)),
                     (3, _) => {
-                        edit::reorder(r.pick(&w.patches).id, r.below(1000) as f64 / 7.0 - 70.0)
+                        let p = r.pick(&w.patches).id;
+                        edit::reorder(&w, p, r.below(1000) as f64 / 7.0 - 70.0).unwrap_or_default()
                     }
                     (4, _) => {
                         let p = r.pick(&w.patches);
                         let keys: Vec<Key> = p.entries.keys().copied().collect();
                         edit::split(&w, p.id, &keys[..keys.len() / 2], product(&mut r, &w.space))
+                            .unwrap_or_default()
                     }
                     (5, _) => edit::merge(&w, r.pick(&w.patches).id, r.pick(&w.patches).id)
                         .unwrap_or_default(),
@@ -837,6 +863,15 @@ fn growing_an_axis_changes_no_decision() {
             slides.push(ValueId(9), Vec::new());
             let at = r.below(6);
             slides.insert(at, ValueId(8));
+            // Every kind grows: a state, and placements under patterns.
+            if let Some(states) = g.space.axes.get_mut(&STATES) {
+                states.push(ValueId(13), Vec::new());
+            }
+            if let Some(inst) = g.space.axes.get_mut(&INSTANCES) {
+                inst.push(ValueId(26), vec![9, 1, 2, 3]);
+                inst.push(ValueId(27), vec![8, 4, 3]);
+                inst.push(ValueId(28), vec![8, 6, 2, 3]);
+            }
             let old: BTreeSet<Point> = w.space.points().into_iter().collect();
             for ((x, a), (_, b)) in w
                 .snapshot()

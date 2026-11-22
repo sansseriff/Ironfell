@@ -146,10 +146,14 @@ pub fn widen_by_move(w: &World, p: PatchId, keys: &[Key], region: Product) -> Ve
 
 /// Split: `keys` leave `p` for a new patch on `region`, in `p`'s layer. On
 /// `p`'s own region the new patch sits just above `p`, so every value stays.
-pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
+/// Refused for a patch that may not be written, since it clears entries.
+pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Result<Vec<Op>, String> {
     let Some(src) = w.patch(p) else {
-        return Vec::new();
+        return Err("no such patch".into());
     };
+    if !src.writable {
+        return Err("a patch that may not be written".into());
+    }
     let moving: BTreeMap<Key, i64> = keys
         .iter()
         .filter_map(|k| src.entries.get(k).map(|v| (*k, *v)))
@@ -170,7 +174,7 @@ pub fn split(w: &World, p: PatchId, keys: &[Key], region: Product) -> Vec<Op> {
         patch: new,
         at: w.patches.len(),
     });
-    ops
+    Ok(ops)
 }
 
 /// Merge two patches of one layer on the same region (as written) into the
@@ -228,9 +232,22 @@ pub fn merge(w: &World, a: PatchId, b: PatchId) -> Result<Vec<Op>, String> {
     Ok(ops)
 }
 
-/// Reorder: change a rank within its layer.
-pub fn reorder(p: PatchId, rank: f64) -> Vec<Op> {
-    vec![Op::Rank { patch: p, rank }]
+/// Reorder: change a rank within its layer. Ranks are distinct within a
+/// layer (patches.md §6.1), so a rank another patch of the layer has is
+/// refused: with equal ranks, inserting "just above" one of them could land
+/// above the other, and a split would change a value (round 2).
+pub fn reorder(w: &World, p: PatchId, rank: f64) -> Result<Vec<Op>, String> {
+    let Some(src) = w.patch(p) else {
+        return Err("no such patch".into());
+    };
+    if w
+        .patches
+        .iter()
+        .any(|q| q.id != p && q.layer == src.layer && q.rank == rank)
+    {
+        return Err("another patch of the layer has that rank".into());
+    }
+    Ok(vec![Op::Rank { patch: p, rank }])
 }
 
 /// A drag at `point`, from a view writing in `layer` whose edit region is

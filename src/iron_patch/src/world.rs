@@ -186,9 +186,12 @@ impl World {
         out
     }
 
-    /// The entries that win nowhere: a stronger patch sets the field
-    /// everywhere they apply. A rank that contradicts inclusion shows up
-    /// here, as the inner patch's dead entries.
+    /// The entries that win nowhere over the points that exist: stronger
+    /// patches *of their own layer* set the field everywhere they apply. A
+    /// rank that contradicts inclusion shows up here, as the inner patch's
+    /// dead entries, and both fixes (reorder, drop) are the layer's own. An
+    /// outer layer covering an entry is not listed: that is outermost-wins
+    /// working, and an inner layer may not be writable (round 2).
     pub fn dead(&self) -> Vec<(PatchId, Key)> {
         let mut out = Vec::new();
         for p in &self.patches {
@@ -196,7 +199,17 @@ impl World {
                 continue;
             }
             for &key in p.entries.keys() {
-                if self.winning(p.id, key).is_empty(&self.space) {
+                let mut left = Region(vec![p.region.clone()]);
+                for q in &self.patches {
+                    if q.id != p.id
+                        && q.layer == p.layer
+                        && q.entries.contains_key(&key)
+                        && self.cmp(q, p) == Ordering::Greater
+                    {
+                        left = left.minus(&q.region, &self.space);
+                    }
+                }
+                if left.is_empty(&self.space) {
                     out.push((p.id, key));
                 }
             }

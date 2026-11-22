@@ -55,7 +55,7 @@ RE-4.3 (Dormant by view rectangle) moved to [`handoff-render.md`](handoff-render
 | PT-1 | Composition clocks | Build | none (approved spec §10.1) | **Done 2026-11-20** (PT-1.1 to PT-1.3; PT-1.4 moved to PT-10, PT-1.5 to PT-9) |
 | PT-2 | Council on the note | Design, read-only | none | **Done 2026-11-21**: Opus 6/10, Sol 6/10; findings in the note's §11 |
 | PT-3 | The algebra as a crate, with property tests | Build (pure, no document) | none | **Done 2026-11-21**: `src/iron_patch`; stored strength, axis keys for its default (below) |
-| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model, and the spec revised to match; council round 2 next |
+| PT-4a | `specs/patches.md`: the algebra spec | Design | PT-2 and PT-3 done | **Drafted 2026-11-21**; council round 1 (Opus 5.5/10, Sol 5/10) fixed in the model, and the spec revised; round 2 (Opus 6/10, Sol 6/10) fixed in both; round 3 with PT-4b's first |
 | PT-4b | The storage-and-query spec | Design | PT-4a written | **Drafted 2026-11-21** (`specs/patch-storage.md`); council after PT-4a's |
 | PT-5 | Patches in `iron_document` | Build | **user approves PT-4a and PT-4b** | |
 | PT-6 | Machines rebuilt on axes | Build | PT-5 | |
@@ -318,6 +318,35 @@ green):
 10. PT-5's exit gains the axis-growth properties, and ranks are order keys, not `f64`.
 11. What PT-3 does not cover, said plainly: shrinking, child order, a canonical form
     (not needed: "same" is mutual inclusion as written).
+
+**Council round 2 (2026-11-21): Opus 6/10, Sol 6/10.** Fixed in the model (16
+examples, 19 properties, all green) and in the spec:
+- **Variants are layers, not classes** (Opus): a class beat an instance's override on
+  the variant's own instance, and a class of paths grew as placements were added
+  (round 1's flaw again). A variant sits between its definition and what places it,
+  its patches anchored in it. Classes, and path sets, are gone.
+- **The layer decides across layers, at every state** (Opus): a document slide patch
+  beats a definition's hover pose. The spec said otherwise; §6.1 now says it plainly,
+  and the axis order decides only within a layer
+  (`an_outer_layer_beats_the_definition_s_pose_at_every_state`).
+- **Written equality keeps tombstones** (Sol): `{C}` after C's deletion was void, so
+  `[C, C]` = `{C}` = `{}` but `[C, C]` ≠ `{}`. A set of tombstones is no longer void,
+  and an intersection with a set keeps its written members.
+- **The instance key** (Sol): counting exclusions put `*/j not {*/a/b/j, */c/b/j}`
+  above the narrower `*/j not */b/j`. Reduced exclusions are now counted per length,
+  shortest first (`one_short_exclusion_is_narrower_than_two_long_ones`; the generator
+  now makes up to three exclusions).
+- **Ranks are distinct in a layer** (both): equal ranks let a split change a value.
+  `reorder` refuses a taken rank; `split` refuses a read-only patch.
+- **`dead` counts its own layer only** (Opus); dead and stale are about existing
+  points, and the growth guarantee says so (both).
+- **PutPut** holds when the second value differs from the original; dragging back
+  leaves the first patch (Sol). The lens property now drags from every layer, and the
+  growth property grows every axis kind.
+- Text: driver cycles defined through regions (PT-6 builds the check); arrows by their
+  endpoints' values; PT-5's read contract (one point per composition, other observers
+  values only); the picture axis moved to §13; markup saves ids; PT-8's UI items cut
+  from the spec.
 
 ### PT-4b: the storage-and-query spec
 

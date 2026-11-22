@@ -133,6 +133,11 @@ impl Sel {
             (Sel::Set(s), Sel::Set(t)) => Sel::Set(&s & &t),
             (Sel::Set(s), Sel::Not(t)) | (Sel::Not(t), Sel::Set(s)) => Sel::Set(&s - &t),
             (Sel::Not(s), Sel::Not(t)) => Sel::Not(&s | &t),
+            // A set's values as written, tombstones kept, so an intersection
+            // a drag writes is the region as written (`Sel::within`).
+            (Sel::Set(s), o) | (o, Sel::Set(s)) => {
+                Sel::Set(s.into_iter().filter(|v| o.contains(axis, *v)).collect())
+            }
             (Sel::Suffix { tail: a, not: an }, Sel::Suffix { tail: b, not: bn }) => {
                 let tail = if ends_with(&a, &b) {
                     a
@@ -342,27 +347,21 @@ impl Region {
 /// changes when an axis grows. Queries, which are about the points that
 /// exist, use `Product::subset`, `minus` and `points`.
 impl Sel {
-    /// The ids it names that a point can still take: a tombstone is never
-    /// taken again.
-    fn live_ids(set: &BTreeSet<ValueId>, axis: &Axis) -> BTreeSet<ValueId> {
-        set.iter()
-            .copied()
-            .filter(|v| axis.live().any(|l| l == *v) || axis.position(*v).is_none())
-            .collect()
-    }
-
-    /// Whether no value, now or later, can be in it.
+    /// Whether it holds no value as written. Values as written include
+    /// tombstones: `{C}` after C is deleted is not void, as `[C, C]` is not,
+    /// so the two stay the same region and neither equals `{}` (round 2).
     pub fn void(&self, axis: &Axis) -> bool {
         match self.normal(axis) {
             Sel::Range(lo, hi) => lower_cut(axis, &lo) > upper_cut(axis, &hi),
-            Sel::Set(s) => Sel::live_ids(&s, axis).is_empty(),
+            Sel::Set(s) => s.is_empty(),
             Sel::Not(_) | Sel::All => false,
             Sel::Suffix { tail, not } => not.iter().any(|m| ends_with(&tail, m)),
         }
     }
 
-    /// Whether every value it may ever hold is in `outer`. A set's values
-    /// count as written, deleted ones too, as its key counts them.
+    /// Whether every value it holds as written, now or later, is in `outer`.
+    /// A set's values count as written, deleted ones too, as its key counts
+    /// them.
     pub fn within(&self, outer: &Sel, axis: &Axis) -> bool {
         if *outer == Sel::All || self.void(axis) {
             return true;

@@ -2923,7 +2923,26 @@ impl StoreCore {
             BTreeSet::new()
         } else {
             let shown = composition::shown(doc, &self.observed_compositions());
-            composition::compositions(doc).into_iter().filter(|c| !shown.contains(c)).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect()
+            let mut hidden: BTreeSet<NodeId> = composition::compositions(doc).into_iter().filter(|c| !shown.contains(c)).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect();
+            // An entity pictured only in hidden compositions is hidden too:
+            // a placed instance's entity lies outside every composition, and
+            // its cells (a plot's ticks and paths) are needed only where
+            // something needed reads them, as the gate runs it only where it
+            // is pictured (PT-1.1). Before, a clip on a hidden page's plot
+            // evaluated that plot every frame while playing (2026-11-21).
+            let mut pictured: BTreeMap<NodeId, bool> = BTreeMap::new();
+            for r in doc.relations().filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.is_live(r.to)) {
+                if let Some(c) = composition::composition_of(doc, r.from) {
+                    *pictured.entry(r.to).or_default() |= shown.contains(&c);
+                }
+            }
+            for (e, seen) in pictured {
+                if !seen {
+                    hidden.insert(e);
+                    hidden.extend(doc.descendants(e));
+                }
+            }
+            hidden
         };
         let solved: BTreeSet<NodeId> = self.clusters.list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).collect();
         let rooted = |n: NodeId| solved.contains(&n) || doc.facets_of(n).any(|f| ROOTED.contains(&f.kind()));

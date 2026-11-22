@@ -131,6 +131,19 @@ Tasks, in order; each is committed alone.
     (`Store::gate_decisions` stays put), `reactivity::a_preview_that_starts_reading_a_hidden_accumulator_runs_it`
     and `reactivity::setting_run_to_always_on_a_hidden_page_starts_it` (each fails
     with its stamp removed). `advance` is now a phase in `__iron.timings`.
+  - **Then (2026-11-21), the gate in one pass:** structure still changes often (a
+    scrolling plot's tick label comes and goes every second or two on the Lorenz
+    page), and each change re-decided in ~9 ms. The gate now finds each hidden
+    composition's and pictured entity's readers once (`Reactive::reader_nodes`) and
+    decides over those: 0.9 ms; a Lorenz tick frame 9.8 → 2.6 ms
+    (`demo::tests::lorenz_frames_time`).
+  - **And necessity hides entities pictured only on hidden pages** (as the gate runs
+    them, PT-1.1): playing in a new tab of the demo 0.55 → 0.41 ms natively. The rest
+    is hidden pages' clips evaluating their plots' `ROOTED` cells (lets, args,
+    repeats), which PT-10 replaces.
+  - **The harness missed all of this:** every page observed (the gate returns at
+    once) and `showcase=0` (no gallery). `run-iron/single-tab.txt` now covers one tab
+    open in the whole demo: a drag, playback, and the Lorenz page at rest.
 - **PT-1.3, the override:** a composition setting that keeps it running while hidden,
   in the composition settings menu. **Done 2026-11-20**, with PT-1.2:
   - The existing **Run** setting carries it. `run = always`, which already meant

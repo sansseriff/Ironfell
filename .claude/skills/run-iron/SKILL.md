@@ -74,7 +74,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `query.txt` (`GPU=1`, with `model-server.ts`): a plot of a 1.5 s Model's answer | ~12 s (2026-11-10) |
 | `plot-view.txt`, `pulses.txt` (`GPU=1`) | ~12 s each (2026-11-10) |
 | `idle.txt`, `context.txt` (`GPU=1`) | ~8 s each (2026-11-10) |
-| `single-tab.txt` (`GPU=1`): the store's per-frame cost with one tab open, dragging and playing | ~15 s (2026-11-21) |
+| `single-tab.txt` (`GPU=1`): the store's per-frame cost with one tab open, dragging, playing, and the Lorenz page at rest | ~30 s (2026-11-21) |
 | `fiber.txt` (`GPU=1`): a pulse clicked into a delayed `std:fiber` | ~12 s (2026-11-10) |
 | `actions.txt` (`GPU=1`): a document-declared accordion hovered, clicked and undone | ~15 s (2026-11-09) |
 | `narrative.txt` | ~25 s |
@@ -232,19 +232,23 @@ on the curve at once; at least eight different dashes; the meter reading both 12
 dashes along the amber fiber.
 
 `single-tab.txt` is the store's per-frame cost as a user working in one tab has it:
-a new composition in the demo with every other tab closed, so the demo's pages are
-hidden (the visibility gate's worst case; observing every page hides that cost, and
-did, 2026-11-21). It drags a rect, then loops the playhead over 0–4 s, and asserts
-`__iron.timings`' `advance` p50 under 1 ms for each (it was ~20 ms before the gate kept
-its decision).
+the whole demo, gallery included (`new=demo`, no `showcase=0`: that leaves the gallery
+out, and most of the document with it), a new composition with every other tab closed,
+so the demo's pages are hidden (the visibility gate's worst case; observing every page
+hides that cost, and did, 2026-11-21). It drags a rect (`advance` p50 under 1 ms), loops
+the playhead over 0–4 s (under 5 ms: the gallery's clips on hidden pages still evaluate
+their plots' `ROOTED` cells, until PT-10), then opens the Lorenz page alone at rest,
+whose scrolling axis adds and drops a tick label every second or two (the worst frame's
+`advance` under 12 ms; ~25 ms when the gate walked every hidden composition three times).
 
 ```sh
 cd .claude/skills/run-iron && GPU=1 bun run drive.ts < single-tab.txt; cd -
 ```
 
-Expected: `"open: Perf"`, `"drag: advance p50 … ms, frame p50 … ms"` (0.06 and 3.4 ms
-on 2026-11-21), `"playing: advance p50 … ms over … frames, frame p50 … ms"` (0.31 ms
-over ~90 frames, 2.0 ms), two `assertion passed` lines, `(no page errors)`.
+Expected (2026-11-21): `"open: Perf"`, `"drag: advance p50 0.49 ms, frame p50 2.67 ms"`,
+`"playing: advance p50 3.21 ms over 90 frames, frame p50 4.71 ms"`, `"open: Lorenz"`,
+`"lorenz at rest: advance p50 1.77 max 6.11 ms, frame p50 4.61 max 10.53 ms"` (times
+vary), three `assertion passed` lines, `(no page errors)`.
 
 `idle.txt` places a laser that is not pulsing, a fiber, a meter and a plot, and counts
 what is drawn over 1.5 s of rest. `context.txt` defines a component whose template
@@ -1432,7 +1436,7 @@ cd -
 
 | command | what it does |
 |---|---|
-| `nav [url]` | open the app; default `$URL`, else `http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog` (`&demo`: an unsaved demo, not the last scope; plans/specs/scopes.md D11). With `URL` set, a script's own `nav <url>` keeps its path and query but goes to URL's host, so a worktree's Vite on 5185 runs every script |
+| `nav [url]` | open the app; default `$URL`, else `http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog` (`&demo`: an unsaved demo, not the last scope; plans/specs/scopes.md D11; `showcase=0` leaves out the contexts showcase and the whole gallery, Lorenz included, so measure performance without it). With `URL` set, a script's own `nav <url>` keeps its path and query but goes to URL's host, so a worktree's Vite on 5185 runs every script |
 | `ready` | wait until the `.loading` overlay leaves the DOM and the frame loop is cycling (cadence probe frame count advancing between polls), then read the viewer panel rect. About 6 s under SwiftShader |
 | `shot <name>` | screenshot to `screenshots/<name>.png` |
 | `move x y`, `down [button]`, `up [button]`, `drag x0 y0 x1 y1 [steps]` | pointer in window pixels; `down right` … `up right` around `move`s orbits a 3D panel's camera |

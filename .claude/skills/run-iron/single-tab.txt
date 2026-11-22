@@ -2,9 +2,17 @@
 # working in a new tab has it: the demo's other pages hidden, which is the
 # gate's worst case (handoff-patches.md PT-1.2, "Cost, as built"). Its
 # `advance` once cost ~20 ms a frame here, at rest, dragging and playing,
-# where an empty scope costs nothing. A drag, then the playhead looping
-# 0-4 s, must each keep `advance` under 1 ms at p50.
-nav http://localhost:5173/Ironfell/?gfx=webgl2&showcase=0&demo&bevy=debuglog
+# where an empty scope costs nothing. A drag must keep `advance` under
+# 1 ms at p50, and the playhead looping 0-4 s under 5 ms: playing samples
+# every clip, and the gallery's clips on hidden pages still evaluate their
+# plots' rooted cells (`ROOTED`, replaced in PT-10), ~2-3 ms here. Then the Lorenz page
+# alone, at rest: its "x against time" axis scrolls, so a tick label comes
+# and goes every second or two (structure, which the gate decides again
+# on); the worst frame's `advance` must stay under 12 ms (~25 ms when the
+# gate walked every hidden composition three times, 2026-11-21). The whole
+# demo, gallery included: `showcase=0` leaves the gallery out, and with it
+# most of the document a user has.
+nav http://localhost:5173/Ironfell/?gfx=webgl2&new=demo&bevy=debuglog
 ready
 sleep 800
 clickel .dv-groupview:has(.dv-tab:has-text("Main")) button[aria-label="Open a view"]
@@ -30,6 +38,16 @@ pdrag Perf 175 150 450 400 90
 eval (async()=>{const t=await __iron.timings(false);window.__drag=t.phases;return 'drag: advance p50 '+t.phases.advance.p50+' ms, frame p50 '+t.phases.frame.p50+' ms'})()
 assert window.__drag.advance.p50 < 1
 eval (async()=>{await __iron.call('clock_set',[JSON.stringify({loop_in:0,loop_out:4,playing:true})]);await __iron.timings(true);await new Promise(r=>setTimeout(r,1500));const t=await __iron.timings(false);await __iron.call('clock_set',[JSON.stringify({playing:false})]);window.__play=t.phases;return 'playing: advance p50 '+t.phases.advance.p50+' ms over '+t.phases.advance.n+' frames, frame p50 '+t.phases.frame.p50+' ms'})()
-assert window.__play.advance.n > 20 && window.__play.advance.p50 < 1
+assert window.__play.advance.n > 20 && window.__play.advance.p50 < 5
+clickel .dv-groupview:has(.dv-tab:has-text("Perf")) button[aria-label="Open a view"]
+sleep 300
+clickel [role=menuitem]:has-text("Open composition")
+sleep 400
+clickel [role=menuitem]:has-text("Lorenz")
+sleep 800
+eval (()=>{for(const p of [...__dock.panels]) if(!/lorenz/i.test(p.api.title)) p.api.close(); return 'open: '+__dock.panels.map(p=>p.api.title).join(' ')})()
+sleep 2000
+eval (async()=>{await __iron.timings(true);await new Promise(r=>setTimeout(r,6000));const t=await __iron.timings(false);window.__lorenz=t.phases;return 'lorenz at rest: advance p50 '+t.phases.advance.p50+' max '+t.phases.advance.max+' ms, frame p50 '+t.phases.frame.p50+' max '+t.phases.frame.max+' ms'})()
+assert window.__lorenz.advance.n > 100 && window.__lorenz.advance.max < 12
 errors
 quit

@@ -670,3 +670,25 @@ evaluation, refusal goes by the journal (DS-7), and one oracle replaces the per-
 ones. A spike showed a store rebuilt from the document can't be that oracle (72 of 494
 tests differ by design, through history the document doesn't hold), so the oracle
 compares structure from scratch and reruns every current cell.
+
+**Review of the rewritten spec (2026-11-22): Opus 6.5/10, Sol 6/10; both: adopt with
+named changes.** Both: the rule is right for *when*, but *in what order* derived work runs
+was left to a loop the spec barely described, and "makers write no structure, so the
+loop terminates" was false (expansion, settling and the solver's write-back write
+structure; wiring changes during evaluation). Opus: grouping reads values, so it must
+split into a structural partition and per-cluster cells; `Cx::graph()`, `previous()`,
+`scope_stamp` and side tables read around the recorder; `Saved` restores far more history
+than the spec named, so DS-7 should be a graph journal and not depend on the families;
+the oracle should check history cells as a fixpoint; the §1 table missed several caches,
+including the host's. Sol: separate reservations from claims and reconcile in one batch;
+define the state boundary for refusal and the oracle; rebuild maker candidates from raw
+records; scope by what computes together; name the whole-document costs left. Adopted:
+the four-stage loop with makers reading no values by type (§3.2); the grouping split
+(DS-12); `Cx` limited to recorded reads (DS-10); refusal by a graph journal, decoupled
+(DS-7); state as an explicit contract (§3.4); a fixpoint oracle with an index check
+(§4); both tables of §1 complete; the costs left after DS-15 listed (§6). Declined: a
+coarser first cut rerunning every maker of a touched composition (Opus), which would
+make structural edits grow with the active composition; solving clusters across
+compositions (Sol), in favour of checking assumption A11; per-clip animation ends with a
+maintained maximum now (Sol), left to PT-9; whether refusal is needed at all (Opus),
+which is product behaviour.

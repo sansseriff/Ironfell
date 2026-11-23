@@ -1,17 +1,11 @@
 # Patches: one algebra for "the same thing, a bit different"
 
-**Status:** Draft for the user's approval (PT-4a, 2026-11-21), revised after council
-rounds 1 and 2. **Not approved; do not build from it.** Building starts at PT-5 once the user
-approves this and PT-4b's storage spec, [`patch-storage.md`](patch-storage.md)
-(plans/handoff-patches.md §2). Written from the design note
-[`../notes/patches-regions-and-time.md`](../notes/patches-regions-and-time.md), its
-council (§11) and the model that tested it, `src/iron_patch` (PT-3). Where this spec and
-the note differ, this spec is the later word: the note's laws as written do not all
-hold, and §6 here says what does.
+**Status:** Companion algebra spec to [`engine.md`](engine.md) (originally drafted 2026-11-21
+and revised through council rounds 1–3; round-3 polish and user approval live in
+[`../handoff-engine.md`](../handoff-engine.md) `EN-3`). Verified by `src/iron_patch`.
 
-**Read first:** the note's §1 to §4 (the motivation and the mapping); its §11 (what the
-council found); `src/iron_patch/src/lib.rs` and `tests/laws.rs` (the laws as running
-properties). For what is replaced: [`component-model.md`](component-model.md) §5.3,
+**Read first:** [`engine.md`](engine.md) §2, `src/iron_patch/src/lib.rs`, and `src/iron_patch/tests/laws.rs`.
+For what is replaced: [`component-model.md`](component-model.md) §5.3,
 [`machines.md`](machines.md) §1 and §2, [`variants-and-imports.md`](variants-and-imports.md)
 V1, the narrative note's §6.5.
 

@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-22 for the scaling track (`structure-in-the-graph.md`). Update this file whenever a plan is added,
+**Updated:** 2026-11-22 for the unified engine track (`handoff-engine.md`, `specs/engine.md`). Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -9,32 +9,16 @@ finishes, or is superseded.
    place that records what is done.
 2. **The handoff for your track**, the one place that says what to do next and in
    what order:
+   - **Unified engine** (one cohesive engine: recorded-read graph & `settle(mode)`,
+     patches & virtual views, then local need counts, visibility gate, host scaling,
+     and chunked loading; consolidates the former `RE`, `DS`, and `PT` tracks):
+     [`handoff-engine.md`](handoff-engine.md), with the target architecture in
+     [`specs/engine.md`](specs/engine.md) and the patch algebra in
+     [`specs/patches.md`](specs/patches.md).
    - **Product work** (documents, compositions, tools, signals, lessons):
      [`handoff-product.md`](handoff-product.md). Several tasks are open; it says to ask
      the user which.
    - **Rendering performance** (stage H): [`handoff-render.md`](handoff-render.md) §4.
-   - **The new reactive engine** (owners, demand-driven evaluation, instances as
-     references, a time scheduler; it began as the `std:plot` pan/zoom frame drops):
-     **closed 2026-11-21**, its handoff archived as
-     [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md),
-     with the design in [`specs/reactive-engine.md`](specs/reactive-engine.md). Approved 2026-11-15;
-     phases 0 (baselines, the harnesses), 1 (the read contract: `Tree`,
-     `take_changes()`) and 2a (transactions in place, a document journal) done
-     2026-11-16; 2b (owners, the graph updated in place: the plot fix) done and
-     swapped in 2026-11-17, the old engine deleted; 2c (copies leave the document),
-     3 (time) and 4 (observation) done 2026-11-19, each with named steps deferred.
-     Phase 5 (the pipeline as cells: layout, the network per island, constraint
-     grouping and change tests as native cells on one general cell) done
-     2026-11-21. The handoff's §2 has the state of each phase and what each left
-     deferred or not met. Its clock providers, clips, parking and phase 6 moved to the
-     patches track, and RE-4.3 (Dormant by view) to `handoff-render.md` §10.
-   - **Patches, regions and time** (one algebra for instances, variants, machine
-     states, slides, takes, clips and narrative extents; composition clocks):
-     [`handoff-patches.md`](handoff-patches.md). The design is a note,
-     [`notes/patches-regions-and-time.md`](notes/patches-regions-and-time.md), not
-     adopted. PT-1 (composition clocks) is done. PT-2 to PT-4b are a council,
-     a pure crate with property tests, and two specs. Building from PT-5 on waits for
-     the user to approve those specs.
 3. **[`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md)**: build,
    serve, drive, the smoke script and its expected output.
 4. **[`guide2/index.html`](guide2/index.html)**: a readable walkthrough of the system as
@@ -48,18 +32,18 @@ handoffs, then `specs/` and `rendering/architecture.md`, then `vision/`, then `a
 
 Every phase or step a handoff orders has a **key**: the plan's prefix, a dash and its
 number, with a dot for a step inside a phase. Keys are unique across all plans, so
-"RE-4.3" always means the same thing in a commit, a chat or another document. **Refer
+"EN-2a" always means the same thing in a commit, a chat or another document. **Refer
 to work by key only, never by a bare "step 1" or "phase 5".** A key is never reused or
 renumbered. Work that moves keeps its key and gains a line saying where it went. New
 work under a plan gets the next free number.
 
 | Prefix | Plan | Numbering |
 |---|---|---|
-| `RE` | [`archive/handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) (closed; `RE-4.3` is now in `handoff-render.md` §10) | phases of `specs/reactive-engine.md` §17 (`RE-2b`; `RE-4.3` is phase 4, step 3) |
-| `PT` | [`handoff-patches.md`](handoff-patches.md) | its §2 steps (`PT-1` … `PT-11`; `PT-4a`) |
-| `DS` | [`handoff-scaling.md`](handoff-scaling.md) | its §6 phases (`DS-1` … `DS-8`; `DS-4a`), and `specs/structure-in-the-graph.md` §5 (`DS-9` … `DS-16`, renumbered 2026-11-22; `DS-7` brought forward) |
-| `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited |
+| `EN` | [`handoff-engine.md`](handoff-engine.md) | its §2 phases (`EN-0` … `EN-11`, `EN-2a`) |
+| `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited (`RE-4.3` moved to §10) |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
+
+*Retired prefixes (consolidated into `EN` on 2026-11-22, preserved in git history):* `RE`, `DS`, `PT`.
 
 A spec's own phase numbers ("ECM phase 4") stay as they are inside that spec; a handoff
 that orders them gives them a key.
@@ -82,7 +66,7 @@ that orders them gives them a key.
 |---|---|---|
 | [`agent-vision.md`](specs/agent-vision.md) | Pasted/dropped raster references and GPU composition pictures for the built-in agent | Built on `t3/agent-image-vision`; 2D capture, bounded visual refinement; native/live-provider verification pending |
 | [`agent-runtimes.md`](specs/agent-runtimes.md) | Loopback runtime interoperability, Codex bootstrap, Claude CLI adapter, provider selection and 2D authoring tests | Bootstrap built 2026-11-03 in `agent-runtimes` worktree; live Codex create/edit/undo passes in worker/main modes; live Claude, native and full smoke pending |
-| [`structure-in-the-graph.md`](specs/structure-in-the-graph.md) (DS-9 to DS-16) | Every cached derivation is a cell: a from-scratch function over a bounded scope, rerun by the keys its reads recorded; one write channel, one driver with a written order, one oracle; the hand rules deleted one family at a time | Adopted 2026-11-22, rewritten the same day after a review of its direction (handoff-scaling.md §9); DS-9 done |
+| [`engine.md`](specs/engine.md) (`EN-0` to `EN-11`) | The unified Iron engine: authored document + patches over axes + virtual views; recorded-read cells/makers with one write channel and `settle(mode)`; local need counts, composition-graph clock gate, and host-side scaling | Adopted 2026-11-22; consolidates the former reactive-engine, scaling, structure-in-the-graph, and patches handoffs. Work order in [`handoff-engine.md`](handoff-engine.md) |
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |
@@ -121,17 +105,16 @@ that orders them gives them a key.
 | [`agent-streaming.md`](specs/agent-streaming.md) | Live agent progress: one event stream from provider to chat (phases, reasoning summaries, streamed prose, Stop, idle timeout), a T3-style work log, and partial-edit previews through provisional store transactions | Phases 1–2 built 2026-11-06 (§6: live work log, Stop, streamed prose and forming edit, idle timeouts); 3–4 (partial-edit previews) proposed |
 | [`timeline.md`](specs/timeline.md) | The timeline as a session composition: what a clip is, a session `clock` node, `axis` leaves fixed during drags, generated rows by object and property bound to clips, `std:timeline`, retiming, explicit clip creation | Phases 1–2, most of 3 and Animate change (4) done 2026-11-03 (§11); snapping, easing curves, ends at the playhead, phase 5 next |
 | [`plot.md`](specs/plot.md) | Series values (numbers with a unit), broadcasting floor functions and lambdas (`x => …`); paths bound to SVG path data (`points`, `circles`, `segments`); instances with their own size that reflow on a corner drag; the `std:plot` standard component | Phases 1–3 built 2026-11-08 (§12); `std:plot` is markup (`std/plot.xml`) since 2026-11-09 |
-| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; built in part (`roadmap.md`). **To be replaced** by the patches spec: states become points on an axis, poses patches ([`handoff-patches.md`](handoff-patches.md) PT-6) |
+| [`machines.md`](specs/machines.md) | Component state machines, first slice: states as poses over channels, transitions with tweens over a `progress` input; progress driven by a clock clip (a derived band, edited per occurrence) or by the machine itself; the strip/graph timeline panel; how the narrative sets state | Proposed 2026-11-08; built in part (`roadmap.md`). **To be replaced** by patches on an unordered state axis ([`handoff-engine.md`](handoff-engine.md) `EN-6a`) |
 | [`wires-and-formulas.md`](specs/wires-and-formulas.md) | The node graph Iron already has, shown on demand: formulas as the source of truth, purple wires only around the selection, modifier chips on wires (Easy Ease, Map range, Window…) that are calls in the formula, components for depth, no free node canvas; `ease()`, `window()`, `cubic-bezier`, Trim Paths | Proposed 2026-11-08; phase 1 next |
 | [`frame-constraints.md`](specs/frame-constraints.md) | Figma's resizing model for people: a `pin` facet per child (left, right, stretch, center, scale) interpreted by the layout step, the Resizable toggle, the constraints widget, an auto-layout section | Proposed 2026-11-08; phases 1–2 (minimal) built 2026-11-08 (§7) |
 | [`repeat.md`](specs/repeat.md) | A repeat (a `repeat` facet on a group): one derived copy of its children per element of a series or count, keyed by index or value, entering and exiting through machines; `let` named values; node markup, in which the standard components are written | Phase 1, `let` and node markup built 2026-11-09 (§9): `std:plot` and the other standard components are markup; reworked the same day onto item nodes and live settling (reactivity.md); value keys, enter/exit open |
 | [`reactivity.md`](specs/reactivity.md) | One model for values, structure, state and events, after the council review of repeat and let and a study of Svelte 5's runtime: scopes (one expansion for instances, repeat items and conditionals), keys in ids, structure settling with values, errors that propagate, lists, `let` as state with tiers, `on` actions, tracked reads, queries and accumulators | Phases 1–5 built 2026-11-09 (§13): errors propagate, problems as data, item scopes, structure settling with values; lists and records, keys in ids, `when`; state (`let.keep`) and `on` actions; tracked reads (`deref`). Phase 6 part 1 done 2026-11-10: context (`@name`), traces and accumulators, the delayed `std:fiber`. Part 2 done the same day: the `query` node (a slow Model's answer with pending and stale states). Phase 7 part 1 done too: enter and exit (`presence`). Part 2: a parent's machine over its children's (`machine.at`, in machines.md). Drag and wheel actions, the zoomable `std:plot` and a pulsed `std:laser` done too. Open: declared context reads, reorder by drag, `std:plot` split into parts |
-| [`reactive-engine.md`](specs/reactive-engine.md) | A new reactive engine replacing the graph, expansion and settling: an owner tree, evaluation only of what is observed, structure inside one pass, instances as references to shared templates, transactions in place, the pipeline (layout, network, clips, steppers) as cells, clocks with a scheduler and slices, readiness for partial loading | Approved for building 2026-11-15, decisions settled; not built. Revised 2026-11-16 after a third council round: phases 0 to 2 are ready, phases 3 to 5 have open points listed in its §14. Covers the constraint solver as cells (§9.4) and 3D (§8.10). Unverified assumptions in its §14; review history in [`reactive-engine-review.md`](specs/reactive-engine-review.md). Work order and phase 0 and 1 tasks in `handoff-reactive-structure.md` |
-| [`patches.md`](specs/patches.md) | One algebra for instance overrides, variants, machine poses, clips, narrative extents, decks and takes: patches with regions over axes, stored strength, the drag rule, selectors and queries | **Draft for the user's approval** (PT-4a, 2026-11-21); not approved, do not build from it. Written from `notes/patches-regions-and-time.md` and `src/iron_patch` (PT-3). Work order in `handoff-patches.md` |
-| [`patch-storage.md`](specs/patch-storage.md) | Storage for patches: content-addressed chunks, manifests as Merkle trees of `Summary`s, loading by a view's point, the derived index (server and client), the browser cache, sync of region edits, ops on unloaded parts | **Draft for the user's approval** (PT-4b, 2026-11-21); not approved, not yet councilled; revises `scopes.md` §4 and §8, `reactive-engine.md` §13 and iron-platform once approved |
+| [`patches.md`](specs/patches.md) | One algebra for instance overrides, variants, machine poses, clips, narrative extents, decks and takes: patches with regions over axes, stored strength, the drag rule, selectors and queries | Companion algebra spec to `specs/engine.md`, verified by `src/iron_patch`; round-3 polish and user approval in [`handoff-engine.md`](handoff-engine.md) `EN-3` |
+| [`patch-storage.md`](specs/patch-storage.md) | Storage for patches: content-addressed chunks, manifests as Merkle trees of `Summary`s, loading by a view's point, the derived index, browser cache, sync of region edits | Draft for Stage 4 ([`handoff-engine.md`](handoff-engine.md) `EN-11`); deferred until Stages 1–3 settle |
 | [`themes.md`](specs/themes.md) | Colour tokens with light and dark values: `@name` in formulas, a palette of token nodes, the built-in validated theme added on first use, the theme published by the store, the picker's Tokens section, `std:plot` on tokens | Built 2026-11-08 (step 5) |
 | [`types-and-units.md`](specs/types-and-units.md) | A typed component boundary: `port.type` (quantities with display units, `choice(a\|b)`, `bool`, `color`, `series`, `fn(n)`, `\| auto`), checks at set and connect, widgets by type, literals that keep their unit, pin visibility (`port.show`, `port.group`) and its author flow. Prior art for plots beyond `std:plot`: `notes/plot-system-vision.md` | Proposed 2026-11-08; phase 1 with widgets and pins built 2026-11-08 (§9) |
-| [`variants-and-imports.md`](specs/variants-and-imports.md) | Lesson variants (`extends`, differences only, re-applied when the base changes); `iron://owner/package@range` imports, pinned and copied in with a hash | Proposed 2026-11-08; syntax only, building waits on narrative moves and the server. V1's `extends` is **to be replaced** by regions on a variant axis ([`handoff-patches.md`](handoff-patches.md)) |
+| [`variants-and-imports.md`](specs/variants-and-imports.md) | Lesson variants (`extends`, differences only, re-applied when the base changes); `iron://owner/package@range` imports, pinned and copied in with a hash | Proposed 2026-11-08; syntax only, building waits on narrative moves and the server. V1's `extends` is **to be replaced** by variant layers ([`handoff-engine.md`](handoff-engine.md) `EN-5`) |
 
 ## 4. Rendering
 
@@ -149,7 +132,6 @@ that orders them gives them a key.
 | Document | Superseded by |
 |---|---|
 | [`handoff-2026-10-11.md`](archive/handoff-2026-10-11.md) | `handoff-product.md` (tasks done) |
-| [`handoff-reactive-structure.md`](archive/handoff-reactive-structure.md) | Finished 2026-11-21: the reactive engine's phases 0 to 5. Open items moved to `handoff-patches.md` §1 and `handoff-render.md` §10 |
 | [`vello-hybrid-migration-scope.md`](archive/vello-hybrid-migration-scope.md), [`vello-retention-and-render-plan.md`](archive/vello-retention-and-render-plan.md), [`vello-retained-subtree-renderer-proposal.md`](archive/vello-retained-subtree-renderer-proposal.md) | `rendering/architecture.md`; still the place for their source citations and Zulip quotes |
 | [`bevy-vello-hybrid-design.md`](archive/bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](archive/bevy-vello-hybrid-open-questions.md) | The migration happened; see `rendering/architecture.md` |
 | [`deferred-3d-image-target.md`](archive/deferred-3d-image-target.md) | `specs/view-textures.md` |

@@ -1,15 +1,14 @@
 # Patch storage: chunks, loading by point, the index
 
-**Status:** Draft for the user's approval (PT-4b, 2026-11-21). **Not approved; do not
-build from it.** It is the storage half of [`patches.md`](patches.md) (PT-4a), and is
-built in PT-11 (plans/handoff-patches.md §2). Once approved it revises
-[`scopes.md`](scopes.md) §4 and §8, [`reactive-engine.md`](reactive-engine.md) §13, and
-iron-platform's `README.md` and `server/migrations`; until then those stand as they
-are, and iron-platform is not edited.
+**Status:** Draft for Stage 4 ([`../handoff-engine.md`](../handoff-engine.md) `EN-11`;
+deferred until Stages 1–3 settle). **Not approved; do not build from it.** It is the
+storage half of [`patches.md`](patches.md) and [`engine.md`](engine.md) §5. Once revised
+(cutting premature Postgres index tables) and approved it revises
+[`scopes.md`](scopes.md) §4 and §8 and iron-platform's `README.md` and `server/migrations`.
 
-**Read first:** patches.md §3 to §6 and §10; scopes.md §2, §4 and §8; reactive-engine.md
-§13; iron-platform's `README.md` ("How a scope is stored", "How sync works") and
-`server/migrations/0001_init.sql`; the note's §4.3.
+**Read first:** `engine.md` §5; `patches.md` §3 to §6 and §10; `scopes.md` §2, §4 and §8;
+iron-platform's `README.md` ("How a scope is stored", "How sync works") and
+`server/migrations/0001_init.sql`.
 
 ## 1. What this decides
 

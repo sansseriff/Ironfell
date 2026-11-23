@@ -106,7 +106,7 @@
     <Popover.Content class="ui-popover easing-popover" side="left" align="start" sideOffset={8} aria-label="{label} curves">
       <div class="easing-list" role="listbox" tabindex="0" aria-label={label} aria-activedescendant="easing-{highlighted}" onkeydown={onKey}>
         {#each CURVES as c, i (c.value)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_interactive_supports_focus -->
           <div class="ui-menu-item" id="easing-{i}" role="option" aria-selected={c.value === value} data-highlighted={i === highlighted ? "" : undefined} title={c.label}
             onpointermove={() => (highlighted = i)} onclick={() => choose(c.value)}>
             <span class="ui-menu-check">{#if c.value === value}<Check size={14} strokeWidth={1.75} />{/if}</span>

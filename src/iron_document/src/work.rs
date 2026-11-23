@@ -56,7 +56,7 @@ thread_local! {
 }
 
 /// The large maps `Counted` wraps, by the name a report gives them.
-pub const MAP_NAMES: [&str; 28] = [
+pub const MAP_NAMES: [&str; 27] = [
     "graph.nodes",
     "graph.dependents",
     "graph.natives",
@@ -83,7 +83,6 @@ pub const MAP_NAMES: [&str; 28] = [
     "other",
     "graph.readers",
     "owners.counts",
-    "owners.by_def",
     "producer.published",
 ];
 
@@ -114,8 +113,7 @@ pub const CLOCKS: usize = 22;
 /// The readers of one leaf or native, as a pass visits them (`Readers`).
 pub const GRAPH_READERS: usize = 24;
 pub const OWNERS_COUNTS: usize = 25;
-pub const OWNERS_BY_DEF: usize = 26;
-pub const PRODUCER_PUBLISHED: usize = 27;
+pub const PRODUCER_PUBLISHED: usize = 26;
 
 /// Count `n` units of work at `site`.
 #[inline(always)]

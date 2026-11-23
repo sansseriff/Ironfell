@@ -60,7 +60,7 @@ impl Channel {
         match kind {
             K::Transform2d | K::Transform3d => Some(Channel::Placement),
             K::Appearance | K::Shadow => Some(Channel::Effects),
-            K::Name | K::Host | K::Anchor | K::Instance | K::Override | K::Use | K::Template | K::Import | K::Port | K::Equation | K::Connection | K::Composition | K::Constraint | K::Timing | K::Clip | K::Camera | K::EmbedCamera => None,
+            K::Name | K::Host | K::Anchor | K::Instance | K::Use | K::Template | K::Import | K::Port | K::Equation | K::Connection | K::Composition | K::Constraint | K::Timing | K::Clip | K::Camera | K::EmbedCamera => None,
             _ if kind.is_dynamic() => None,
             _ => Some(Channel::Shape),
         }
@@ -95,7 +95,7 @@ fn draws(ty: &str) -> bool {
 /// A template child that is part of the picture: authored, live, and not
 /// bookkeeping (an override, a constraint).
 fn part_node(doc: Tree<'_>, n: NodeId) -> bool {
-    !n.is_expanded() && doc.live(n).is_some_and(|x| !matches!(x.ty.name(), "override" | "constraint" | "clip" | "key" | "timeline" | "narrative" | "block"))
+    !n.is_expanded() && doc.live(n).is_some_and(|x| !matches!(x.ty.name(), "constraint" | "clip" | "key" | "timeline" | "narrative" | "block"))
 }
 
 /// Follows the graph from an instance's copies to its inputs, memoised per

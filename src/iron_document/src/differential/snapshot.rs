@@ -62,7 +62,6 @@ pub struct Other {
     pub contexts: contexts::Library,
     /// `table_grid` for every table that has one.
     pub tables: BTreeMap<NodeId, table::Grid>,
-    pub stale_overrides: Vec<(NodeId, String)>,
     pub expansion_problems: Vec<expand::Problem>,
     pub physics_error: Option<String>,
     pub session_version: u64,
@@ -182,7 +181,6 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         layout_preview: s.layout_preview().cloned(),
         contexts: s.contexts().clone(),
         tables,
-        stale_overrides: s.stale_overrides(),
         expansion_problems: s.expansion_problems().to_vec(),
         physics_error: s.physics_error().map(str::to_owned),
         session_version: s.session_version(),
@@ -255,7 +253,7 @@ impl Snapshot {
         let o = fields!("other", a, b, [
             time, time_errors, clock, producers, clusters, port_anchors, gesture_in_progress, active_gesture, gesture_status,
             has_actions, problem_notes, interaction, motion_enabled, pinned_state, shared_edits, inside_open, running_machines,
-            pending_queries, dark, layout_preview, contexts, tables, stale_overrides, expansion_problems, physics_error,
+            pending_queries, dark, layout_preview, contexts, tables, expansion_problems, physics_error,
             session_version, selection, scope, client, horizon, session_state,
         ]);
         let (pa, pb) = (&self.pending, &r.pending);

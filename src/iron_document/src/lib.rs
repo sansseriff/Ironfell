@@ -1185,7 +1185,7 @@ impl StoreCore {
         let c = solve::assemble_clusters(entries, problems);
         self.clusters_rev = Some(rev);
         if c != self.clusters {
-            self.owners.hold(c.copies().clone());
+            self.owners.hold(Tree::of(&self.docs), &self.repeats, c.copies().clone());
             // `committed` names current clusters only: `resolve_clusters_live`
             // counts on it.
             self.committed.retain(|k| c.at.contains_key(k));
@@ -2231,7 +2231,7 @@ impl StoreCore {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
                     self.docs.rollback();
-                    self.owners.clear_templates();
+                    self.owners.clear_on_rollback();
                     return Err(e);
                 }
             }
@@ -4600,11 +4600,6 @@ impl StoreCore {
         Ok((made, tx))
     }
 
-    /// Overrides that apply nothing, and why (component-model.md §5.3).
-    pub fn stale_overrides(&self) -> Vec<(NodeId, String)> {
-        expand::stale_overrides(Tree::of(&self.docs))
-    }
-
     /// What the last expansion could not derive, if anything.
     pub fn expansion_problems(&self) -> &[expand::Problem] {
         &self.expansion_problems
@@ -4807,6 +4802,43 @@ impl StoreCore {
         }
         let tkeys = self.docs.drain_template_touched();
         self.owners.note_touched(&tkeys);
+        let mut owner_structural = false;
+        if let Some(which) = self.owners.take_dirty(&mut self.docs) {
+            let stamp = self.docs.authored.version();
+            let (ops, odelta) = self.owners.expand(&mut self.docs, stamp, &self.repeats, which);
+            self.owners.apply(odelta);
+            self.expansion_problems = self.owners.problems();
+            if !ops.is_empty() {
+                self.note_changes(ops.iter(), &[]);
+                self.geometry.note_ops(ops.iter());
+                for op in &ops {
+                    match op {
+                        Op::Create { id, .. } | Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Reparent { id, .. } => {
+                            owner_structural = true;
+                            targets.insert(*id);
+                        }
+                        Op::Reorder { id, .. } => {
+                            targets.insert(*id);
+                        }
+                        Op::Set { id, path, slot } => {
+                            if slot.expr().is_some() || names_context(path) || rederives(path) || self.reactive.is_bound(Leaf { node: *id, path: *path }) {
+                                owner_structural = true;
+                            }
+                            targets.insert(*id);
+                        }
+                        Op::Link { rel } => {
+                            owner_structural = true;
+                            targets.insert(rel.from);
+                            targets.insert(rel.to);
+                        }
+                        Op::Unlink { .. } => {
+                            owner_structural = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         let keys = self.docs.take_touched();
         if keys.iter().any(|k| {
             matches!(k, structure::Key::Facet(_, FacetKind::Token))
@@ -4814,10 +4846,11 @@ impl StoreCore {
         }) {
             self.docs.tokens_shaped = stamp();
         }
-        if keys.iter().any(|k| matches!(k, structure::Key::Leaf(Leaf { path, .. }) if matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")))) {
+        if owner_structural || keys.iter().any(|k| matches!(k, structure::Key::Leaf(Leaf { path, .. }) if matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")))) {
             self.docs.reshaped = stamp();
         }
-        let structural = keys.iter().any(|k| !matches!(k, structure::Key::Leaf(_) | structure::Key::Facet(_, _) | structure::Key::Patch(_)))
+        let structural = owner_structural
+            || keys.iter().any(|k| !matches!(k, structure::Key::Leaf(_) | structure::Key::Facet(_, _) | structure::Key::Patch(_)))
             || targets.iter().any(|&id| {
                 let doc = Tree::of(&self.docs);
                 doc.facets_of(id).any(|f| {
@@ -4865,6 +4898,10 @@ impl StoreCore {
                 self.reactive.flush(doc);
             }
             self.resample_running();
+        }
+        if owner_structural {
+            let _ = self.settle_repeats();
+            self.sync_clusters();
         }
         self.settle(SettleMode::Live { clusters: true });
     }
@@ -5508,8 +5545,8 @@ impl StoreCore {
         let mut expanded = Vec::new();
         let mut problems = None;
         if errors.is_empty() {
-            // Only the owners these ops can change (stage 2).
-            if let Some(which) = self.owners.affected(Tree::of(docs), &input.ops, &inverse) {
+            // Only the owners whose recorded reads were touched (EN-5b).
+            if let Some(which) = self.owners.take_dirty(docs) {
                 let (ops, delta) = self.owners.expand(docs, stamp, &self.repeats, which);
                 expanded = ops;
                 problems = Some(delta);
@@ -5563,7 +5600,7 @@ impl StoreCore {
         }
         if !errors.is_empty() {
             self.docs.rollback();
-            self.owners.clear_templates();
+            self.owners.clear_on_rollback();
             return Err(errors);
         }
         docs.authored.set_version(stamp);

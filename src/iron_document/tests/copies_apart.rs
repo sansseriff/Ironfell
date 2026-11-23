@@ -296,7 +296,7 @@ fn undoing_a_solved_copy_adds_no_override() {
     let n = built.named;
     let rels = store.authored().next_relation_ids(3);
     store.apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], n["fix"], n["p"], "a"), constrains(rels[1], n["d"], n["p"], "a"), constrains(rels[2], n["d"], copy, "b")]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
-    let overrides = |store: &Store| store.tree().live_nodes().filter(|n| n.ty.name() == "override").count();
+    let overrides = |store: &Store| store.tree().patches().patches.len();
     let x = path("transform2d.x");
     let (was, moved) = (Store::load(&before).unwrap().resolved(copy, x), store.resolved(copy, x));
     assert_ne!(was, moved, "the solver moved the copy");

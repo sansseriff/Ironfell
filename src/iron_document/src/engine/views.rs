@@ -679,25 +679,32 @@ fn build_owner_views(
         return Vec::new();
     };
     let spatial_root = authored_root_of(doc, top_owner);
+    let base_scopes: Vec<NodeId> = expand::definition_of(doc, top_owner).into_iter().collect();
     let mut out = Vec::new();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = expand::linked_definition(doc, top_owner) {
-                let coord = ViewCoord { path: vec![top_owner], scopes: vec![def], local: local_dp.clone() };
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                 build_entity_view(doc, templates, top_owner, top_owner, spatial_root, def, coord, global, budget, problems, &mut out);
             }
         }
         "use" => {
             let sized = doc.facet(top_owner, FacetKind::Size).is_some();
             if let Some(def) = expand::main_definition(doc, top_owner) {
-                let coord = ViewCoord { path: vec![top_owner], scopes: vec![def], local: local_dp.clone() };
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                 if let Some(notation) = effective_notation(doc, global, &coord, top_owner, None, None, None) {
                     build_use_view(doc, reg, templates, top_owner, top_owner, spatial_root, sized, None, def, &notation, coord, global, budget, problems, &mut out);
                 }
             } else if let Some(entity) = resolve_use_entity(doc, reg, top_owner)
                 && let Some(def) = resolve_entity_def(doc, reg, &out, entity)
             {
-                let coord = ViewCoord { path: vec![top_owner], scopes: vec![def], local: local_dp.clone() };
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                 if let Some(notation) = effective_notation(doc, global, &coord, top_owner, None, None, None) {
                     build_use_view(doc, reg, templates, top_owner, top_owner, spatial_root, sized, Some(entity), def, &notation, coord, global, budget, problems, &mut out);
                 }
@@ -808,6 +815,7 @@ fn eval_virtual_patches(
 
     let mut fk_seen: BTreeSet<FacetKind> = BTreeSet::new();
     let mut lp_seen: BTreeSet<LeafPath> = BTreeSet::new();
+    let mut notation_seen = false;
     for cand in [copy_id, local] {
         for p in pt.patches_for_target(cand) {
             if p.layer >= crate::patch::SESSION_LAYER {
@@ -826,6 +834,9 @@ fn eval_virtual_patches(
                     }
                     PatchKey::Leaf(lp) => {
                         lp_seen.insert(lp);
+                    }
+                    PatchKey::Notation => {
+                        notation_seen = true;
                     }
                     _ => {}
                 }
@@ -849,6 +860,13 @@ fn eval_virtual_patches(
         {
             leaf_patches.push((lp, slot.clone()));
         }
+    }
+    if notation_seen
+        && let Some((p, t)) = winner_for(PatchKey::Notation)
+        && let Some(n) = p.entries.get(&t).and_then(|v| v.as_notation())
+    {
+        let lp = LeafPath::new(FacetKind::Use, "notation").expect("declared");
+        leaf_patches.push((lp, Slot::Const(crate::value::Value::Str(n.to_owned()))));
     }
 
     let has_facet_or_leaf_patch = !opt_facets.is_empty() || !leaf_patches.is_empty();
@@ -898,7 +916,14 @@ fn resolve_virtual_facets(
                     for field in f.field_names() {
                         if let Some(Slot::Const(_)) = f.get(field)
                             && let Some(bs) = bf.get(field)
-                            && !env.overrides.iter().any(|(t, lp, _)| *t == n.target && lp.facet == f.kind() && lp.field == field)
+                            && !env.overrides.iter().any(|(t, pk, _)| {
+                                *t == n.target
+                                    && match pk {
+                                        PatchKey::Leaf(lp) => lp.facet == f.kind() && lp.field == field,
+                                        PatchKey::Notation => f.kind() == FacetKind::Use && field == "notation",
+                                        _ => false,
+                                    }
+                            })
                         {
                             let _ = f.set(field, bs.clone());
                         }
@@ -919,6 +944,12 @@ fn resolve_virtual_facets(
         }
     }
     for (lp, slot) in &patch.leaf_patches {
+        if patch.opt_facets.get(&lp.facet) == Some(&false) {
+            continue;
+        }
+        if !map.contains_key(&lp.facet) && n.ty.spec().allows(lp.facet) {
+            map.insert(lp.facet, lp.facet.default_facet());
+        }
         if let Some(f) = map.get_mut(&lp.facet) {
             let _ = f.set(lp.field, slot.clone());
         }
@@ -997,7 +1028,8 @@ fn build_entity_view(
         entity: Some(entity),
         sized: false,
         item: None,
-        overrides: templates.overrides(doc, entity),
+        scopes: coord.scopes.clone(),
+        overrides: Vec::new(),
     });
 
     let mut nodes = Vec::with_capacity(t.nodes.len());
@@ -1150,7 +1182,8 @@ fn build_use_view(
         entity,
         sized,
         item: None,
-        overrides: templates.overrides(doc, u),
+        scopes: coord.scopes.clone(),
+        overrides: Vec::new(),
     });
 
     let mut nodes = Vec::with_capacity(t.nodes.len());

@@ -536,6 +536,9 @@ impl Docs {
             }
         }
         if !targets.is_empty() {
+            for &t in &targets {
+                self.scoped_touched.note(crate::structure::Key::Patch(t));
+            }
             self.reconcile_resolved(Some(&targets));
             // Also emit Leaf keys for session-patched leaves on changed axes.
             for p in self.session_patches.values() {
@@ -1100,6 +1103,16 @@ impl<'a> Tree<'a> {
     fn note(self, k: crate::structure::Key) {
         if let Some(r) = self.rec {
             r.borrow_mut().push(k);
+        }
+    }
+
+    pub(crate) fn note_key(self, k: crate::structure::Key) {
+        self.note(k);
+    }
+
+    pub(crate) fn note_all(self, keys: &[crate::structure::Key]) {
+        if let Some(r) = self.rec {
+            r.borrow_mut().extend_from_slice(keys);
         }
     }
 

@@ -564,12 +564,18 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     // edit to the laser definition (§5.3, "Nested targets").
     lab.store.apply(tx("wider laser here", vec![Op::Set { id: laser_box, path: path("size.w"), slot: Slot::Const(Value::Number(140.0)) }])).unwrap();
     let doc = lab.store.tree();
-    let o = doc.children(source_picture).iter().copied().find(|&c| doc.live(c).unwrap().ty.name() == "override").expect("override on the source's picture");
-    let target = doc.get::<iron_document::facet::Override>(o).unwrap().target.constant().unwrap().as_ref().unwrap();
-    assert_eq!(target.path(), laser_box.path()[1..].to_vec());
+    let inst_ax = doc.patches().instance_axis_id().expect("instance axis");
+    let expected_tail = laser_box.path()[..2].to_vec();
+    let p = doc
+        .patches()
+        .patches
+        .values()
+        .find(|p| p.anchor.is_none() && matches!(p.region.sels.get(&inst_ax), Some(iron_document::patch::Sel::Suffix { tail, .. }) if *tail == expected_tail))
+        .expect("override patch for nested laser");
+    assert!(p.entries.keys().any(|t| t.node == template_box));
     lab.store.apply(tx("wider lasers", vec![Op::Set { id: template_box, path: path("size.w"), slot: Slot::Const(Value::Number(90.0)) }])).unwrap();
     assert_eq!(lab.store.resolved(laser_box, path("size.w")), Some(Value::Number(140.0)));
-    assert!(lab.store.stale_overrides().is_empty(), "{:?}", lab.store.stale_overrides());
+    assert!(lab.store.patch_lints().stale.is_empty(), "{:?}", lab.store.patch_lints().stale);
     // Saved and loaded, the nesting re-derives with the same ids.
     let text = lab.store.save();
     let loaded = Store::load(&text).unwrap();

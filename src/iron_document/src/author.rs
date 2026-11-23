@@ -284,10 +284,10 @@ fn static_coordinates(store: &crate::StoreCore, nodes: &[NodeId]) -> Result<(), 
         // Include the authored source when editing a main's expanded picture.
         let source = id.path().last().copied().unwrap_or(id);
         let same = |n: NodeId| n == id || n == source || n.path().last() == Some(&source);
-        if doc.nodes_of_type(ty("override")).any(|n| {
-            doc.get::<crate::facet::Override>(n).is_some_and(|o| {
-                o.target.constant().and_then(|v| v.as_ref()).is_some_and(same)
-                    && o.leaf.constant().and_then(|v| v.as_str()).is_some_and(|p| p.starts_with("transform2d."))
+        if doc.patches().patches.values().any(|p| {
+            p.entries.keys().any(|t| {
+                same(t.node)
+                    && matches!(t.key, crate::patch::PatchKey::Leaf(lp) if lp.facet == FacetKind::Transform2d)
             })
         }) {
             return Err("An instance overrides these coordinates; remove its transform overrides before changing the main's pivot".into());

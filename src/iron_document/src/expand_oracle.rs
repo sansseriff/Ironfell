@@ -38,29 +38,36 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wante
     let mut out = Wanted::new(cap);
     out.root = Some(owner);
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
+    let base_scopes: Vec<NodeId> = definition_of(doc, owner).into_iter().collect();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = linked_definition(doc, owner) {
-                want_entity(doc, owner, def, &mut out);
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                want_entity(doc, owner, def, &scopes, &mut out);
             }
         }
         "use" => {
-            let notation = doc.get::<Use>(owner).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned);
             let sized = doc.facet(owner, FacetKind::Size).is_some();
             if let Some(def) = main_definition(doc, owner) {
-                if let Some(notation) = notation {
-                    want_use(doc, owner, sized, None, def, &notation, &mut out);
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                if let Some(notation) = effective_notation(doc, owner, None, &scopes, None) {
+                    want_use(doc, owner, sized, None, def, &notation, &scopes, &mut out);
                 }
             } else if let Some(entity) = use_entity(doc, owner)
                 && let Some(def) = linked_definition(doc, entity)
-                && let Some(notation) = notation
             {
-                want_use(doc, owner, sized, Some(entity), def, &notation, &mut out);
+                let mut scopes = base_scopes;
+                scopes.push(def);
+                if let Some(notation) = effective_notation(doc, owner, None, &scopes, None) {
+                    want_use(doc, owner, sized, Some(entity), def, &notation, &scopes, &mut out);
+                }
             }
         }
         "group" => {
             if is_item_owner(doc, owner) && draws_repeat(doc, owner, &doc.facets_of(owner).cloned().collect::<Vec<_>>()) && !in_repeat_template(doc, owner) {
-                want_items(doc, owner, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out);
+                want_items(doc, owner, &base_scopes, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out);
             }
         }
         _ => {}
@@ -69,11 +76,7 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wante
     out
 }
 
-/// Expand every scope nobody has expanded yet (reactivity.md §3.1), until
-/// none is left: a repeat's items, and inside whatever those derive, the
-/// ports of an instance and the picture of a `use`. So a component in a
-/// repeat's template, a repeat in a component's, and repeats in repeats
-/// all expand, each scope under the one that made it.
+/// Expand every scope nobody has expanded yet (reactivity.md §3.1).
 fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec<NodeId>) {
     let mut done = BTreeSet::new();
     let mut seen = 0;
@@ -91,24 +94,27 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
             match w.ty.name() {
                 "entity" => {
                     if let Some(def) = linked_def_of(doc, &w.facets) {
-                        want_entity(doc, id, def, out);
+                        let mut scopes = out.scopes.get(&id).cloned().unwrap_or_default();
+                        scopes.push(def);
+                        want_entity(doc, id, def, &scopes, out);
                     }
                 }
                 "use" => {
                     let sized = w.facets.iter().any(|f| matches!(f, Facet::Size(_)));
-                    let notation = w.facets.iter().find_map(|f| match f {
-                        Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
-                        _ => None,
-                    });
-                    // The entity it pictures: one this expansion derives
-                    // (its own item's), or an authored one.
+                    let local_u = id.path().last().copied();
+                    let base_scopes = out.scopes.get(&id).cloned().unwrap_or_default();
+                    let facets = w.facets.clone();
                     let entity = out.rels.iter().find(|r| r.rel.from == id && r.rel.rel == RelKind::Figures).map(|r| r.rel.to);
                     let def = entity.and_then(|e| match out.get(e) {
                         Some(copy) => linked_def_of(doc, &copy.facets),
                         None => linked_definition(doc, e),
                     });
-                    if let (Some(entity), Some(def), Some(notation)) = (entity, def, notation) {
-                        want_use(doc, id, sized, Some(entity), def, &notation, out);
+                    if let (Some(entity), Some(def)) = (entity, def) {
+                        let mut scopes = base_scopes;
+                        scopes.push(def);
+                        if let Some(notation) = effective_notation(doc, id, local_u, &scopes, Some(&facets)) {
+                            want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out);
+                        }
                     }
                 }
                 _ => {}
@@ -116,19 +122,14 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
         }
         let Some(r) = repeats.pop() else { break };
         if done.insert(r) && !in_template(doc, out, r) {
-            want_items(doc, r, counts.get(&r).map_or(&[][..], Vec::as_slice), out);
+            let scopes = out.scopes.get(&r).cloned().unwrap_or_default();
+            want_items(doc, r, &scopes, counts.get(&r).map_or(&[][..], Vec::as_slice), out);
         }
     }
 }
 
-/// The items of repeat (or conditional) `r`, by key. Each is a scope: a
-/// derived group `#r/~key` with an `item` facet, holding a copy of the
-/// template, with the repeat's overrides of that item applied. In a
-/// copy, references to the template follow to the item's own copies, and
-/// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
-/// which the store publishes (`Store::settle_repeats`): so an item
-/// re-evaluates when its own element changes, not when any does.
-fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
+/// The items of repeat (or conditional) `r`, by key.
+fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[NodeId], keys: &[String], out: &mut Wanted) {
     if keys.is_empty() || !out.enter(r) {
         return;
     }
@@ -153,13 +154,9 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
             if leaf.node == r && leaf.path == path("index") {
                 return Leaf { node: scope, path: item_path("index") };
             }
-            // A repeat's or a conditional's `presence` and `leaving` are
-            // each item's own.
             if leaf.node == r && owns_items(leaf.path.facet) && matches!(leaf.path.field, "presence" | "leaving") {
                 return Leaf { node: scope, path: item_path(leaf.path.field) };
             }
-            // A template node's copy, or a node under one (an inner
-            // picture's parts): under the item's copy.
             let p = leaf.node.path();
             let under = (1..=p.len()).rev().find_map(|i| NodeId::from_path(&p[..i]).filter(|n| inside.contains(n)).map(|n| (n, i)));
             match under.and_then(|(n, i)| NodeId::item(r, k, n).map(|c| (c, i))) {
@@ -194,14 +191,13 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
                 })
                 .collect();
             if let Some(&local) = id.path().last() {
-                apply_overrides(doc, scope, local, *ty, &mut facets);
+                apply_overrides(doc, scope, scopes, local, *ty, &mut facets);
             }
             if !out.push(Want { id: copy, ty: *ty, parent: parent_copy, order: order.clone(), facets, scoped: false }) {
                 return;
             }
+            out.scopes.insert(copy, scopes.to_vec());
         }
-        // The template's relations, between the item's copies: a picture
-        // in the template figures its item's entity.
         for rel in &rels {
             let Some(from) = NodeId::item(r, k, rel.from) else { continue };
             let to = follow(Leaf { node: rel.to, path: any }).node;
@@ -210,11 +206,8 @@ fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted) {
     }
 }
 
-/// What entity `entity` (authored, or derived for an outer instance)
-/// derives from `def`: its ports and equations, and its inner entities and
-/// connections, each inner entity in turn deriving its own.
-fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
-    out.defs.insert(def);
+/// What entity `entity` derives from `def`.
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], out: &mut Wanted) {
     if !out.enter(entity) {
         return;
     }
@@ -242,12 +235,12 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
                 }
             }
         }
-        apply_overrides(doc, entity, child, ty, &mut facets);
+        apply_overrides(doc, entity, scopes, child, ty, &mut facets);
         let inner_def = (node.ty.name() == "entity").then(|| linked_def_of(doc, &facets)).flatten();
         if !out.push(Want { id, ty, parent: entity, order: node.order.clone(), facets, scoped: true }) {
             return;
         }
-        // A connection's ends, a port's `exposes`: re-pointed for this entity.
+        out.scopes.insert(id, scopes.to_vec());
         if matches!(node.ty.name(), "connection" | "port_spec") {
             for r in doc.relations_from(child) {
                 let to = follow(Leaf { node: r.to, path: LeafPath::new(FacetKind::Name, "text").expect("declared") }).node;
@@ -255,35 +248,30 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted) {
             }
         }
         if let Some(inner) = inner_def {
-            want_entity(doc, id, inner, out);
+            let mut inner_scopes = scopes.to_vec();
+            inner_scopes.push(inner);
+            want_entity(doc, id, inner, &inner_scopes, out);
         }
     }
-    // A machine's states, transitions and tweens, copied for this instance
-    // (machines.md §9 Q12): their timing may read the instance's inputs,
-    // and the instance may override any of it. After the ports they read.
     for &machine in doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
         let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
         while let Some(local) = stack.pop() {
             let Some(n) = doc.live(local) else { continue };
             let (Some(copy), Some(parent)) = (NodeId::expanded(entity, local), n.parent.and_then(|p| NodeId::expanded(entity, p))) else { continue };
             let mut facets = rewritten(doc, local, &follow);
-            apply_overrides(doc, entity, local, n.ty, &mut facets);
+            apply_overrides(doc, entity, scopes, local, n.ty, &mut facets);
             if !out.push(Want { id: copy, ty: n.ty, parent, order: n.order.clone(), facets, scoped: true }) {
                 return;
             }
+            out.scopes.insert(copy, scopes.to_vec());
             stack.extend(doc.children(local).iter().rev().copied().filter(|c| !c.is_expanded()));
         }
     }
 }
 
-/// What `use` `u`, figuring `entity` (an instance of `def`), derives: the
-/// definition's template for `notation`, as its children. A `use` inside
-/// the template pictures one of the definition's inner entities, so its
-/// copy figures that entity's copy and derives that entity's picture. A
-/// main has no entity: references to the definition's body stay on it.
-fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted) {
-    out.defs.insert(def);
-    // A picture of another owner's derived entity reads that owner's copy.
+/// What `use` `u`, figuring `entity` (an instance of `def`), derives.
+#[allow(clippy::too_many_arguments)]
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[NodeId], out: &mut Wanted) {
     if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())
         && out.root.is_some_and(|o| o != r)
     {
@@ -294,9 +282,6 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     }
     let Some(template) = definition::template_of(doc, def, notation) else { return };
     let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-    // A sized picture (plans/specs/plot.md §3): the template's own `size`,
-    // which its parts read, is this use's (`sized`: the use has a size;
-    // an inner use's copy may not exist yet, so the caller says).
     let follow = |leaf: Leaf| -> Leaf {
         if leaf.node == template {
             return if sized && leaf.path.facet == FacetKind::Size { Leaf { node: u, path: leaf.path } } else { leaf };
@@ -317,9 +302,7 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
             None => leaf,
         }
     };
-    // Preorder, so every parent is wanted before its children. A template's
-    // own derived children (its uses' previews) and overrides are not copied.
-    let copied = |n: NodeId| !n.is_expanded() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
+    let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.is_live(n);
     let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
     while let Some(local) = stack.pop() {
         let Some(node) = doc.live(local) else { continue };
@@ -330,32 +313,29 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
         };
         let (Some(id), Some(parent)) = (NodeId::expanded(u, local), parent) else { continue };
         let mut facets = rewritten(doc, local, &follow);
-        apply_overrides(doc, u, local, node.ty, &mut facets);
-        // An entity in a template (a repeat's item instance) and a picture
-        // of one are scopes the scope pass expands; a picture of one of
-        // the definition's own inner entities is expanded here.
+        apply_overrides(doc, u, scopes, local, node.ty, &mut facets);
         let inner = (node.ty.name() == "use").then(|| doc.relations_from(local).find(|r| r.rel == RelKind::Figures)).flatten();
         let own = inner.is_some_and(|r| !inside.contains(&r.to.path()[0]));
         if !out.push(Want { id, ty: node.ty, parent, order: node.order.clone(), facets: facets.clone(), scoped: !matches!(node.ty.name(), "entity" | "use") || own }) {
             return;
         }
+        out.scopes.insert(id, scopes.to_vec());
         if node.ty.name() == "use" {
-            // An inner picture: it figures the inner entity's copy, and
-            // derives that entity's picture in turn.
             if let Some(r) = doc.relations_from(local).find(|r| r.rel == RelKind::Figures) {
                 let inner_entity = follow(Leaf { node: r.to, path: LeafPath::new(FacetKind::Name, "text").expect("declared") }).node;
                 out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(u, r.id), from: id, to: inner_entity, rel: RelKind::Figures, data: r.data.clone() } });
-                let inner_notation = facets.iter().find_map(|f| match f {
-                    Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
-                    _ => None,
-                });
                 let inner_def = doc.node(r.to).and_then(|_| doc.get::<Instance>(r.to)).and_then(|i| {
                     (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
                 });
+                let mut inner_scopes = scopes.to_vec();
+                if let Some(d) = inner_def {
+                    inner_scopes.push(d);
+                }
+                let inner_notation = effective_notation(doc, id, Some(local), &inner_scopes, Some(&facets));
                 if let (Some(n), Some(d)) = (inner_notation, inner_def)
                     && own
                 {
-                    want_use(doc, id, facets.iter().any(|f| matches!(f, Facet::Size(_))), Some(inner_entity), d, &n, out);
+                    want_use(doc, id, facets.iter().any(|f| matches!(f, Facet::Size(_))), Some(inner_entity), d, &n, &inner_scopes, out);
                 }
             }
             continue;
@@ -364,24 +344,50 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     }
 }
 
-/// Apply `owner`'s overrides of `local` to the facets its copy will have
-/// (component-model.md §5.3): each sets one leaf to a constant, adding the
-/// facet when the node type admits it and the copy lacks it.
-fn apply_overrides(doc: Tree<'_>, owner: NodeId, local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
-    for (_, target, leaf, value) in overrides(doc, owner) {
-        if target != local {
-            continue;
-        }
-        if !facets.iter().any(|f| f.kind() == leaf.facet) {
-            if !ty.spec().allows(leaf.facet) {
-                continue;
+/// Apply `owner`'s patch overrides of `local` to the facets its copy will have.
+fn apply_overrides(doc: Tree<'_>, owner: NodeId, scopes: &[NodeId], local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
+    let ovs = patch_overrides_for(doc, owner, scopes, &[local]);
+    if ovs.is_empty() {
+        return;
+    }
+    let mut suppressed: std::collections::HashSet<FacetKind> = std::collections::HashSet::new();
+    for (_, key, val) in &ovs {
+        if let (PatchKey::FacetPresent(fk), PatchValue::Bool { v }) = (key, val) {
+            if *v {
+                if !facets.iter().any(|f| f.kind() == *fk) && ty.spec().allows(*fk) {
+                    facets.push(fk.default_facet());
+                }
+            } else {
+                suppressed.insert(*fk);
+                facets.retain(|f| f.kind() != *fk);
             }
-            facets.push(leaf.facet.default_facet());
-        }
-        if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
-            let _ = f.set(leaf.field, Slot::Const(value));
         }
     }
+    for (_, key, val) in ovs {
+        match (key, val) {
+            (PatchKey::Leaf(leaf), PatchValue::Slot { slot }) => {
+                if suppressed.contains(&leaf.facet) {
+                    continue;
+                }
+                if !facets.iter().any(|f| f.kind() == leaf.facet) {
+                    if !ty.spec().allows(leaf.facet) {
+                        continue;
+                    }
+                    facets.push(leaf.facet.default_facet());
+                }
+                if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
+                    let _ = f.set(leaf.field, slot);
+                }
+            }
+            (PatchKey::Notation, PatchValue::Notation { notation }) => {
+                if let Some(Facet::Use(u)) = facets.iter_mut().find(|f| matches!(f, Facet::Use(_))) {
+                    u.notation = Slot::Const(Value::Str(notation));
+                }
+            }
+            _ => {}
+        }
+    }
+    facets.sort_by_key(Facet::kind);
 }
 
 /// `node`'s facets with every reference passed through `follow`: those in
@@ -419,7 +425,8 @@ pub(crate) fn expand(docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op
     let Whole { nodes: want, rels: want_rels, mut problems } = wanted(Tree::of(docs), counts);
     let have: Vec<NodeId> = Tree::of(docs).expanded_ids().filter(|id| Tree::of(docs).is_live(*id)).collect();
     let have_rels: Vec<Relation> = Tree::of(docs).relations().filter(|r| r.id.is_expanded()).cloned().collect();
-    let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems, (&BTreeSet::new(), &BTreeSet::new()), &std::collections::HashSet::new(), &HashMap::new());
+    let mut ignored = HashMap::new();
+    let ops = apply_wanted(docs, stamp, want, want_rels, have, have_rels, &mut problems, (&BTreeSet::new(), &BTreeSet::new()), &HashMap::new(), &mut ignored);
     sort_problems(&mut problems);
     (ops, problems)
 }
@@ -435,38 +442,28 @@ fn template_of_repeat(doc: Tree<'_>, r: NodeId, out: &Wanted) -> (Vec<TemplateNo
     let mut nodes = Vec::new();
     let mut rels = Vec::new();
     if r.is_expanded() && out.get(r).is_none() {
-        // A derived repeat this pass did not want: its items alone are
-        // being brought up to date (`expand_items`), and its template is
-        // the copies its owner's last expansion wrote.
         let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(|c| c.item_of(r).is_none()).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            let Some(node) = doc.live(n) else { continue };
             nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).cloned());
-            // Not a picture's own derivation (an own inner picture's).
             stack.extend(doc.children(n).iter().rev().copied().filter(|c| c.expanded_parts().map(|(o, _)| o) != Some(n)));
         }
     } else if r.is_expanded() {
         let mut parents = BTreeSet::from([r]);
         for w in &out.nodes {
-            // Not a picture's own derivation: an own inner picture in the
-            // template is the picture's, and each item's copy of the `use`
-            // derives its own (the templates' identity contract).
             let derived_by_parent = w.id.expanded_parts().is_some_and(|(o, _)| o == w.parent);
-            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && w.ty.name() != "override" && !derived_by_parent {
+            if parents.contains(&w.parent) && w.id.item_of(r).is_none() && !derived_by_parent {
                 parents.insert(w.id);
                 nodes.push((w.id, w.parent, w.ty, w.order.clone(), w.facets.clone()));
             }
         }
         rels.extend(out.rels.iter().filter(|x| parents.contains(&x.rel.from) && x.rel.from != r).map(|x| x.rel.clone()));
     } else {
-        // An override is the repeat's own opinion about one item's copy,
-        // not part of what items copy. A session node gets no copy, nor
-        // anything under it.
         let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
         let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            let Some(node) = doc.live(n) else { continue };
             nodes.push((n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
             stack.extend(doc.children(n).iter().rev().copied().filter(copied));

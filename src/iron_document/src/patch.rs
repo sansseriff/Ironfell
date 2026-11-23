@@ -1166,6 +1166,22 @@ impl PatchTable {
         PatchId(self.next_patch)
     }
 
+    /// First `Instance` axis in the table, if one exists (`EN-5b`).
+    pub fn instance_axis_id(&self) -> Option<AxisId> {
+        self.axes.values().find(|a| a.kind == AxisKind::Instance).map(|a| a.id)
+    }
+
+    /// Existing writable layer-0 patch matching `(anchor, Suffix { tail, not: [] })`
+    /// on `inst_ax` (and no other axis restrictions), for reusing one override
+    /// patch per instance placement (`EN-5b`).
+    pub fn instance_override_patch(&self, inst_ax: AxisId, anchor: Option<NodeId>, tail: &[NodeId]) -> Option<PatchId> {
+        let want = Product::default().with(inst_ax, Sel::Suffix { tail: tail.to_vec(), not: Vec::new() });
+        self.patches
+            .values()
+            .find(|p| p.writable && p.layer == 0 && p.anchor == anchor && p.region == want)
+            .map(|p| p.id)
+    }
+
     pub fn reindex(&mut self) {
         self.by_target.clear();
         self.by_axis.clear();
@@ -1292,10 +1308,7 @@ impl PatchTable {
     }
 
     /// Validate a region & optional anchor against this table's axes.
-    pub fn validate_region(&self, region: &Product, anchor: Option<NodeId>) -> Result<(), String> {
-        if anchor.is_some() && !self.axes.values().any(|a| a.kind == AxisKind::Instance) {
-            return Err("anchored patch requires an instance axis".into());
-        }
+    pub fn validate_region(&self, region: &Product, _anchor: Option<NodeId>) -> Result<(), String> {
         for (a, sel) in &region.sels {
             let ax = self.axes.get(a).ok_or_else(|| format!("region references unknown axis {a}"))?;
             match (ax.kind, sel) {
@@ -1505,11 +1518,12 @@ impl PatchTable {
         }
     }
 
-    /// Every discrete point across all non-time axes.
+    /// Every discrete point across all non-time axes (skipping derived-path
+    /// `Instance` axes that hold no saved `AxisValue`s, `EN-5b`).
     pub fn points(&self) -> Vec<Point> {
         let mut out: Vec<Point> = vec![Point::new()];
         for (&a, axis) in &self.axes {
-            if axis.kind == AxisKind::Time {
+            if axis.kind == AxisKind::Time || (axis.kind == AxisKind::Instance && axis.values.is_empty()) {
                 continue;
             }
             let vals: Vec<AxisValueId> = axis.live().collect();
@@ -1730,13 +1744,59 @@ impl PatchTable {
     /// Stale entries (patches.md §5.3, P21): non-empty winning region where
     /// the target node or optional facet is absent at every point of it.
     pub fn stale(&self, is_present: &dyn Fn(&Point, NodeId) -> bool, has_facet: &dyn Fn(&Point, NodeId, FacetKind) -> bool) -> Vec<(PatchId, PatchTarget)> {
+        let has_derived_instance = self.axes.values().any(|a| a.kind == AxisKind::Instance && a.values.is_empty());
         let mut out = Vec::new();
         for p in self.patches.values() {
+            // Check whether a derived-path `Instance` suffix references a dead authored step.
+            let dead_suffix_step = |pt: &Point| -> bool {
+                for (a, sel) in &p.region.sels {
+                    if self.axes.get(a).is_some_and(|ax| ax.kind == AxisKind::Instance && ax.values.is_empty())
+                        && let Sel::Suffix { tail, .. } = sel
+                    {
+                        for &step in tail {
+                            if !step.is_expanded() && !step.is_item_step() && !is_present(pt, step) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                if let Some(anc) = p.anchor
+                    && !is_present(pt, anc)
+                {
+                    return true;
+                }
+                false
+            };
             for (&target, val) in &p.entries {
                 if matches!((target.key, val), (PatchKey::Present | PatchKey::FacetPresent(_), PatchValue::Bool { v: false })) {
                     continue;
                 }
-                let points: Vec<Point> = if p.anchor.is_some() {
+                let has_discrete_inst = self.axes.values().any(|ax| ax.kind == AxisKind::Instance && !ax.values.is_empty());
+                let uses_derived_inst = (p.anchor.is_some() && !has_discrete_inst)
+                    || (has_derived_instance
+                        && p.region.sels.keys().any(|a| self.axes.get(a).is_some_and(|ax| ax.kind == AxisKind::Instance && ax.values.is_empty())));
+                let points: Vec<Point> = if uses_derived_inst {
+                    let wr = self.winning_region(p.id, target);
+                    if wr.is_empty(&self.axes) {
+                        Vec::new()
+                    } else {
+                        // Match discrete points on all non-derived-instance axes.
+                        self.points()
+                            .into_iter()
+                            .filter(|x| {
+                                wr.0.iter().any(|box_| {
+                                    box_.sels.iter().all(|(a, sel)| {
+                                        let Some(ax) = self.axes.get(a) else { return false };
+                                        if ax.kind == AxisKind::Time || (ax.kind == AxisKind::Instance && ax.values.is_empty()) {
+                                            return !sel.void(ax);
+                                        }
+                                        x.get(*a).is_some_and(|v| sel.contains(ax, v))
+                                    })
+                                })
+                            })
+                            .collect()
+                    }
+                } else if p.anchor.is_some() {
                     self.points()
                         .into_iter()
                         .filter(|x| self.winner_authored(x, target).is_some_and(|w| w.id == p.id))
@@ -1745,11 +1805,19 @@ impl PatchTable {
                     self.winning_region(p.id, target).points(self)
                 };
                 let absent_at = |x: &Point| {
+                    if uses_derived_inst && dead_suffix_step(x) {
+                        return true;
+                    }
                     if !is_present(x, target.node) {
                         return true;
                     }
                     if let PatchKey::Leaf(lp) = target.key {
-                        return !has_facet(x, target.node, lp.facet);
+                        let self_adds_facet = p
+                            .entries
+                            .get(&PatchTarget { node: target.node, key: PatchKey::FacetPresent(lp.facet) })
+                            .and_then(|v| v.as_bool())
+                            == Some(true);
+                        return !self_adds_facet && !has_facet(x, target.node, lp.facet);
                     }
                     false
                 };

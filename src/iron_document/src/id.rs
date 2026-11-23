@@ -346,7 +346,7 @@ macro_rules! id_type {
                         let parts: Vec<String> = path.iter().map(|&n| step(n)).collect();
                         write!(f, "{}{}", $prefix, parts.join("/"))
                     }
-                    None => write!(f, "{}{}", $prefix, render(self.0)),
+                    None => write!(f, "{}{}", $prefix, step(self.0)),
                 }
             }
         }
@@ -368,7 +368,7 @@ macro_rules! id_type {
                         .filter(|p| p.len() >= 2 && p.iter().all(|&n| n & EXPANDED == 0 && n < SESSION_BASE))
                         .map(|p| expanded_raw(&p))
                 } else {
-                    parse_plain(body)
+                    parse_step(body)
                 };
                 raw.map(Self).ok_or_else(|| IdParseError(s.to_owned()))
             }
@@ -411,6 +411,11 @@ impl NodeId {
     /// undo, never edited directly (component-model.md §6).
     pub fn is_expanded(self) -> bool {
         self.0 & EXPANDED != 0
+    }
+
+    /// Whether this standalone id is a repeat item-key step (`~key`).
+    pub fn is_item_step(self) -> bool {
+        is_item_step(self.0)
     }
 
     /// An expanded node's instance (the authored one, or the derived inner
@@ -596,6 +601,14 @@ mod tests {
         let r = RelationId::from_raw(7);
         assert_eq!(r.to_string(), "r7");
         assert_eq!("r7".parse::<RelationId>().unwrap(), r);
+        // Standalone item step ids render and parse canonically as `#~key` (EN-5b).
+        for k in ["0", "row-1", "item_abc"] {
+            let scope = NodeId::item_scope(NodeId::from_raw(5), k).unwrap();
+            let step_id = *scope.path().last().unwrap();
+            assert!(step_id.is_item_step());
+            assert_eq!(step_id.to_string(), format!("#~{k}"));
+            assert_eq!(format!("#~{k}").parse::<NodeId>().unwrap(), step_id);
+        }
     }
 }
 

@@ -40,12 +40,12 @@ use crate::expr::{Expr, Leaf};
 use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::order::OrderKey;
+use crate::patch::{PatchKey, PatchValue};
 use crate::registry::TypeId;
 use crate::structure::{Key, Recorder};
 use crate::value::{Slot, Value};
 use crate::Tree;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// How a node a template refers to is read from one owner's copy.
@@ -136,9 +136,12 @@ pub(crate) struct Env {
     pub(crate) sized: bool,
     /// A collection item.
     pub(crate) item: Option<Item>,
-    /// The overrides reaching the owner's copies: (target, leaf, value),
-    /// weakest first.
-    pub(crate) overrides: Vec<(NodeId, LeafPath, Value)>,
+    /// Enclosing definition scopes (outermost first), for derived scope-chain
+    /// layer precedence (`EN-5b`).
+    pub(crate) scopes: Vec<NodeId>,
+    /// The patch overrides reaching the owner's copies: `(target, key, value)`,
+    /// resolved from `PatchTable` at `(global, ViewCoord)` (`EN-5b`).
+    pub(crate) overrides: Vec<(NodeId, PatchKey, PatchValue)>,
 }
 
 /// A collection item's part of its environment.
@@ -266,7 +269,7 @@ impl Template {
     /// copy, `NodeId::expanded`).
     pub(crate) fn picture(doc: Tree<'_>, def: NodeId, template: NodeId) -> Template {
         let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
+        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.is_live(n);
         let mut nodes = Vec::new();
         let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
         while let Some(local) = stack.pop() {
@@ -301,16 +304,15 @@ impl Template {
 
     /// Authored repeat (or conditional) `r`'s template: its children that
     /// are not items, and their subtrees, parents first, with the
-    /// relations from them. An override is the repeat's own opinion about
-    /// one item's copy, not part of what items copy; a session node gets no
-    /// copy, nor anything under it, and does not order the items.
+    /// relations from them. A session node gets no copy, nor anything under
+    /// it, and does not order the items.
     pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
         let mut nodes = Vec::new();
         let mut rels = Vec::new();
         let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
         let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            let Some(node) = doc.live(n) else { continue };
             nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
             stack.extend(doc.children(n).iter().rev().copied().filter(copied));
@@ -318,26 +320,9 @@ impl Template {
         Template::collection(r, nodes, rels)
     }
 
-    /// Which of this template's nodes are, with every reference they hold
-    /// classed alike, as `was` has them: `None` when the two copy different
-    /// sources or class a reference differently. For one environment such a
-    /// node's copy is the copy `was` made.
-    pub(crate) fn same_nodes(&self, was: &Template) -> Option<Vec<bool>> {
-        if self.source != was.source || self.refs != was.refs {
-            return None;
-        }
-        let old: HashMap<NodeId, &TNode> = was.nodes.iter().map(|n| (n.local, n)).collect();
-        Some(self.nodes.iter().map(|n| old.get(&n.local).is_some_and(|o| *o == n)).collect())
-    }
-
-    /// Node `local`'s copy for `env`, if this template has the node.
-    pub(crate) fn materialise_local(&self, local: NodeId, env: &Env) -> Option<Vec<Facet>> {
-        let i = self.nodes.iter().position(|n| n.local == local)?;
-        Some(self.materialise(i, env))
-    }
-
-    /// Whether a kept copy of node `i` must be read for what it derives: an
-    /// instance, a picture, or a repeat (`want_scopes`).
+    /// Whether a copy of node `i` derives its own scope (an instance,
+    /// picture, or repeat).
+    #[allow(dead_code)]
     pub(crate) fn derives(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         matches!(n.ty.name(), "entity" | "use") || n.facets.iter().any(|f| expand::owns_items(f.kind()))
@@ -490,13 +475,12 @@ impl Template {
     }
 }
 
-/// `env`'s overrides of node `n`'s copy: an item's outer owner's first.
+/// `env`'s patch overrides of node `n`'s copy: an item's outer owner's first.
 fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
     if let Some(item @ Item { outer: Some((outer_t, outer)), .. }) = &env.item {
         apply_overrides(outer_t, n, outer, facets);
         // An outer override naming a node under this template's, as the
-        // outer owner copies it, names the item's copy
-        // (`Template::into_item`).
+        // outer owner copies it, names the item's copy (`Template::into_item`).
         if outer_sets_a_node(n, outer) {
             for f in facets.iter_mut() {
                 for field in f.field_names() {
@@ -510,27 +494,59 @@ fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) 
             }
         }
     }
-    for (target, leaf, value) in &env.overrides {
+    let mut suppressed: HashSet<FacetKind> = HashSet::new();
+    for (target, key, val) in &env.overrides {
         if *target != n.target {
             continue;
         }
-        if !facets.iter().any(|f| f.kind() == leaf.facet) {
-            if !n.ty.spec().allows(leaf.facet) {
-                continue;
+        if let (PatchKey::FacetPresent(fk), PatchValue::Bool { v }) = (key, val) {
+            if *v {
+                if !facets.iter().any(|f| f.kind() == *fk) && n.ty.spec().allows(*fk) {
+                    facets.push(fk.default_facet());
+                }
+            } else {
+                suppressed.insert(*fk);
+                facets.retain(|f| f.kind() != *fk);
             }
-            facets.push(leaf.facet.default_facet());
-        }
-        if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
-            let _ = f.set(leaf.field, Slot::Const(value.clone()));
         }
     }
+    for (target, key, val) in &env.overrides {
+        if *target != n.target {
+            continue;
+        }
+        match (key, val) {
+            (PatchKey::Leaf(leaf), PatchValue::Slot { slot }) => {
+                if suppressed.contains(&leaf.facet) {
+                    continue;
+                }
+                if !facets.iter().any(|f| f.kind() == leaf.facet) {
+                    if !n.ty.spec().allows(leaf.facet) {
+                        continue;
+                    }
+                    facets.push(leaf.facet.default_facet());
+                }
+                if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
+                    let _ = f.set(leaf.field, slot.clone());
+                }
+            }
+            (PatchKey::Notation, PatchValue::Notation { notation }) => {
+                if let Some(Facet::Use(u)) = facets.iter_mut().find(|f| matches!(f, Facet::Use(_))) {
+                    u.notation = Slot::Const(Value::Str(notation.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    // Keep facets in `FacetKind` order (matching `Document::facets_of` / `BTreeMap`).
+    facets.sort_by_key(Facet::kind);
 }
 
 /// Whether an override reaching `env` (or an owner it is an item of) sets
-/// node `n`'s copy to a node.
+/// node `n`'s copy to a node reference.
 fn outer_sets_a_node(n: &TNode, env: &Env) -> bool {
-    env.overrides.iter().any(|(target, _, v)| *target == n.target && matches!(v, Value::Ref(_)))
-        || matches!(&env.item, Some(Item { outer: Some((_, outer)), .. }) if outer_sets_a_node(n, outer))
+    env.overrides.iter().any(|(target, _, v)| {
+        *target == n.target && matches!(v, PatchValue::Slot { slot: Slot::Const(Value::Ref(_)) })
+    }) || matches!(&env.item, Some(Item { outer: Some((_, outer)), .. }) if outer_sets_a_node(n, outer))
 }
 
 /// One cached template entry's lookup key, used by the reverse dependency index.
@@ -671,64 +687,23 @@ impl std::fmt::Debug for TemplateCache {
     }
 }
 
-/// One pass's view of the templates: the kept ones, and each node's own
-/// overrides, read once in the pass.
-/// What each piece's last applied expansion copied, by the piece's owner (an
-/// entity's body, a picture, an item scope): the template and environment.
-pub(crate) type Pieces = HashMap<NodeId, (Arc<Template>, Arc<Env>)>;
-
+/// One pass's view of the compiled templates, forwarding each template's
+/// recorded structural dependencies into any recording [`Tree`] caller (`EN-5b`).
 pub(crate) struct Templates<'c> {
     cache: &'c mut TemplateCache,
-    /// The pieces' records, when copies made as recorded may be kept.
-    made: Option<&'c Pieces>,
-    /// The copies a constraint cluster holds (`Owners::held`).
-    held: Option<&'c std::collections::BTreeSet<NodeId>>,
-    own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
-    /// `Template::same_nodes` for each (recorded, current) pair compared
-    /// this pass, by address.
-    same: HashMap<(usize, usize), Option<Rc<[bool]>>>,
 }
 
 impl<'c> Templates<'c> {
     pub(crate) fn new(cache: &'c mut TemplateCache) -> Templates<'c> {
-        Templates { cache, made: None, held: None, own: HashMap::new(), same: HashMap::new() }
-    }
-
-    /// A pass that may keep copies their piece's record says are current.
-    pub(crate) fn recorded(cache: &'c mut TemplateCache, made: &'c Pieces, held: &'c std::collections::BTreeSet<NodeId>) -> Templates<'c> {
-        Templates { cache, made: Some(made), held: Some(held), own: HashMap::new(), same: HashMap::new() }
-    }
-
-    /// What piece `piece`'s last accepted expansion copied.
-    pub(crate) fn record(&self, piece: NodeId) -> Option<&'c (Arc<Template>, Arc<Env>)> {
-        self.made?.get(&piece)
-    }
-
-    /// Whether a constraint cluster holds copy `id`.
-    pub(crate) fn held(&self, id: NodeId) -> bool {
-        self.held.is_some_and(|h| h.contains(&id))
-    }
-
-    /// Which of `t`'s nodes piece `piece` copies as its last applied
-    /// expansion did: its environment is the one recorded, and the node
-    /// the same in the recorded template (`same_nodes`).
-    pub(crate) fn kept(&mut self, piece: NodeId, t: &Arc<Template>, env: &Env) -> Option<Rc<[bool]>> {
-        let (was, at) = self.made?.get(&piece)?;
-        if **at != *env {
-            return None;
-        }
-        self.same_nodes(was, t)
-    }
-
-    /// Which of `now`'s nodes make the same copy as `was` made of them, for
-    /// an equal environment (`Template::same_nodes`), compared once a pass.
-    pub(crate) fn same_nodes(&mut self, was: &Arc<Template>, now: &Arc<Template>) -> Option<Rc<[bool]>> {
-        let key = (Arc::as_ptr(was) as usize, Arc::as_ptr(now) as usize);
-        self.same.entry(key).or_insert_with(|| now.same_nodes(was).map(Rc::from)).clone()
+        Templates { cache }
     }
 
     pub(crate) fn body(&mut self, doc: Tree<'_>, def: NodeId) -> Arc<Template> {
+        let ck = CacheKey::Body(def);
         if let Some(t) = self.cache.bodies.get(&def) {
+            if let Some(deps) = self.cache.deps.get(&ck) {
+                doc.note_all(deps);
+            }
             return t.clone();
         }
         let rec = Recorder::default();
@@ -736,13 +711,20 @@ impl<'c> Templates<'c> {
         t.rev = self.cache.alloc_rev();
         let t = Arc::new(t);
         self.cache.bodies.insert(def, t.clone());
-        self.cache.record_deps(CacheKey::Body(def), rec.into_inner());
+        self.cache.record_deps(ck.clone(), rec.into_inner());
+        if let Some(deps) = self.cache.deps.get(&ck) {
+            doc.note_all(deps);
+        }
         t
     }
 
     pub(crate) fn picture(&mut self, doc: Tree<'_>, def: NodeId, notation: &str) -> Option<Arc<Template>> {
         let key = (def, notation.to_owned());
+        let ck = CacheKey::Picture(def, notation.to_owned());
         if let Some(t) = self.cache.pictures.get(&key) {
+            if let Some(deps) = self.cache.deps.get(&ck) {
+                doc.note_all(deps);
+            }
             return t.clone();
         }
         let rec = Recorder::default();
@@ -753,13 +735,20 @@ impl<'c> Templates<'c> {
             Arc::new(compiled)
         });
         self.cache.pictures.insert(key, t.clone());
-        self.cache.record_deps(CacheKey::Picture(def, notation.to_owned()), rec.into_inner());
+        self.cache.record_deps(ck.clone(), rec.into_inner());
+        if let Some(deps) = self.cache.deps.get(&ck) {
+            doc.note_all(deps);
+        }
         t
     }
 
     /// Authored repeat `r`'s template.
     pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Arc<Template> {
+        let ck = CacheKey::Repeat(r);
         if let Some(t) = self.cache.repeats.get(&r) {
+            if let Some(deps) = self.cache.deps.get(&ck) {
+                doc.note_all(deps);
+            }
             return t.clone();
         }
         let rec = Recorder::default();
@@ -767,7 +756,10 @@ impl<'c> Templates<'c> {
         t.rev = self.cache.alloc_rev();
         let t = Arc::new(t);
         self.cache.repeats.insert(r, t.clone());
-        self.cache.record_deps(CacheKey::Repeat(r), rec.into_inner());
+        self.cache.record_deps(ck.clone(), rec.into_inner());
+        if let Some(deps) = self.cache.deps.get(&ck) {
+            doc.note_all(deps);
+        }
         t
     }
 
@@ -783,12 +775,5 @@ impl<'c> Templates<'c> {
         self.cache.subs.insert(key, t.clone());
         self.cache.subs_by_rev.entry(outer.rev).or_default().push(l);
         t
-    }
-
-    /// The overrides that reach `owner`'s copies, as (target, leaf, value),
-    /// weakest first (`expand::overrides_by`), each node's own read once.
-    pub(crate) fn overrides(&mut self, doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
-        let own = &mut self.own;
-        expand::overrides_by(owner, |n| own.entry(n).or_insert_with(|| expand::own_overrides(doc, n).into()).clone()).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
     }
 }

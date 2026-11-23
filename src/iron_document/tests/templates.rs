@@ -9,7 +9,7 @@
 //! find nothing to change.
 
 use iron_document::edit;
-use iron_document::facet::{self, Name, Override};
+use iron_document::facet::{self, Name};
 use iron_document::*;
 use std::collections::BTreeMap;
 
@@ -37,16 +37,53 @@ fn copies(store: &Store, under: NodeId, name: &str) -> Vec<NodeId> {
     doc.descendants(under).into_iter().filter(|&d| d.is_expanded() && doc.is_live(d) && doc.get::<Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some(name)).collect()
 }
 
-/// An override node under `owner`: `target`'s `leaf` set to `value`.
-fn override_of(store: &Store, owner: NodeId, target: NodeId, leaf: &str, value: Value) -> (NodeId, Op) {
-    let id = store.authored().next_id();
+/// An instance-axis override patch for `owner`: `target`'s `leaf` set to `value`.
+fn override_of(store: &Store, owner: NodeId, target: NodeId, leaf: &str, value: Value) -> (patch::PatchId, Vec<Op>) {
+    use patch::{Axis, AxisKind, AxisOp, Patch, PatchKey, PatchOp, PatchTarget, PatchValue, Product, Sel};
     let doc = store.tree();
-    let after = doc.children(owner).iter().filter(|c| !c.is_expanded()).filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
-    let mut o = Override::default();
-    o.target = Slot::Const(Value::Ref(target));
-    o.leaf = Slot::Const(Value::Str(leaf.into()));
-    o.value = Slot::Const(value);
-    (id, Op::Create { id, ty: ty("override"), parent: Some(owner), order: after.map_or_else(OrderKey::first, |k| OrderKey::after(&k)), facets: vec![o.wrap()] })
+    let mut ops = Vec::new();
+    let ax = match doc.patches().instance_axis_id() {
+        Some(a) => a,
+        None => {
+            let a = doc.patches().next_axis_id();
+            ops.push(Op::Axis(AxisOp::Add {
+                axis: Axis { id: a, name: "instance".into(), kind: AxisKind::Instance, owner: None, values: Vec::new() },
+            }));
+            a
+        }
+    };
+    let mut anchor = None;
+    let mut cur = Some(owner);
+    while let Some(n) = cur.and_then(|id| doc.node(id)) {
+        if n.ty.name() == "definition" {
+            anchor = Some(n.id);
+            break;
+        }
+        cur = n.parent;
+    }
+    let tpath = target.path();
+    let mut tail = vec![owner];
+    tail.extend_from_slice(&tpath[..tpath.len() - 1]);
+    let target_node = *tpath.last().unwrap();
+    let lp: LeafPath = leaf.parse().unwrap();
+    let mut entries = BTreeMap::new();
+    if lp.facet == FacetKind::Use && lp.field == "notation" {
+        if let Value::Str(notation) = value {
+            entries.insert(PatchTarget { node: target_node, key: PatchKey::Notation }, PatchValue::Notation { notation });
+        } else {
+            entries.insert(PatchTarget { node: target_node, key: PatchKey::Leaf(lp) }, PatchValue::Slot { slot: Slot::Const(value) });
+        }
+    } else {
+        if doc.base_facet(target_node, lp.facet).is_none() {
+            entries.insert(PatchTarget { node: target_node, key: PatchKey::FacetPresent(lp.facet) }, PatchValue::Bool { v: true });
+        }
+        entries.insert(PatchTarget { node: target_node, key: PatchKey::Leaf(lp) }, PatchValue::Slot { slot: Slot::Const(value) });
+    }
+    let region = Product::default().with(ax, Sel::Suffix { tail, not: Vec::new() });
+    let rank = doc.patches().default_rank(&region, 0);
+    let id = doc.patches().next_patch_id();
+    ops.push(Op::Patch(PatchOp::Add { patch: Patch { id, layer: 0, rank, region, anchor, writable: true, entries } }));
+    (id, ops)
 }
 
 /// A scene and two definitions: `cell`, drawn as a 10-wide box in `free`
@@ -102,21 +139,21 @@ fn nested_overrides_apply_innermost_first_and_the_outermost_wins() {
     let (iu, bx) = (names["$iu"], names["$box"]);
     let copy = || NodeId::from_path(&[u, iu, bx]).unwrap();
     assert_eq!(number(&store, copy(), "size.w"), 10.0);
-    // The definition's: an override under its inner picture.
-    let (inner, op) = override_of(&store, iu, bx, "size.w", Value::Number(20.0));
-    store.apply(tx("definition's", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    // The definition's: an anchored override patch under its inner picture.
+    let (inner, ops) = override_of(&store, iu, bx, "size.w", Value::Number(20.0));
+    store.apply(tx("definition's", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, copy(), "size.w"), 20.0);
     // The instance's, through the inner picture to the box.
-    let (outer, op) = override_of(&store, u, NodeId::from_path(&[iu, bx]).unwrap(), "size.w", Value::Number(30.0));
-    store.apply(tx("instance's", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (outer, ops) = override_of(&store, u, NodeId::from_path(&[iu, bx]).unwrap(), "size.w", Value::Number(30.0));
+    store.apply(tx("instance's", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, copy(), "size.w"), 30.0);
     // An override may add a facet the copy lacks, where its type admits one.
-    let (_, op) = override_of(&store, u, NodeId::from_path(&[iu, bx]).unwrap(), "stroke.width", Value::Number(2.0));
-    store.apply(tx("outline", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (_, ops) = override_of(&store, u, NodeId::from_path(&[iu, bx]).unwrap(), "stroke.width", Value::Number(2.0));
+    store.apply(tx("outline", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, copy(), "stroke.width"), 2.0);
-    store.apply(tx("drop the instance's", vec![Op::Delete { id: outer }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("drop the instance's", vec![Op::Patch(patch::PatchOp::Remove { id: outer })])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, copy(), "size.w"), 20.0);
-    store.apply(tx("drop the definition's", vec![Op::Delete { id: inner }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("drop the definition's", vec![Op::Patch(patch::PatchOp::Remove { id: inner })])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, copy(), "size.w"), 10.0);
 }
 
@@ -128,10 +165,10 @@ fn an_override_of_an_inner_pictures_notation_changes_its_copies() {
     let iu = names["$iu"];
     let inner = NodeId::from_path(&[u, iu]).unwrap();
     assert_eq!((copies(&store, inner, "box").len(), copies(&store, inner, "dot").len()), (1, 0));
-    let (o, op) = override_of(&store, u, iu, "use.notation", Value::Str("alt".into()));
-    store.apply(tx("alt", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (o, ops) = override_of(&store, u, iu, "use.notation", Value::Str("alt".into()));
+    store.apply(tx("alt", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!((copies(&store, inner, "box").len(), copies(&store, inner, "dot").len()), (0, 1));
-    store.apply(tx("free again", vec![Op::Delete { id: o }])).unwrap_or_else(|e| panic!("{e:?}"));
+    store.apply(tx("free again", vec![Op::Patch(patch::PatchOp::Remove { id: o })])).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!((copies(&store, inner, "box").len(), copies(&store, inner, "dot").len()), (1, 0));
     store.undo(0).unwrap().unwrap();
     assert_eq!((copies(&store, inner, "box").len(), copies(&store, inner, "dot").len()), (0, 1));
@@ -166,8 +203,8 @@ fn a_repeat_in_a_template_carries_its_pictures_overrides_into_its_items() {
         ["0", "1", "2"].iter().map(|k| NodeId::item(r, k, NodeId::from_path(&[u, cell]).unwrap()).unwrap()).map(|n| (number(store, n, "transform2d.x"), number(store, n, "size.w"))).collect()
     };
     assert_eq!(cells(&store, a), vec![(0.0, 5.0), (10.0, 5.0), (20.0, 5.0)]);
-    let (_, op) = override_of(&store, a, cell, "size.w", Value::Number(9.0));
-    store.apply(tx("wider in a", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (_, ops) = override_of(&store, a, cell, "size.w", Value::Number(9.0));
+    store.apply(tx("wider in a", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(cells(&store, a), vec![(0.0, 9.0), (10.0, 9.0), (20.0, 9.0)]);
     assert_eq!(cells(&store, b), vec![(0.0, 5.0), (10.0, 5.0), (20.0, 5.0)]);
     // The definition's edit reaches both; the override still wins in a.
@@ -205,8 +242,8 @@ fn items_of_a_repeat_in_a_repeat_in_a_picture_come_from_the_definition() {
     let doc = store.tree();
     let u = *doc.children(c).iter().find(|&&x| !x.is_expanded() && doc.live(x).is_some_and(|y| y.ty.name() == "use")).unwrap();
     let entity = doc.relations_from(u).find(|r| r.rel == RelKind::Figures).unwrap().to;
-    let (_, op) = override_of(&store, u, cell, "size.w", Value::Number(9.0));
-    store.apply(tx("wider", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (_, ops) = override_of(&store, u, cell, "size.w", Value::Number(9.0));
+    store.apply(tx("wider", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     let cells = |store: &Store| -> Vec<(f64, f64, f64)> {
         let outer = NodeId::from_path(&[u, rows]).unwrap();
         let mut out = Vec::new();
@@ -409,8 +446,8 @@ fn a_refused_definition_edit_leaves_no_template_behind() {
     assert!(refused.is_err(), "{refused:?}");
     assert_eq!(number(&store, copy, "size.w"), 10.0);
     // The picture expands again for something else.
-    let (_, op) = override_of(&store, u, iu, "transform2d.x", Value::Number(7.0));
-    store.apply(tx("moved", vec![op])).unwrap_or_else(|e| panic!("{e:?}"));
+    let (_, ops) = override_of(&store, u, iu, "transform2d.x", Value::Number(7.0));
+    store.apply(tx("moved", ops)).unwrap_or_else(|e| panic!("{e:?}"));
     assert_eq!(number(&store, NodeId::from_path(&[u, iu]).unwrap(), "transform2d.x"), 7.0);
     assert_eq!(number(&store, copy, "size.w"), 10.0);
 }
@@ -484,8 +521,8 @@ fn an_outer_override_naming_a_prototype_node_names_the_items_copy() {
     apply(&mut store, &format!(r#"<place def="{d}" in="{c}" x="0" y="0"/>"#));
     let u = *store.tree().children(c).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
     let prototype = NodeId::expanded(u, cell).unwrap();
-    let (_, op) = override_of(&store, u, saved, "let.value", Value::Ref(prototype));
-    store.apply(tx("store sibling ref", vec![op])).unwrap();
+    let (_, ops) = override_of(&store, u, saved, "let.value", Value::Ref(prototype));
+    store.apply(tx("store sibling ref", ops)).unwrap();
     let copied_repeat = NodeId::expanded(u, r).unwrap();
     let item_saved = NodeId::item(copied_repeat, "0", saved).unwrap();
     let item_cell = NodeId::item(copied_repeat, "0", cell).unwrap();
@@ -559,8 +596,8 @@ fn an_override_of_an_inner_entitys_definition_settles_as_it_expands() {
     let lib = store.tree().live(cell).unwrap().parent.unwrap();
     let other = apply(&mut store, &format!(r#"<definition in="{lib}" id="$other" name="other"><template notation="free"><rect name="otherbox" w="20" h="4"/></template></definition>"#))["$other"];
     let outer = store.tree().relations_from(u).find(|rel| rel.rel == RelKind::Figures).unwrap().to;
-    let (_, op) = override_of(&store, outer, ie, "instance.def", Value::Ref(other));
-    store.apply(tx("override inner entity's definition", vec![op])).unwrap();
+    let (_, ops) = override_of(&store, outer, ie, "instance.def", Value::Ref(other));
+    store.apply(tx("override inner entity's definition", ops)).unwrap();
     let template = store.tree().live(bx).unwrap().parent.unwrap();
     let r = apply(&mut store, &format!(r#"<group in="{template}" id="$r" repeat.count="1"><rect id="$part" name="part" w="5" h="4"/></group>"#));
     let dr = NodeId::from_path(&[u, iu, r["$r"]]).unwrap();
@@ -626,8 +663,8 @@ fn a_binding_into_an_inner_picture_in_a_repeat_reads_the_items_copy() {
     let item_box = NodeId::expanded(item_pic, bx).unwrap();
     let item_reader = NodeId::item(repeat, "0", reader).unwrap();
     let target = NodeId::from_path(&[*item_scope.path().last().unwrap(), iu, bx]).unwrap();
-    let (_, op) = override_of(&store, r, target, "size.w", Value::Number(29.0));
-    store.apply(tx("make the first item's inner box wider", vec![op])).unwrap();
+    let (_, ops) = override_of(&store, r, target, "size.w", Value::Number(29.0));
+    store.apply(tx("make the first item's inner box wider", ops)).unwrap();
     assert_eq!(number(&store, prototype_box, "size.w"), 10.0);
     assert_eq!(number(&store, item_box, "size.w"), 29.0);
     assert_eq!(number(&store, item_reader, "size.w"), 29.0);
@@ -678,8 +715,8 @@ fn a_session_group_moved_out_of_a_template_takes_its_nodes_out() {
     // Move the session group out of the template: a session op.
     store.apply_session(vec![Op::Reparent { id: s, parent: None, order: OrderKey::first() }]).unwrap();
     // Anything that re-expands u, and runs the owner check.
-    let (_, op) = override_of(&store, u, reader, "name.text", Value::Str("renamed".into()));
-    store.apply(tx("re-expand u", vec![op])).unwrap();
+    let (_, ops) = override_of(&store, u, reader, "name.text", Value::Str("renamed".into()));
+    store.apply(tx("re-expand u", ops)).unwrap();
     let after = store.tree().leaf(copy, "let.value".parse().unwrap()).and_then(Slot::constant).and_then(Value::as_ref);
     assert_eq!(after, Some(x), "the oracle leaves a reference to a node outside the template as it is");
 }

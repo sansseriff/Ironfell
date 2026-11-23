@@ -825,11 +825,12 @@ pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [
     }
     let figure = figure.ok_or("no picture placed")?;
     push(&mut scratch, &mut ops, inst)?;
-    // A turned part's labels stay upright: overrides on its picture.
+    // A turned part's labels stay upright: instance-axis override patch on its picture.
     let quarter = (rot / std::f64::consts::FRAC_PI_2).round().rem_euclid(4.0) as u8;
     if quarter != 0
         && let Some(template) = crate::definition::template_of(Tree::authored_only(&scratch), def, NOTATION)
     {
+        use crate::patch::{Axis, AxisKind, AxisOp, Patch, PatchKey, PatchOp, PatchTarget, PatchValue, Product, Sel};
         let labels: Vec<NodeId> = scratch.children(template).iter().copied().filter(|&c| scratch.live(c).is_some_and(|n| n.ty.name() == "text")).collect();
         let marks = part.symbol.iter().filter_map(|m| match m {
             Mark::Label { at, turned, with, .. } => Some((*at, *turned, *with)),
@@ -837,8 +838,7 @@ pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [
         });
         let r = f64::from(quarter) * std::f64::consts::FRAC_PI_2;
         let (s, c) = r.sin_cos();
-        let mut overrides = Vec::new();
-        let mut key = OrderKey::first();
+        let mut entries = std::collections::BTreeMap::new();
         for (label, (at, turned, with)) in labels.into_iter().zip(marks) {
             if with {
                 continue;
@@ -847,18 +847,34 @@ pub fn place_ops(doc: &crate::Document, part: &Part, composition: NodeId, at_: [
             // into the part's turned frame.
             let world = if quarter % 2 == 1 { turned.unwrap_or([c * at[0] - s * at[1], s * at[0] + c * at[1]]) } else { at };
             let local = [c * world[0] + s * world[1], -s * world[0] + c * world[1]];
-            for (leaf, v) in [("transform2d.x", local[0]), ("transform2d.y", local[1]), ("transform2d.rot", -r)] {
-                let mut o = crate::facet::Override::default();
-                o.target = Slot::Const(Value::Ref(label));
-                o.leaf = Slot::Const(Value::Str(leaf.into()));
-                o.value = Slot::Const(Value::Number(v));
-                overrides.push((o, key.clone()));
-                key = OrderKey::after(&key);
+            for (field, v) in [("x", local[0]), ("y", local[1]), ("rot", -r)] {
+                let lp = crate::facet::LeafPath::new(crate::facet::FacetKind::Transform2d, field).expect("declared");
+                entries.insert(
+                    PatchTarget { node: label, key: PatchKey::Leaf(lp) },
+                    PatchValue::Slot { slot: Slot::Const(Value::Number(v)) },
+                );
             }
         }
-        let ids = scratch.next_ids(overrides.len());
-        let new: Vec<Op> = overrides.into_iter().zip(ids).map(|((o, order), id)| Op::Create { id, ty: ty("override"), parent: Some(figure), order, facets: vec![o.wrap()] }).collect();
-        push(&mut scratch, &mut ops, new)?;
+        if !entries.is_empty() {
+            let mut new = Vec::new();
+            let ax = match scratch.patches().instance_axis_id() {
+                Some(a) => a,
+                None => {
+                    let a = scratch.patches().next_axis_id();
+                    new.push(Op::Axis(AxisOp::Add {
+                        axis: Axis { id: a, name: "instance".into(), kind: AxisKind::Instance, owner: None, values: Vec::new() },
+                    }));
+                    a
+                }
+            };
+            let region = Product::default().with(ax, Sel::Suffix { tail: vec![figure], not: Vec::new() });
+            let rank = scratch.patches().default_rank(&region, 0);
+            let id = scratch.patches().next_patch_id();
+            new.push(Op::Patch(PatchOp::Add {
+                patch: Patch { id, layer: 0, rank, region, anchor: None, writable: true, entries },
+            }));
+            push(&mut scratch, &mut ops, new)?;
+        }
     }
     Ok((ops, Placed { entity, figure }))
 }

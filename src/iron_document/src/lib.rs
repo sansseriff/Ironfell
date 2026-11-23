@@ -4345,7 +4345,7 @@ impl StoreCore {
         // The constraints' problems before, so the reply names those this
         // transaction brought (review of DS-7: after `after_transaction` it
         // was too late to see the grouping's).
-        let problems_before: BTreeSet<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
+        let problems_before: Vec<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
         let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
         if let Some(found) = problems {
             self.store_found(found);
@@ -4358,11 +4358,12 @@ impl StoreCore {
         // brought (a malformed or duplicate constraint, a cycle, a pose
         // that doesn't hold), and why a solve failed, unless that cluster
         // was in trouble already.
-        let after: Vec<expand::Problem> = self.cluster_problems();
-        let new: Vec<solve::SolverProblem> = after.into_iter().filter(|p| !problems_before.contains(&(p.node, p.message.clone()))).map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
+        // By node: a constraint already in trouble whose residual moved is
+        // not news (review of DS-7, Opus).
+        let troubled: BTreeSet<NodeId> = problems_before.iter().map(|(n, _)| *n).collect();
+        let new: Vec<solve::SolverProblem> = self.cluster_problems().into_iter().filter(|p| !troubled.contains(&p.node)).map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
         if !new.is_empty() || solver.as_ref().is_some_and(|s| !s.problems.is_empty()) {
             let s = solver.get_or_insert_with(SolverSummary::default);
-            let troubled: BTreeSet<NodeId> = problems_before.iter().map(|(n, _)| *n).collect();
             s.problems.retain(|p| !troubled.contains(&p.node));
             s.problems.extend(new);
             if s.is_empty() {

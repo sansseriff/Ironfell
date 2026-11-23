@@ -723,7 +723,8 @@ pub(crate) fn violated(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, clus
         buf.clear();
         buf.resize(t.len, 0.0);
         t.eval(&problem.vars, &mut buf);
-        let r = buf.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+        // NaN anywhere doesn't hold (`f64::max` would drop it).
+        let r = buf.iter().fold(0.0f64, |m, x| if x.is_nan() { f64::INFINITY } else { m.max(x.abs()) });
         if r > HOLDS {
             match out.iter_mut().find(|(c, _)| *c == id) {
                 Some((_, m)) => *m = m.max(r),

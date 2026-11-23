@@ -268,14 +268,13 @@ fn an_exact_request_unmet_is_refused() {
     let (q, past) = (x(&store), store.history().past().len());
     let mut strict = tx("push q exactly", vec![Op::Set { id: n["q"], path: path("transform2d.x"), slot: num(900.0) }]);
     strict.exact = true;
-    let errs = store.apply(strict).unwrap_err();
+    // Bit-identical, no id minted, the journal closed (`refused`).
+    let errs = refused(&mut store, comp, "an exact request out of reach", |s| s.apply(strict));
     assert_eq!(errs[0].kind, ErrorKind::Unsatisfiable, "{errs:?}");
     assert!(errs[0].message.contains("exact transaction not honoured"), "{errs:?}");
     assert_eq!(x(&store), q, "q is where it was");
     assert_eq!(store.history().past().len(), past, "nothing was kept in history");
-    assert!(store.history().future().is_empty(), "nor left to redo");
     store.authored().check_invariants().unwrap();
-    let _ = comp;
 }
 
 
@@ -487,4 +486,5 @@ fn a_failed_live_solve_is_not_retried_by_an_unrelated_drag() {
     assert!(first.converged || second.converged, "{first:?}");
     assert!(second.converged, "the failed cluster is not tried again: {second:?}");
     store.end_drag(&h);
+    assert!(store.problems().iter().any(|p| p.kind == "constraint" && p.node == a["d"]), "its failure is reported: {:?}", store.problems());
 }

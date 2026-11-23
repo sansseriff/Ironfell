@@ -804,6 +804,21 @@ attempt hit a rate limit and is being rerun. Fixed, with tests:
 Checks: plain (502), differential with the structure oracle and `IRON_OWNER_CHECK`
 (506), and the smoke pass.
 
+**Opus's round-2 review (2026-11-22, 6/10; it reviewed the code before `b0e2c68`).** Its
+findings on `published_by`, players' `unshow`, unreadable values, exact edits under
+glides, and stale glided requests were the same as Sol's, already fixed in `b0e2c68`.
+New, and fixed (with tests `constraints::a_nan_constraint_value_is_a_problem`, and the
+exact and live-failure tests strengthened):
+- a NaN constraint value read as a solve that holds (NaN compares false). A non-finite
+  value is now a problem, and a NaN residual doesn't hold;
+- the reply re-reported a constraint already in trouble whose residual moved. It now
+  compares by node.
+
+Left open: an exact edit sent while a drag previews a stack's order is checked without
+that preview (`scratch()` drops it). The case is rare, and its owner is DS-10b's
+oracle work. `cluster_problems` walks every cluster twice per transaction in a
+document with constraints, which DS-13 makes per composition.
+
 **DS-10a part 2: cycles (design, for review before it is built).** Cycles arise only
 while evaluating: through a binding's tracked reads (`deref`, `graph.rs` at "reads {own}
 through deref") and through a native's reads (`closing`). Authored static cycles stay

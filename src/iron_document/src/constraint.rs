@@ -118,7 +118,8 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
     })?;
     let enabled = c.enabled.constant().and_then(|v| v.as_bool()).unwrap_or(true);
     let value = match read_value(value_leaf(id)) {
-        Some(Value::Number(n)) => n,
+        Some(Value::Number(n)) if n.is_finite() => n,
+        Some(Value::Number(_)) => return Err(format!("{id}: its value isn't a finite number")),
         Some(v) => return Err(format!("{id}: value must be a number, got {}", v.kind().name())),
         // Unreadable (its formula fails with no value before it): left out
         // with this problem, not solved as 0 (review of DS-7, Sol).

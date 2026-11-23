@@ -772,3 +772,13 @@ fn an_unreadable_constraint_value_is_a_problem_not_zero() {
     let told = applied.solver.map(|s| s.problems).unwrap_or_default();
     assert!(told.iter().any(|q| q.node == p.links[0]), "the reply says so: {told:?}");
 }
+
+/// A constraint value that isn't a finite number (NaN) is a problem, not a
+/// solve that "holds" (review of DS-7, Opus: NaN residuals compared false).
+#[test]
+fn a_nan_constraint_value_is_a_problem() {
+    let mut p = pendulum();
+    p.store.apply(tx("nan", vec![Op::Set { id: p.links[0], path: path("constraint.value"), slot: bind("sqrt(-1)") }])).unwrap();
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(n, _)| *n == p.links[0]), "{problems:?}");
+}

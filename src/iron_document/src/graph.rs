@@ -3058,6 +3058,8 @@ fn read_with(
     doc: Tree<'_>,
     leaf: Leaf,
 ) -> Option<Value> {
+    // A node that went (tombstoned or patched absent) has no value in any tier.
+    doc.live(leaf.node)?;
     if let Some(v) = overlay.get(&leaf) {
         return Some(v.clone());
     }
@@ -3070,9 +3072,6 @@ fn read_with(
     if let Some(s) = runtime.get(&leaf) {
         return Some(s.value.clone());
     }
-    // A node that went has no stored value: a tombstone's facets are kept
-    // for undo, and a copy removed outright has none (handoff §4.6).
-    doc.live(leaf.node)?;
     // Tier 4: dedicated system-owned solve layer (engine.md §2.4, P17).
     if let Some(v) = doc.solve_leaf(leaf) {
         return Some(v.clone());

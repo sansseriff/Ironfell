@@ -249,6 +249,20 @@ impl Changes {
         }
     }
 
+    /// Record effective presence transitions from `Docs::reconcile_resolved`
+    /// so `document_bridge` and `iron_spatial` see nodes revealed or removed
+    /// by patches, axis ops, or `set_point` (engine.md §2.3, EN-4b).
+    pub(crate) fn note_resolved_delta(&mut self, doc: Tree<'_>, gone: &Gone, delta: &crate::tree::ResolvedDelta) {
+        for &(id, parent) in &delta.became_present {
+            self.created.push(id);
+            self.depths.insert(id, doc.depth(id));
+            self.structure.insert(parent);
+        }
+        for &(id, parent) in &delta.became_absent {
+            self.remove(doc, gone, id, parent);
+        }
+    }
+
     fn remove(&mut self, doc: Tree<'_>, gone: &Gone, id: NodeId, parent: Option<NodeId>) {
         if self.removed_ids.insert(id) {
             self.removed.push((id, parent));

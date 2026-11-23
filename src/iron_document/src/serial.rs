@@ -134,7 +134,7 @@ pub fn save(doc: &Document) -> String {
             let solve_map: BTreeMap<String, &crate::value::Slot> = pt
                 .solve
                 .iter()
-                .map(|(l, s)| (format!("{}.{}", l.node, l.path), s))
+                .map(|((dp, l), s)| (format!("{}|{}.{}", crate::patch::Point::format_discrete(dp), l.node, l.path), s))
                 .collect();
             out.push_str(&format!(",\n \"solve\": {}", n_compact(&json!(solve_map))));
         }
@@ -394,12 +394,15 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
     if let Some(v) = obj.get("solve") {
         let raw_solve: BTreeMap<String, crate::value::Slot> = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("solve: {e}")))?;
         for (k, slot) in raw_solve {
-            let (node_s, path_s) = k.split_once('.').ok_or_else(|| LoadError(format!("solve key {k:?} must be `<node>.<facet>.<field>`")))?;
+            let (pt_s, leaf_s) = k.split_once('|').ok_or_else(|| LoadError(format!("solve key {k:?} must be `<point>|<node>.<facet>.<field>`")))?;
+            let dp = crate::patch::Point::parse_discrete(pt_s).map_err(LoadError)?;
+            let (node_s, path_s) = leaf_s.split_once('.').ok_or_else(|| LoadError(format!("solve key {k:?} must be `<point>|<node>.<facet>.<field>`")))?;
             let node: NodeId = node_s.parse().map_err(|e: crate::id::IdParseError| LoadError(e.to_string()))?;
             let path: crate::facet::LeafPath = path_s.parse().map_err(|e: crate::facet::LeafError| LoadError(e.to_string()))?;
-            patch_table.solve.insert(crate::expr::Leaf { node, path }, slot);
+            patch_table.solve.insert((dp, crate::expr::Leaf { node, path }), slot);
         }
     }
+    patch_table.validate_all(&|id| nodes.get(&id).map(|n| n.ty)).map_err(LoadError)?;
     patch_table.reindex();
 
     let mut doc = Document::from_parts(nodes, facets, relations, next, version, patch_table);

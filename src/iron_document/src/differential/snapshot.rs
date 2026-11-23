@@ -78,6 +78,10 @@ pub struct Other {
     pub hover_listeners: Vec<(NodeId, Vec<NodeId>)>,
     /// Session state cells that differ from their initial value.
     pub session_state: BTreeMap<Leaf, Value>,
+    /// Active variation-axis point, session-layer patches, and hidden nodes (EN-4b).
+    pub point: patch::Point,
+    pub session_patches: BTreeMap<patch::PatchId, patch::Patch>,
+    pub hidden: Vec<NodeId>,
 }
 
 /// What `take_changes` would return now, and what is buffered for the
@@ -190,6 +194,9 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         context_reads: live.iter().map(|&n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect(),
         hover_listeners: live.iter().map(|&n| (n, s.hover_listeners(n))).filter(|(_, r)| !r.is_empty()).collect(),
         session_state: s.session_state.clone(),
+        point: s.point().clone(),
+        session_patches: s.docs.session_patches.clone(),
+        hidden: live.iter().copied().filter(|&n| doc.is_hidden(n)).collect(),
     };
     let pending = Pending { changes: s.peek_changes(), revisions: s.revisions().clone(), emitted: s.emitted.clone() };
     Snapshot {

@@ -192,6 +192,10 @@ impl Axis {
     }
 }
 
+/// Discrete coordinate projection of a `Point` (`values` only, excluding
+/// continuous `times`): keys persisted solve-layer poses (P17).
+pub type DiscretePoint = BTreeMap<AxisId, AxisValueId>;
+
 /// One coordinate per axis in play: discrete axis values plus continuous
 /// clock times.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -205,6 +209,30 @@ pub struct Point {
 impl Point {
     pub fn new() -> Self {
         Point::default()
+    }
+
+    pub fn discrete(&self) -> DiscretePoint {
+        self.values.clone()
+    }
+
+    pub fn format_discrete(dp: &DiscretePoint) -> String {
+        dp.iter().map(|(a, v)| format!("{a}={v}")).collect::<Vec<_>>().join(",")
+    }
+
+    pub fn parse_discrete(s: &str) -> Result<DiscretePoint, String> {
+        let mut out = BTreeMap::new();
+        if s.is_empty() {
+            return Ok(out);
+        }
+        for part in s.split(',') {
+            let (a_s, v_s) = part.split_once('=').ok_or_else(|| format!("invalid discrete point entry {part:?}"))?;
+            let a: AxisId = a_s.parse()?;
+            let v: AxisValueId = v_s.parse()?;
+            if out.insert(a, v).is_some() {
+                return Err(format!("duplicate axis {a} in discrete point"));
+            }
+        }
+        Ok(out)
     }
 
     pub fn with_value(mut self, axis: AxisId, value: AxisValueId) -> Self {
@@ -304,20 +332,38 @@ fn upper_cut(axis: &Axis, b: &Bound) -> i64 {
     }
 }
 
+fn canon_f64(t: f64) -> f64 {
+    if t == 0.0 { 0.0 } else { t }
+}
+
+/// Strictly order-preserving map from finite `f64` (with `-0.0` canonicalized
+/// to `+0.0`) to `i128`, avoiding microsecond truncation in time specificity.
+fn f64_order_i128(t: f64) -> i128 {
+    let bits = canon_f64(t).to_bits();
+    let ordered = if (bits >> 63) == 0 {
+        (bits ^ (1u64 << 63)) as i64
+    } else {
+        (!bits) as i64
+    };
+    ordered as i128
+}
+
 fn time_lower_ok(b: &Bound, t: f64) -> bool {
+    let t = canon_f64(t);
     match b {
         Bound::Open => true,
-        Bound::TimeIncl { t: lo } => t >= *lo,
-        Bound::TimeExcl { t: lo } => t > *lo,
+        Bound::TimeIncl { t: lo } => t >= canon_f64(*lo),
+        Bound::TimeExcl { t: lo } => t > canon_f64(*lo),
         _ => false,
     }
 }
 
 fn time_upper_ok(b: &Bound, t: f64) -> bool {
+    let t = canon_f64(t);
     match b {
         Bound::Open => true,
-        Bound::TimeIncl { t: hi } => t <= *hi,
-        Bound::TimeExcl { t: hi } => t < *hi,
+        Bound::TimeIncl { t: hi } => t <= canon_f64(*hi),
+        Bound::TimeExcl { t: hi } => t < canon_f64(*hi),
         _ => false,
     }
 }
@@ -325,8 +371,8 @@ fn time_upper_ok(b: &Bound, t: f64) -> bool {
 fn time_lo_key(b: &Bound) -> (f64, i8) {
     match b {
         Bound::Open => (f64::NEG_INFINITY, -1),
-        Bound::TimeIncl { t } => (*t, 0),
-        Bound::TimeExcl { t } => (*t, 1),
+        Bound::TimeIncl { t } => (canon_f64(*t), 0),
+        Bound::TimeExcl { t } => (canon_f64(*t), 1),
         _ => (f64::NEG_INFINITY, -1),
     }
 }
@@ -334,8 +380,8 @@ fn time_lo_key(b: &Bound) -> (f64, i8) {
 fn time_hi_key(b: &Bound) -> (f64, i8) {
     match b {
         Bound::Open => (f64::INFINITY, 1),
-        Bound::TimeIncl { t } => (*t, 0),
-        Bound::TimeExcl { t } => (*t, -1),
+        Bound::TimeIncl { t } => (canon_f64(*t), 0),
+        Bound::TimeExcl { t } => (canon_f64(*t), -1),
         _ => (f64::INFINITY, 1),
     }
 }
@@ -384,7 +430,7 @@ impl Sel {
             Sel::Suffix { tail, not } => scopes
                 .iter()
                 .enumerate()
-                .filter(|&(_, &s)| s == scope)
+                .filter(|&(k, &s)| s == scope && k < path.len())
                 .any(|(k, _)| {
                     let sub = &path[k..];
                     ends_with(sub, tail) && !not.iter().any(|n| ends_with(sub, n))
@@ -653,6 +699,9 @@ impl Product {
         if self.is_empty(axes) {
             return Vec::new();
         }
+        if other.is_empty(axes) {
+            return vec![self.clone()];
+        }
         let mut out = Vec::new();
         let mut rest = self.clone();
         for (a, axis) in axes {
@@ -855,7 +904,7 @@ pub struct Patch {
 }
 
 /// One axis's specificity key, from the selection as written (P10).
-pub type AxisKey = (i64, i64, Vec<i64>);
+pub type AxisKey = (i128, i128, Vec<i64>);
 
 fn exclusions(tail: &[NodeId], not: &[Vec<NodeId>]) -> Vec<i64> {
     let mut ext: Vec<&Vec<NodeId>> = not.iter().filter(|n| n.len() > tail.len() && ends_with(n, tail)).collect();
@@ -879,79 +928,87 @@ fn exclusions(tail: &[NodeId], not: &[Vec<NodeId>]) -> Vec<i64> {
 
 pub fn axis_key(axes: &BTreeMap<AxisId, Axis>, axis: AxisId, sel: &Sel) -> AxisKey {
     let Some(ax) = axes.get(&axis) else {
-        return (i64::MIN, i64::MIN, vec![i64::MIN]);
+        return (i128::MIN, i128::MIN, vec![i64::MIN]);
     };
     if sel.void(ax) {
-        return (i64::MAX, i64::MAX, vec![i64::MAX]);
+        return (i128::MAX, i128::MAX, vec![i64::MAX]);
     }
-    let cut = |v: AxisValueId| 2 * pos(ax, v);
+    let cut = |v: AxisValueId| (2 * pos(ax, v)) as i128;
     match (ax.kind, sel) {
-        (AxisKind::Ordered, Sel::All) => (i64::MIN, -i64::MAX, vec![i64::MIN / 2]),
+        (AxisKind::Ordered, Sel::All) => (i128::MIN, -i128::MAX, vec![i64::MIN / 2]),
         (AxisKind::Ordered, Sel::Range { lo, hi }) => {
             let l = match lo {
-                Bound::Open => i64::MIN,
+                Bound::Open => i128::MIN,
                 Bound::Incl { v } => cut(*v),
                 Bound::Excl { v } => cut(*v) + 1,
-                _ => i64::MIN,
+                _ => i128::MIN,
             };
             let h = match hi {
-                Bound::Open => i64::MAX,
+                Bound::Open => i128::MAX,
                 Bound::Incl { v } => cut(*v),
                 Bound::Excl { v } => cut(*v) - 1,
-                _ => i64::MAX,
+                _ => i128::MAX,
             };
             (l, -h, vec![if l == h { -1 } else { i64::MIN / 2 }])
         }
         (AxisKind::Ordered, Sel::Set { values }) => {
-            let cuts: Vec<i64> = values.iter().map(|v| cut(*v)).collect();
+            let cuts: Vec<i128> = values.iter().map(|v| cut(*v)).collect();
             (
                 cuts.iter().copied().min().unwrap_or(0),
                 -cuts.iter().copied().max().unwrap_or(0),
                 vec![-(values.len() as i64)],
             )
         }
-        (AxisKind::Time, Sel::All) => (i64::MIN, -i64::MAX, vec![i64::MIN / 2]),
+        (AxisKind::Time, Sel::All) => (i128::MIN, -i128::MAX, vec![i64::MIN / 2]),
         (AxisKind::Time, Sel::Range { lo, hi }) => {
-            let enc = |t: f64| (t * 1e6).clamp(i64::MIN as f64 / 4.0, i64::MAX as f64 / 4.0) as i64 * 2;
+            let enc = |t: f64| f64_order_i128(t) * 2;
             let l = match lo {
-                Bound::Open => i64::MIN,
+                Bound::Open => i128::MIN,
                 Bound::TimeIncl { t } => enc(*t),
                 Bound::TimeExcl { t } => enc(*t) + 1,
-                _ => i64::MIN,
+                _ => i128::MIN,
             };
             let h = match hi {
-                Bound::Open => i64::MAX,
+                Bound::Open => i128::MAX,
                 Bound::TimeIncl { t } => enc(*t),
                 Bound::TimeExcl { t } => enc(*t) - 1,
-                _ => i64::MAX,
+                _ => i128::MAX,
             };
             (l, -h, vec![if l == h { -1 } else { i64::MIN / 2 }])
         }
-        (AxisKind::Unordered, Sel::Set { values }) => (1, -(values.len() as i64), Vec::new()),
-        (AxisKind::Unordered, Sel::Not { values }) => (0, values.len() as i64, Vec::new()),
+        (AxisKind::Unordered, Sel::Set { values }) => (1, -(values.len() as i128), Vec::new()),
+        (AxisKind::Unordered, Sel::Not { values }) => (0, values.len() as i128, Vec::new()),
         (AxisKind::Unordered, Sel::All) => (0, 0, Vec::new()),
-        (AxisKind::Instance, Sel::Suffix { tail, not }) => (tail.len() as i64, 0, exclusions(tail, not)),
+        (AxisKind::Instance, Sel::Suffix { tail, not }) => (tail.len() as i128, 0, exclusions(tail, not)),
         (AxisKind::Instance, Sel::All) => (0, 0, Vec::new()),
-        _ => (i64::MIN, i64::MIN, vec![i64::MIN]),
+        _ => (i128::MIN, i128::MIN, vec![i64::MIN]),
     }
 }
 
+/// Whether a stronger patch's `anchor` covers every instance coordinate that
+/// a weaker patch's `anchor` can match.
+fn anchor_covers(strong: Option<NodeId>, weak: Option<NodeId>) -> bool {
+    strong.is_none() || strong == weak
+}
+
 /// Stored authored patches, axes, dedicated solve layer (P17), and derived
-/// in-memory indexes (`by_target`, `by_axis`, `solve_by_node`).
+/// in-memory indexes (`by_target`, `by_axis`, `anchored`, `solve_by_node`).
 #[derive(Clone, Debug)]
 pub struct PatchTable {
     pub axes: BTreeMap<AxisId, Axis>,
     pub axis_order: Vec<AxisId>,
     pub patches: BTreeMap<PatchId, Patch>,
-    /// Dedicated system-owned solve layer (engine.md §2.4, patches.md P17).
-    pub solve: BTreeMap<Leaf, Slot>,
+    /// Dedicated system-owned solve layer keyed by `(DiscretePoint, Leaf)`
+    /// (engine.md §2.4, patches.md P17).
+    pub solve: BTreeMap<(DiscretePoint, Leaf), Slot>,
     pub next_axis: u64,
     pub next_axis_value: u64,
     pub next_patch: u64,
     // Derived in-memory indexes (rebuilt by `reindex`, outside `PartialEq`).
     by_target: HashMap<NodeId, BTreeSet<PatchId>>,
     by_axis: HashMap<AxisId, BTreeSet<PatchId>>,
-    solve_by_node: HashMap<NodeId, BTreeSet<LeafPath>>,
+    anchored: BTreeSet<PatchId>,
+    solve_by_node: HashMap<NodeId, BTreeSet<(DiscretePoint, LeafPath)>>,
 }
 
 impl Default for PatchTable {
@@ -966,6 +1023,7 @@ impl Default for PatchTable {
             next_patch: 1,
             by_target: HashMap::new(),
             by_axis: HashMap::new(),
+            anchored: BTreeSet::new(),
             solve_by_node: HashMap::new(),
         }
     }
@@ -1012,6 +1070,7 @@ impl PatchTable {
     pub fn reindex(&mut self) {
         self.by_target.clear();
         self.by_axis.clear();
+        self.anchored.clear();
         self.solve_by_node.clear();
         for p in self.patches.values() {
             for t in p.entries.keys() {
@@ -1020,9 +1079,12 @@ impl PatchTable {
             for &a in p.region.sels.keys() {
                 self.by_axis.entry(a).or_default().insert(p.id);
             }
+            if p.anchor.is_some() {
+                self.anchored.insert(p.id);
+            }
         }
-        for leaf in self.solve.keys() {
-            self.solve_by_node.entry(leaf.node).or_default().insert(leaf.path);
+        for (dp, leaf) in self.solve.keys() {
+            self.solve_by_node.entry(leaf.node).or_default().insert((dp.clone(), leaf.path));
         }
     }
 
@@ -1032,6 +1094,9 @@ impl PatchTable {
         }
         for &a in p.region.sels.keys() {
             self.by_axis.entry(a).or_default().insert(p.id);
+        }
+        if p.anchor.is_some() {
+            self.anchored.insert(p.id);
         }
     }
 
@@ -1052,13 +1117,16 @@ impl PatchTable {
                 }
             }
         }
+        if p.anchor.is_some() {
+            self.anchored.remove(&p.id);
+        }
     }
 
-    pub(crate) fn index_solve(&mut self, leaf: Leaf, present: bool) {
+    pub(crate) fn index_solve(&mut self, dp: &DiscretePoint, leaf: Leaf, present: bool) {
         if present {
-            self.solve_by_node.entry(leaf.node).or_default().insert(leaf.path);
+            self.solve_by_node.entry(leaf.node).or_default().insert((dp.clone(), leaf.path));
         } else if let Some(s) = self.solve_by_node.get_mut(&leaf.node) {
-            s.remove(&leaf.path);
+            s.remove(&(dp.clone(), leaf.path));
             if s.is_empty() {
                 self.solve_by_node.remove(&leaf.node);
             }
@@ -1074,7 +1142,8 @@ impl PatchTable {
             .filter_map(|id| self.patches.get(id))
     }
 
-    /// Every node targeted by any patch referencing `axis`.
+    /// Every node targeted by any patch referencing `axis` (including anchored
+    /// patches that implicitly depend on `Instance` axes, patches.md §4 P18).
     pub fn targets_for_axis(&self, axis: AxisId) -> BTreeSet<NodeId> {
         let mut out = BTreeSet::new();
         if let Some(ids) = self.by_axis.get(&axis) {
@@ -1084,7 +1153,182 @@ impl PatchTable {
                 }
             }
         }
+        if self.axes.get(&axis).is_some_and(|a| a.kind == AxisKind::Instance) {
+            for id in &self.anchored {
+                if let Some(p) = self.patches.get(id) {
+                    out.extend(p.entries.keys().map(|t| t.node));
+                }
+            }
+        }
         out
+    }
+
+    /// Whether any authored patch references `axis` (explicitly or via an
+    /// anchor when `axis` is the last `Instance` axis).
+    pub fn axis_referenced(&self, axis: AxisId) -> bool {
+        if self.by_axis.get(&axis).is_some_and(|s| !s.is_empty()) {
+            return true;
+        }
+        if self.axes.get(&axis).is_some_and(|a| a.kind == AxisKind::Instance)
+            && !self.anchored.is_empty()
+            && self.axes.values().filter(|a| a.kind == AxisKind::Instance).count() <= 1
+        {
+            return true;
+        }
+        false
+    }
+
+    /// Validate an axis definition (unique value ids, valid path/scope alignment).
+    pub fn validate_axis(axis: &Axis) -> Result<(), String> {
+        let mut seen = BTreeSet::new();
+        for v in &axis.values {
+            if !seen.insert(v.id) {
+                return Err(format!("axis {} has duplicate value {}", axis.id, v.id));
+            }
+            if !v.scopes.is_empty() && v.scopes.len() != v.path.len() {
+                return Err(format!("axis {} value {} scopes length {} != path length {}", axis.id, v.id, v.scopes.len(), v.path.len()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a region & optional anchor against this table's axes.
+    pub fn validate_region(&self, region: &Product, anchor: Option<NodeId>) -> Result<(), String> {
+        if anchor.is_some() && !self.axes.values().any(|a| a.kind == AxisKind::Instance) {
+            return Err("anchored patch requires an instance axis".into());
+        }
+        for (a, sel) in &region.sels {
+            let ax = self.axes.get(a).ok_or_else(|| format!("region references unknown axis {a}"))?;
+            match (ax.kind, sel) {
+                (_, Sel::All) => {}
+                (AxisKind::Ordered, Sel::Range { lo, hi }) => {
+                    for b in [lo, hi] {
+                        if matches!(b, Bound::TimeIncl { .. } | Bound::TimeExcl { .. }) {
+                            return Err(format!("ordered axis {a} cannot use time bounds"));
+                        }
+                    }
+                }
+                (AxisKind::Ordered, Sel::Set { .. }) => {}
+                (AxisKind::Time, Sel::Range { lo, hi }) => {
+                    for b in [lo, hi] {
+                        match b {
+                            Bound::Open => {}
+                            Bound::TimeIncl { t } | Bound::TimeExcl { t } => {
+                                if !t.is_finite() {
+                                    return Err(format!("time axis {a} bound must be finite"));
+                                }
+                            }
+                            Bound::Incl { .. } | Bound::Excl { .. } => {
+                                return Err(format!("time axis {a} cannot use discrete bounds"));
+                            }
+                        }
+                    }
+                }
+                (AxisKind::Unordered, Sel::Set { .. } | Sel::Not { .. }) => {}
+                (AxisKind::Instance, Sel::Suffix { .. } | Sel::Set { .. }) => {}
+                (kind, _) => {
+                    return Err(format!("selector not allowed on {kind:?} axis {a}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate one patch entry's key/value match, leaf type, and required-facet rules.
+    pub fn validate_entry(target: PatchTarget, val: &PatchValue, node_ty: Option<crate::registry::TypeId>) -> Result<(), String> {
+        match (target.key, val) {
+            (PatchKey::Present | PatchKey::Hidden, PatchValue::Bool { .. }) => Ok(()),
+            (PatchKey::FacetPresent(fk), PatchValue::Bool { v }) => {
+                if let Some(ty) = node_ty {
+                    if !*v && ty.spec().requires(fk) {
+                        return Err(format!("{} ({}) requires facet {}", target.node, ty, fk.name()));
+                    }
+                    if *v && !ty.spec().allows(fk) {
+                        return Err(format!("{} ({}) does not allow facet {}", target.node, ty, fk.name()));
+                    }
+                }
+                Ok(())
+            }
+            (PatchKey::Leaf(lp), PatchValue::Slot { slot }) => {
+                if let Some(ty) = node_ty
+                    && !ty.spec().allows(lp.facet)
+                {
+                    return Err(format!("{} ({}) does not allow facet {}", target.node, ty, lp.facet.name()));
+                }
+                let mut probe = lp.facet.default_facet();
+                probe.set(lp.field, slot.clone()).map_err(|e| format!("{target}: {e}"))?;
+                Ok(())
+            }
+            (PatchKey::Notation, PatchValue::Notation { .. }) => Ok(()),
+            _ => Err(format!("patch value kind does not match target {target}")),
+        }
+    }
+
+    /// Validate an authored patch (region, layer, anchor, and all entries).
+    pub fn validate_patch(&self, patch: &Patch, node_ty: &dyn Fn(NodeId) -> Option<crate::registry::TypeId>) -> Result<(), String> {
+        if patch.layer == SESSION_LAYER {
+            return Err("authored patch may not use SESSION_LAYER".into());
+        }
+        self.validate_region(&patch.region, patch.anchor)?;
+        for (&target, val) in &patch.entries {
+            Self::validate_entry(target, val, node_ty(target.node))?;
+        }
+        Ok(())
+    }
+
+    /// Validate a session-layer patch (constant leaf entries only, P8).
+    pub fn validate_session_patch(&self, patch: &Patch, node_ty: &dyn Fn(NodeId) -> Option<crate::registry::TypeId>) -> Result<(), String> {
+        self.validate_region(&patch.region, patch.anchor)?;
+        for (&target, val) in &patch.entries {
+            match (target.key, val) {
+                (PatchKey::Leaf(_), PatchValue::Slot { slot }) if slot.expr().is_none() => {
+                    Self::validate_entry(target, val, node_ty(target.node))?;
+                }
+                (PatchKey::Leaf(_), PatchValue::Slot { .. }) => {
+                    return Err(format!("session patch {target} must hold a constant slot"));
+                }
+                _ => {
+                    return Err(format!("session patch supports leaf entries only, got {target}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate a solve-layer constant entry (P17).
+    pub fn validate_solve_entry(leaf: Leaf, slot: &Slot, node_ty: Option<crate::registry::TypeId>) -> Result<(), String> {
+        if slot.expr().is_some() {
+            return Err(format!("solve layer entry {leaf} must be a constant, not a binding"));
+        }
+        Self::validate_entry(
+            PatchTarget { node: leaf.node, key: PatchKey::Leaf(leaf.path) },
+            &PatchValue::Slot { slot: slot.clone() },
+            node_ty,
+        )
+    }
+
+    /// Whole-table validation used by Schema 16 `serial::load`.
+    pub fn validate_all(&self, node_ty: &dyn Fn(NodeId) -> Option<crate::registry::TypeId>) -> Result<(), String> {
+        for (&k, ax) in &self.axes {
+            if k != ax.id {
+                return Err(format!("axis map key {k} disagrees with embedded id {}", ax.id));
+            }
+            Self::validate_axis(ax)?;
+        }
+        let mut ranks: BTreeSet<(u32, OrderKey)> = BTreeSet::new();
+        for (&k, p) in &self.patches {
+            if k != p.id {
+                return Err(format!("patch map key {k} disagrees with embedded id {}", p.id));
+            }
+            if !ranks.insert((p.layer, p.rank.clone())) {
+                return Err(format!("duplicate rank {} in layer {}", p.rank, p.layer));
+            }
+            self.validate_patch(p, node_ty)?;
+        }
+        for ((_, leaf), slot) in &self.solve {
+            Self::validate_solve_entry(*leaf, slot, node_ty(leaf.node))?;
+        }
+        Ok(())
     }
 
     /// Every node that has at least one authored patch or solve entry.
@@ -1093,7 +1337,7 @@ impl PatchTable {
     }
 
     pub fn solve_leaves_of(&self, node: NodeId) -> impl Iterator<Item = LeafPath> + '_ {
-        self.solve_by_node.get(&node).into_iter().flatten().copied()
+        self.solve_by_node.get(&node).into_iter().flatten().map(|(_, lp)| *lp)
     }
 
     /// Axes in deciding order (P11): explicit `axis_order`, then any remaining
@@ -1237,7 +1481,11 @@ impl PatchTable {
         };
         let mut out = Region(vec![p.region.clone()]);
         for q in self.patches_for_target(target.node) {
-            if q.id != p.id && q.entries.contains_key(&target) && self.compare(q, p) == Ordering::Greater {
+            if q.id != p.id
+                && q.entries.contains_key(&target)
+                && anchor_covers(q.anchor, p.anchor)
+                && self.compare(q, p) == Ordering::Greater
+            {
                 out = out.minus(&q.region, &self.axes);
             }
         }
@@ -1255,7 +1503,12 @@ impl PatchTable {
             for &target in p.entries.keys() {
                 let mut left = Region(vec![p.region.clone()]);
                 for q in self.patches_for_target(target.node) {
-                    if q.id != p.id && q.layer == p.layer && q.entries.contains_key(&target) && self.compare(q, p) == Ordering::Greater {
+                    if q.id != p.id
+                        && q.layer == p.layer
+                        && q.entries.contains_key(&target)
+                        && anchor_covers(q.anchor, p.anchor)
+                        && self.compare(q, p) == Ordering::Greater
+                    {
                         left = left.minus(&q.region, &self.axes);
                     }
                 }
@@ -1274,6 +1527,7 @@ impl PatchTable {
         for (i, p) in ps.iter().enumerate() {
             for q in &ps[i + 1..] {
                 if p.layer == q.layer
+                    && p.anchor == q.anchor
                     && self.keys(&p.region) == self.keys(&q.region)
                     && !p.region.same(&q.region, &self.axes)
                     && p.region.meets(&q.region, &self.axes)
@@ -1292,7 +1546,9 @@ impl PatchTable {
         let mut out = Vec::new();
         for p in self.patches.values() {
             for q in self.patches.values() {
-                let inside = p.region.within(&q.region, &self.axes) && !q.region.within(&p.region, &self.axes);
+                let inside = anchor_covers(q.anchor, p.anchor)
+                    && p.region.within(&q.region, &self.axes)
+                    && !(anchor_covers(p.anchor, q.anchor) && q.region.within(&p.region, &self.axes));
                 if p.id != q.id && p.layer == q.layer && inside && !p.region.void(&self.axes) && self.compare(p, q) == Ordering::Less {
                     out.push((p.id, q.id));
                 }
@@ -1381,6 +1637,7 @@ pub fn plan_drag(
     table: &PatchTable,
     point: &Point,
     edit: &Product,
+    anchor: Option<NodeId>,
     target: PatchTarget,
     value: PatchValue,
     layer: u32,
@@ -1394,14 +1651,15 @@ pub fn plan_drag(
     if !facet_present {
         return Err("facet is absent here".into());
     }
-    if !edit.contains(&table.axes, point) {
+    if !edit.contains_anchored(&table.axes, point, anchor) {
         return Err("the point is outside the edit region".into());
     }
+    let dp = point.discrete();
     let mut prefix: Vec<Op> = Vec::new();
     if let PatchKey::Leaf(lp) = target.key {
         let leaf = Leaf { node: target.node, path: lp };
-        if layer < SESSION_LAYER && table.solve.contains_key(&leaf) {
-            prefix.push(Op::Solve { leaf, slot: None });
+        if layer < SESSION_LAYER && table.solve.contains_key(&(dp.clone(), leaf)) {
+            prefix.push(Op::Solve { point: dp, leaf, slot: None });
         }
     }
     let win = table.winner_authored(point, target);
@@ -1422,7 +1680,7 @@ pub fn plan_drag(
             layer,
             rank,
             region,
-            anchor: None,
+            anchor,
             writable: true,
             entries: BTreeMap::from([(target, value.clone())]),
         };
@@ -1432,7 +1690,7 @@ pub fn plan_drag(
         let reuse = table
             .patches
             .values()
-            .filter(|q| q.layer == layer && q.writable && q.region.same(edit, &table.axes))
+            .filter(|q| q.layer == layer && q.writable && q.anchor == anchor && q.region.same(edit, &table.axes))
             .min_by(|a, b| table.compare(a, b));
         return Ok(finish(match reuse {
             Some(q) => set_entry(q.id),
@@ -1442,7 +1700,7 @@ pub fn plan_drag(
     if win.layer > layer {
         return Err("an outer scope sets it here".into());
     }
-    if win.layer == layer && win.writable && win.region.within(edit, &table.axes) {
+    if win.layer == layer && win.writable && anchor_covers(anchor, win.anchor) && win.region.within(edit, &table.axes) {
         return Ok(finish(set_entry(win.id)));
     }
     let region = edit.intersect(&win.region, &table.axes);
@@ -1462,6 +1720,7 @@ pub fn plan_drag(
         .filter(|q| {
             q.layer == layer
                 && q.writable
+                && q.anchor == anchor
                 && q.region.same(&region, &table.axes)
                 && table.compare(q, win) == Ordering::Greater
                 && clear(q)
@@ -1552,11 +1811,24 @@ pub fn plan_reorder(table: &PatchTable, id: PatchId, rank: OrderKey) -> Result<V
     Ok(vec![Op::Patch(PatchOp::SetRank { patch: id, rank })])
 }
 
-/// Plan clearing solve-layer entries for `leaves` on constraint release (P17).
-pub fn plan_release_solve(table: &PatchTable, leaves: &[Leaf]) -> Vec<Op> {
+/// Plan clearing solve-layer entries for `leaves` at `point` on constraint release (P17).
+pub fn plan_release_solve(table: &PatchTable, point: &Point, leaves: &[Leaf]) -> Vec<Op> {
+    let dp = point.discrete();
     leaves
         .iter()
-        .filter(|l| table.solve.contains_key(l))
-        .map(|&leaf| Op::Solve { leaf, slot: None })
+        .filter(|l| table.solve.contains_key(&(dp.clone(), **l)))
+        .map(|&leaf| Op::Solve { point: dp.clone(), leaf, slot: None })
+        .collect()
+}
+
+/// Plan clearing solve-layer entries for `leaves` across ALL discrete points
+/// (e.g. when a constraint holding an instance part is deleted, P17).
+pub fn plan_release_solve_all(table: &PatchTable, leaves: &[Leaf]) -> Vec<Op> {
+    let want: BTreeSet<Leaf> = leaves.iter().copied().collect();
+    table
+        .solve
+        .keys()
+        .filter(|(_, l)| want.contains(l))
+        .map(|(dp, leaf)| Op::Solve { point: dp.clone(), leaf: *leaf, slot: None })
         .collect()
 }

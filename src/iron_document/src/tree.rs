@@ -178,6 +178,26 @@ impl ResolvedStore {
     }
 }
 
+/// Effective presence & node changes accumulated by `Docs::reconcile_resolved`
+/// (engine.md §2.3, EN-4b): drained once by `StoreCore` into `Changes`,
+/// `geometry`, and `Reactive::restructure`.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ResolvedDelta {
+    pub(crate) became_present: Vec<(NodeId, Option<NodeId>)>,
+    pub(crate) became_absent: Vec<(NodeId, Option<NodeId>)>,
+    pub(crate) changed_nodes: BTreeSet<NodeId>,
+}
+
+impl ResolvedDelta {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.became_present.is_empty() && self.became_absent.is_empty() && self.changed_nodes.is_empty()
+    }
+
+    pub(crate) fn has_presence_change(&self) -> bool {
+        !self.became_present.is_empty() || !self.became_absent.is_empty()
+    }
+}
+
 /// The store's documents (handoff §4.6): the authored one, and the one
 /// holding derived copies when they are kept apart. With `apart` false every
 /// node, copies included, is in `authored` and `copies` stays empty: 2b's
@@ -197,6 +217,9 @@ pub(crate) struct Docs {
     pub(crate) session_patches: BTreeMap<crate::patch::PatchId, crate::patch::Patch>,
     /// Sparse non-journaled resolved state at `point` (engine.md §2.3).
     pub(crate) resolved: ResolvedStore,
+    /// Effective presence & node changes from `reconcile_resolved` waiting to
+    /// be drained by `StoreCore` into `Changes` and `Reactive`.
+    pending_delta: ResolvedDelta,
     /// Each node deleted since the changes were last taken, as it was when
     /// it went: a copy leaves no tombstone to read it from afterwards
     /// (`Changes::note`, `Store::regraph`).
@@ -228,6 +251,7 @@ impl Docs {
             point: crate::patch::Point::default(),
             session_patches: BTreeMap::new(),
             resolved: ResolvedStore::default(),
+            pending_delta: ResolvedDelta::default(),
             gone: Default::default(),
             gone_journal: None,
             reshaped: crate::stamp(),
@@ -235,8 +259,39 @@ impl Docs {
         };
         if !docs.authored.patches().patches.is_empty() {
             docs.reconcile_resolved(None);
+            docs.pending_delta = ResolvedDelta::default();
         }
         docs
+    }
+
+    pub(crate) fn take_resolved_delta(&mut self) -> ResolvedDelta {
+        std::mem::take(&mut self.pending_delta)
+    }
+
+    /// Walk raw/base live descendants of `id` across authored + copies without
+    /// filtering by `resolved.absent` (used by `Op::Delete` and `set_parent`
+    /// so authored topology edits never skip patch-absent children, EN-4b).
+    pub(crate) fn base_descendants(&self, id: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = Vec::new();
+        let push_raw = |n: NodeId, stack: &mut Vec<NodeId>| {
+            if self.apart {
+                if n.is_expanded() {
+                    stack.extend(self.copies.children(n).iter().rev().copied());
+                } else {
+                    stack.extend(self.copies.children(n).iter().rev().copied());
+                    stack.extend(self.authored.children(n).iter().rev().copied());
+                }
+            } else {
+                stack.extend(self.authored.children(n).iter().rev().copied());
+            }
+        };
+        push_raw(id, &mut stack);
+        while let Some(cur) = stack.pop() {
+            out.push(cur);
+            push_raw(cur, &mut stack);
+        }
+        out
     }
 
     fn root_for(&self, id: NodeId, parent: Option<NodeId>) -> NodeId {
@@ -334,10 +389,11 @@ impl Docs {
         let new_root = self.root_for(id, parent);
         self.of_node(id).set_parent(id, parent, order);
         if old_root != Some(new_root) {
+            let base_desc = self.base_descendants(id);
             let moved: Vec<(NodeId, TypeId, Vec<FacetKind>)> = {
                 let tree = Tree::of(self);
                 std::iter::once(id)
-                    .chain(tree.descendants(id))
+                    .chain(base_desc)
                     .filter_map(|n| {
                         let node = tree.live(n)?;
                         let kinds = tree.facets_of(n).map(Facet::kind).collect();
@@ -435,8 +491,8 @@ impl Docs {
         Ok(inv)
     }
 
-    pub(crate) fn apply_solve(&mut self, leaf: crate::expr::Leaf, slot: Option<Slot>) -> Option<Slot> {
-        self.authored.apply_solve(leaf, slot)
+    pub(crate) fn apply_solve(&mut self, point: crate::patch::DiscretePoint, leaf: crate::expr::Leaf, slot: Option<Slot>) -> Result<Option<Slot>, String> {
+        self.authored.apply_solve(point, leaf, slot)
     }
 
     /// Move the active point on variation axes, reconciling only nodes whose
@@ -446,21 +502,45 @@ impl Docs {
         if changed.is_empty() {
             return BTreeSet::new();
         }
+        let old_dp = self.point.discrete();
+        let new_dp = point.discrete();
         self.point = point;
         let mut targets = BTreeSet::new();
         for a in &changed {
             targets.extend(self.authored.patches().targets_for_axis(*a));
+            let is_instance = self.authored.patches().axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance);
             for p in self.session_patches.values() {
-                if p.region.sels.contains_key(a) {
+                if p.region.sels.contains_key(a) || (is_instance && p.anchor.is_some()) {
                     targets.extend(p.entries.keys().map(|t| t.node));
                 }
+            }
+        }
+        // Emit Leaf keys for any solve-layer entry whose discrete point changed.
+        if old_dp != new_dp && !self.authored.patches().solve.is_empty() {
+            let solve_leaves: Vec<crate::expr::Leaf> = self
+                .authored
+                .patches()
+                .solve
+                .keys()
+                .filter(|(dp, _)| *dp == old_dp || *dp == new_dp)
+                .map(|(_, l)| *l)
+                .collect();
+            for leaf in solve_leaves {
+                targets.insert(leaf.node);
+                self.scoped_touched.note(crate::structure::Key::Leaf(leaf));
+                self.scoped_touched.note(crate::structure::Key::Patch(leaf.node));
             }
         }
         if !targets.is_empty() {
             self.reconcile_resolved(Some(&targets));
             // Also emit Leaf keys for session-patched leaves on changed axes.
             for p in self.session_patches.values() {
-                if p.region.sels.keys().any(|a| changed.contains(a)) {
+                if p.region.sels.keys().any(|a| changed.contains(a))
+                    || (p.anchor.is_some()
+                        && changed.iter().any(|a| {
+                            self.authored.patches().axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance)
+                        }))
+                {
                     for t in p.entries.keys() {
                         if let crate::patch::PatchKey::Leaf(lp) = t.key {
                             self.scoped_touched.note(crate::structure::Key::Leaf(crate::expr::Leaf { node: t.node, path: lp }));
@@ -473,8 +553,12 @@ impl Docs {
     }
 
     /// Install or replace a session-layer patch (`SESSION_LAYER`, P8; never saved).
-    pub(crate) fn set_session_patch(&mut self, mut patch: crate::patch::Patch) -> Vec<crate::expr::Leaf> {
+    /// Validated before mutation so an invalid patch never leaves queued keys.
+    pub(crate) fn set_session_patch(&mut self, mut patch: crate::patch::Patch) -> Result<Vec<crate::expr::Leaf>, String> {
         patch.layer = crate::patch::SESSION_LAYER;
+        self.authored
+            .patches()
+            .validate_session_patch(&patch, &|id| self.authored.node(id).map(|n| n.ty))?;
         let mut leaves = Vec::new();
         if let Some(old) = self.session_patches.insert(patch.id, patch.clone()) {
             for t in old.entries.keys() {
@@ -493,7 +577,7 @@ impl Docs {
         for &l in &leaves {
             self.scoped_touched.note(crate::structure::Key::Leaf(l));
         }
-        leaves
+        Ok(leaves)
     }
 
     /// Remove a session-layer patch by id, returning the leaves it touched.
@@ -618,10 +702,13 @@ impl Docs {
                     self.resolved.hidden.remove(&id);
                 }
             }
-            // Cascade down authored children only when effective presence or
-            // visibility changed (keeps leaf edits on containers O(1)).
+            // Cascade down authored children (and derived copies if apart) only
+            // when effective presence or visibility changed (keeps leaf edits O(1)).
             if old_absent != !present || old_hidden != hidden {
                 work.extend_from_slice(self.authored.children(id));
+                if self.apart {
+                    work.extend_from_slice(self.copies.children(id));
+                }
             }
 
             // Compute effective facets if present and touched by any active patch on `id`.
@@ -723,7 +810,32 @@ impl Docs {
                 }
             }
 
-            // Emit effective structural keys for anything that changed.
+            // Emit effective structural keys and record ResolvedDelta for anything that changed.
+            if old_absent != !present || old_hidden != hidden || old_facets != new_facets {
+                self.pending_delta.changed_nodes.insert(id);
+            }
+            if old_absent != !present {
+                if present {
+                    self.pending_delta.became_present.push((id, node.parent));
+                } else {
+                    self.pending_delta.became_absent.push((id, node.parent));
+                }
+                // Notify relations touching `id` so network/constraint/anchor makers react.
+                self.scoped_touched.note(crate::structure::Key::Relations(id));
+                let rel_touch: Vec<(RelationId, NodeId, NodeId)> = self
+                    .authored
+                    .relations_from(id)
+                    .chain(self.authored.relations_to(id))
+                    .chain(self.copies.relations_from(id))
+                    .chain(self.copies.relations_to(id))
+                    .map(|r| (r.id, r.from, r.to))
+                    .collect();
+                for (rid, from, to) in rel_touch {
+                    self.scoped_touched.note(crate::structure::Key::Relation(rid));
+                    self.scoped_touched.note(crate::structure::Key::Relations(from));
+                    self.scoped_touched.note(crate::structure::Key::Relations(to));
+                }
+            }
             if old_absent != !present || old_hidden != hidden {
                 self.scoped_touched.note(crate::structure::Key::Node(id));
                 if let Some(p) = node.parent {
@@ -740,12 +852,18 @@ impl Docs {
                     let before = if old_absent {
                         None
                     } else {
-                        old_facets.as_ref().and_then(|m| m.get(&k)).or_else(|| self.authored.facet(id, k))
+                        match &old_facets {
+                            Some(m) => m.get(&k),
+                            None => self.authored.facet(id, k),
+                        }
                     };
                     let after = if !present {
                         None
                     } else {
-                        new_facets.as_ref().and_then(|m| m.get(&k)).or_else(|| self.authored.facet(id, k))
+                        match &new_facets {
+                            Some(m) => m.get(&k),
+                            None => self.authored.facet(id, k),
+                        }
                     };
                     if before != after {
                         self.scoped_touched.note(crate::structure::Key::Facet(id, k));
@@ -841,11 +959,13 @@ impl Docs {
                 None => self.gone.remove(&id),
             };
         }
+        self.pending_delta = ResolvedDelta::default();
         if !self.resolved.is_empty() || !self.authored.patches().patches.is_empty() {
             let on = self.scoped_touched.on;
             self.scoped_touched.on = false;
             self.resolved = ResolvedStore::default();
             self.reconcile_resolved(None);
+            self.pending_delta = ResolvedDelta::default();
             self.scoped_touched.on = on;
         }
         #[cfg(feature = "differential")]
@@ -1228,12 +1348,32 @@ impl<'a> Tree<'a> {
 
     pub fn nodes_of_type(self, ty: TypeId) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_of_type");
-        self.both().flat_map(move |d| d.nodes_of_type(ty))
+        let resolved = self.resolved;
+        self.both()
+            .flat_map(move |d| d.nodes_of_type(ty))
+            .filter(move |id| !resolved.is_some_and(|r| r.absent.contains(id)))
     }
 
     pub fn nodes_with(self, kind: FacetKind) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_with");
-        self.both().flat_map(move |d| d.nodes_with(kind))
+        let resolved = self.resolved;
+        let base = self.both().flat_map(move |d| d.nodes_with(kind)).filter(move |id| {
+            let Some(r) = resolved else { return true };
+            if r.absent.contains(id) {
+                return false;
+            }
+            r.facets.get(id).is_none_or(|m| m.contains_key(&kind))
+        });
+        let added = resolved
+            .into_iter()
+            .flat_map(|r| r.facets.iter())
+            .filter(move |(id, map)| {
+                !resolved.is_some_and(|r| r.absent.contains(id))
+                    && map.contains_key(&kind)
+                    && self.at(**id).facet(**id, kind).is_none()
+            })
+            .map(|(&id, _)| id);
+        base.chain(added)
     }
 
     /// Live nodes of `ty` under top-level `root` (engine.md §3.2): O(matches
@@ -1302,7 +1442,13 @@ impl<'a> Tree<'a> {
         self.at(id).leaf(id, path)
     }
 
-    /// Dedicated system-owned solve-layer value for `leaf` (engine.md §2.4 Tier 4, P17).
+    /// All unpatched base facets of a node from the authored document (EN-4b).
+    pub fn base_facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        self.at(id).facets_of(id)
+    }
+
+    /// Dedicated system-owned solve-layer value for `leaf` at the active
+    /// discrete point (engine.md §2.4 Tier 4, P17).
     pub(crate) fn solve_leaf(self, leaf: Leaf) -> Option<&'a crate::value::Value> {
         if self.doc.patches().solve.is_empty() {
             return None;
@@ -1310,7 +1456,8 @@ impl<'a> Tree<'a> {
         if !self.is_live(leaf.node) || !self.has(leaf.node, leaf.path.facet) {
             return None;
         }
-        self.doc.patches().solve.get(&leaf)?.constant()
+        let dp = self.point.map(|p| p.discrete()).unwrap_or_default();
+        self.doc.patches().solve.get(&(dp, leaf))?.constant()
     }
 
     /// Session-layer patch value for `leaf` at the active point (engine.md §2.4 Tier 1, P8).
@@ -1477,10 +1624,14 @@ impl<'a> Tree<'a> {
 
     pub fn relation(self, id: RelationId) -> Option<&'a Relation> {
         self.note(crate::structure::Key::Relation(id));
-        match self.copies {
+        let rel = match self.copies {
             Some(c) if id.is_expanded() => c.relation(id),
             _ => self.doc.relation(id),
+        }?;
+        if self.resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)) {
+            return None;
         }
+        Some(rel)
     }
 
     /// The derived relations whose id names `owner`, from either document.
@@ -1491,20 +1642,29 @@ impl<'a> Tree<'a> {
 
     pub fn relations(self) -> impl Iterator<Item = &'a Relation> + 'a {
         self.unkeyed("relations");
-        self.both().flat_map(Document::relations)
+        let resolved = self.resolved;
+        self.both()
+            .flat_map(Document::relations)
+            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
     }
 
     /// Edges leaving `id`, from either document: an authored relation can
     /// end at a copy and a derived one start at an authored node.
     pub fn relations_from(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        self.both().flat_map(move |d| d.relations_from(id))
+        let resolved = self.resolved;
+        self.both()
+            .flat_map(move |d| d.relations_from(id))
+            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
     }
 
     /// Edges arriving at `id`: "what drives this node" (doc 05 §3.1).
     pub fn relations_to(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        self.both().flat_map(move |d| d.relations_to(id))
+        let resolved = self.resolved;
+        self.both()
+            .flat_map(move |d| d.relations_to(id))
+            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
     }
 }
 

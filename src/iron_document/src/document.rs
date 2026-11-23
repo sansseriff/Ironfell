@@ -240,7 +240,7 @@ enum Rec {
     Axis(crate::patch::AxisId, Option<crate::patch::Axis>),
     AxisOrder(Vec<crate::patch::AxisId>),
     Patch(crate::patch::PatchId, Option<crate::patch::Patch>),
-    Solve(Leaf, Option<Slot>),
+    Solve(crate::patch::DiscretePoint, Leaf, Option<Slot>),
     PatchCounters(u64, u64, u64),
 }
 
@@ -786,15 +786,15 @@ impl Document {
                     self.patches.patches.insert(id, p);
                 }
             }
-            Rec::Solve(leaf, old) => {
+            Rec::Solve(dp, leaf, old) => {
                 match old {
                     Some(s) => {
-                        self.patches.solve.insert(leaf, s);
-                        self.patches.index_solve(leaf, true);
+                        self.patches.solve.insert((dp.clone(), leaf), s);
+                        self.patches.index_solve(&dp, leaf, true);
                     }
                     None => {
-                        self.patches.solve.remove(&leaf);
-                        self.patches.index_solve(leaf, false);
+                        self.patches.solve.remove(&(dp.clone(), leaf));
+                        self.patches.index_solve(&dp, leaf, false);
                     }
                 }
             }
@@ -1304,6 +1304,7 @@ impl Document {
                 if self.patches.axes.contains_key(&axis.id) {
                     return Err(format!("axis {} already exists", axis.id));
                 }
+                crate::patch::PatchTable::validate_axis(axis)?;
                 if self.recording() {
                     self.rec(Rec::Axis(axis.id, None));
                 }
@@ -1317,7 +1318,13 @@ impl Document {
                 Ok((AxisOp::Remove { id: axis.id }, targets))
             }
             AxisOp::Remove { id } => {
-                let old = self.patches.axes.remove(id).ok_or_else(|| format!("no axis {id}"))?;
+                if !self.patches.axes.contains_key(id) {
+                    return Err(format!("no axis {id}"));
+                }
+                if self.patches.axis_referenced(*id) {
+                    return Err(format!("axis {id} is still referenced by patches"));
+                }
+                let old = self.patches.axes.remove(id).expect("checked");
                 if self.recording() {
                     self.rec(Rec::Axis(*id, Some(old.clone())));
                 }
@@ -1333,6 +1340,9 @@ impl Document {
                 Ok((AxisOp::SetOrder { order: old }, targets))
             }
             AxisOp::AddValue { axis, at, value } => {
+                if !value.scopes.is_empty() && value.scopes.len() != value.path.len() {
+                    return Err(format!("axis {axis} value {} scopes length {} != path length {}", value.id, value.scopes.len(), value.path.len()));
+                }
                 let recording = self.recording();
                 let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
                 if ax.values.iter().any(|v| v.id == value.id) {
@@ -1406,21 +1416,19 @@ impl Document {
     /// per layer and non-session layer, maintaining the in-memory patch index,
     /// and returning `(inverse, affected_targets)` (EN-4).
     pub(crate) fn apply_patch_op(&mut self, op: &crate::patch::PatchOp) -> Result<(crate::patch::PatchOp, BTreeSet<NodeId>), String> {
-        use crate::patch::{PatchOp, SESSION_LAYER};
+        use crate::patch::PatchOp;
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("apply_patch");
         let res = (|| -> Result<(PatchOp, BTreeSet<NodeId>), String> {
             match op {
                 PatchOp::Add { patch } => {
-                    if patch.layer == SESSION_LAYER {
-                        return Err("authored patch may not use SESSION_LAYER".into());
-                    }
                     if self.patches.patches.contains_key(&patch.id) {
                         return Err(format!("patch {} already exists", patch.id));
                     }
                     if self.patches.patches.values().any(|q| q.layer == patch.layer && q.rank == patch.rank) {
                         return Err(format!("another patch in layer {} already has rank {}", patch.layer, patch.rank));
                     }
+                    self.patches.validate_patch(patch, &|id| self.nodes.get(&id).map(|n| n.ty))?;
                     if self.recording() {
                         self.rec(Rec::Patch(patch.id, None));
                         self.rec(Rec::PatchCounters(self.patches.next_axis, self.patches.next_axis_value, self.patches.next_patch));
@@ -1448,6 +1456,12 @@ impl Document {
                 }
                 PatchOp::SetEntry { patch, target, value } => {
                     let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
+                    if !cur.writable {
+                        return Err(format!("patch {patch} is read-only"));
+                    }
+                    if let Some(v) = value {
+                        crate::patch::PatchTable::validate_entry(*target, v, self.nodes.get(&target.node).map(|n| n.ty))?;
+                    }
                     let before = self.recording().then(|| cur.clone());
                     let old_p = self.patches.patches.remove(patch).expect("checked");
                     self.patches.unindex_patch(&old_p);
@@ -1466,6 +1480,10 @@ impl Document {
                 }
                 PatchOp::SetRegion { patch, region } => {
                     let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
+                    if !cur.writable {
+                        return Err(format!("patch {patch} is read-only"));
+                    }
+                    self.patches.validate_region(region, cur.anchor)?;
                     let before = self.recording().then(|| cur.clone());
                     let old_p = self.patches.patches.remove(patch).expect("checked");
                     self.patches.unindex_patch(&old_p);
@@ -1506,26 +1524,29 @@ impl Document {
     }
 
     /// Write or clear one entry in the dedicated system-owned solve layer (P17).
-    pub(crate) fn apply_solve(&mut self, leaf: Leaf, slot: Option<Slot>) -> Option<Slot> {
+    pub(crate) fn apply_solve(&mut self, point: crate::patch::DiscretePoint, leaf: Leaf, slot: Option<Slot>) -> Result<Option<Slot>, String> {
+        if let Some(s) = &slot {
+            crate::patch::PatchTable::validate_solve_entry(leaf, s, self.nodes.get(&leaf.node).map(|n| n.ty))?;
+        }
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("apply_solve");
         let old = match slot {
             Some(s) => {
-                self.patches.index_solve(leaf, true);
-                self.patches.solve.insert(leaf, s)
+                self.patches.index_solve(&point, leaf, true);
+                self.patches.solve.insert((point.clone(), leaf), s)
             }
             None => {
-                self.patches.index_solve(leaf, false);
-                self.patches.solve.remove(&leaf)
+                self.patches.index_solve(&point, leaf, false);
+                self.patches.solve.remove(&(point.clone(), leaf))
             }
         };
         if self.recording() {
-            self.rec(Rec::Solve(leaf, old.clone()));
+            self.rec(Rec::Solve(point, leaf, old.clone()));
         }
         self.touched.note(crate::structure::Key::Leaf(leaf));
         self.touched.note(crate::structure::Key::Patch(leaf.node));
         self.touched.on = on;
-        old
+        Ok(old)
     }
 
     // ---- bulk construction (used by load) -----------------------------

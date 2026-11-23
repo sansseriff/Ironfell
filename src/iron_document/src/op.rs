@@ -70,6 +70,8 @@ pub enum Op {
     Patch(crate::patch::PatchOp),
     /// Dedicated system-owned solve-layer write (plans/specs/patches.md P17, EN-4).
     Solve {
+        #[serde(default)]
+        point: crate::patch::DiscretePoint,
         leaf: crate::expr::Leaf,
         slot: Option<Slot>,
     },
@@ -265,9 +267,11 @@ pub(crate) fn apply_op(
                 .map_err(|msg| cx.err(ErrorKind::BadPatch, msg))?;
             Ok(vec![Op::Patch(inv)])
         }
-        Op::Solve { leaf, slot } => {
-            let old = docs.apply_solve(*leaf, slot.clone());
-            Ok(vec![Op::Solve { leaf: *leaf, slot: old }])
+        Op::Solve { point, leaf, slot } => {
+            let old = docs
+                .apply_solve(point.clone(), *leaf, slot.clone())
+                .map_err(|msg| cx.err(ErrorKind::BadPatch, msg))?;
+            Ok(vec![Op::Solve { point: point.clone(), leaf: *leaf, slot: old }])
         }
     }
 }
@@ -284,6 +288,10 @@ fn reshapes(op: &Op) -> bool {
     match op {
         Op::Set { path, .. } => matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
         Op::Solve { .. } => false,
+        Op::Patch(crate::patch::PatchOp::SetEntry { target, .. }) => match target.key {
+            crate::patch::PatchKey::Leaf(lp) => matches!((lp.facet, lp.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
+            _ => true,
+        },
         _ => true,
     }
 }
@@ -310,8 +318,26 @@ fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
 /// Whether `op` can change the theme's tokens: a token made, deleted or
 /// moved, or a token's leaf or name set.
 fn retokens(docs: &Docs, op: &Op) -> bool {
+    let is_token_node = |id: NodeId| Tree::of(docs).node(id).is_some_and(|n| n.ty.name() == "token");
     match op {
-        Op::Set { id, path, .. } => path.facet == FacetKind::Token || (path.facet == FacetKind::Name && Tree::of(docs).node(*id).is_some_and(|n| n.ty.name() == "token")),
+        Op::Set { id, path, .. } => path.facet == FacetKind::Token || (path.facet == FacetKind::Name && is_token_node(*id)),
+        Op::Axis(_) => !docs.authored.patches().patches.is_empty(),
+        Op::Patch(p) => {
+            use crate::patch::{PatchKey, PatchOp};
+            let hits = |t: &crate::patch::PatchTarget| match t.key {
+                PatchKey::Leaf(lp) => lp.facet == FacetKind::Token || (lp.facet == FacetKind::Name && is_token_node(t.node)),
+                PatchKey::FacetPresent(FacetKind::Token) => true,
+                PatchKey::Present | PatchKey::Hidden => is_token_node(t.node),
+                _ => false,
+            };
+            match p {
+                PatchOp::Add { patch } => patch.entries.keys().any(hits),
+                PatchOp::SetEntry { target, .. } => hits(target),
+                PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
+                    docs.authored.patches().patches.get(id).is_none_or(|patch| patch.entries.keys().any(hits))
+                }
+            }
+        }
         _ => touches(docs, op, &["token"], &[FacetKind::Token]),
     }
 }
@@ -580,15 +606,19 @@ fn check_embeds(doc: Tree<'_>, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
 
 fn delete(docs: &mut Docs, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> {
     live(Tree::of(docs), cx, id)?;
+    // Walk raw/base topology (NOT effective `Tree::descendants`), so a child
+    // patched `Present = false` is still deleted with its parent instead of
+    // being orphaned under a tombstone, and snapshot base facets so undo
+    // restores the unpatched base (EN-4b).
     let mut order = vec![id];
-    order.extend(Tree::of(docs).descendants(id));
+    order.extend(docs.base_descendants(id));
     // Inverses are pushed bottom-up so that the reversed list restores parents
     // before children.
     let mut inverse = Vec::with_capacity(order.len());
     for &n in order.iter().rev() {
         let doc = Tree::of(docs);
         let node = doc.node(n).expect("descendant exists").clone();
-        let comps: Vec<Facet> = doc.facets_of(n).cloned().collect();
+        let comps: Vec<Facet> = doc.base_facets_of(n).cloned().collect();
         inverse.push(Op::Create {
             id: n,
             ty: node.ty,
@@ -795,7 +825,9 @@ fn add_comp(
     // A dynamic facet (an instance's `args`) is replaced whole: its fields
     // are the definition's inputs, which can gain, lose or rename one at
     // once (component-authoring.md §2).
-    let replaced = match Tree::of(docs).facet(id, kind) {
+    // Check the base facet (not effective `Tree::facet`), so a base facet
+    // hidden by a `FacetPresent(false)` patch is never silently overwritten.
+    let replaced = match Tree::of(docs).base_facet(id, kind) {
         Some(old) if kind.is_dynamic() => Some(old.clone()),
         Some(_) => {
             return Err(cx.err(

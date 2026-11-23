@@ -475,7 +475,7 @@ impl Store {
         self.call("set_point", |s| s.set_point(point.clone()))
     }
 
-    pub fn set_session_patch(&mut self, patch: crate::patch::Patch) {
+    pub fn set_session_patch(&mut self, patch: crate::patch::Patch) -> Result<(), String> {
         self.call("set_session_patch", |s| s.set_session_patch(patch.clone()))
     }
 

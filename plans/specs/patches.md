@@ -224,15 +224,18 @@ Strength is **(layer, rank)**, compared layer first (P1, P15).
   imported or `std:` definition's patches are in its layer and may not be written, and
   their ranks never compare with the document's.
 - **The solve layer (P17)** is a dedicated system-owned layer between the document
-  layer and the session layer. It is saved, holds at most one entry per exact instance
-  leaf (region always the exact instance path), and is written only by Stage 4
-  `Transaction` constraint solves. In effective value precedence (`engine.md` §2.4), it
-  sits **below bindings and producer signals** and **above authored patches**, so it
-  never shadows a binding or layout/clip producer. An authored write in the same
-  transaction targeting a leaf with a solve entry clears that solve entry first (as a
-  derived op) so the authored edit acts as a driver; undo, redo, and replay apply
-  recorded ops only without re-solving. Solve-layer entries do not participate in
-  authored-layer `dead`/`ties`/`contradictions` lints.
+  layer and the session layer. It is saved, keyed by `(DiscretePoint, Leaf)` (discrete
+  axis coordinates excluding continuous `times`, plus the exact instance leaf), and is
+  written only by Stage 4 `Transaction` constraint solves. Keying by discrete coordinate
+  keeps solved poses independent across slides, variants, and machine states. In effective
+  value precedence (`engine.md` §2.4), it sits **below bindings and producer signals** and
+  **above authored patches**, so it never shadows a binding or layout/clip producer. An
+  authored write in the same transaction targeting a leaf with a solve entry clears that
+  solve entry first (as a derived op) so the authored edit acts as a driver; deleting a
+  constraint clears the solve entries of parts no cluster holds so they snap back to their
+  authored override/template value; undo, redo, and replay apply recorded ops only without
+  re-solving. Solve-layer entries do not participate in authored-layer
+  `dead`/`ties`/`contradictions` lints.
 - **The session is the outermost layer** (P8): the scratch layer, and above it a
   gesture's previews. Its patches are never saved or synced. Being a layer rather than
   an axis, a session patch takes any region, normally all of it, so a preview does not
@@ -286,9 +289,11 @@ its own sequence axes among themselves.
 **Across layers the layer decides, at every state.** An instance's override, written
 in the document, beats its definition's hover pose. So does a slide's patch written in
 the document: a deck that sets a part's leaf on slide 3 replaces that part's hover
-feedback there too, since the pose sets a channel and the slide's patch the leaf the
-channel drove (M7). To keep the feedback, the slide's patch leaves `hover` out of its
-region, or the document writes its own hover pose. (`iron_patch`:
+feedback there too (M7). Under `engine.md` §2.4, machine poses are authored patches on the
+definition's state axis (or, when a channel binding exists on the leaf, an outer-layer
+patch on the leaf replaces the effective slot — superseding the channel binding at its
+region). To keep the feedback, the slide's patch leaves `hover` out of its region, or the
+document writes its own hover pose. (`iron_patch`:
 `an_outer_layer_beats_the_definition_s_pose_at_every_state`.)
 
 ### 6.2 The laws, as they hold

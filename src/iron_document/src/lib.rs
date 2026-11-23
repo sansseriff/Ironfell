@@ -906,6 +906,17 @@ impl StoreCore {
                 }
             }
         }
+        // Include every node whose effective presence, visibility, or facets
+        // changed via patches/axes (including cascaded descendants, EN-4b).
+        let delta = self.docs.take_resolved_delta();
+        if !delta.is_empty() {
+            if delta.has_presence_change() {
+                self.geometry.note_structure();
+            }
+            self.pending.note_resolved_delta(Tree::of(&self.docs), &self.docs.gone, &delta);
+            nodes.extend(delta.changed_nodes);
+        }
+        let doc = Tree::of(&self.docs);
         // A boundary check on an instance's argument reads its definition's
         // port_specs (`types::declared`): an edit inside a definition
         // reaches the arguments of every entity naming it.
@@ -4718,6 +4729,13 @@ impl StoreCore {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
         } else {
+            let delta = self.docs.take_resolved_delta();
+            if !delta.is_empty() {
+                if delta.has_presence_change() {
+                    self.geometry.note_structure();
+                }
+                self.pending.note_resolved_delta(Tree::of(&self.docs), &self.docs.gone, &delta);
+            }
             self.sync_touched(false);
             // A clip's own leaves set (its `prop`, a key): every clip is
             // sampled, so what one stops driving is withdrawn; otherwise
@@ -4764,13 +4782,34 @@ impl StoreCore {
 
     /// Move the active point on variation axes (`engine.md` §2.3, EN-4).
     /// Reconciles only nodes whose patches reference the changed axes,
-    /// restructures reactive bindings when needed, and settles live.
+    /// drains effective `ResolvedDelta` into `Changes`/`geometry`,
+    /// restructures reactive bindings (including cascaded descendants) when
+    /// needed, and settles live.
     pub fn set_point(&mut self, point: patch::Point) {
-        let targets = self.docs.set_point(point);
+        let mut targets = self.docs.set_point(point);
         if targets.is_empty() {
             return;
         }
+        let delta = self.docs.take_resolved_delta();
+        if !delta.is_empty() {
+            if delta.has_presence_change() {
+                self.geometry.note_structure();
+                self.docs.reshaped = stamp();
+                self.docs.tokens_shaped = stamp();
+            }
+            self.pending.note_resolved_delta(Tree::of(&self.docs), &self.docs.gone, &delta);
+            targets.extend(delta.changed_nodes);
+        }
         let keys = self.docs.take_touched();
+        if keys.iter().any(|k| {
+            matches!(k, structure::Key::Facet(_, FacetKind::Token))
+                || matches!(k, structure::Key::Leaf(Leaf { path, .. }) if path.facet == FacetKind::Token)
+        }) {
+            self.docs.tokens_shaped = stamp();
+        }
+        if keys.iter().any(|k| matches!(k, structure::Key::Leaf(Leaf { path, .. }) if matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")))) {
+            self.docs.reshaped = stamp();
+        }
         let structural = keys.iter().any(|k| !matches!(k, structure::Key::Leaf(_) | structure::Key::Facet(_, _) | structure::Key::Patch(_)))
             || targets.iter().any(|&id| {
                 let doc = Tree::of(&self.docs);
@@ -4824,8 +4863,10 @@ impl StoreCore {
     }
 
     /// Install or replace a session-layer patch (`SESSION_LAYER`, P8; never saved).
-    pub fn set_session_patch(&mut self, patch: patch::Patch) {
-        let leaves = self.docs.set_session_patch(patch);
+    /// Returns `Err` if the patch contains non-leaf or bound entries, leaving
+    /// the store untouched.
+    pub fn set_session_patch(&mut self, patch: patch::Patch) -> Result<(), String> {
+        let leaves = self.docs.set_session_patch(patch)?;
         if !leaves.is_empty() {
             for &l in &leaves {
                 self.pending.slots.insert(l);
@@ -4833,6 +4874,7 @@ impl StoreCore {
             self.sync_touched(true);
             self.settle(SettleMode::Live { clusters: true });
         }
+        Ok(())
     }
 
     /// Remove a session-layer patch by id (`SESSION_LAYER`, P8).
@@ -4861,17 +4903,37 @@ impl StoreCore {
 
     /// Evaluate `leaf` at an arbitrary variation `point` without mutating this store
     /// (`engine.md` §2.3, EN-4). Uses the live store directly when `point == self.point()`.
+    /// Evaluates settled values (without transient gesture overlays or glides).
     pub fn eval_at(&self, point: &patch::Point, leaf: Leaf) -> Option<Value> {
         if *point == self.docs.point {
             return self.resolved(leaf.node, leaf.path);
         }
-        // Fast path: when no patches exist at all, every point yields the same value.
-        if self.docs.authored.patches().patches.is_empty() && self.docs.session_patches.is_empty() {
+        // Fast path: when no patches, solve entries, or session patches exist,
+        // every point yields the same value.
+        if self.docs.authored.patches().patches.is_empty()
+            && self.docs.authored.patches().solve.is_empty()
+            && self.docs.session_patches.is_empty()
+        {
             return self.resolved(leaf.node, leaf.path);
         }
         let mut s = self.scratch();
         // Preserve session patches for point evaluation (scratch clears them for planning).
-        s.docs.session_patches = self.docs.session_patches.clone();
+        if !self.docs.session_patches.is_empty() {
+            s.docs.session_patches = self.docs.session_patches.clone();
+            let sess_leaves: Vec<Leaf> = s
+                .docs
+                .session_patches
+                .values()
+                .flat_map(|p| p.entries.keys())
+                .filter_map(|t| match t.key {
+                    patch::PatchKey::Leaf(path) => Some(Leaf { node: t.node, path }),
+                    _ => None,
+                })
+                .collect();
+            if !sess_leaves.is_empty() {
+                s.reactive.invalidate(Tree::of(&s.docs), sess_leaves);
+            }
+        }
         s.set_point(point.clone());
         s.resolved(leaf.node, leaf.path)
     }
@@ -4895,11 +4957,13 @@ impl StoreCore {
         pt.lints(&is_present, &has_facet)
     }
 
-    /// Plan the ops for dragging `target` to `value` over `edit` in `layer`
-    /// (`patches.md` §7.2, P12, P17: clears any solve-layer entry on that leaf first).
+    /// Plan the ops for dragging `target` to `value` over `edit` (with optional
+    /// scope `anchor`) in `layer` (`patches.md` §7.2, P12, P17: clears any
+    /// solve-layer entry on that leaf at the active discrete point first).
     pub fn plan_patch_drag(
         &self,
         edit: &patch::Product,
+        anchor: Option<NodeId>,
         target: patch::PatchTarget,
         value: patch::PatchValue,
         layer: u32,
@@ -4918,7 +4982,7 @@ impl StoreCore {
             patch::PatchKey::Leaf(lp) => doc.base_leaf(target.node, lp).cloned().map(|slot| patch::PatchValue::Slot { slot }),
             patch::PatchKey::Notation => Some(patch::PatchValue::Notation { notation: String::new() }),
         };
-        patch::plan_drag(self.docs.authored.patches(), point, edit, target, value, layer, node_present, facet_present, base_val)
+        patch::plan_drag(self.docs.authored.patches(), point, edit, anchor, target, value, layer, node_present, facet_present, base_val)
     }
 
     pub fn history(&self) -> &History {

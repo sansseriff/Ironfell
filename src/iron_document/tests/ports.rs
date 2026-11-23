@@ -587,3 +587,177 @@ fn making_a_component_keeps_every_signal_and_nests_live_instances() {
     assert!(doc.live(lab.laser).is_some() && doc.live(made.entity).is_none());
     assert!((watts(&lab.signal(lab.meter, "in")) - reading).abs() < 1e-15);
 }
+
+fn key(n: u32) -> OrderKey {
+    (0..n).fold(OrderKey::first(), |k, _| OrderKey::after(&k))
+}
+
+/// EN-2c: `NetworkMakers` runs per top-level root, `deref` in one model's
+/// equation does not merge an unrelated model's island, constant edits on an
+/// equation solve without replacing islands or waking other models, and
+/// non-structural `port.dir` edits update derived one-way signals via
+/// `sync_touched`.
+#[test]
+fn independent_models_and_deref_equations_stay_isolated() {
+    use iron_document::facet::{Args, Connection, Equation, Instance, Let, Port, Size, Transform2d};
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(15);
+    let [lib, def, m1, m2, comp, w_let, h_rect, e1, p1, eq1, e2, p2, eq2, p_sig_a, p_sig_b] = ids.try_into().unwrap();
+    let elec = |name: &str| vec![
+        Port { kind: Slot::Const(Value::Str("electrical".into())), ..Default::default() }.wrap(),
+        named(name),
+    ];
+    let val_port = |name: &str, dir: &str, sig: f64| vec![
+        Port {
+            kind: Slot::Const(Value::Str("value".into())),
+            dir: Slot::Const(Value::Enum(dir.into())),
+            signal: Slot::Const(Value::Number(sig)),
+            ..Default::default()
+        }
+        .wrap(),
+        named(name),
+    ];
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    let mut at = Transform2d::default();
+    at.x = Slot::Const(Value::Number(7.0));
+    let mut w = Let::default();
+    w.value = Slot::Const(Value::Ref(h_rect));
+    let bound = |s: String| Slot::Bound(Expr::parse(&s).unwrap());
+    let mut eq1_f = Equation::default();
+    eq1_f.lhs = bound(format!("{p1}.port.across"));
+    eq1_f.rhs = bound(format!("deref({w_let}.let.value, 'transform2d.x', 0) * (1 V)"));
+    let mut eq2_f = Equation::default();
+    eq2_f.lhs = bound(format!("{p2}.port.across"));
+    eq2_f.rhs = Slot::Const(Value::parse_quantity("3 V").unwrap());
+    let mut inst = Instance::default();
+    inst.def = Slot::Const(Value::Ref(def));
+    store
+        .apply(tx(
+            "two models",
+            vec![
+                Op::Create { id: lib, ty: ty("library"), parent: None, order: key(0), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(lib), order: key(0), facets: vec![named("part")] },
+                Op::Create { id: m1, ty: ty("model"), parent: None, order: key(1), facets: vec![named("m1")] },
+                Op::Create { id: m2, ty: ty("model"), parent: None, order: key(2), facets: vec![named("m2")] },
+                Op::Create { id: comp, ty: ty("composition"), parent: None, order: key(3), facets: vec![named("c"), c.wrap()] },
+                Op::Create { id: w_let, ty: ty("let"), parent: Some(comp), order: key(0), facets: vec![named("w"), w.wrap()] },
+                Op::Create { id: h_rect, ty: ty("rect"), parent: Some(comp), order: key(1), facets: vec![at.wrap(), Size::default().wrap()] },
+                Op::Create { id: e1, ty: ty("entity"), parent: Some(m1), order: key(0), facets: vec![inst.clone().wrap(), Args::default().wrap()] },
+                Op::Create { id: p1, ty: ty("port"), parent: Some(e1), order: key(0), facets: elec("p1") },
+                Op::Create { id: eq1, ty: ty("equation"), parent: Some(e1), order: key(1), facets: vec![eq1_f.wrap()] },
+                Op::Create { id: e2, ty: ty("entity"), parent: Some(m2), order: key(0), facets: vec![inst.wrap(), Args::default().wrap()] },
+                Op::Create { id: p2, ty: ty("port"), parent: Some(e2), order: key(0), facets: elec("p2") },
+                Op::Create { id: eq2, ty: ty("equation"), parent: Some(e2), order: key(1), facets: vec![eq2_f.wrap()] },
+                Op::Create { id: p_sig_a, ty: ty("port"), parent: Some(e1), order: key(2), facets: val_port("sa", "out", 42.0) },
+                Op::Create { id: p_sig_b, ty: ty("port"), parent: Some(e1), order: key(3), facets: val_port("sb", "in", 0.0) },
+            ],
+        ))
+        .unwrap();
+
+    // Scoped deref: `eq1` in `m1` uses `deref(...)`, yet `m1` and `m2` stay
+    // separate solver islands (`m1` has 1 island over `{p1.across, p1.through}`,
+    // `m2` has 2 islands `{p2.across}` and `{p2.through}`, instead of 1 merged).
+    let net = iron_document::port::network(store.tree());
+    let islands = net.islands();
+    assert_eq!(islands.len(), 3, "deref in m1 must not merge m2's islands");
+    for island in &islands {
+        let roots: std::collections::BTreeSet<_> = island.unknowns.iter().map(|&i| store.tree().top_root(net.unknowns[i].0.node)).collect();
+        assert_eq!(roots.len(), 1, "each island must stay inside one model root: {roots:?}");
+    }
+    let volts = |s: &Store, p: NodeId| s.resolved(p, path("port.across")).unwrap().as_quantity().unwrap().0;
+    assert!((volts(&store, p1) - 7.0).abs() < 1e-6);
+    assert!((volts(&store, p2) - 3.0).abs() < 1e-6);
+
+    // Editing m2's equation constant updates p2 without touching m1's network maker.
+    let m1_runs = store.network_maker_runs(m1);
+    let m2_runs = store.network_maker_runs(m2);
+    store
+        .apply(tx("set eq2", vec![Op::Set { id: eq2, path: path("equation.rhs"), slot: Slot::Const(Value::parse_quantity("9 V").unwrap()) }]))
+        .unwrap();
+    assert!((volts(&store, p2) - 9.0).abs() < 1e-6);
+    assert_eq!(store.network_maker_runs(m1), m1_runs, "m1 network maker must not run on m2 edit");
+    assert!(store.network_maker_runs(m2) >= m2_runs);
+
+    // Connecting a one-way signal in m1 does not wake m2's derived-binding maker,
+    // and flipping `port.dir` via non-structural Op::Set updates the derived
+    // signal through `sync_touched`.
+    let conn = store.authored().next_id();
+    let rels = store.authored().next_relation_ids(2);
+    let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+    let m2_derived = store.derived_maker_runs(m2);
+    store
+        .apply(tx(
+            "wire signal",
+            vec![
+                Op::Create { id: conn, ty: ty("connection"), parent: Some(m1), order: key(5), facets: vec![Connection::default().wrap()] },
+                Op::Link { rel: Relation { id: rels[0], from: conn, to: p_sig_a, rel: RelKind::Connects, data: end("a") } },
+                Op::Link { rel: Relation { id: rels[1], from: conn, to: p_sig_b, rel: RelKind::Connects, data: end("b") } },
+            ],
+        ))
+        .unwrap();
+    assert_eq!(store.derived_maker_runs(m2), m2_derived, "m2 derived maker must not run on m1 connection");
+    assert_eq!(store.resolved(p_sig_b, path("port.signal")), Some(Value::Number(42.0)));
+
+    // Reverse direction with pure constant Sets (`sync_touched`, not `regraph`).
+    store
+        .apply(tx(
+            "reverse dir",
+            vec![
+                Op::Set { id: p_sig_a, path: path("port.dir"), slot: Slot::Const(Value::Enum("in".into())) },
+                Op::Set { id: p_sig_b, path: path("port.dir"), slot: Slot::Const(Value::Enum("out".into())) },
+                Op::Set { id: p_sig_b, path: path("port.signal"), slot: Slot::Const(Value::Number(13.0)) },
+            ],
+        ))
+        .unwrap();
+    assert_eq!(store.derived_maker_runs(m2), m2_derived, "m2 derived maker must stay quiet");
+    assert_eq!(store.resolved(p_sig_a, path("port.signal")), Some(Value::Number(13.0)));
+}
+
+/// EN-2c canary: silencing `insert_relation` stops `Key::Relations(conn)` from
+/// waking `NetworkMakers` when two pair ports are connected, and the oracle catches it.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_connection_link_fails_the_network_oracle() {
+    use iron_document::facet::{Args, Connection, Instance, Port};
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            iron_document::silence_for_canary(None);
+        }
+    }
+    let _reset = Reset;
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(7);
+    let [lib, def, model, entity, pa, pb, conn] = ids.try_into().unwrap();
+    let elec = |name: &str| vec![Port { kind: Slot::Const(Value::Str("electrical".into())), ..Default::default() }.wrap(), named(name)];
+    let mut inst = Instance::default();
+    inst.def = Slot::Const(Value::Ref(def));
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: lib, ty: ty("library"), parent: None, order: key(0), facets: vec![] },
+                Op::Create { id: def, ty: ty("definition"), parent: Some(lib), order: key(0), facets: vec![named("part")] },
+                Op::Create { id: model, ty: ty("model"), parent: None, order: key(1), facets: vec![] },
+                Op::Create { id: entity, ty: ty("entity"), parent: Some(model), order: key(0), facets: vec![inst.wrap(), Args::default().wrap()] },
+                Op::Create { id: pa, ty: ty("port"), parent: Some(entity), order: key(0), facets: elec("a") },
+                Op::Create { id: pb, ty: ty("port"), parent: Some(entity), order: key(1), facets: elec("b") },
+                Op::Create { id: conn, ty: ty("connection"), parent: Some(model), order: key(2), facets: vec![Connection::default().wrap()] },
+            ],
+        ))
+        .unwrap();
+    let rels = store.authored().next_relation_ids(2);
+    let end = |e: &str| BTreeMap::from([("end".to_owned(), Value::Str(e.into()))]);
+    iron_document::silence_for_canary(Some("insert_relation"));
+    store
+        .apply(tx(
+            "connect",
+            vec![
+                Op::Link { rel: Relation { id: rels[0], from: conn, to: pa, rel: RelKind::Connects, data: end("a") } },
+                Op::Link { rel: Relation { id: rels[1], from: conn, to: pb, rel: RelKind::Connects, data: end("b") } },
+            ],
+        ))
+        .unwrap();
+}

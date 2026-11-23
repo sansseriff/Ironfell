@@ -23,8 +23,6 @@ pub(crate) struct Went {
     pub parent: Option<NodeId>,
     pub depth: usize,
     pub ty: crate::registry::TypeId,
-    /// It had a `port` or an `anchor` facet (what `Store::regraph` asks).
-    pub port_or_anchor: bool,
 }
 
 /// Every node deleted since the changes were last taken.

@@ -90,25 +90,32 @@ fn direction(doc: Tree<'_>, a: NodeId, b: NodeId) -> Option<(NodeId, NodeId)> {
     }
 }
 
+/// One-way signal binding for a single live connection `c`, if valid.
+fn connection_signal(doc: Tree<'_>, c: NodeId) -> Option<(Leaf, Expr)> {
+    let (a, b) = ends(doc, c)?;
+    if !doc.is_live(a) || !doc.is_live(b) {
+        return None;
+    }
+    let k = kind(&text(doc, a, "kind")?)?;
+    if k.flow != Flow::Signal {
+        return None;
+    }
+    let (from, to) = direction(doc, a, b)?;
+    Some((signal(to), Expr::Ref(signal(from))))
+}
+
 /// Every in-port's signal as its partner's: one derived binding per live,
 /// valid one-way connection.
 pub fn derived_signals(doc: Tree<'_>) -> Vec<(Leaf, Expr)> {
     let Some(ty) = crate::registry::TypeId::lookup("connection") else { return Vec::new() };
-    doc.nodes_of_type(ty)
-        .filter(|&c| doc.is_live(c))
-        .filter_map(|c| {
-            let (a, b) = ends(doc, c)?;
-            if !doc.is_live(a) || !doc.is_live(b) {
-                return None;
-            }
-            let k = kind(&text(doc, a, "kind")?)?;
-            if k.flow != Flow::Signal {
-                return None;
-            }
-            let (from, to) = direction(doc, a, b)?;
-            Some((signal(to), Expr::Ref(signal(from))))
-        })
-        .collect()
+    doc.nodes_of_type(ty).filter(|&c| doc.is_live(c)).filter_map(|c| connection_signal(doc, c)).collect()
+}
+
+/// Every derived one-way signal for live connections under top-level `root`
+/// (Stage 2, EN-2c).
+pub(crate) fn derived_signals_in(doc: Tree<'_>, root: NodeId) -> Vec<(Leaf, Expr)> {
+    let Some(ty) = crate::registry::TypeId::lookup("connection") else { return Vec::new() };
+    doc.nodes_of_type_in(root, ty).into_iter().filter_map(|c| connection_signal(doc, c)).collect()
 }
 
 /// Check a connection: two live ports of one kind; for a one-way kind, an
@@ -198,6 +205,12 @@ pub struct Network {
     /// Each a residual over the unknowns: `Linear` sums `coef · unknown`,
     /// `Expr` evaluates `lhs - rhs` with the unknowns substituted.
     pub equations: Vec<Equation>,
+    /// Top-level root of each unknown (parallel to `unknowns`): scopes
+    /// `deref` equations to unknowns in the same root instead of merging
+    /// unrelated models into one island (EN-2c).
+    pub(crate) unknown_roots: Vec<Option<NodeId>>,
+    /// Top-level root of each equation (parallel to `equations`).
+    pub(crate) equation_roots: Vec<Option<NodeId>>,
 }
 
 /// One island of a network (reactive-engine handoff §4.10, RE-5.3): the
@@ -213,11 +226,23 @@ pub struct Island {
 
 impl Network {
     /// The unknowns an equation reads. An `Expr` holding a `deref` may read
-    /// any of them, so it reads them all: its island is conservative.
+    /// any unknown in its root (or any unknown when root info is absent), so
+    /// its island is conservative within its model without merging other roots.
     pub fn vars_of(&self, eq: &Equation, index: &BTreeMap<Leaf, usize>) -> Vec<usize> {
+        self.vars_of_in(eq, None, index)
+    }
+
+    fn vars_of_in(&self, eq: &Equation, eq_root: Option<NodeId>, index: &BTreeMap<Leaf, usize>) -> Vec<usize> {
         let mut vars: Vec<usize> = match eq {
             Equation::Linear(coefs) => coefs.iter().map(|(i, _)| *i).collect(),
-            Equation::Expr { lhs, rhs, .. } if has_deref(lhs) || has_deref(rhs) => (0..self.unknowns.len()).collect(),
+            Equation::Expr { lhs, rhs, .. } if has_deref(lhs) || has_deref(rhs) => match eq_root {
+                Some(r) if self.unknown_roots.len() == self.unknowns.len() => {
+                    let mut vs: Vec<usize> = self.unknown_roots.iter().enumerate().filter_map(|(i, ur)| (*ur == Some(r)).then_some(i)).collect();
+                    vs.extend(lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()));
+                    vs
+                }
+                _ => (0..self.unknowns.len()).collect(),
+            },
             Equation::Expr { lhs, rhs, .. } => lhs.deps().into_iter().chain(rhs.deps()).filter_map(|l| index.get(&l).copied()).collect(),
         };
         vars.sort();
@@ -237,7 +262,12 @@ impl Network {
             }
             i
         }
-        let vars: Vec<Vec<usize>> = self.equations.iter().map(|eq| self.vars_of(eq, &index)).collect();
+        let vars: Vec<Vec<usize>> = self
+            .equations
+            .iter()
+            .enumerate()
+            .map(|(i, eq)| self.vars_of_in(eq, self.equation_roots.get(i).copied().flatten(), &index))
+            .collect();
         for vs in &vars {
             for w in vs.windows(2) {
                 let (a, b) = (root(&mut parent, w[0]), root(&mut parent, w[1]));
@@ -403,6 +433,147 @@ fn dim_of(unit: Option<&str>) -> crate::units::Dim {
         .map_or(crate::units::Dim::NONE, |(_, d)| d)
 }
 
+/// Per-top-level-root structural summary of the across/through network
+/// (Stage 2, EN-2c). Purely structural: editing an equation's constant side
+/// still references its leaf and produces an equal `RootNetwork`, so no
+/// island native is replaced and warm starts are kept.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RootNetwork {
+    /// Live pair ports under this root: `(port, kind_name, across_unknown, through_unknown)`.
+    pub(crate) pair_ports: Vec<(NodeId, &'static str, bool, bool)>,
+    /// Live connections under this root: `(end_a, end_b)`.
+    pub(crate) connections: Vec<(NodeId, NodeId)>,
+    /// Live entity equations under this root: `(eq_id, lhs, rhs)`.
+    pub(crate) equations: Vec<(NodeId, Expr, Expr)>,
+}
+
+impl RootNetwork {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pair_ports.is_empty() && self.connections.is_empty() && self.equations.is_empty()
+    }
+}
+
+/// Stage 2 per-root network maker (EN-2c): reads only `In(root, port|connection|equation)`,
+/// node liveness/parents, port/equation facets, and connection relations.
+pub(crate) fn root_network(cx: &crate::MakerCx<'_>, root: NodeId) -> RootNetwork {
+    let doc = cx.tree();
+    let port_ty = crate::registry::TypeId::lookup("port").expect("registered");
+    let mut pair_ports = Vec::new();
+    for p in doc.nodes_of_type_in(root, port_ty) {
+        if !doc.live(p).and_then(|n| n.parent).is_some_and(|e| doc.is_live(e)) {
+            continue;
+        }
+        let Some(port) = doc.get::<Port>(p) else { continue };
+        let Some(k) = port.kind.constant().and_then(|v| v.as_str()).and_then(kind).filter(|k| k.flow == Flow::Pair) else {
+            continue;
+        };
+        pair_ports.push((p, k.name, port.across.expr().is_none(), port.through.expr().is_none()));
+    }
+    let conn_ty = crate::registry::TypeId::lookup("connection").expect("registered");
+    let mut connections = Vec::new();
+    for c in doc.nodes_of_type_in(root, conn_ty) {
+        if let Some((a, b)) = ends(doc, c) {
+            connections.push((a, b));
+        }
+    }
+    let eq_ty = crate::registry::TypeId::lookup("equation").expect("registered");
+    let mut equations = Vec::new();
+    for e in doc.nodes_of_type_in(root, eq_ty) {
+        if doc.live(e).and_then(|n| n.parent).and_then(|p| doc.live(p)).is_none_or(|n| n.ty.name() != "entity") {
+            continue;
+        }
+        let Some(eq) = doc.get::<crate::facet::Equation>(e) else { continue };
+        let side = |s: &crate::value::Slot, field: &str| s.expr().cloned().or_else(|| s.constant().map(|_| Expr::Ref(Leaf { node: e, path: LeafPath::new(FacetKind::Equation, field).expect("declared") })));
+        if let (Some(lhs), Some(rhs)) = (side(&eq.lhs, "lhs"), side(&eq.rhs, "rhs")) {
+            equations.push((e, lhs, rhs));
+        }
+    }
+    RootNetwork { pair_ports, connections, equations }
+}
+
+/// Assemble the whole across/through `Network` from per-root `RootNetwork`s
+/// (Stage 2, EN-2c). Sorted by `NodeId` so its unknowns and equations match
+/// `port::network(doc)` identically.
+pub(crate) fn assemble_network(roots: &BTreeMap<NodeId, RootNetwork>) -> Network {
+    let mut pair_ports: Vec<(NodeId, NodeId, &'static PortKind, bool, bool)> = Vec::new();
+    for (&r, rn) in roots {
+        for &(p, name, across_u, through_u) in &rn.pair_ports {
+            if let Some(k) = kind(name) {
+                pair_ports.push((p, r, k, across_u, through_u));
+            }
+        }
+    }
+    pair_ports.sort_by_key(|(p, ..)| *p);
+    let mut unknowns = Vec::new();
+    let mut unknown_roots = Vec::new();
+    let mut index: BTreeMap<Leaf, usize> = BTreeMap::new();
+    for &(p, r, k, across_u, through_u) in &pair_ports {
+        for (field, unit, is_unknown) in [("across", k.unit, across_u), ("through", k.through, through_u)] {
+            if is_unknown {
+                let leaf = Leaf { node: p, path: LeafPath::new(FacetKind::Port, field).expect("declared") };
+                index.insert(leaf, unknowns.len());
+                unknowns.push((leaf, dim_of(unit)));
+                unknown_roots.push(Some(r));
+            }
+        }
+    }
+    let mut equations = Vec::new();
+    let mut equation_roots = Vec::new();
+    if pair_ports.is_empty() {
+        return Network { unknowns, equations, unknown_roots, equation_roots };
+    }
+    let mut parent: BTreeMap<NodeId, NodeId> = pair_ports.iter().map(|&(p, ..)| (p, p)).collect();
+    fn root(parent: &mut BTreeMap<NodeId, NodeId>, p: NodeId) -> NodeId {
+        let mut r = p;
+        while parent[&r] != r {
+            r = parent[&r];
+        }
+        parent.insert(p, r);
+        r
+    }
+    for rn in roots.values() {
+        for &(a, b) in &rn.connections {
+            if parent.contains_key(&a) && parent.contains_key(&b) {
+                let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                parent.insert(ra, rb);
+            }
+        }
+    }
+    let mut nets: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for &(p, ..) in &pair_ports {
+        let r = root(&mut parent, p);
+        nets.entry(r).or_default().push(p);
+    }
+    let leaf = |p: NodeId, f: &str| Leaf { node: p, path: LeafPath::new(FacetKind::Port, f).expect("declared") };
+    for ports in nets.values() {
+        for w in ports.windows(2) {
+            let (a, b) = (leaf(w[0], "across"), leaf(w[1], "across"));
+            match (index.get(&a), index.get(&b)) {
+                (Some(&i), Some(&j)) => equations.push(Equation::Linear(vec![(i, 1.0), (j, -1.0)])),
+                _ => equations.push(Equation::Expr { node: w[0], lhs: Expr::Ref(a), rhs: Expr::Ref(b) }),
+            }
+            equation_roots.push(None);
+        }
+        let throughs: Vec<(usize, f64)> = ports.iter().filter_map(|&p| index.get(&leaf(p, "through")).map(|&i| (i, 1.0))).collect();
+        if !throughs.is_empty() {
+            equations.push(Equation::Linear(throughs));
+            equation_roots.push(None);
+        }
+    }
+    let mut all_eqs: Vec<(NodeId, NodeId, &Expr, &Expr)> = Vec::new();
+    for (&r, rn) in roots {
+        for (e, lhs, rhs) in &rn.equations {
+            all_eqs.push((*e, r, lhs, rhs));
+        }
+    }
+    all_eqs.sort_by_key(|(e, ..)| *e);
+    for (e, r, lhs, rhs) in all_eqs {
+        equations.push(Equation::Expr { node: e, lhs: lhs.clone(), rhs: rhs.clone() });
+        equation_roots.push(Some(r));
+    }
+    Network { unknowns, equations, unknown_roots, equation_roots }
+}
+
 pub fn network(doc: Tree<'_>) -> Network {
     let port_ty = crate::registry::TypeId::lookup("port").expect("registered");
     let pair_ports: Vec<(NodeId, &'static PortKind)> = doc
@@ -411,19 +582,23 @@ pub fn network(doc: Tree<'_>) -> Network {
         .filter_map(|p| kind(&text(doc, p, "kind")?).filter(|k| k.flow == Flow::Pair).map(|k| (p, k)))
         .collect();
     let mut unknowns = Vec::new();
+    let mut unknown_roots = Vec::new();
     let mut index: BTreeMap<Leaf, usize> = BTreeMap::new();
     for &(p, k) in &pair_ports {
+        let r = doc.top_root(p);
         for (field, unit) in [("across", k.unit), ("through", k.through)] {
             let leaf = Leaf { node: p, path: LeafPath::new(FacetKind::Port, field).expect("declared") };
             if doc.leaf(p, leaf.path).is_some_and(|s| s.expr().is_none()) {
                 index.insert(leaf, unknowns.len());
                 unknowns.push((leaf, dim_of(unit)));
+                unknown_roots.push(r);
             }
         }
     }
     let mut equations = Vec::new();
+    let mut equation_roots = Vec::new();
     if pair_ports.is_empty() {
-        return Network { unknowns, equations };
+        return Network { unknowns, equations, unknown_roots, equation_roots };
     }
     // Nets: union-find over pair connections.
     let mut parent: BTreeMap<NodeId, NodeId> = pair_ports.iter().map(|&(p, _)| (p, p)).collect();
@@ -458,11 +633,13 @@ pub fn network(doc: Tree<'_>) -> Network {
                 (Some(&i), Some(&j)) => equations.push(Equation::Linear(vec![(i, 1.0), (j, -1.0)])),
                 _ => equations.push(Equation::Expr { node: w[0], lhs: Expr::Ref(a), rhs: Expr::Ref(b) }),
             }
+            equation_roots.push(None);
         }
         // Through values sum to zero; alone, a terminal carries none.
         let throughs: Vec<(usize, f64)> = ports.iter().filter_map(|&p| index.get(&leaf(p, "through")).map(|&i| (i, 1.0))).collect();
         if !throughs.is_empty() {
             equations.push(Equation::Linear(throughs));
+            equation_roots.push(None);
         }
     }
     let eq_ty = crate::registry::TypeId::lookup("equation").expect("registered");
@@ -477,8 +654,9 @@ pub fn network(doc: Tree<'_>) -> Network {
         let side = |s: &crate::value::Slot, field: &str| s.expr().cloned().or_else(|| s.constant().map(|_| Expr::Ref(Leaf { node: e, path: LeafPath::new(FacetKind::Equation, field).expect("declared") })));
         if let (Some(lhs), Some(rhs)) = (side(&eq.lhs, "lhs"), side(&eq.rhs, "rhs")) {
             equations.push(Equation::Expr { node: e, lhs, rhs });
+            equation_roots.push(doc.top_root(e));
         }
     }
-    Network { unknowns, equations }
+    Network { unknowns, equations, unknown_roots, equation_roots }
 }
 

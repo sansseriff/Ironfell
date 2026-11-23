@@ -282,22 +282,35 @@ impl<'a> MakerCx<'a> {
     }
 }
 
-/// Per-top-level-root Stage 2 makers for `Layout` and `Pins` natives
-/// (engine.md §3.3, EN-2a). Each root's maker runs through `MakerCx`,
-/// recording `structure::Key` dependencies so only roots whose read keys
-/// were touched re-run.
-#[derive(Clone, Debug, Default)]
-struct LayoutMakers {
+/// Per-top-level-root Stage 2 maker state (engine.md §3.3, EN-2a..2c). Each
+/// root's maker runs through `MakerCx`, recording `structure::Key` dependencies
+/// so future edits only re-run roots whose read keys were touched.
+#[derive(Clone, Debug)]
+struct PerRootMakers<T> {
     init: bool,
     roots_dirty: bool,
     dirty: BTreeSet<NodeId>,
     keys_of: BTreeMap<NodeId, Vec<structure::Key>>,
     readers: BTreeMap<structure::Key, BTreeSet<NodeId>>,
-    owned: BTreeMap<NodeId, Vec<graph::NativeKey>>,
+    per_root: BTreeMap<NodeId, T>,
     runs_of: BTreeMap<NodeId, u64>,
 }
 
-impl LayoutMakers {
+impl<T> Default for PerRootMakers<T> {
+    fn default() -> Self {
+        Self {
+            init: false,
+            roots_dirty: false,
+            dirty: BTreeSet::new(),
+            keys_of: BTreeMap::new(),
+            readers: BTreeMap::new(),
+            per_root: BTreeMap::new(),
+            runs_of: BTreeMap::new(),
+        }
+    }
+}
+
+impl<T> PerRootMakers<T> {
     fn note_touched(&mut self, keys: &[structure::Key]) {
         if !self.init {
             return;
@@ -359,66 +372,6 @@ impl ContextMaker {
         }
         if keys.iter().any(|k| self.keys.contains(k)) {
             self.dirty = true;
-        }
-    }
-}
-
-/// Per-top-level-root Stage 2 makers for structural constraint candidate
-/// components (engine.md §3.6, EN-2b). Each dirty root runs
-/// `solve::root_candidates` through `MakerCx`, recording `structure::Key`
-/// dependencies; when any root's candidates change, candidate components are
-/// repartitioned into `NativeKey::Component(_)` natives.
-#[derive(Clone, Debug, Default)]
-struct ConstraintMakers {
-    init: bool,
-    roots_dirty: bool,
-    dirty: BTreeSet<NodeId>,
-    keys_of: BTreeMap<NodeId, Vec<structure::Key>>,
-    readers: BTreeMap<structure::Key, BTreeSet<NodeId>>,
-    per_root: BTreeMap<NodeId, solve::RootCandidates>,
-    runs_of: BTreeMap<NodeId, u64>,
-}
-
-impl ConstraintMakers {
-    fn note_touched(&mut self, keys: &[structure::Key]) {
-        if !self.init {
-            return;
-        }
-        for &key in keys {
-            if key == structure::Key::Roots {
-                self.roots_dirty = true;
-            }
-            if let Some(roots) = self.readers.get(&key) {
-                self.dirty.extend(roots.iter().copied());
-            }
-        }
-    }
-
-    fn unindex(&mut self, root: NodeId) {
-        if let Some(old) = self.keys_of.remove(&root) {
-            for k in old {
-                if let Some(set) = self.readers.get_mut(&k) {
-                    set.remove(&root);
-                    if set.is_empty() {
-                        self.readers.remove(&k);
-                    }
-                }
-            }
-        }
-    }
-
-    fn set_keys(&mut self, root: NodeId, mut keys: Vec<structure::Key>) {
-        keys.sort();
-        keys.dedup();
-        if self.keys_of.get(&root).is_some_and(|old| *old == keys) {
-            return;
-        }
-        self.unindex(root);
-        for &k in &keys {
-            self.readers.entry(k).or_default().insert(root);
-        }
-        if !keys.is_empty() {
-            self.keys_of.insert(root, keys);
         }
     }
 }
@@ -570,7 +523,7 @@ pub struct StoreCore {
     clusters_rev: Option<u64>,
     /// Stage 2 keyed makers for `context` nodes and constraint partitions.
     context_maker: ContextMaker,
-    constraint_makers: ConstraintMakers,
+    constraint_makers: PerRootMakers<solve::RootCandidates>,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -650,12 +603,12 @@ pub struct StoreCore {
     /// What each repeat without enter or exit timing settled
     /// to last, and from what: a cache, a pure function of its key.
     item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
-    /// The across/through network as of a count of document
-    /// writes (`Document::edits`): a cache.
-    network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
-    /// Per-root layout makers (Stage 2, engine.md §3.3), and the x-placed
-    /// nodes of each layout root (for glide specs).
-    layout_makers: LayoutMakers,
+    /// Per-root Stage 2 makers for layouts/pins, across/through network
+    /// islands, and derived connection/anchor bindings (engine.md §3.3, EN-2a..2c),
+    /// plus the x-placed nodes of each layout root (for glide specs).
+    layout_makers: PerRootMakers<Vec<graph::NativeKey>>,
+    network_makers: PerRootMakers<port::RootNetwork>,
+    derived_makers: PerRootMakers<BTreeMap<Leaf, Expr>>,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// The count of document writes the repeat natives were made for.
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
@@ -793,8 +746,9 @@ impl StoreCore {
             expansion_problems: self.expansion_problems.clone(),
             repeats: self.repeats.clone(),
             item_memo: self.item_memo.clone(),
-            network: self.network.clone(),
             layout_makers: self.layout_makers.clone(),
+            network_makers: self.network_makers.clone(),
+            derived_makers: self.derived_makers.clone(),
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
             drawn: self.drawn.clone(),
@@ -854,33 +808,12 @@ impl StoreCore {
         let mut names: BTreeSet<String> = BTreeSet::new();
         let mut under: Vec<NodeId> = Vec::new();
         let mut rescope_all = false;
-        let mut rederive = false;
         let doc = Tree::of(&self.docs);
         let name_of = |n: NodeId| doc.get::<facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
         let provides_any = |n: NodeId| matches!(doc.node(n).map(|x| x.ty.name()), Some("let" | "token"));
-        // What connections and anchors derive reads ports, anchors,
-        // connections, the relations between them and each anchor's chain
-        // of transformed ancestors (`port::derived_signals`,
-        // `anchor::positions`, `anchor::followers`).
-        let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
         // A deleted node is read as it was when it went (`Docs::gone`).
         let gone = &self.docs.gone;
-        let made_of = |id: NodeId| match gone.get(&id) {
-            Some(w) => matches!(w.ty.name(), "port" | "connection") || w.port_or_anchor,
-            None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
-        };
         for op in ops {
-            rederive |= match op {
-                Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
-                Op::AddFacet { facet, .. } => derives(facet.kind()),
-                Op::RemoveFacet { kind, .. } => derives(*kind),
-                // A created node is live: read it, not what an earlier node
-                // with its id was when it went.
-                Op::Create { id, ty, facets, .. } => matches!(ty.name(), "port" | "connection") || facets.iter().any(|f| matches!(f.kind(), FacetKind::Port | FacetKind::Anchor)) || doc.facet(*id, FacetKind::Port).is_some() || doc.facet(*id, FacetKind::Anchor).is_some(),
-                Op::Delete { id } => made_of(*id),
-                Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection),
-                Op::Reorder { .. } => false,
-            };
             match op {
                 Op::Create { id, .. } | Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } | Op::Reorder { id, .. } => {
                     nodes.insert(*id);
@@ -952,24 +885,22 @@ impl StoreCore {
                 .collect();
             nodes.extend(naming);
         }
-        // The network's islands and Stage 2 makers first, so that this pass
-        // runs the new natives and not the old against the new structure.
-        let (net, fresh) = self.network_now();
-        if fresh {
-            self.sync_islands(&net, false);
-        }
         // Stage 2 -> Stage 3: consume touched keys from Docs, reconcile dirty
-        // contexts, layout, and constraint makers before priming keyed cells
-        // (engine.md §3.2, §3.3).
+        // contexts, layout, constraint, network, and derived-binding makers
+        // before priming keyed cells (engine.md §3.2, §3.3).
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
             self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
             self.constraint_makers.note_touched(&keys);
+            self.network_makers.note_touched(&keys);
+            self.derived_makers.note_touched(&keys);
         }
         self.sync_contexts(false);
         self.sync_layout_makers(false);
         self.sync_constraint_makers(false);
+        self.sync_network_makers(false);
+        self.sync_derived_makers(false);
         self.sync_repeats(false);
         let touched_leaves = self.reactive.prime_touched(keys);
         // What waited on the leaves of every node gone, subtrees included,
@@ -984,7 +915,7 @@ impl StoreCore {
             graph::Rescope::Some { names, under }
         };
         let tokens = self.token_leaves();
-        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive, &tokens, &touched_leaves);
+        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, &tokens, &touched_leaves);
     }
 
     /// The theme's tokens by name, as cells read them: kept until a token
@@ -1084,7 +1015,7 @@ impl StoreCore {
             committed: BTreeSet::new(),
             clusters_rev: None,
             context_maker: ContextMaker::default(),
-            constraint_makers: ConstraintMakers::default(),
+            constraint_makers: PerRootMakers::default(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -1123,8 +1054,9 @@ impl StoreCore {
             item_shown: BTreeMap::new(),
             repeat_natives: Default::default(),
             item_memo: Default::default(),
-            network: None,
-            layout_makers: LayoutMakers::default(),
+            layout_makers: PerRootMakers::default(),
+            network_makers: PerRootMakers::default(),
+            derived_makers: PerRootMakers::default(),
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -1149,6 +1081,7 @@ impl StoreCore {
         let (_, delta) = store.owners.expand(&mut store.docs, stamp, &BTreeMap::new(), engine::owners::Which::All);
         store.store_found(delta);
         store.geometry.note_structure();
+        store.init_derived_makers();
         store.reactive.rebuild(Tree::of(&store.docs));
         store.resample();
         store.settle_repeats();
@@ -1156,6 +1089,7 @@ impl StoreCore {
         store.docs.gone.clear();
         store.sync_contexts(false);
         store.sync_constraint_makers(false);
+        store.sync_network_makers(false);
         store.sync_clusters();
         store.resolve_physics();
         // Initial load already ran rebuild and resolve_physics from scratch;
@@ -3023,11 +2957,12 @@ impl StoreCore {
             }
             self.note_changes(derived.iter(), &[]);
             self.publish_state();
-            self.solve_network();
             self.resolve_theme();
             self.sync_contexts(true);
             self.sync_layout_makers(true);
             self.sync_constraint_makers(true);
+            self.sync_network_makers(true);
+            self.sync_derived_makers(true);
             self.reactive.flush(Tree::of(&self.docs));
         }
         self.repeat_changes.clear();
@@ -3046,6 +2981,20 @@ impl StoreCore {
     #[doc(hidden)]
     pub fn constraint_maker_runs(&self, root: NodeId) -> u64 {
         self.constraint_makers.runs_of.get(&root).copied().unwrap_or(0)
+    }
+
+    /// How many times top-level `root`'s across/through network maker has run
+    /// (for locality tests in EN-2c).
+    #[doc(hidden)]
+    pub fn network_maker_runs(&self, root: NodeId) -> u64 {
+        self.network_makers.runs_of.get(&root).copied().unwrap_or(0)
+    }
+
+    /// How many times top-level `root`'s derived-binding maker (connections &
+    /// anchors) has run (for locality tests in EN-2c).
+    #[doc(hidden)]
+    pub fn derived_maker_runs(&self, root: NodeId) -> u64 {
+        self.derived_makers.runs_of.get(&root).copied().unwrap_or(0)
     }
 
     /// Stage 2 keyed contexts library maker (engine.md §3.6, EN-2b): merges
@@ -4027,33 +3976,189 @@ impl StoreCore {
         None
     }
 
-    /// Solve the across/through network (ECM §6.1, step 3) and put its
-    /// solution in the graph's physics layer: derived, never stored, read by
-    /// bindings like any value. A network that does not converge keeps its
-    /// previous solution and says why.
-    /// The across/through network, and whether it was found again: what it
-    /// is depends only on structure and slots, so it is kept until the
-    /// document is written again.
-    fn network_now(&mut self) -> (std::sync::Arc<crate::port::Network>, bool) {
-        let edits = self.docs.network_shaped;
-        match &self.network {
-            Some((at, net)) if *at == edits => (net.clone(), false),
-            _ => {
-                let net = std::sync::Arc::new(crate::port::network(Tree::of(&self.docs)));
-                self.network = Some((edits, net.clone()));
-                (net, true)
+    /// Stage 2 per-root across/through network makers (engine.md §3.6, EN-2c).
+    /// Only dirty top-level roots re-run `port::root_network`; when any root's
+    /// `RootNetwork` changes, islands are assembled and diffed into
+    /// `NativeKey::Island(_)` cells in one `set_natives` batch.
+    fn sync_network_makers(&mut self, run: bool) {
+        if !self.network_makers.init {
+            self.network_makers.init = true;
+            self.network_makers.roots_dirty = true;
+        }
+        if !self.network_makers.roots_dirty && self.network_makers.dirty.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        if self.network_makers.roots_dirty {
+            self.network_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let removed: Vec<NodeId> = self.network_makers.per_root.keys().copied().filter(|r| !current.contains(r)).collect();
+            for r in removed {
+                self.network_makers.unindex(r);
+                self.network_makers.dirty.remove(&r);
+                if let Some(old) = self.network_makers.per_root.remove(&r)
+                    && !old.is_empty()
+                {
+                    changed = true;
+                }
             }
+            for &r in &current {
+                if !self.network_makers.per_root.contains_key(&r) {
+                    self.network_makers.dirty.insert(r);
+                }
+            }
+        }
+        let dirty = std::mem::take(&mut self.network_makers.dirty);
+        for root in dirty {
+            if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).live(root).and_then(|n| n.parent).is_some() {
+                self.network_makers.unindex(root);
+                if let Some(old) = self.network_makers.per_root.remove(&root)
+                    && !old.is_empty()
+                {
+                    changed = true;
+                }
+                continue;
+            }
+            *self.network_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let rn = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                port::root_network(&cx, root)
+            };
+            self.network_makers.set_keys(root, rec.into_inner());
+            if self.network_makers.per_root.get(&root) != Some(&rn) {
+                changed = true;
+                self.network_makers.per_root.insert(root, rn);
+            }
+        }
+        if !changed {
+            return;
+        }
+        let net = port::assemble_network(&self.network_makers.per_root);
+        let want: BTreeMap<graph::NativeKey, port::IslandNative> = net.island_natives().into_iter().collect();
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = Vec::new();
+        for k in self.reactive.native_keys() {
+            if matches!(k, graph::NativeKey::Island(_)) && !want.contains_key(&k) {
+                batch.push((k, None));
+            }
+        }
+        for (k, island) in want {
+            let same = self.reactive.native(k).and_then(|n| n.as_any().downcast_ref::<port::IslandNative>()) == Some(&island);
+            if !same {
+                batch.push((k, Some((std::sync::Arc::new(island), true))));
+            }
+        }
+        if !batch.is_empty() {
+            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
     }
 
-    fn solve_network(&mut self) {
-        let (net, fresh) = self.network_now();
-        // Its islands are native cells (handoff §4.10), made where the
-        // structure changes (`regraph`); this catches a write that
-        // reached none (a session edit's constant).
-        if fresh {
-            self.sync_islands(&net, true);
+    /// Compute one top-level root's derived connection signals and anchor
+    /// bindings through `MakerCx` (Stage 2, EN-2c).
+    fn make_derived_root(cx: &MakerCx<'_>, root: NodeId) -> BTreeMap<Leaf, Expr> {
+        let doc = cx.tree();
+        let mut out = anchor::derived_in(doc, root);
+        for (l, e) in port::derived_signals_in(doc, root) {
+            out.insert(l, e);
         }
+        out
+    }
+
+    /// Seed `derived_makers` and `reactive.derived` for all initial roots
+    /// before `Reactive::rebuild` on initial load (EN-2c).
+    fn init_derived_makers(&mut self) {
+        self.derived_makers.init = true;
+        self.derived_makers.roots_dirty = false;
+        self.derived_makers.dirty.clear();
+        let roots: Vec<NodeId> = Tree::of(&self.docs).roots().to_vec();
+        let mut all = BTreeMap::new();
+        for root in roots {
+            *self.derived_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let map = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                Self::make_derived_root(&cx, root)
+            };
+            self.derived_makers.set_keys(root, rec.into_inner());
+            all.extend(map.iter().map(|(l, e)| (*l, e.clone())));
+            self.derived_makers.per_root.insert(root, map);
+        }
+        self.reactive.set_initial_derived(all);
+    }
+
+    /// Reconcile per-root derived connection signals and anchor bindings
+    /// (Stage 2, engine.md §3.6, EN-2c). Only dirty top-level roots re-run;
+    /// changed leaves are applied to `Reactive::sync_derived`.
+    fn sync_derived_makers(&mut self, run: bool) {
+        if !self.derived_makers.init {
+            self.derived_makers.init = true;
+            self.derived_makers.roots_dirty = true;
+        }
+        if !self.derived_makers.roots_dirty && self.derived_makers.dirty.is_empty() {
+            return;
+        }
+        let mut touched: BTreeSet<Leaf> = BTreeSet::new();
+        if self.derived_makers.roots_dirty {
+            self.derived_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let removed: Vec<NodeId> = self.derived_makers.per_root.keys().copied().filter(|r| !current.contains(r)).collect();
+            for r in removed {
+                self.derived_makers.unindex(r);
+                self.derived_makers.dirty.remove(&r);
+                if let Some(old) = self.derived_makers.per_root.remove(&r) {
+                    touched.extend(old.keys().copied());
+                }
+            }
+            for &r in &current {
+                if !self.derived_makers.per_root.contains_key(&r) {
+                    self.derived_makers.dirty.insert(r);
+                }
+            }
+        }
+        let dirty = std::mem::take(&mut self.derived_makers.dirty);
+        for root in dirty {
+            if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).live(root).and_then(|n| n.parent).is_some() {
+                self.derived_makers.unindex(root);
+                if let Some(old) = self.derived_makers.per_root.remove(&root) {
+                    touched.extend(old.keys().copied());
+                }
+                continue;
+            }
+            *self.derived_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let next = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                Self::make_derived_root(&cx, root)
+            };
+            self.derived_makers.set_keys(root, rec.into_inner());
+            if let Some(old) = self.derived_makers.per_root.get(&root) {
+                for (l, e) in old {
+                    if next.get(l) != Some(e) {
+                        touched.insert(*l);
+                    }
+                }
+                for (l, e) in &next {
+                    if old.get(l) != Some(e) {
+                        touched.insert(*l);
+                    }
+                }
+            } else {
+                touched.extend(next.keys().copied());
+            }
+            self.derived_makers.per_root.insert(root, next);
+        }
+        if touched.is_empty() {
+            return;
+        }
+        let diff: Vec<(Leaf, Option<Expr>)> = touched
+            .into_iter()
+            .map(|leaf| {
+                let want = self.derived_makers.per_root.values().find_map(|m| m.get(&leaf).cloned());
+                (leaf, want)
+            })
+            .collect();
+        let tokens = self.token_leaves();
+        self.reactive.sync_derived(Tree::of(&self.docs), diff, &tokens, run);
     }
 
     /// How many times top-level `root`'s layout maker has run (for locality
@@ -4079,16 +4184,16 @@ impl StoreCore {
         if self.layout_makers.roots_dirty {
             self.layout_makers.roots_dirty = false;
             let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
-            let removed: Vec<NodeId> = self.layout_makers.owned.keys().copied().filter(|r| !current.contains(r)).collect();
+            let removed: Vec<NodeId> = self.layout_makers.per_root.keys().copied().filter(|r| !current.contains(r)).collect();
             for r in removed {
                 self.layout_makers.unindex(r);
                 self.layout_makers.dirty.remove(&r);
-                if let Some(old) = self.layout_makers.owned.remove(&r) {
+                if let Some(old) = self.layout_makers.per_root.remove(&r) {
                     dropped.extend(old);
                 }
             }
             for &r in &current {
-                if !self.layout_makers.owned.contains_key(&r) {
+                if !self.layout_makers.per_root.contains_key(&r) {
                     self.layout_makers.dirty.insert(r);
                 }
             }
@@ -4099,7 +4204,7 @@ impl StoreCore {
             if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).live(root).and_then(|n| n.parent).is_some() {
                 // No longer a live top-level root (already dropped above if removed).
                 self.layout_makers.unindex(root);
-                if let Some(old) = self.layout_makers.owned.remove(&root) {
+                if let Some(old) = self.layout_makers.per_root.remove(&root) {
                     dropped.extend(old);
                 }
                 continue;
@@ -4111,7 +4216,7 @@ impl StoreCore {
                 layout::make_root(&cx, root)
             };
             self.layout_makers.set_keys(root, rec.into_inner());
-            if let Some(old) = self.layout_makers.owned.get(&root) {
+            if let Some(old) = self.layout_makers.per_root.get(&root) {
                 for &k in old {
                     if !want.contains_key(&k) {
                         dropped.insert(k);
@@ -4119,7 +4224,7 @@ impl StoreCore {
                 }
             }
             let keys: Vec<graph::NativeKey> = want.keys().copied().collect();
-            self.layout_makers.owned.insert(root, keys);
+            self.layout_makers.per_root.insert(root, keys);
             wanted.extend(want);
         }
         // Rooted, so a hidden composition stays laid out: an unrun native
@@ -4343,20 +4448,62 @@ impl StoreCore {
         Ok(())
     }
 
+    /// The per-family structure oracle for the port network and derived
+    /// bindings (engine.md §6, EN-2c):
+    /// 1. Live `NativeKey::Island(_)` natives match fresh `port::network(doc).island_natives()`.
+    /// 2. `self.reactive.derived_bindings()` matches fresh
+    ///    `port::derived_signals(doc) + anchor::positions + anchor::followers`.
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn check_keyed_network(&self) -> Result<(), String> {
+        let doc = Tree::of(&self.docs);
+        let expected_islands: BTreeMap<graph::NativeKey, port::IslandNative> = port::network(doc).island_natives().into_iter().collect();
+        for k in self.reactive.native_keys() {
+            if matches!(k, graph::NativeKey::Island(_)) && !expected_islands.contains_key(&k) {
+                return Err(format!("stale network island native {k:?} still present"));
+            }
+        }
+        for (k, island) in expected_islands {
+            let Some(native) = self.reactive.native(k) else {
+                return Err(format!("network island native {k:?} is missing"));
+            };
+            if native.as_any().downcast_ref::<port::IslandNative>() != Some(&island) {
+                return Err(format!("network island native {k:?} differs from fresh port::network"));
+            }
+        }
+
+        let anchors = anchor::anchors(doc);
+        let mut expected_derived: BTreeMap<Leaf, Expr> = port::derived_signals(doc).into_iter().collect();
+        expected_derived.extend(anchors.iter().flat_map(|&a| anchor::positions(doc, a)));
+        expected_derived.extend(anchor::followers(doc, &anchors));
+        let kept = self.reactive.derived_bindings();
+        if *kept != expected_derived {
+            return Err(format!(
+                "derived bindings differ from fresh derivation:\n kept {:?}\n fresh {:?}",
+                kept.keys().collect::<Vec<_>>(),
+                expected_derived.keys().collect::<Vec<_>>(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Consume every key written to `Docs` since the last sync through the
     /// single write channel (engine.md §3.2): reconciles dirty Stage 2
-    /// contexts, layout, and constraint makers, marks keyed natives, optionally
-    /// marks session leaves for the host, and evaluates invalidated cells and
-    /// pending natives.
+    /// contexts, layout, constraint, network, and derived-binding makers,
+    /// marks keyed natives, optionally marks session leaves for the host, and
+    /// evaluates invalidated cells and pending natives.
     fn sync_touched(&mut self, mark_session: bool) {
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
             self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
             self.constraint_makers.note_touched(&keys);
+            self.network_makers.note_touched(&keys);
+            self.derived_makers.note_touched(&keys);
             self.sync_contexts(false);
             self.sync_layout_makers(false);
             self.sync_constraint_makers(false);
+            self.sync_network_makers(false);
+            self.sync_derived_makers(false);
         }
         let leaves = if keys.is_empty() {
             Vec::new()
@@ -4375,27 +4522,6 @@ impl StoreCore {
             self.reactive.invalidate(doc, leaves);
         } else {
             self.reactive.flush(doc);
-        }
-    }
-
-    /// Make the network's islands native cells, keeping each one whose
-    /// unknowns and equations did not change, and dropping the rest.
-    fn sync_islands(&mut self, net: &crate::port::Network, run: bool) {
-        let want: std::collections::BTreeMap<graph::NativeKey, crate::port::IslandNative> = net.island_natives().into_iter().collect();
-        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = Vec::new();
-        for k in self.reactive.native_keys() {
-            if matches!(k, graph::NativeKey::Island(_)) && !want.contains_key(&k) {
-                batch.push((k, None));
-            }
-        }
-        for (k, island) in want {
-            let same = self.reactive.native(k).and_then(|n| n.as_any().downcast_ref::<crate::port::IslandNative>()) == Some(&island);
-            if !same {
-                batch.push((k, Some((std::sync::Arc::new(island), true))));
-            }
-        }
-        if !batch.is_empty() {
-            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
     }
 
@@ -5362,12 +5488,12 @@ fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, moving: &mut BTreeSet<N
 
 /// Whether a set of this leaf changes what `@name` resolves to: a rename,
 /// or a let starting or ceasing to provide (palette.rs `provided`).
-/// Whether a set on this leaf changes what the graph derives beyond the
-/// leaf's own value: the signal a connection derives (a port's `kind` and
-/// `dir`), an anchor's position (`follow`, `port`), or a boundary's declared
-/// type (`datatype`). Each rebuilds the graph, as a structural op does.
+/// Whether a set on this leaf changes a boundary's declared type (`datatype`),
+/// which changes tracked read-checking on bindings in `restructure` (until
+/// EN-7 moves boundary type checks to cells). Port `kind`/`dir` and anchor
+/// `follow`/`port` are now handled by Stage 2 keyed makers via `sync_touched`.
 fn rederives(path: &LeafPath) -> bool {
-    matches!((path.facet, path.field), (FacetKind::Port, "kind" | "dir" | "datatype") | (FacetKind::Anchor, "follow" | "port"))
+    matches!((path.facet, path.field), (FacetKind::Port, "datatype"))
 }
 
 /// Whether `id` may answer an `@name`: a let (it provides when its flag

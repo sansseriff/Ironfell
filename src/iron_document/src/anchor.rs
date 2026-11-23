@@ -27,6 +27,7 @@ use crate::expr::{BinOp, Expr, Leaf};
 use crate::facet::{Anchor, FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::value::Value;
+use std::collections::BTreeMap;
 
 fn leaf(node: NodeId, facet: FacetKind, field: &str) -> Expr {
     Expr::Ref(Leaf { node, path: LeafPath::new(facet, field).expect("declared field") })
@@ -50,7 +51,7 @@ fn transformed_chain(doc: Tree<'_>, id: NodeId, with_self: bool) -> Vec<NodeId> 
     let mut out = Vec::new();
     let mut cur = if with_self { Some(id) } else { doc.live(id).and_then(|n| n.parent) };
     while let Some(n) = cur {
-        if doc.facet(n, FacetKind::Transform2d).is_some() {
+        if doc.has(n, FacetKind::Transform2d) {
             out.push(n);
         }
         cur = doc.live(n).and_then(|x| x.parent);
@@ -149,21 +150,44 @@ pub fn positions(doc: Tree<'_>, a: NodeId) -> [(Leaf, Expr); 3] {
 }
 
 /// Followers' placements: a connected `follow` anchor sits on its
-/// partner's anchor. `anchors` is `anchors(doc)`.
+/// partner's anchor in the same composition. `anchors` is the anchors in the
+/// same composition (or root).
 pub fn followers(doc: Tree<'_>, anchors: &[NodeId]) -> Vec<(Leaf, Expr)> {
     let mut out = Vec::new();
     for &a in anchors.iter().filter(|&&a| follows(doc, a)) {
         let Some((other, connection)) = port_of(doc, a).and_then(|p| partner(doc, p)) else { continue };
-        let here = composition::composition_of(doc, a);
+        let Some(here) = composition::composition_of(doc, a) else { continue };
         let ports = standing_for(doc, other);
         // A joint of two loose ends: the held one stays, the other follows
         // it (component-authoring.md §5).
         let held = crate::plug::held_end(doc, connection);
         let holds = |b: NodeId| !follows(doc, b) || held.is_some_and(|h| standing_for(doc, h).contains(&port_of(doc, b).unwrap_or(b)));
-        let Some(target) = anchors.iter().copied().find(|&b| b != a && holds(b) && port_of(doc, b).is_some_and(|p| ports.contains(&p)) && composition::composition_of(doc, b) == here) else { continue };
+        let Some(target) = anchors
+            .iter()
+            .copied()
+            .find(|&b| b != a && holds(b) && port_of(doc, b).is_some_and(|p| ports.contains(&p)) && composition::composition_of(doc, b) == Some(here))
+        else {
+            continue;
+        };
         let (x, y) = inward(doc, a, leaf(target, FacetKind::Anchor, "wx"), leaf(target, FacetKind::Anchor, "wy"));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "x").expect("declared") }, x));
         out.push((Leaf { node: a, path: LeafPath::new(FacetKind::Transform2d, "y").expect("declared") }, y));
+    }
+    out
+}
+
+/// Every anchor-derived binding (`anchor.wx`/`wy`/`wrot` and follower
+/// `transform2d.x`/`y`) under top-level `root` (Stage 2, EN-2c).
+pub(crate) fn derived_in(doc: Tree<'_>, root: NodeId) -> BTreeMap<Leaf, Expr> {
+    let anchors: Vec<NodeId> = doc.nodes_with_in(root, FacetKind::Anchor).into_iter().filter(|&a| doc.live(a).is_some_and(|n| n.ty.name() == "empty")).collect();
+    let mut out = BTreeMap::new();
+    for &a in &anchors {
+        for (l, e) in positions(doc, a) {
+            out.insert(l, e);
+        }
+    }
+    for (l, e) in followers(doc, &anchors) {
+        out.insert(l, e);
     }
     out
 }

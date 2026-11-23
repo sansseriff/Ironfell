@@ -608,16 +608,9 @@ pub struct Reactive {
     /// not anything ran: a publish that only turns unneeded cells stale
     /// counts. The store's idle sweep waits for a frame where it is still.
     pub(crate) propagations: u64,
-    /// The signals connections and anchors derive, as last computed: what
-    /// `restructure` compares against.
+    /// The signals connections and anchors derive, maintained incrementally
+    /// by Stage 2 `DerivedBindingMakers` (EN-2c).
     derived: Counted<BTreeMap<Leaf, Expr>, GRAPH_DERIVED>,
-    /// Each anchor's chain of transformed ancestors as its positions in
-    /// `derived` were made from (`anchor::chain`): a restructure makes them
-    /// again only for an anchor whose chain changed.
-    chains: Counted<BTreeMap<NodeId, Vec<NodeId>>, { crate::work::GRAPH_CHAINS }>,
-    /// The rest of `derived`: connections' signals and followers'
-    /// placements, made again whole by a restructure that rederives.
-    rest: Counted<BTreeSet<Leaf>, { crate::work::GRAPH_REST }>,
     /// Bound leaves whose expression reads context (`@name`).
     token_readers: Counted<BTreeSet<Leaf>, GRAPH_TOKEN_READERS>,
     /// The token readers by the names they read: what a rescope of some
@@ -1238,8 +1231,96 @@ impl Reactive {
         &self.overlay
     }
 
+    /// Seed the initial derived bindings before `rebuild` (EN-2c).
+    pub(crate) fn set_initial_derived(&mut self, derived: BTreeMap<Leaf, Expr>) {
+        self.derived = derived.into();
+    }
+
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn derived_bindings(&self) -> &BTreeMap<Leaf, Expr> {
+        &self.derived
+    }
+
+    /// Reconcile derived bindings from Stage 2 `DerivedBindingMakers` (EN-2c):
+    /// updates `self.derived`, installs/drops affected `BoundNode`s, raises
+    /// heights, and either evaluates immediately (`run == true`) or queues
+    /// them in `self.pending` for the upcoming pass (`run == false`).
+    pub(crate) fn sync_derived(&mut self, doc: Tree<'_>, diff: Vec<(Leaf, Option<Expr>)>, tokens: &BTreeMap<String, Leaf>, run: bool) {
+        if diff.is_empty() {
+            return;
+        }
+        let mut changed = Vec::new();
+        for (leaf, want) in diff {
+            match want {
+                Some(e) => {
+                    if self.derived.get(&leaf) != Some(&e) {
+                        self.derived.insert(leaf, e);
+                        changed.push(leaf);
+                    }
+                }
+                None => {
+                    if self.derived.remove(&leaf).is_some() {
+                        changed.push(leaf);
+                    }
+                }
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+        let mut primed: BTreeSet<CellId> = BTreeSet::new();
+        let mut made: Vec<CellId> = Vec::new();
+        for leaf in changed {
+            let want: Option<Expr> = self
+                .derived
+                .get(&leaf)
+                .cloned()
+                .or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
+            match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
+                (Some(old), Some(e)) if **old == e => {}
+                (_, Some(e)) => {
+                    self.set_cell(doc, leaf, e, tokens);
+                    made.push(CellId::Leaf(leaf));
+                    primed.insert(CellId::Leaf(leaf));
+                }
+                (Some(_), None) => {
+                    self.drop_cell(leaf);
+                    self.resolved.remove(&leaf);
+                    self.errors.remove(&leaf);
+                    if let Some(v) = self.read(doc, leaf) {
+                        self.note(leaf, v);
+                    }
+                    primed.extend(self.dependents.get(&leaf).into_iter().flatten().copied());
+                    self.edge_gone = true;
+                }
+                (None, None) => {}
+            }
+        }
+        if !made.is_empty() {
+            if self.raise(&made).is_none() {
+                self.compute_heights();
+            }
+            let made_set: BTreeSet<CellId> = made.iter().copied().collect();
+            self.need_what_reads_reach(doc, &made_set);
+        }
+        if run {
+            if self.edge_gone {
+                primed.extend(self.blocked.iter().copied());
+            }
+            primed.retain(|c| self.exists(*c));
+            if !primed.is_empty() {
+                let dirty = self.readers(&primed);
+                self.need_what_reads_reach(doc, &dirty);
+                self.evaluate(doc, &dirty, &primed);
+            }
+        } else {
+            let live: Vec<CellId> = primed.into_iter().filter(|c| self.exists(*c)).collect();
+            self.pending.extend(live);
+        }
+    }
+
     /// Rebuild the structure from the document and evaluate every binding.
-    /// Called after transactions that created, deleted, or rebound anything.
+    /// Called on initial load, after `set_initial_derived` populates `self.derived`.
     pub fn rebuild(&mut self, doc: Tree<'_>) {
         // Everything is evaluated below.
         if !self.unneeded.is_empty() {
@@ -1256,16 +1337,9 @@ impl Reactive {
         self.dependents.clear();
         self.token_readers.clear();
         self.token_readers_by.clear();
-        // Stored bindings, then the signals connections derive (`port`):
-        // an in-port reads its partner, evaluated like any binding; then
-        // anchors' positions and followers' placements (`anchor`).
-        let anchors = crate::anchor::anchors(doc);
-        let mut derived = crate::port::derived_signals(doc);
-        derived.extend(crate::anchor::followers(doc, &anchors));
-        self.rest = derived.iter().map(|(l, _)| *l).collect();
-        self.chains = anchors.iter().map(|&a| (a, crate::anchor::chain(doc, a))).collect();
-        derived.extend(anchors.iter().flat_map(|&a| crate::anchor::positions(doc, a)));
-        self.derived = derived.iter().cloned().collect();
+        // Stored bindings, then the derived bindings seeded by Stage 2
+        // `DerivedBindingMakers` (derived takes precedence over stored).
+        let derived: Vec<(Leaf, Expr)> = self.derived.iter().map(|(l, e)| (*l, e.clone())).collect();
         let tokens = crate::palette::leaves(doc);
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let mut deps = expr.deps();
@@ -1338,19 +1412,15 @@ impl Reactive {
     /// Bring the graph up to date after structure changed at `nodes` (made,
     /// removed, rebound, given or stripped of facets), without the rebuild
     /// (reactive-engine handoff §4.4, stage 3a): only those nodes' bindings
-    /// are read again, the signals connections and anchors derive are
-    /// compared with what they were, heights are raised where an edge needs
-    /// it, and what changed and what reads it are evaluated. With `rescope`
-    /// (a provider may have moved), every `@name` reader is resolved again.
-    /// `rederive` says whether the ops can have changed what connections and
-    /// anchors derive (`port::derived_signals`, `anchor::positions`,
-    /// `anchor::followers`): without it they are kept as they were; with it
-    /// signals and followers are made again whole, and positions for each
-    /// anchor whose chain of transformed ancestors changed.
-    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: Rescope, rederive: bool, tokens: &BTreeMap<String, Leaf>, touched_leaves: &[Leaf]) {
+    /// are read again, heights are raised where an edge needs it, and what
+    /// changed and what reads it are evaluated. Derived bindings from
+    /// connections and anchors are already synced into `self.derived` /
+    /// `self.pending` by Stage 2 `DerivedBindingMakers` (EN-2c). With
+    /// `rescope` (a provider may have moved), every `@name` reader is
+    /// resolved again.
+    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: Rescope, tokens: &BTreeMap<String, Leaf>, touched_leaves: &[Leaf]) {
         let start = first_leaf;
-        // The leaves to look at again: every binding the nodes had or have,
-        // and every derived signal that came, went or changed.
+        // The leaves to look at again: every binding the nodes had or have.
         let mut look: BTreeSet<Leaf> = BTreeSet::new();
         for &n in nodes {
             look.extend(self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
@@ -1361,52 +1431,6 @@ impl Reactive {
                             look.insert(Leaf { node: n, path: crate::facet::LeafPath::new(f.kind(), field).expect("declared field") });
                         }
                     }
-                }
-            }
-        }
-        // Unless the ops could change one, the derived signals and anchors
-        // stand as they are: no copy of them to compare.
-        if rederive {
-            // Positions: made again for an anchor whose chain of transformed
-            // ancestors changed (they are a function of it), dropped for one
-            // gone.
-            let anchors = crate::anchor::anchors(doc);
-            let present: BTreeSet<NodeId> = anchors.iter().copied().collect();
-            let gone: Vec<NodeId> = self.chains.keys().filter(|a| !present.contains(a)).copied().collect();
-            for a in gone {
-                self.chains.remove(&a);
-                for l in crate::anchor::position_leaves(a) {
-                    if self.derived.remove(&l).is_some() {
-                        look.insert(l);
-                    }
-                }
-            }
-            for &a in &anchors {
-                let chain = crate::anchor::chain(doc, a);
-                if self.chains.get(&a) == Some(&chain) {
-                    continue;
-                }
-                for (l, e) in crate::anchor::positions(doc, a) {
-                    if self.derived.get(&l) != Some(&e) {
-                        look.insert(l);
-                        self.derived.insert(l, e);
-                    }
-                }
-                self.chains.insert(a, chain);
-            }
-            // Signals and followers, which follow connections: whole.
-            let mut rest: BTreeMap<Leaf, Expr> = crate::port::derived_signals(doc).into_iter().collect();
-            rest.extend(crate::anchor::followers(doc, &anchors));
-            for l in std::mem::take(&mut self.rest) {
-                if !rest.contains_key(&l) && self.derived.remove(&l).is_some() {
-                    look.insert(l);
-                }
-            }
-            self.rest = rest.keys().copied().collect();
-            for (l, e) in rest {
-                if self.derived.get(&l) != Some(&e) {
-                    look.insert(l);
-                    self.derived.insert(l, e);
                 }
             }
         }

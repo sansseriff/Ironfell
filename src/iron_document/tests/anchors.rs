@@ -412,3 +412,87 @@ fn two_loose_ends_join_and_the_one_landed_on_holds() {
     assert!(store.plug_targets(&p).iter().any(|t| t.anchor == lead_anchor));
     store.cancel_plug(p);
 }
+
+/// EN-2c: moving transforms does not re-run the anchor derived-binding maker
+/// (`Key::FacetSet` in `transformed_chain`), edits in one composition do not
+/// wake another composition's maker, and toggling `anchor.follow` via a
+/// non-structural `Op::Set` updates followers through `sync_touched`.
+#[test]
+fn anchor_maker_is_per_root_and_ignores_transform_moves() {
+    let Bench { mut store, jack_use, lead_anchor, .. } = bench();
+    let comp = store.tree().roots()[1];
+    // Add a second, unrelated composition root.
+    let comp2 = store.authored().next_id();
+    let mut c2 = Composition::default();
+    c2.dims = Slot::Const(Value::Enum("2d".into()));
+    store
+        .apply(tx("comp2", vec![Op::Create { id: comp2, ty: ty("composition"), parent: None, order: key(9), facets: vec![named("other"), c2.wrap()] }]))
+        .unwrap();
+
+    // Moving/rotating the jack updates the follower live with ZERO derived-maker runs.
+    let runs_before = store.derived_maker_runs(comp);
+    let runs2_before = store.derived_maker_runs(comp2);
+    store
+        .apply(tx(
+            "move jack",
+            vec![
+                Op::Set { id: jack_use, path: path("transform2d.x"), slot: Slot::Const(Value::Number(140.0)) },
+                Op::Set { id: jack_use, path: path("transform2d.rot"), slot: Slot::Const(Value::Number(0.5)) },
+            ],
+        ))
+        .unwrap();
+    assert_eq!(store.derived_maker_runs(comp), runs_before, "moving a transform must not re-run the anchor maker");
+    assert_eq!(store.derived_maker_runs(comp2), runs2_before);
+
+    // Toggling `anchor.follow` to false (non-structural Op::Set) drops the
+    // follower binding via `sync_touched` without touching `comp2`.
+    let lead_use = lead_anchor.expanded_root().unwrap();
+    let (_, lead_anchor_tpl) = lead_anchor.expanded_parts().unwrap();
+    let runs_before = store.derived_maker_runs(comp);
+    store
+        .apply(tx(
+            "stop following",
+            vec![Op::Set { id: lead_anchor_tpl, path: path("anchor.follow"), slot: Slot::Const(Value::Bool(false)) }],
+        ))
+        .unwrap();
+    assert!(store.derived_maker_runs(comp) > runs_before, "anchor.follow toggle should wake comp's derived maker");
+    assert_eq!(store.derived_maker_runs(comp2), runs2_before, "comp2 must not wake on comp anchor edit");
+    // Unfollowed, lead_anchor's local transform2d.x/y drops its derived
+    // follower binding and reverts to its template constant (0, 0), while both
+    // rigid ends now form an implied mate constraint cluster.
+    assert_eq!(num(&store, lead_anchor, "transform2d.x"), 0.0);
+    assert_eq!(num(&store, lead_anchor, "transform2d.y"), 0.0);
+    assert!(store.clusters().containing(lead_use).is_some(), "two rigid connected anchors mate");
+}
+
+/// EN-2c canary: silencing `insert_facet` stops `Key::With(root, Anchor)` from
+/// waking `DerivedBindingMakers` when an `Anchor` facet is added to an `empty`,
+/// and the structure oracle catches it.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_anchor_facet_fails_the_derived_oracle() {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            iron_document::silence_for_canary(None);
+        }
+    }
+    let _reset = Reset;
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(2);
+    let [comp, empty] = ids.try_into().unwrap();
+    let mut c = Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: comp, ty: ty("composition"), parent: None, order: key(0), facets: vec![named("scene"), c.wrap()] },
+                Op::Create { id: empty, ty: ty("empty"), parent: Some(comp), order: key(0), facets: vec![at(10.0, 20.0).wrap()] },
+            ],
+        ))
+        .unwrap();
+    iron_document::silence_for_canary(Some("insert_facet"));
+    store.apply(tx("add anchor", vec![Op::AddFacet { id: empty, facet: Anchor::default().wrap() }])).unwrap();
+}

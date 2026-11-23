@@ -210,9 +210,6 @@ pub(crate) fn apply_op(
     if reshapes(op) {
         docs.reshaped = crate::stamp();
     }
-    if rewires_network(docs, op) {
-        docs.network_shaped = crate::stamp();
-    }
     if retokens(docs, op) {
         docs.tokens_shaped = crate::stamp();
     }
@@ -279,17 +276,6 @@ fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
         Op::Link { rel } => is(rel.from) || is(rel.to),
         Op::Unlink { id } => doc.relation(*id).is_none_or(|r| is(r.from) || is(r.to)),
         Op::Reorder { .. } | Op::Set { .. } => false,
-    }
-}
-
-/// Whether `op` can change the port network (`port::network`): a port,
-/// connection or equation made, deleted, moved or relinked, or one of their
-/// leaves set (whether one is bound decides an unknown). Nothing else can
-/// (DS-3b: a structural change elsewhere does not rebuild it).
-fn rewires_network(docs: &Docs, op: &Op) -> bool {
-    match op {
-        Op::Set { path, .. } => matches!(path.facet, FacetKind::Port | FacetKind::Connection | FacetKind::Equation),
-        _ => touches(docs, op, &["port", "connection", "equation"], &[FacetKind::Port, FacetKind::Connection, FacetKind::Equation]),
     }
 }
 

@@ -95,15 +95,6 @@ fn dash(ring: &VecDeque<(f64, Value)>, now: f64, delay: f64) -> String {
 }
 
 impl Steps {
-    /// Forget having shown `leaves`, which the graph refused (bound, or held
-    /// by another producer): a later visit publishes them again, so one let
-    /// go is driven (council review of DS-2).
-    pub(crate) fn unshow(&mut self, leaves: &[Leaf]) {
-        for l in leaves {
-            self.shown.remove(l);
-        }
-    }
-
     /// Start a step to `now` (seconds on the host's clock): how long it is.
     pub fn tick(&mut self, now: f64) -> f64 {
         let dt = self.last.map_or(0.0, |l| (now - l).clamp(0.0, MAX_DT));

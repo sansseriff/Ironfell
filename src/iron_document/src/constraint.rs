@@ -120,7 +120,9 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
     let value = match read_value(value_leaf(id)) {
         Some(Value::Number(n)) => n,
         Some(v) => return Err(format!("{id}: value must be a number, got {}", v.kind().name())),
-        None => 0.0,
+        // Unreadable (its formula fails with no value before it): left out
+        // with this problem, not solved as 0 (review of DS-7, Sol).
+        None => return Err(format!("{id}: its value can't be read")),
     };
     let mut operands = Vec::new();
     for r in doc.relations_from(id).filter(|r| r.rel == RelKind::Constrains) {

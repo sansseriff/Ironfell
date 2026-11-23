@@ -757,3 +757,18 @@ fn a_formula_on_a_structural_field_is_reported() {
     let problems = p.store.problems();
     assert_eq!(problems.iter().filter(|q| q.node == p.links[1]).count(), 1, "{problems:?}");
 }
+
+/// A constraint whose value can't be read (its formula fails, with no value
+/// before it) is left out with a problem, not solved as 0 (review of DS-7,
+/// Sol).
+#[test]
+fn an_unreadable_constraint_value_is_a_problem_not_zero() {
+    let mut p = pendulum();
+    let before = dist(pos(&p.store, p.joints[0]), pos(&p.store, p.joints[1]));
+    let applied = p.store.apply(tx("bad", vec![Op::Set { id: p.links[0], path: path("constraint.value"), slot: bind("sin('bad')") }])).unwrap();
+    assert!((dist(pos(&p.store, p.joints[0]), pos(&p.store, p.joints[1])) - before).abs() < 1e-6, "the joints did not collapse");
+    let problems = constraint_problems(&p.store);
+    assert!(problems.iter().any(|(n, m)| *n == p.links[0] && m.contains("can't be read")), "{problems:?}");
+    let told = applied.solver.map(|s| s.problems).unwrap_or_default();
+    assert!(told.iter().any(|q| q.node == p.links[0]), "the reply says so: {told:?}");
+}

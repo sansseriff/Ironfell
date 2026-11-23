@@ -190,3 +190,30 @@ fn a_freeze_commits_the_published_values_as_one_transaction() {
     store.undo(2).unwrap().unwrap();
     assert_eq!(f64_of(&store, bar, "size.w"), 50.0);
 }
+
+/// A request waiting on a bound leaf goes with its node: deleting the node
+/// drops the binding and promotes nothing onto the deleted leaf (review of
+/// DS-10a, Sol).
+#[test]
+fn a_request_waiting_on_a_deleted_node_is_not_promoted() {
+    let Scene { mut store, bar, .. } = scene();
+    let gas = store.register_producer("gas");
+    store.publish(gas, BTreeMap::from([(leaf(bar, "size.w"), Value::Number(1.0))]));
+    assert!(store.signal_errors().contains_key(&leaf(bar, "size.w")), "it waits on the binding");
+    store.apply(TransactionInput { label: "delete".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Delete { id: bar }], exact: false }).unwrap();
+    assert!(!store.signals().contains_key(&leaf(bar, "size.w")), "nothing drives a deleted leaf");
+    assert!(store.signal_errors().is_empty(), "{:?}", store.signal_errors());
+}
+
+/// What a losing producer published is its own: `published_by` reads its
+/// waiting request, not the winner's value, so freezing it writes what it
+/// asked for (review of DS-10a, Sol).
+#[test]
+fn a_losing_producer_s_published_values_are_its_own() {
+    let Scene { mut store, rect, .. } = scene();
+    let gas = store.register_producer("gas");
+    store.set_time(2.0);
+    store.publish(gas, BTreeMap::from([(leaf(rect, "transform2d.x"), Value::Number(7.0))]));
+    assert_eq!(f64_of(&store, rect, "transform2d.x"), 200.0, "the clip drives it");
+    assert_eq!(store.reactive().published_by(gas).get(&leaf(rect, "transform2d.x")), Some(&Value::Number(7.0)));
+}

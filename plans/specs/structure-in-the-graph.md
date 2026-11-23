@@ -773,6 +773,37 @@ formulas on structural fields reported on their leaf. Tests:
 - `graph::tests::a_contested_leaf_goes_to_the_higher_rank_whichever_asked_first`;
 - `constraints::a_formula_on_a_structural_field_is_reported`.
 
+**Code review round 2 of DS-7 and DS-10a part 1 (2026-11-22): Sol 4/10.** Opus's first
+attempt hit a rate limit and is being rerun. Fixed, with tests:
+- **Exact edits checked against a different state.** An exact edit passed the scratch
+  check (glides put at their targets) and committed unmet (the real solve read eased
+  positions). A transaction's solve and the watchers now read `Reactive::settled`:
+  layout's placements at their targets, as a layout reads its neighbours'.
+- **Stale requests promoted.** Players forgot leaves the graph refused (`unshow`), so
+  their requests were never withdrawn. A deleted node's waiting requests were promoted
+  when its binding went. `unshow` is deleted (requests stay, and are promoted or
+  withdrawn), and `Reactive::forget_waiting` drops what waits on gone nodes before
+  their bindings go (`signals::a_request_waiting_on_a_deleted_node_is_not_promoted`).
+- **A losing producer changed the winner.** The machines' "still moving" test read any
+  conflict as a refusal, which froze a fade; it now asks `Reactive::refuses`.
+  `published_by` returned the winner's value for a loser's leaf (so `freeze` wrote it);
+  it now returns the producer's own request
+  (`signals::a_losing_producer_s_published_values_are_its_own`).
+- **A cluster left at an intermediate pose.** A cluster whose input another cluster's
+  write moved (through a layout) wasn't solved again. Now it is, if its watcher ran
+  since, up to `RESOLVES` (4) times a pass. A live solve's own previews don't count, and
+  an unwritten preview stays uncommitted.
+- **An unreadable constraint value** was solved as 0. It is now a problem, and the
+  constraint is left out
+  (`constraints::an_unreadable_constraint_value_is_a_problem_not_zero`).
+- **Snapping.** It could undo a hold under a hugely scaled parent; the unsnapped values
+  are kept then.
+- **A promoted native request** reruns its native, so a glide that moved on while it
+  waited isn't left at an old sample.
+
+Checks: plain (502), differential with the structure oracle and `IRON_OWNER_CHECK`
+(506), and the smoke pass.
+
 **DS-10a part 2: cycles (design, for review before it is built).** Cycles arise only
 while evaluating: through a binding's tracked reads (`deref`, `graph.rs` at "reads {own}
 through deref") and through a native's reads (`closing`). Authored static cycles stay

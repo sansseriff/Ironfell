@@ -314,6 +314,18 @@ impl Cx<'_> {
         self.graph
     }
 
+    /// `leaf` as it settles (`Reactive::settled`), read and tracked.
+    pub fn settled(&self, leaf: Leaf) -> Option<Value> {
+        let v = self.read(leaf);
+        if let Some(g) = &self.graph.glide
+            && self.graph.runtime.get(&leaf).is_some_and(|s| s.producer == ProducerId::LAYOUT)
+            && let Some(t) = g.targets.get(&leaf)
+        {
+            return Some(t.clone());
+        }
+        v
+    }
+
     /// What this native last wrote on `leaf`, if it holds it: a warm start
     /// (handoff §4.10), read outside the cycle rule and not tracked.
     pub fn previous(&self, leaf: Leaf) -> Option<Value> {
@@ -1028,7 +1040,33 @@ impl Reactive {
 
     /// The leaves a producer holds, with their values.
     pub fn published_by(&self, producer: ProducerId) -> BTreeMap<Leaf, Value> {
-        self.held.get(&producer).map(|ls| ls.iter().inspect(|_| crate::work::visit_map(crate::work::PRODUCER_PUBLISHED, 1)).filter_map(|l| self.runtime.get(l).map(|s| (*l, s.value.clone()))).collect()).unwrap_or_default()
+        // Its own requests, driving or waiting: never another's value
+        // (review of DS-10a: freezing a losing host wrote the winner's).
+        let own = |l: &Leaf| match self.runtime.get(l) {
+            Some(s) if s.producer == producer => Some(s.value.clone()),
+            _ => self.waiting.get(l).and_then(|w| w.get(&producer)).cloned(),
+        };
+        self.held.get(&producer).map(|ls| ls.iter().inspect(|_| crate::work::visit_map(crate::work::PRODUCER_PUBLISHED, 1)).filter_map(|l| own(l).map(|v| (*l, v))).collect()).unwrap_or_default()
+    }
+
+    /// Whether the graph holds `leaf` against `producer`: bound, or driven
+    /// by a higher-ranked producer.
+    pub(crate) fn refuses(&self, leaf: Leaf, producer: ProducerId) -> bool {
+        self.nodes.contains_key(&leaf) || self.runtime.get(&leaf).is_some_and(|s| s.producer != producer && rank(s.producer) < rank(producer))
+    }
+
+    /// A leaf as it settles: a layout's placement at its target rather than
+    /// eased mid-glide, as a layout reads its neighbours'. What a
+    /// transaction's solve and the constraints' problems read, so neither
+    /// depends on how far a glide has got (review of DS-7, Sol).
+    pub(crate) fn settled(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
+        if let Some(g) = &self.glide
+            && self.runtime.get(&leaf).is_some_and(|s| s.producer == ProducerId::LAYOUT)
+            && let Some(t) = g.targets.get(&leaf)
+        {
+            return Some(t.clone());
+        }
+        self.read(doc, leaf)
     }
 
     /// Leaves a producer asked for while another held them, with why.
@@ -1076,16 +1114,12 @@ impl Reactive {
     /// leaves (as `publish` does each), `unset` withdraws those it held;
     /// everything else it publishes stands. What a stepper that changes a
     /// few leaves a frame uses, rather than replacing its whole map (DS-2).
-    pub fn publish_delta(&mut self, doc: Tree<'_>, producer: ProducerId, set: BTreeMap<Leaf, Value>, unset: &[Leaf]) -> Vec<Leaf> {
+    pub fn publish_delta(&mut self, doc: Tree<'_>, producer: ProducerId, set: BTreeMap<Leaf, Value>, unset: &[Leaf]) {
         let mut changed: Vec<Leaf> = Vec::new();
-        let mut refused: Vec<Leaf> = Vec::new();
         let mut held = self.held.remove(&producer).unwrap_or_default();
         for (leaf, value) in set {
             if self.offer(leaf, producer, value) {
                 changed.push(leaf);
-            }
-            if self.runtime.get(&leaf).is_none_or(|s| s.producer != producer) {
-                refused.push(leaf);
             }
             held.insert(leaf);
         }
@@ -1098,7 +1132,7 @@ impl Reactive {
             self.held.insert(producer, held);
         }
         if changed.is_empty() {
-            return refused;
+            return;
         }
         for &l in &changed {
             if !self.overlay.contains_key(&l)
@@ -1108,7 +1142,6 @@ impl Reactive {
             }
         }
         self.invalidate(doc, changed);
-        refused
     }
 
     /// Release everything `producer` publishes.
@@ -2601,6 +2634,22 @@ impl Reactive {
         changed
     }
 
+    /// Drop what waits on the leaves of nodes that went (review of DS-10a,
+    /// Sol): nothing is promoted onto a deleted leaf. Called before the
+    /// bindings of those nodes are dropped.
+    pub(crate) fn forget_waiting(&mut self, gone: impl Iterator<Item = NodeId>) {
+        if self.waiting.is_empty() {
+            return;
+        }
+        for n in gone {
+            let leaves: Vec<Leaf> = self.waiting.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).collect();
+            for l in leaves {
+                self.waiting.remove(&l);
+                self.conflict(l);
+            }
+        }
+    }
+
     /// Drive an undriven, unbound `leaf` with its best waiting request, if
     /// it has one.
     fn promote(&mut self, leaf: Leaf) -> bool {
@@ -2611,6 +2660,13 @@ impl Reactive {
         let Some(&best) = w.keys().min_by_key(|p| rank(**p)) else { return false };
         let value = w.remove(&best).expect("present");
         self.runtime.insert(leaf, Signal { value, producer: best });
+        // A native's request may be an old sample (a glide moved on while
+        // it waited): it runs again and claims afresh.
+        if let Some(&k) = self.owned.get(&leaf)
+            && self.natives.get(&k).is_some_and(|n| n.rule.producer() == best)
+        {
+            self.pending.insert(CellId::Native(k));
+        }
         true
     }
 

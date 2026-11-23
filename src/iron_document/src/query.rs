@@ -77,15 +77,6 @@ fn leaf(node: NodeId, field: &'static str) -> Leaf {
 pub const OUTPUTS: [&str; 4] = ["value", "status", "error", "stale"];
 
 impl Queries {
-    /// Forget having shown `leaves`, which the graph refused (bound, or held
-    /// by another producer): a later visit publishes them again, so one let
-    /// go is driven (council review of DS-2).
-    pub(crate) fn unshow(&mut self, leaves: &[Leaf]) {
-        for l in leaves {
-            self.shown.remove(l);
-        }
-    }
-
     /// What changed to publish at `now` (seconds on the host's clock), and
     /// the requests that became due, visiting the dirty and the waiting
     /// queries only. `wanted` says whether anything reads a query.

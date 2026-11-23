@@ -289,19 +289,6 @@ pub struct Running {
 }
 
 impl Player {
-    /// Forget having shown `leaves`, which the graph refused: a later visit
-    /// publishes them again (council review of DS-2).
-    pub(crate) fn unshow(&mut self, leaves: &[Leaf]) {
-        if leaves.is_empty() {
-            return;
-        }
-        for shown in self.shown.values_mut() {
-            for l in leaves {
-                shown.remove(l);
-            }
-        }
-    }
-
     /// Visit the clocked instances at the next advance, whether or not the
     /// playhead moved: what they read of the timeline (a key's `t` or
     /// `span`, a clip's start) changed (council review of DS-2).

@@ -240,6 +240,11 @@ impl Drop for Rollback {
     }
 }
 
+/// How many times one pass solves a cluster whose inputs another
+/// cluster's write changed (through a binding or a layout): enough for a
+/// chain, bounded for a loop.
+const RESOLVES: usize = 4;
+
 /// Stale cells an idle `advance` brings up to date (§8.7).
 const IDLE_SWEEP: usize = 256;
 
@@ -854,6 +859,10 @@ impl StoreCore {
             };
             self.reactive.prime_natives(keys);
         }
+        // What waited on the leaves of every node gone, subtrees included,
+        // goes with them: nothing is promoted onto a deleted leaf (review
+        // of DS-10a, Sol). A lookup in the waiting requests, which are few.
+        self.reactive.forget_waiting(self.docs.gone.keys().copied());
         let rescope = if rescope_all {
             graph::Rescope::All
         } else if names.is_empty() && under.is_empty() {
@@ -1097,9 +1106,19 @@ impl StoreCore {
     /// with the grouping taken again first: a cluster's write can wake a
     /// later one that reads it (council review of DS-9, Sol), or make a
     /// cluster cyclic, which is then not solved (review of DS-7, Sol).
-    fn next_to_solve(&mut self, drivers: &[solve::Driver], solved: &BTreeSet<NodeId>) -> Option<solve::Cluster> {
+    fn next_to_solve(&mut self, drivers: &[solve::Driver], solved: &BTreeMap<NodeId, usize>) -> Option<solve::Cluster> {
         self.regroup();
-        self.to_solve(drivers).into_iter().map(|i| &self.clusters.list[i]).find(|c| !solved.contains(&c.key())).cloned()
+        // Once each; again only if what it reads changed since (its
+        // watcher ran), as through a layout another cluster's write moved
+        // (review of DS-7, Sol), up to `RESOLVES` times.
+        self.to_solve(drivers)
+            .into_iter()
+            .map(|i| &self.clusters.list[i])
+            .find(|c| match solved.get(&c.key()) {
+                None => true,
+                Some(&n) => n < RESOLVES && self.reactive.ran(graph::NativeKey::Cluster(c.key())),
+            })
+            .cloned()
     }
 
     /// The clusters, in solve order, whose solve could move something: a
@@ -1156,9 +1175,9 @@ impl StoreCore {
         // The clusters that could have moved: their watching native ran,
         // a finger holds them, or they have not been committed; the rest
         // are as their last solve left them (DS-3a: no pass over all).
-        let mut solved = BTreeSet::new();
+        let mut solved = BTreeMap::new();
         while let Some(c) = self.next_to_solve(&[], &solved) {
-            solved.insert(c.key());
+            *solved.entry(c.key()).or_insert(0) += 1;
             let c = &c;
             if self.unmoved(c, &[]) {
                 continue;
@@ -1185,6 +1204,12 @@ impl StoreCore {
                     self.reactive.preview(Tree::of(&self.docs), leaf, value);
                 }
             }
+            // Its own previews ran its watcher: not a reason to solve it
+            // again in this pass (a change that comes back through another
+            // cluster's write does mark it again). A preview is not
+            // committed: the next transaction still solves and writes it.
+            self.reactive.clear_ran(graph::NativeKey::Cluster(c.key()));
+            self.committed.remove(&c.key());
         }
         report
     }
@@ -3100,15 +3125,15 @@ impl StoreCore {
                 self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, e, now), clocks.held(doc, e)), visit.as_ref())
             };
             running = now_running;
-            // A leaf publishing refuses (bound, or another producer's) is a
-            // signal error, never shown: it is not still moving.
-            let refused = self.reactive.signal_errors();
-            moving = set.keys().find(|l| !refused.contains_key(l)).map(|l| l.node).or_else(|| unset.first().map(|l| l.node));
+            // A leaf the graph holds against the machines (bound, or a
+            // higher-ranked producer's) is never shown: it is not still
+            // moving. One the machines drive, contested or not, is (review
+            // of DS-10a: a lower-ranked request froze a running fade).
+            moving = set.keys().find(|l| !self.reactive.refuses(**l, ProducerId::MACHINES)).map(|l| l.node).or_else(|| unset.first().map(|l| l.node));
             if moving.is_none() {
                 break;
             }
-            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
-            self.machines.unshow(&refused);
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
             self.pipeline();
             if round == ROUNDS {
                 break;
@@ -3142,8 +3167,7 @@ impl StoreCore {
             self.queries.advance(doc, &read, &wanted, now)
         };
         if !values.is_empty() {
-            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
-            self.queries.unshow(&refused);
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
             self.pipeline();
         }
         due
@@ -3215,8 +3239,7 @@ impl StoreCore {
             self.steps.advance(doc, &read, now, &self.clocks, &traces, &accs, &woken)
         };
         if !values.is_empty() {
-            let refused = self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
-            self.steps.unshow(&refused);
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
             self.pipeline();
         }
         active
@@ -4339,7 +4362,8 @@ impl StoreCore {
         let new: Vec<solve::SolverProblem> = after.into_iter().filter(|p| !problems_before.contains(&(p.node, p.message.clone()))).map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
         if !new.is_empty() || solver.as_ref().is_some_and(|s| !s.problems.is_empty()) {
             let s = solver.get_or_insert_with(SolverSummary::default);
-            s.problems.retain(|p| !problems_before.iter().any(|(n, _)| *n == p.node));
+            let troubled: BTreeSet<NodeId> = problems_before.iter().map(|(n, _)| *n).collect();
+            s.problems.retain(|p| !troubled.contains(&p.node));
             s.problems.extend(new);
             if s.is_empty() {
                 solver = None;
@@ -4555,15 +4579,15 @@ impl StoreCore {
                 _ => None,
             })
             .collect();
-        let mut solved = BTreeSet::new();
+        let mut solved = BTreeMap::new();
         while let Some(c) = self.next_to_solve(&drivers, &solved) {
-            solved.insert(c.key());
+            *solved.entry(c.key()).or_insert(0) += 1;
             let c = &c;
             if self.unmoved(c, &drivers) {
                 continue;
             }
             let result = {
-                let read = |l: Leaf| self.reactive.read(Tree::of(&self.docs), l);
+                let read = |l: Leaf| self.reactive.settled(Tree::of(&self.docs), l);
                 solve::solve_cluster(Tree::of(&self.docs), &read, c, &drivers, &self.fingers)
             };
             if !solve::holds(&result) {

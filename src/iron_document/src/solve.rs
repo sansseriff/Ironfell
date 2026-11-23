@@ -631,7 +631,12 @@ pub fn solve_cluster(
     // tolerance, and it keeps a point that is coincident with a fixed one
     // at exactly its coordinate in files and views.
     let snap = |v: f64| (v * 1e9).round() / 1e9;
-    let values: Vec<(Leaf, f64)> = cluster.vars.iter().copied().zip(s.vars.iter().map(|v| snap(*v))).collect();
+    let snapped: Vec<f64> = s.vars.iter().map(|v| snap(*v)).collect();
+    // Unless snapping undoes a hold that solving reached (a parent scaled
+    // a millionfold turns a nanometre into a millimetre): the watchers
+    // would report what was just written (review of DS-7, Sol).
+    let keep = if problem.max_residual(&snapped, iron_solve::Tier::Required) <= HOLDS || problem.max_residual(&s.vars, iron_solve::Tier::Required) > HOLDS { snapped } else { s.vars.clone() };
+    let values: Vec<(Leaf, f64)> = cluster.vars.iter().copied().zip(keep).collect();
     let mut unmet = Vec::new();
     for d in drivers {
         if let Some(i) = cluster.vars.iter().position(|l| *l == d.leaf)
@@ -844,7 +849,7 @@ impl crate::graph::Native for ClusterNative {
         // solve here: which are at fault is the failed solve's to tell, in
         // the transaction's reply (review of DS-7: a solve per watcher run
         // doubled a drag's solves).
-        cx.set_extra(std::sync::Arc::new(Violated(violated(cx.tree(), &|l| cx.read(l), &self.cluster))));
+        cx.set_extra(std::sync::Arc::new(Violated(violated(cx.tree(), &|l| cx.settled(l), &self.cluster))));
         Ok(BTreeMap::new())
     }
 }

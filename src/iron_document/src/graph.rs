@@ -2353,7 +2353,7 @@ impl Reactive {
     /// released). The leaves whose readable value moved.
     fn claim(&mut self, doc: Tree<'_>, k: NativeKey, values: BTreeMap<Leaf, Value>) -> Vec<Leaf> {
         let producer = self.natives[&k].rule.producer();
-        let values = if producer == ProducerId::LAYOUT { self.glided(k, values) } else { values };
+        let (values, settled_changed) = if producer == ProducerId::LAYOUT { self.glided(k, values) } else { (values, Vec::new()) };
         let was = self.claims.remove(&k).unwrap_or_default();
         let mut now: BTreeSet<Leaf> = BTreeSet::new();
         let mut changed: Vec<Leaf> = Vec::new();
@@ -2390,6 +2390,10 @@ impl Reactive {
                 self.note(l, v);
             }
         }
+        // Readers of `Cx::settled` (constraint watchers, neighbour layouts)
+        // read `g.targets`, so wake them when a target moves even if the
+        // eased value at `t0` still equals the previous drawn value.
+        changed.extend(settled_changed);
         changed
     }
 
@@ -2406,9 +2410,10 @@ impl Reactive {
 
     /// A layout native's targets as drawn: transitions started for the nodes
     /// whose target moved, from where they are drawn, and every node in
-    /// flight eased.
-    fn glided(&mut self, k: NativeKey, mut values: BTreeMap<Leaf, Value>) -> BTreeMap<Leaf, Value> {
-        let Some(g) = self.glide.as_mut() else { return values };
+    /// flight eased. Also returns the leaves whose settled target (`g.targets`)
+    /// changed, so `Cx::settled` readers wake even at `t == t0`.
+    fn glided(&mut self, k: NativeKey, mut values: BTreeMap<Leaf, Value>) -> (BTreeMap<Leaf, Value>, Vec<Leaf>) {
+        let Some(g) = self.glide.as_mut() else { return (values, Vec::new()) };
         let (xp, yp) = xy();
         let mine: BTreeSet<NodeId> = self.natives[&k].rule.outputs().iter().map(|l| l.node).collect();
         let num = |m: &BTreeMap<Leaf, Value>, node: NodeId, path| m.get(&Leaf { node, path }).and_then(|v| v.as_f64());
@@ -2423,10 +2428,20 @@ impl Reactive {
             let Some(&(ms, ease)) = g.specs.get(&node) else { continue };
             g.anims.insert(node, Anim { from: [sx, sy], to: [tx, ty], t0: g.clock, ms, ease });
         }
+        let mut settled_changed: Vec<Leaf> = values
+            .iter()
+            .filter(|(l, v)| g.targets.get(l) != Some(*v))
+            .map(|(l, _)| *l)
+            .collect();
+        for l in g.targets.keys() {
+            if mine.contains(&l.node) && !values.contains_key(l) {
+                settled_changed.push(*l);
+            }
+        }
         g.targets.retain(|l, _| !mine.contains(&l.node));
         g.targets.extend(values.iter().map(|(l, v)| (*l, v.clone())));
         g.apply(&mut values, &|n| mine.contains(&n));
-        values
+        (values, settled_changed)
     }
 
     /// Take back the transitions a round trip of layout's targets restarted
@@ -2635,8 +2650,9 @@ impl Reactive {
     }
 
     /// Drop what waits on the leaves of nodes that went (review of DS-10a,
-    /// Sol): nothing is promoted onto a deleted leaf. Called before the
-    /// bindings of those nodes are dropped.
+    /// Sol): nothing is promoted onto a deleted leaf, and producers' `held`
+    /// sets do not retain dead leaves. Called before the bindings of those
+    /// nodes are dropped.
     pub(crate) fn forget_waiting(&mut self, gone: impl Iterator<Item = NodeId>) {
         if self.waiting.is_empty() {
             return;
@@ -2644,7 +2660,16 @@ impl Reactive {
         for n in gone {
             let leaves: Vec<Leaf> = self.waiting.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).collect();
             for l in leaves {
-                self.waiting.remove(&l);
+                if let Some(waiters) = self.waiting.remove(&l) {
+                    for p in waiters.into_keys() {
+                        if let Some(h) = self.held.get_mut(&p) {
+                            h.remove(&l);
+                            if h.is_empty() {
+                                self.held.remove(&p);
+                            }
+                        }
+                    }
+                }
                 self.conflict(l);
             }
         }

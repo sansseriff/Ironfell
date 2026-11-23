@@ -782,3 +782,52 @@ fn a_nan_constraint_value_is_a_problem() {
     let problems = constraint_problems(&p.store);
     assert!(problems.iter().any(|(n, _)| *n == p.links[0]), "{problems:?}");
 }
+
+/// When motion glides a layout child's placement, `g.targets` jumps to the new
+/// position while the eased value at `t0` still equals the old drawn position.
+/// A cluster reading that child through `Cx::settled` must wake and solve to
+/// the new settled target immediately in that transaction, not stay stale at
+/// the old position (EN-0 audit).
+#[test]
+fn a_glided_layout_target_wakes_a_constraint_cluster_at_t0() {
+    let mut store = Store::new();
+    store.set_motion(true);
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0" size.w="100" size.h="100" layout.mode="stack_x" layout.gap="10">
+        <rect id="$a" name="a" w="20" h="20"/>
+        <rect id="$b" name="b" w="20" h="20"/>
+      </group>
+      <rect id="$follower" name="follower" x="30" y="50" w="10" h="10"/>
+      <constraint id="$c" kind="distance" value="50"/>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (g, b, follower, c) = (plan.aliases["$g"], plan.aliases["$b"], plan.aliases["$follower"], plan.aliases["$c"]);
+    let rels = store.authored().next_relation_ids(2);
+    let link = |id: RelationId, from: NodeId, to: NodeId, role: &str| {
+        let mut data = BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str(role.into()));
+        data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+        Op::Link { rel: Relation { id, from, to, rel: RelKind::Constrains, data } }
+    };
+    let mut ops = plan.ops;
+    ops.push(link(rels[0], c, b, "a"));
+    ops.push(link(rels[1], c, follower, "b"));
+    store.apply(tx("setup", ops)).unwrap();
+    store.advance_motion(0.0);
+    // `$b` is at x=30 (20 + gap 10); `$follower` is at (30, 50), distance 50.
+    assert!((pos(&store, b)[0] - 30.0).abs() < 1e-6);
+    assert!((dist(pos(&store, b), pos(&store, follower)) - 50.0).abs() < 1e-4);
+
+    // Widen gap to 100: `$b`'s settled target moves to x=120 while its eased
+    // drawn position at t0 is still x=30. The cluster must wake and solve
+    // `$follower` to distance 50 from settled (120, 0) in this transaction.
+    store.apply(tx("widen gap", vec![Op::Set { id: g, path: path("layout.gap"), slot: num(100.0) }])).unwrap();
+    let settled_b = [120.0, 0.0];
+    let f = pos(&store, follower);
+    assert!(
+        (dist(settled_b, f) - 50.0).abs() < 1e-3,
+        "follower {f:?} must solve to distance 50 from settled {settled_b:?}, not stay at old drawn b={:?}",
+        pos(&store, b),
+    );
+    assert!(constraint_problems(&store).is_empty(), "no constraint problem: {:?}", constraint_problems(&store));
+}

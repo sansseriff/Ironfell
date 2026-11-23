@@ -203,6 +203,7 @@ fn a_request_waiting_on_a_deleted_node_is_not_promoted() {
     store.apply(TransactionInput { label: "delete".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Delete { id: bar }], exact: false }).unwrap();
     assert!(!store.signals().contains_key(&leaf(bar, "size.w")), "nothing drives a deleted leaf");
     assert!(store.signal_errors().is_empty(), "{:?}", store.signal_errors());
+    assert!(store.reactive().published_by(gas).is_empty(), "held drops dead waiting leaves: {:?}", store.reactive().published_by(gas));
 }
 
 /// What a losing producer published is its own: `published_by` reads its

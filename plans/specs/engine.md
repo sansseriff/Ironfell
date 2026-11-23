@@ -86,27 +86,65 @@ Static component instances (`<place>` / `use`) are answered through `Tree` as **
 views** over shared compiled templates plus the active patch stack for their instance
 path, rather than copying nodes into `Docs::copies`:
 
-- **Read path:** `Tree` resolves a derived `NodeId` by its owner path and template node,
-  layering the winning patch entry (if any) over the template slot.
-- **Solver write-backs on instances:** Solved values on instance parts are written into a
-  patch entry targeting that instance path (or the session layer during a live drag),
-  eliminating `Owners::solved`, `keep_solved`, `release`, and `apply_recorded`.
-- **Dynamic repeats and `when`:** Value-driven item sets (`count`, `each`, `when`) are
-  evaluated in `settle` and either represented as virtual item views over the repeat's
-  body template + `(item, index)` environment or a minimal item list; `EN-3` prototypes
-  and finalizes this boundary before implementation.
+- **Read path & sparse resolved store:** `Tree` answers effective values at the live point
+  while preserving its borrowed `&'a` API. A sparse, non-journaled `Resolved` table inside
+  `Docs` (updated eagerly in Stage 1, with `base_facet()` alongside for inspector/planner)
+  holds only patched authored nodes (`EN-4`) and rewritten/patched virtual nodes (`EN-5`);
+  unpatched constant virtual nodes borrow directly from shared `Arc<Template>`. The `EN-3`
+  spike benchmarks this against fully-virtual per-field resolution before `EN-4` freezes
+  the representation.
+- **View deltas & keys:** Stage 1 diffs each view's record (template `Arc`, environment,
+  notation, absent set, sparse resolved nodes) and emits ordinary effective `Node(v)`,
+  `Children(v)`, `Facet(v, k)`, `Leaf`, `Relations`, and old/new `In`/`With` keys (plus
+  `Changes` and `Gone`) — including when a notation switch or patch reveals an
+  initially-absent virtual node or cross-root relation. `Key::Patch(target)` is reserved
+  for patch-structure readers (lints, provenance, drag planner); value cells record only
+  effective keys. Scoped indexes `In(root, ty)` / `With(root, kind)` index views per
+  `(root, ty/kind)` + template local lists minus absent sets rather than inserting every
+  virtual `NodeId`. Template compilation moves off `scope_stamp` onto recorded reads.
+- **Solver write-backs on instances (dedicated solve layer):** Solved values on instance
+  parts live in a system-owned **solve layer** (between the document layer and session;
+  saved; region always the exact instance path; at most one entry per leaf; written only
+  by Stage 4 `Transaction` solves). An authored write in the same transaction that moves a
+  leaf with a solve entry clears that entry first (as a derived op) so the authored edit
+  acts as a solver driver; deleting a constraint clears the solve entries of copies no
+  cluster holds (revealing the underlying value cleanly); undo, redo, and replay apply
+  recorded ops only with no re-solve or re-release. Live drag previews write to a
+  gesture-owned session patch discarded on cancel. This deletes `Owners::solved`,
+  `keep_solved`, `release`, and `apply_recorded`.
+- **Dynamic repeats and `when`:** `EN-5` introduces a minimal keyed `ItemTable`
+  (`repeat view id → Vec<ItemRecord>` holding membership, order, value, index, and
+  presence/exit state) so `Docs::copies` can be deleted completely in `EN-5`; item
+  descendants use the same virtual template view, and `item.value`/`item.index` are
+  published as producer signals (so value-only changes touch no structure). `EN-7` then
+  migrates repeat count/input evaluation onto makers and recorded inputs.
+- **Structure & binding restrictions by axis kind:**
+  - A node's instance coordinate is the path of the *enclosing* view (not the view it
+    places), so presence patches on a `use` are never self-referential.
+  - Presence and `use.notation` vary directly on the instance axis and layers; on state
+    and sequence axes they resolve in Stage 1 from committed pass-start coordinates
+    (preserving Stage 2 makers' "no evaluated leaves" boundary); on time axes presence is
+    forbidden (use `hide`).
+  - Bound entries (`{= ...}`) are allowed on the instance axis and layers; on dynamic
+    state/sequence/time axes they are either forbidden or compiled as a fixed mux cell so
+    wiring never churns on state/time changes.
+  - Body leaves and history key on the entity (at its point); picture leaves key on `use`
+    (picture-local patches set presentation/notation without duplicating body computation).
 
 ### 2.4 Effective value precedence at a point
 
 For any live leaf at the active point, highest precedence first:
 
-1. **Session patch layer** (live gesture previews above scratch).
-2. **Constraint solver pose** (for variables of a converged/held cluster; never bound).
-3. **Binding cell value** (if the effective slot holds a formula).
-4. **Producer signal** (layout, network, items, state, selection, theme, machines, steps,
+1. **Session patch layer** (constants only; live gesture previews above scratch, discarded
+   on cancel).
+2. **Binding cell value** (if the effective slot holds a formula — bindings always outrank
+   producers and solver poses).
+3. **Producer signal** (layout, network, items, state, selection, theme, machines, steps,
    presence, queries, events, hosts — resolved by explicit fixed `ProducerId` priority
    rank, with **layout outranking clips**; waiting requests promote automatically on
    release).
+4. **Solve layer** (system-owned exact-instance-path entries for held constraint poses;
+   never shadows a binding or producer; reports `Leaf(v)` for self-trigger suppression).
 5. **Winning authored patch entry** (by `(layer, rank)` across active axes).
 6. **Base authored / template constant** (or facet default).
 
@@ -230,19 +268,45 @@ nodes elsewhere. (Excluded: load, save, export, whole-document queries, undo mem
 
 ### 4.1 Local need counts and scoped pulls (`EN-8`)
 
-- Each cell keeps a **need count**: needed readers' edges into it plus active holds
-  (shown compositions & pictured entities, free owner, running owners, active gesture
-  previews, scoped pulls).
-- Natives reserve their outputs on creation; needed readers of an output count toward the
-  native regardless of current claim; claim transfers move counts.
+- **Exact need-count invariant:** Maintain `leaf_need: Map<Leaf, u32>`, counting distinct
+  `(needed reader, channel)` demand edges targeting each leaf. A cell's `need` equals the
+  sum of `leaf_need` over its outputs/reservations plus its separately owned hold tokens
+  (`observe_all`, observers, Stage 4 document-writer holds, and scoped `pull`/`current`
+  holds).
+- **Separate demand from scheduling edges (no false cycles, no stale promotions):**
+  - If `L` is bound, demand and scheduling both target `binding(L)` (never a reserving
+    native, preventing false cycles when a bound leaf inside a stack is read by layout).
+  - If `L` is unbound, **demand** targets *every* native reserving `L` (both the active
+    claimant and waiting producers, so waiting requests are never stale on promotion),
+    while **scheduling/value edges** follow only the active claimant.
+  - When a binding or reservation changes, `retarget(L, old, new)` transfers `leaf_need(L)`
+    atomically.
+  - `Cx::settled` reads add demand to the owning layout native (and `Reactive::settled`
+    must not bypass the read recorder on its glide-target fast path); dynamic `Wiring`
+    reads (e.g. `transitive_deps` over a sleeping `deref`) pull freshness before returning.
+- **Eager makers & permanent Stage 4 writer holds:** Stage 2 makers remain eager (structure-only,
+  so hidden makers cannot leave stale reservations that block moved nodes). Stage 4 writers
+  that mutate `Document` (constraint clusters and their input cones) stay held permanently
+  so saved content never depends on viewport observation. `LayoutNative`s are un-rooted in
+  `EN-8` and held per shown composition.
 - **Needed-only stale propagation:** Dependents are partitioned into needed vs. unneeded.
-  Value/key changes push only to needed readers. Unneeded cells are untouched on edit and
-  evaluated unconditionally when their need count rises from 0.
-- **No `exact()` / `relax()`:** Store operations, actions, players, and host reads use
-  `Store::pull(leaves)` or scoped `current(|s| …)` holds released on exit. Only export
-  and unscoped whole-document views call `exact_all()`.
-- **Heights by cone:** Whole-graph `compute_heights` is replaced by incremental `raise`
-  along the changed cone.
+  Value/key changes push only to needed readers. On `0 → 1`, increments apply immediately,
+  the waking set is re-heighted and evaluated unconditionally (history natives must be
+  idempotent for equal `(inputs, clock)` so waking never steps them); `1 → 0` decrements
+  batch to the end of the pass to avoid flapping.
+- **No `exact()` / `relax()`:** Reading a need-0 cell outside a `current` scope becomes a
+  `debug_assert!` (`pinned` and `escaped`-forever deleted). Store operations (`run`,
+  `scratch()`, `edit::plan`, `post_apply`, `advance`, `engine_api.rs`) use `Store::pull(leaves)`
+  or scoped `current(|s| …)` holds — always pulling/validating inputs **before** committing
+  side effects (query seq bumps, stepper integration, action emits) and recording structural
+  view reads as well as leaf reads. `query::is_read` counts needed subscribers/holds only.
+  Only export and unscoped whole-document views call `exact_all()`.
+- **Heights on the accepted needed DAG:** Replace `compute_heights` (including in `evaluate`
+  and `raise`'s fallback) with local DAG maintenance on needed edges only: validate
+  acyclicity against the post-removal edge set before committing an edge, recompute
+  `1 + max(input heights)` in the affected reader cone (stopping where unchanged, preventing
+  unbounded drift on edge reversals), and use a single queue-rekey path for both bindings
+  and natives.
 
 ### 4.2 Composition-graph visibility gate and retiring `ROOTED` (`EN-9`)
 

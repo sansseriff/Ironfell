@@ -87,8 +87,11 @@ that drives a coordinate from values a patch sets is allowed, and reads the valu
 the current point. **The axes' dependencies must be acyclic:** axis A depends on axis B
 when A's driver reads a value, or a node's presence (a state value, a `use.notation`),
 that some patch whose region names B sets. A patch on `vis = hover` that sets the
-machine's in port, or decides whether `hover` exists, closes a cycle. The op that
-closes one is refused; PT-6 builds the check, since until then no driver reads a patch.
+machine's in port, or decides whether `hover` exists, closes a cycle. The static axis-dependency check (over `Expr::deps`) refuses a cycle before derivation
+(`run`); a dynamic cycle revealed only through a tracked read (`deref`) evaluates with
+previous-pass coordinates and reports a problem rather than refusing after derivation
+(reconciling P9 with `engine.md` E1). Built in `EN-6a`, since until then no driver reads
+a patch.
 
 ## 4. Regions
 
@@ -451,19 +454,20 @@ answer in regions (unions of boxes), per node, without enumerating points.
 
 | Today | Becomes | Deleted when it lands |
 |---|---|---|
-| An instance's overrides (component-model.md §5.3), nested targets | patches on the instance axis, in the layer of the scope that writes them; a nested target's path is a suffix pattern (§4), and outermost-wins is the layers' order | `override` nodes, their application in expansion, `stale_overrides` (PT-7) |
-| A machine's states and poses (machines.md M1, M3) | an unordered local axis of `state` nodes; channels stay, and each pose is a patch on the axis setting them, shared between states where wanted | the channel values on `state` (PT-6) |
+| An instance's overrides (component-model.md §5.3), nested targets | patches on the instance axis, in the layer of the scope that writes them; a nested target's path is a suffix pattern (§4), and outermost-wins is the layers' order | `override` nodes, their application in expansion, `stale_overrides` (`EN-5`) |
+| A machine's states and poses (machines.md M1, M3) | an unordered local axis of `state` nodes; channels stay, and each pose is a patch on the axis setting them, shared between states where wanted | the channel values on `state` (`EN-6a`) |
 | A machine's current state (M2) | the coordinate, set by its driver: the in port, which a binding, a clip key or a narrative override sets, as today (P9) | nothing |
 | Transitions, `progress`, tweens (M4–M6, M8) | arrows; transitions and tweens stay nodes, so a variant may add or remove them as structure; `progress` and interruption are the driver's | nothing; tweens refine the arrow's diff |
 | M7, "one writer per leaf" | **kept** (machines.md §4.3): a channel's writer is its machine, and a clip keys the state, never a channel. Several patches setting one leaf are not several writers: strength picks one at each point | nothing |
-| A lesson variant that `extends` (variants-and-imports.md V1) | **a layer** (P14): a variant sits between the definition it extends and what places it, and its patches are anchored in it, so they apply in each placement of the variant. An `extends` chain is nested layers. An override on a variant's instance beats the variant, and the variant beats its base, by structure; placing the variant again changes no region. A variant that adds a state or transition adds nodes that are the variant's (§5.2) | V1's own resolution of `extends` (PT-7) |
-| A narrative override's extent (narrative note §6.5) | a region on the narrative axis: a hold is `[k, ∞)`, and holds are ranked by their start, so a later start wins without cutting the earlier region. Retiming a hold, or moving the joint it starts at, re-ranks the holds it passes in the same edit | the extent kinds (PT-9) |
+| A lesson variant that `extends` (variants-and-imports.md V1) | **a layer** (P14): a variant sits between the definition it extends and what places it, and its patches are anchored in it, so they apply in each placement of the variant. An `extends` chain is nested layers. An override on a variant's instance beats the variant, and the variant beats its base, by structure; placing the variant again changes no region. A variant that adds a state or transition adds nodes that are the variant's (§5.2) | V1's own resolution of `extends` (`EN-5`) |
+| A narrative override's extent (narrative note §6.5) | a region on the narrative axis: a hold is `[k, ∞)`, and holds are ranked by their start, so a later start wins without cutting the earlier region. Retiming a hold, or moving the joint it starts at, re-ranks the holds it passes in the same edit | the extent kinds (`EN-6b`) |
 | A deck | an ordered document axis; slide patches default to `[k, ∞)` | |
 | Takes of a loop | a sequence axis, driven by the loop's `n` (§3.1) | |
-| A clip | a patch on its clock's time axis whose values are functions of `t`, with region `[k₀, ∞)` (a clip holds after its last key); a staggered target is its own patch | clips' separate resolution (PT-9) |
-| The scratch layer, gesture previews | patches in the session layer, the outermost (P8) | the overlay's separate precedence, when it moves onto the session layer (PT-7) |
-| `ROOTED`'s list of facet kinds | holding a hidden composition still is the visibility gate on composition clocks (PT-1, done). `ROOTED`'s other role, keeping what a picture demands computed, stays until PT-10 | `ROOTED` (PT-10) |
-| Value slices (reactive-engine.md §10.5, never built) | evaluation at a point: an observer has a point on every axis, not only the clocks (PT-5) | nothing |
+| A clip | a patch on its clock's time axis whose values are functions of `t`, with region `[k₀, ∞)` (a clip holds after its last key); a staggered target is its own patch | clips' separate resolution (`EN-6b`) |
+| The scratch layer, gesture previews | patches in the session layer, the outermost (P8; constants only) | the overlay's separate precedence, when it moves onto the session layer (`EN-5`) |
+| Solver poses on instance copies | entries in a dedicated **solve layer** between the document layer and session (P17) | `Owners::solved`, `keep_solved`, `release`, `apply_recorded` (`EN-5`) |
+| `ROOTED`'s list of facet kinds | holding a hidden composition still is the visibility gate on composition clocks (done); remaining `ROOTED` demand retired after need counts and delta clock gating | `ROOTED` (`EN-9`) |
+| Value slices | evaluation at a point: an observer has a point on every axis, not only the clocks (`EN-4`) | nothing |
 
 **The boundary stays.** Whether patches from outside a definition may set a part's
 fields is a policy per definition (today: any template node's leaf, component-model.md
@@ -471,36 +475,32 @@ fields is a policy per definition (today: any template node's leaf, component-mo
 
 ## 12. Phases
 
-Each ends committed, recorded in the roadmap, with its exit met.
-
-| Phase | Builds | Exit |
-|---|---|---|
-| **PT-5. Patches in `iron_document`** | Axes, patches and regions as document data; the ops of §7.1; resolution at a point (§5); the layer chain (definitions, variants, placing definitions, the document, the session); the stored rank as an order key (the model's `f64` is an artefact) and its default; the lints; a schema bump. Evaluation at a point: **a live tree has one point per composition**, its current one, and an observer at another point reads values only, as slices do; structure per observer stays open (D10). No mechanism moves yet | Values agree with `iron_patch` on every script of a differential test (the crate's scripts, run through the store, its ranks mapped to order keys by order); §6.2's properties, with views in every layer, and the axis-growth property (§4) on every axis kind, hold over the store's random scripts; a patch edit at 700 meters is within 2× of a constant edit |
-| **PT-6. Machines on axes** | §11's machine rows; `std:plot`'s `vis` first; the state editor edits patches on the state axis | machines.md's poses deleted; `std:plot` looks and animates as before (its tests and `plot-view.txt`) |
-| **PT-7. Instances on the instance axis** | overrides as patches; variants as layers; the scratch layer and previews onto the session layer; which of a `use`'s own overrides are picture-side (§13) | every override and variant test passes as patches; `override` deleted; a differential test of old against new over the suite, as the engine plan's was |
-| **PT-8. Search and provenance** | §10; provenance chips, the blast radius shown while dragging, the lints in the inspector | the agent answers "why is this blue" and "what would this change" from regions |
-| **PT-9. Decks, takes, time** | ordered axes in the UI; clips as patches; narrative extents as regions; `now()` and `clock()` | a three-slide deck and a take series authored and played; clips resolve as patches |
-| **PT-10. Clock operators** | rate, offset, loop, ping-pong, gate, hold, remap; ghosts, coverage | per the note's §3; `ROOTED` deleted |
-| **PT-11. Storage and the server** | PT-4b's spec | PT-4b's exits |
+Work order and exits live in [`../handoff-engine.md`](../handoff-engine.md) under the
+unified `EN-n` keys (`EN-3` design & spike, `EN-4` patches & point evaluation in
+`iron_document`, `EN-5` instances as virtual views + minimal `ItemTable`, `EN-6a`
+machines on axes, `EN-6b` clips & ordered axes, `EN-11` chunked storage). Product UX
+follow-ups (search/provenance UI, clock operators/ghosts) follow in `handoff-product.md`.
 
 ## 13. Open
 
 - **Relative regions:** "each instance in its own hover state" is a union over
-  instances of (that instance, its state = hover): a diagonal no box writes, and the
-  commonest machine region. Until it is designed, a pose patch lives in the definition,
-  where its region is on the local state axis alone and holds for every instance, and
-  a per-instance pose is a patch on (that instance) × (that state).
-- **The picture axis.** One entity in several pictures shares state
-  (reactive-engine.md §8.4), and a `use` carries its own overrides, so pictures differ
-  in more than projection. A picture-side region would set picture-side fields only
-  (projection, style), never the body's, so the body computes once. Not modelled and
-  not in the axis order; PT-7 settles which of a `use`'s overrides are picture-side.
-- **Whether ties are noise:** `ties()` lists equal keys on regions that meet; PT-8
+  instances of (that instance, its state = hover): a diagonal no box writes. Deferred
+  past `EN-6b`; until designed, a pose patch lives in the definition (local state axis
+  alone) or per instance as `(instance) × (state)`.
+- **Per-point picture axis:** body leaves/history key on entity (at its point) and
+  picture leaves key on `use`, so two pictures of one entity already disagree on
+  appearance without duplicating body computation (P20). A separate picture axis is
+  deferred past `EN-6b`.
+- **Whether ties are noise:** `ties()` lists equal keys on regions that meet; product UX
   shows the lint and judges whether it helps.
-- **Continuous time:** the crate's ordered axes are discrete, with open and closed
-  ends. Arithmetic on real intervals is verified in PT-5, and stored as PT-4b says.
-- **Cost:** the model enumerates by design; PT-5 measures value-at-point and
-  arrow size against the number of patches.
+- **Continuous time:** `src/iron_patch`'s ordered axes are discrete; continuous real
+  intervals are implemented and verified in `EN-6b` (or `EN-4` if `Time` is exposed
+  early) and stored per `patch-storage.md` (`EN-11`).
+- **Optional facet synthesis:** `EN-3` settles explicit facet-presence entries so adding
+  an optional allowed facet on an instance coexists cleanly with §5.3's inert-entry rule.
+- **Release policy on constraint deletion:** user decision in `EN-3` — whether a solved
+  instance part clears its solve-layer entry on constraint deletion (current behaviour)
+  or retains its solved pose like authored nodes.
 
 ## 14. Decisions
 
@@ -513,8 +513,8 @@ Each ends committed, recorded in the roadmap, with its exit met.
 | P5 | A patch's region is one box (a decision: the keys are per axis); unions are answers, not regions |
 | P6 | Presence (and `use.notation`) is structure, resolved before the fields; hiding cascades and a hidden node exists |
 | P7 | A patch does not reorder children |
-| P8 | The session is the outermost layer (the scratch layer, previews above it), never saved; it is not an axis |
-| P9 | Coordinates are set by drivers, never by patch entries; the axes' dependencies are acyclic |
+| P8 | The session is the outermost layer (the scratch layer, previews above it; constants only), never saved; it is not an axis |
+| P9 | Coordinates are set by drivers, never by patch entries; static axis cycles are refused before derivation, dynamic `deref` cycles evaluate with previous-pass coordinates and report a problem |
 | P10 | The axis keys of §6.1, from selections as written |
 | P11 | The declared axis order, deciding within a layer: instance, local states, clocks, sequences |
 | P12 | The drag writes in the view's layer, into E ∩ the winner's region, by §7.2's rule, and is refused where an outer layer sets the value |
@@ -522,3 +522,7 @@ Each ends committed, recorded in the roadmap, with its exit met.
 | P14 | A variant is a layer between its definition and what places it; there are no classes |
 | P15 | Layers: where a patch is written; an outer layer is stronger than every patch of an inner one |
 | P16 | Regions are compared as written, over values not yet added, deleted ones included; queries, dead and stale answer over the points that exist |
+| P17 | Solver poses on instance parts live in a dedicated system-owned **solve layer** between the document layer and session (exact instance path, saved, below bindings and producers in `engine.md` §2.4, cleared on authored edit or release) |
+| P18 | A node's instance coordinate is the enclosing view's path (not the view it places), so presence patches on a `use` are never self-referential |
+| P19 | Presence, `use.notation`, and bound entries vary directly on the instance axis and layers; dynamic state/sequence presence resolves in Stage 1 from pass-start coordinates (forbidden on time axes; use `hide`); dynamic bound entries are forbidden or compiled as fixed mux cells |
+| P20 | Body leaves and history key on entity; picture leaves key on `use` (no separate picture axis required in `EN-3`–`EN-6b`) |

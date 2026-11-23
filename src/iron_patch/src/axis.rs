@@ -10,6 +10,10 @@ pub struct AxisId(pub u16);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueId(pub u32);
 
+/// The scope (definition / variant) that declares a placement step or anchors
+/// a patch pattern (patches.md §4, P18).
+pub type ScopeId = u32;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// Slides, iterations: regions are intervals by endpoint ids.
@@ -26,6 +30,9 @@ struct Entry {
     id: ValueId,
     live: bool,
     path: Vec<u32>,
+    /// Parallel to `path`: which scope declares each placement step (for
+    /// scope-anchored suffix matching, patches.md §4). Empty when unanchored.
+    scopes: Vec<ScopeId>,
 }
 
 /// One axis. A deleted value stays as a tombstone in its place, so an
@@ -51,6 +58,20 @@ impl Axis {
             id,
             live: true,
             path,
+            scopes: Vec::new(),
+        });
+    }
+
+    /// Append a `Path` axis value with the scope chain that declares each step
+    /// (`scopes.len() == path.len()`, outermost first) for scope-anchored
+    /// pattern matching (patches.md §4, P18).
+    pub fn push_scoped(&mut self, id: ValueId, path: Vec<u32>, scopes: Vec<ScopeId>) {
+        debug_assert_eq!(path.len(), scopes.len());
+        self.values.push(Entry {
+            id,
+            live: true,
+            path,
+            scopes,
         });
     }
 
@@ -62,6 +83,7 @@ impl Axis {
                 id,
                 live: true,
                 path: Vec::new(),
+                scopes: Vec::new(),
             },
         );
     }
@@ -101,6 +123,13 @@ impl Axis {
             .iter()
             .find(|e| e.id == id)
             .map_or(&[], |e| &e.path)
+    }
+
+    pub fn scopes(&self, id: ValueId) -> &[ScopeId] {
+        self.values
+            .iter()
+            .find(|e| e.id == id)
+            .map_or(&[], |e| &e.scopes)
     }
 }
 

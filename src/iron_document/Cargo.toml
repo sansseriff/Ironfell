@@ -21,6 +21,10 @@ path = "tests/fonts.rs"
 name = "instance_cost"
 path = "tests/instance_cost.rs"
 
+[[test]]
+name = "views_spike"
+path = "tests/views_spike.rs"
+
 # No Bevy, by design (plans/specs/document-spine.md §5). This crate compiles and
 # tests natively; the app crate wraps it in a resource and owns the reconciler.
 [dependencies]

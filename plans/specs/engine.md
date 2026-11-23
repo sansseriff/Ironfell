@@ -86,13 +86,17 @@ Static component instances (`<place>` / `use`) are answered through `Tree` as **
 views** over shared compiled templates plus the active patch stack for their instance
 path, rather than copying nodes into `Docs::copies`:
 
-- **Read path & sparse resolved store:** `Tree` answers effective values at the live point
-  while preserving its borrowed `&'a` API. A sparse, non-journaled `Resolved` table inside
-  `Docs` (updated eagerly in Stage 1, with `base_facet()` alongside for inspector/planner)
-  holds only patched authored nodes (`EN-4`) and rewritten/patched virtual nodes (`EN-5`);
-  unpatched constant virtual nodes borrow directly from shared `Arc<Template>`. The `EN-3`
-  spike benchmarks this against fully-virtual per-field resolution before `EN-4` freezes
-  the representation.
+- **Read path & sparse resolved store (settled by `EN-3` spike):** `Tree` answers effective
+  values at the live point while preserving its borrowed `&'a` API (`Tree::facet`,
+  `Tree::get::<T>`, `Tree::leaf`) with `0` heap allocations per read. A sparse,
+  non-journaled `Resolved` table inside `Docs` (updated eagerly in Stage 1, with
+  `base_facet()` alongside for inspector/planner) holds only patched authored nodes
+  (`EN-4`) and rewritten/patched virtual nodes (`EN-5`); unpatched constant virtual nodes
+  borrow directly from shared `Arc<Template>`. In `tests/views_spike.rs` (700 meters × 62
+  nodes = 43,400 virtual nodes, 10% patched), this cut memory from 31.30 MB to 0.77 MB
+  (2.5% of materialized), delivered 15.8–22.4 ns / 0 allocs per read vs 744–2,700 ns /
+  1–17 allocs for fully-virtual resolution, and reconciled a single-owner patch edit in
+  55.3 µs (enabled by zero-alloc `NodeId::expanded_parts()` metadata in `id.rs`).
 - **View deltas & keys:** Stage 1 diffs each view's record (template `Arc`, environment,
   notation, absent set, sparse resolved nodes) and emits ordinary effective `Node(v)`,
   `Children(v)`, `Facet(v, k)`, `Leaf`, `Relations`, and old/new `In`/`With` keys (plus

@@ -33,8 +33,11 @@ pub mod patch;
 pub mod region;
 pub mod world;
 
-pub use axis::{Axis, AxisId, Kind, Point, Space, ValueId};
+pub use axis::{Axis, AxisId, Kind, Point, ScopeId, Space, ValueId};
 pub use edit::Op;
-pub use patch::{Doc, Field, HIDDEN, Key, Node, PRESENT, Patch, PatchId, Strength};
+pub use patch::{
+    Doc, FACET_PRESENT_BASE, FacetId, Field, HIDDEN, Key, Node, PRESENT, Patch, PatchId,
+    SESSION_LAYER, Strength, facet_present, is_facet_present,
+};
 pub use region::{Bound, Product, Region, Sel};
 pub use world::{State, World};

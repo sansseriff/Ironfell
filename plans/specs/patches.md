@@ -21,7 +21,8 @@ patch whose region contains the point applied over it, weakest first.
 What this spec settles: the terms (§2), axes (§3), regions (§4), how a value is
 resolved (§5), strength and its laws (§6), editing (§7), arrows (§8), markup (§9),
 queries (§10), what each mechanism becomes (§11) and the phases (§12). What it leaves
-to PT-4b: storage, loading, the index's shape and sync. What it leaves open: §13.
+to [`patch-storage.md`](patch-storage.md) (`EN-11`): storage, loading, the index's
+shape and sync. What it leaves open: §13.
 
 ## 2. Terms
 
@@ -108,8 +109,8 @@ a patch.
   value is still a value as written: after C is deleted, `{C}` and `[C, C]` are the same
   region, and neither is the empty one. So adding or inserting a value changes no
   value at an existing point, no drag's ops, no default rank, no merge's verdict, no
-  tie and no inversion (PT-3's `growing_an_axis_changes_no_decision`, growing every
-  axis kind). **Dead and stale entries are answers about the points that exist**
+  tie and no inversion (`iron_patch`'s `growing_an_axis_changes_no_decision`, growing
+  every axis kind). **Dead and stale entries are answers about the points that exist**
   (§10), and can change as an axis grows: an entry dead under a stronger `[B, D]` lives
   again at a slide appended after D.
 - **Unions of boxes are answers.** A query's result (§10), a winning region, a blast
@@ -127,11 +128,14 @@ a patch.
   | `*/o1/j` | instances whose path ends in these steps |
   | `*/j not */o2/j` | …less those ending in a longer pattern |
 
-- **Pattern steps** are placement ids qualified by the definition that declares them,
-  since placement ids are definition-local and two definitions may each have an `o1`.
-  **A pattern is anchored where it is written:** its paths start at that scope, so a
-  pattern written in a definition matches inside each placement of that definition and
-  nowhere else.
+- **Pattern steps and nested-placement anchoring (P18):** Pattern steps are placement
+  ids qualified by the definition that declares them, since placement ids are
+  definition-local and two definitions may each have an `o1`. **A pattern is anchored
+  where it is written:** its paths start at that scope, so a pattern written in a
+  definition matches strictly inside placements of that definition and nowhere else.
+  A node's instance coordinate is the path of its **enclosing view** (not the view it
+  places), so a presence patch on a `use` node evaluates at the enclosing view's path
+  and is never self-referential.
 
 ## 5. The value at a point
 
@@ -169,23 +173,41 @@ run of its clock (the note's §2.5), outside this algebra.
   different order sets a layout field.
 - **Hidden nodes** exist: they are laid out where layout says so, readable by bindings,
   and not drawn. Absent nodes are none of these.
+- **Optional facet presence (P21):** Optional facets on a node (e.g. adding a `Fill`,
+  `Stroke`, or `Layout` facet on an instance) are governed by explicit facet-presence
+  entries (`facet:<kind>`, `<add-facet>` / `<remove-facet>`) resolved in Stage 1
+  alongside node `present`. A field entry on an optional facet applies only at points
+  where both the node and that facet are present; elsewhere it is inert and reported
+  stale (§5.3). Field writes never synthesize missing facets implicitly.
+- **Axis-kind structure and binding rules (P19):** Presence, facet presence,
+  `use.notation`, and bound entries (`{= …}`) vary directly on the instance axis and
+  layers. On dynamic state and sequence axes, structure (`present`, `facet:<kind>`,
+  `use.notation`) resolves in Stage 1 from committed pass-start coordinates (preserving
+  Stage 2 makers' "no evaluated leaves" rule), and bound entries are either forbidden or
+  compiled as a fixed mux cell so graph wiring never churns on state/sequence steps. On
+  time axes, presence and bound entries are forbidden (use `hide` for visibility).
+- **Entity vs. picture ownership (P20):** Body leaves and history (ports, equations,
+  accumulators, traces, machines) key on the entity at its point; picture leaves key on
+  the `use` node, so two pictures of one entity can disagree on appearance and notation
+  without duplicating body computation.
 - **Structure may differ by point** (presence is a field), and evaluation at a point
-  (PT-5) builds the structure of that point. A slice of *history* stays values only,
-  as reactive-engine.md D10 leaves it: a ghost of a take that adds parts is PT-10's
-  problem, not this algebra's.
+  (`EN-4` / `EN-5`) builds the structure of that point. A slice of *history* stays
+  values only: a ghost of a take that adds parts is a product UX follow-up
+  (`handoff-product.md`), not this algebra's.
 
 ### 5.3 Stale entries
 
 An entry is **stale** when it does nothing anywhere it would win: its winning region
-(§6.2) is non-empty, and at every point of it the entry's node is absent or has no such
-field. Stale entries are kept, apply nothing, and are listed with their reason, `absent
-node` or `no such field` (`Store::stale()`, replacing `stale_overrides`).
-- **A removal is never stale:** an entry that makes its node absent is why the node is
-  absent.
+(§6.2) is non-empty, and at every point of it the entry's node or optional facet is
+absent, or the node's type has no such field. Stale entries are kept, apply nothing,
+and are listed with their reason, `absent node`, `absent facet`, or `no such field`
+(`Store::stale()`, replacing `stale_overrides`).
+- **A removal is never stale:** an entry that makes its node or facet absent is why it
+  is absent.
 - **An entry absent at only some of the points where it wins is normal** (a part only
   take 3 adds), and is not listed.
 - **"Not loaded" is not stale.** An entry whose node is in a chunk not yet loaded
-  (PT-4b) is unknown until it loads, and a lint over a partly loaded scope says so.
+  (`EN-11`) is unknown until it loads, and a lint over a partly loaded scope says so.
 
 ## 6. Strength and the laws
 
@@ -201,6 +223,16 @@ Strength is **(layer, rank)**, compared layer first (P1, P15).
   order they were made in: component-model.md §5.3's outermost-wins, by structure. An
   imported or `std:` definition's patches are in its layer and may not be written, and
   their ranks never compare with the document's.
+- **The solve layer (P17)** is a dedicated system-owned layer between the document
+  layer and the session layer. It is saved, holds at most one entry per exact instance
+  leaf (region always the exact instance path), and is written only by Stage 4
+  `Transaction` constraint solves. In effective value precedence (`engine.md` §2.4), it
+  sits **below bindings and producer signals** and **above authored patches**, so it
+  never shadows a binding or layout/clip producer. An authored write in the same
+  transaction targeting a leaf with a solve entry clears that solve entry first (as a
+  derived op) so the authored edit acts as a driver; undo, redo, and replay apply
+  recorded ops only without re-solving. Solve-layer entries do not participate in
+  authored-layer `dead`/`ties`/`contradictions` lints.
 - **The session is the outermost layer** (P8): the scratch layer, and above it a
   gesture's previews. Its patches are never saved or synced. Being a layer rather than
   an axis, a session patch takes any region, normally all of it, so a preview does not
@@ -208,9 +240,9 @@ Strength is **(layer, rank)**, compared layer first (P1, P15).
 - **The rank orders patches within a layer.** It is an order key, like child order's,
   so a patch fits between two others without renumbering. **No two patches of a layer
   share a rank:** an op that would give one another's rank is refused, and the store
-  mints keys that do not collide, across clients too (PT-4b). With equal ranks,
-  "just above" one of them could land above the other, and a split would change a
-  value.
+  mints keys that do not collide, across clients too (`EN-4` / `EN-11`). With equal
+  ranks, "just above" one of them could land above the other, and a split would change
+  a value.
 - **A new patch's rank comes from its region's axis keys** (below): just above every
   patch of its layer whose keys are no greater, below the next rank above those. So
   when patches are made, a narrower region is stronger, "this only" beats "from here
@@ -218,9 +250,9 @@ Strength is **(layer, rank)**, compared layer first (P1, P15).
 - **The keys give the default and nothing else.** Once a patch is made its stored rank
   decides, and editing its region does not change it. Derived strength would: widening
   `{C}` to `[C, ∞)` would make an existing `[C, D]` the more specific, and C would
-  change though it was in the patch throughout (PT-3 found this at seed 53, and in the
-  example `apply_from_b_on_and_the_widening_flaw`). Stored rank keeps region edits
-  local (law 3).
+  change though it was in the patch throughout (`iron_patch` found this at seed 53, and
+  in the example `apply_from_b_on_and_the_widening_flaw`). Stored rank keeps region
+  edits local (law 3).
 - **A rank against inclusion shows as dead entries.** An entry is dead when, over the
   points that exist, stronger patches **of its own layer** set the field everywhere it
   applies (`World::dead`). An outer layer covering it is outermost-wins working, and is
@@ -256,7 +288,7 @@ in the document, beats its definition's hover pose. So does a slide's patch writ
 the document: a deck that sets a part's leaf on slide 3 replaces that part's hover
 feedback there too, since the pose sets a channel and the slide's patch the leaf the
 channel drove (M7). To keep the feedback, the slide's patch leaves `hover` out of its
-region, or the document writes its own hover pose. (PT-3:
+region, or the document writes its own hover pose. (`iron_patch`:
 `an_outer_layer_beats_the_definition_s_pose_at_every_state`.)
 
 ### 6.2 The laws, as they hold
@@ -289,19 +321,21 @@ region, or the document writes its own hover pose. (PT-3:
 
 Values do not depend on the order patches are stored in. These are properties in
 `src/iron_patch/tests/laws.rs` over 10,000 random scripts each, checked against a
-reference that enumerates every point and one written apart from the model; 16 check
-the rules taken, and 3 show the rules not taken failing (the laws as written cycle;
-derived strength and widening by moving entries are not local). PT-5 runs them
-against the store.
+reference that enumerates every point and one written apart from the model; the suite
+checks both the rules taken (including anchoring, nested/optional-facet presence, and
+the solve layer) and the rules not taken failing (the laws as written cycle; derived
+strength and widening by moving entries are not local). `EN-4` runs them against the
+store.
 
-**What PT-3 does not cover.** The properties report a failing seed, not a minimal
-case (no shrinking). Child order is not modelled (P7: patches do not reorder, so there
-is nothing to check). There is no canonical form of a region, and none is needed: two
-regions are the same when each is within the other as written. Layers are one integer
-per patch, which is how one node's chain orders them. Not modelled at all: values that
-are functions of the coordinates (a clip's), entries on a field a node lacks, pattern
-anchoring and qualified steps, `use.notation`, relative regions (§13), continuous
-intervals (the ordered axes are discrete, with open and closed ends), and cost.
+**What `src/iron_patch` does not cover.** The properties report a failing seed, not a
+minimal case (no shrinking). Child order is not modelled (P7: patches do not reorder,
+so there is nothing to check). There is no canonical form of a region, and none is
+needed: two regions are the same when each is within the other as written. Layers are
+one integer per patch, which is how one node's chain orders them. Not modelled in
+`iron_patch`: values that are functions of the coordinates (a clip's, covered in
+`EN-6b`), `use.notation` template switching (covered in the `EN-3` spike and `EN-5`),
+relative regions (§13), continuous intervals (the ordered axes are discrete, with open
+and closed ends), and runtime cost (benchmarked in the `EN-3` spike).
 
 ## 7. Editing
 
@@ -310,7 +344,7 @@ intervals (the ordered axes are discrete, with open and closed ends), and cost.
 | Operation | Does | Ops |
 |---|---|---|
 | **Edit** | changes an entry's value | set an entry |
-| **Widen, narrow** | adds or removes points of a patch's region, on one axis | add or remove values or move an endpoint, per axis (PT-4b: they merge) |
+| **Widen, narrow** | adds or removes points of a patch's region, on one axis | add or remove values or move an endpoint, per axis (`EN-11`: they merge) |
 | **Split** | moves some entries to a new patch of the same layer on another region; on the same region the new patch sits just above, and every value stays. Refused for a patch that may not be written | add a patch, clear entries |
 | **Merge** | joins two patches into the stronger | set entries, remove a patch |
 | **Reorder** | changes a rank within its layer; refused for a rank another patch of the layer has | set a rank |
@@ -324,7 +358,7 @@ conservative: it does not look at whether that patch's value happens to agree, o
 whether a fourth patch hides the overlap.
 
 All are ops in transactions through `iron_document` (AGENTS.md), undone like any other;
-each has an inverse (PT-3's `undo_restores_everything`).
+each has an inverse (`iron_patch`'s `undo_restores_everything`).
 
 ### 7.2 The edit region and the drag
 
@@ -357,11 +391,12 @@ that value. A gesture previews in the session layer and commits one drag, with i
 final value, so its samples are not drags. A drag changes exactly the new entry's
 winning region where the value differs, never a point outside E, and never a patch that
 may not be written (a recorded move's, an imported or `std:` definition's). E is as
-written, so values the axes gain later inside E are inside it. These are PT-3's
-`a_drag_obeys_the_lens_laws`, from views in every layer, and its blast-radius property.
+written, so values the axes gain later inside E are inside it. These are
+`iron_patch`'s `a_drag_obeys_the_lens_laws`, from views in every layer, and its
+blast-radius property.
 
 **A clip-driven field** (a value that is a function of `t`) is dragged by timeline.md
-§12.2's table, whole, carried into PT-9: on a key, that key's value in either mode;
+§12.2's table, whole, carried into `EN-6b`: on a key, that key's value in either mode;
 auto-keyframe on, a key at the playhead; off, every key moved by the drag's delta, or
 before the clip starts, the authored value. The guarantee "nothing outside E changes"
 is for the key: a key also changes the interpolated values between its neighbours,
@@ -445,10 +480,11 @@ answer in regions (unions of boxes), per node, without enumerating points.
 - **The agent** reads patches with their regions instead of every point's values, and
   explains a value by its patch stack.
 - **Where symbolic answers stop:** a bound value is evaluated at the points asked
-  about (slices, reactive-engine.md §10.5, which PT-5 takes over); values with history
-  answer "not seekable"; what is not loaded answers "not loaded" (PT-4b).
-- **For PT-8 to design, not this spec:** turning a search result into regions to edit,
-  showing what an edit shadows, matching theme tokens in a find.
+  about (slices, `EN-4`); values with history answer "not seekable"; what is not loaded
+  answers "not loaded" (`EN-11`).
+- **For product UX (`handoff-product.md`) to design, not this spec:** turning a search
+  result into regions to edit, showing what an edit shadows, matching theme tokens in a
+  find.
 
 ## 11. What each mechanism becomes
 
@@ -496,8 +532,6 @@ follow-ups (search/provenance UI, clock operators/ghosts) follow in `handoff-pro
 - **Continuous time:** `src/iron_patch`'s ordered axes are discrete; continuous real
   intervals are implemented and verified in `EN-6b` (or `EN-4` if `Time` is exposed
   early) and stored per `patch-storage.md` (`EN-11`).
-- **Optional facet synthesis:** `EN-3` settles explicit facet-presence entries so adding
-  an optional allowed facet on an instance coexists cleanly with §5.3's inert-entry rule.
 - **Release policy on constraint deletion:** user decision in `EN-3` — whether a solved
   instance part clears its solve-layer entry on constraint deletion (current behaviour)
   or retains its solved pose like authored nodes.
@@ -524,5 +558,6 @@ follow-ups (search/provenance UI, clock operators/ghosts) follow in `handoff-pro
 | P16 | Regions are compared as written, over values not yet added, deleted ones included; queries, dead and stale answer over the points that exist |
 | P17 | Solver poses on instance parts live in a dedicated system-owned **solve layer** between the document layer and session (exact instance path, saved, below bindings and producers in `engine.md` §2.4, cleared on authored edit or release) |
 | P18 | A node's instance coordinate is the enclosing view's path (not the view it places), so presence patches on a `use` are never self-referential |
-| P19 | Presence, `use.notation`, and bound entries vary directly on the instance axis and layers; dynamic state/sequence presence resolves in Stage 1 from pass-start coordinates (forbidden on time axes; use `hide`); dynamic bound entries are forbidden or compiled as fixed mux cells |
+| P19 | Presence, facet presence, `use.notation`, and bound entries vary directly on the instance axis and layers; dynamic state/sequence presence resolves in Stage 1 from pass-start coordinates (forbidden on time axes; use `hide`); dynamic bound entries are forbidden or compiled as fixed mux cells |
 | P20 | Body leaves and history key on entity; picture leaves key on `use` (no separate picture axis required in `EN-3`–`EN-6b`) |
+| P21 | Optional facets are governed by explicit facet-presence entries (`facet:<kind>`) resolved in Stage 1 alongside node `present`; field entries on an absent facet stay inert and stale |

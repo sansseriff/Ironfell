@@ -831,3 +831,41 @@ fn a_glided_layout_target_wakes_a_constraint_cluster_at_t0() {
     );
     assert!(constraint_problems(&store).is_empty(), "no constraint problem: {:?}", constraint_problems(&store));
 }
+
+/// Retargeting a binding onto a cluster's variable with the same value wakes
+/// `ClustersNative` via `Key::Wiring` (closing the old `grouping_reach` gap,
+/// EN-1): the cluster detects the cycle even though the binding's value did
+/// not change.
+#[test]
+fn a_retargeted_binding_with_same_value_regroups_via_wiring_key() {
+    let mut p = pendulum();
+    let ball = p.ball;
+    let link = p.links[0];
+    let current_len = p.store.resolved(link, path("constraint.value")).unwrap().as_f64().unwrap();
+    let ball_x = pos(&p.store, ball)[0];
+    // A separate helper `let` outside the cluster's reach holds `current_len`
+    // as a formula reading nothing in the cluster yet.
+    let comp = p.store.tree().live(p.group).and_then(|n| n.parent);
+    let helper = p.store.authored().next_id();
+    let mut l = facet::Let::default();
+    l.value = bind(&format!("{current_len}"));
+    p.store.apply(tx("helper", vec![
+        Op::Create { id: helper, ty: ty("let"), parent: comp, order: OrderKey::first(), facets: vec![l.wrap()] },
+        Op::Set { id: link, path: path("constraint.value"), slot: bind(&format!("{helper}.let.value")) },
+    ])).unwrap();
+    assert!(constraint_problems(&p.store).is_empty(), "no cycle yet: {:?}", constraint_problems(&p.store));
+
+    // Retarget `helper` to read `ball.transform2d.x` while keeping the EXACT
+    // same numeric value (`current_len + (ball.x - ball_x)`). Neither the
+    // constraint nor any node in `grouping_reach` is touched by this op, and
+    // `constraint.value` doesn't change — ONLY `Key::Wiring(helper.let.value)`
+    // fires, waking `ClustersNative` to detect the cycle!
+    p.store.apply(tx("retarget helper", vec![
+        Op::Set { id: helper, path: path("let.value"), slot: bind(&format!("{current_len} + ({ball}.transform2d.x - {ball_x})")) },
+    ])).unwrap();
+    let problems = constraint_problems(&p.store);
+    assert!(
+        problems.iter().any(|(_, m)| m.contains("reads") && m.contains("feeds the same cluster")),
+        "ClustersNative must regroup via Key::Wiring and report the cycle: {problems:?}"
+    );
+}

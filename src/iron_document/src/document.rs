@@ -871,7 +871,23 @@ impl Document {
         }
     }
 
+    /// Emit `Key::Leaf` for every field held by `facet` on `id`, when
+    /// touch-logging is active.
+    fn note_facet_leaves(&mut self, id: NodeId, facet: &Facet) {
+        if !self.touched.on {
+            return;
+        }
+        let kind = facet.kind();
+        for field in facet.field_names() {
+            if let Ok(path) = LeafPath::new(kind, field) {
+                self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
+            }
+        }
+    }
+
     pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Facet>) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("insert_node");
         let id = node.id;
         debug_assert!(node.is_live());
         self.type_insert(node.ty, id);
@@ -886,6 +902,7 @@ impl Document {
         }
         self.place(id);
         self.touch(id);
+        self.touched.on = on;
     }
 
     /// Bring a tombstoned node back, replacing its placement and facets
@@ -898,12 +915,15 @@ impl Document {
         order: OrderKey,
         comps: Vec<Facet>,
     ) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("restore_node");
         // Where the tombstone was, and (below) where it comes back.
         self.touch(id);
         for kind in FacetKind::ALL {
             if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
                 self.touched.note(crate::structure::Key::FacetSet(id));
                 self.touched.note(crate::structure::Key::Facet(id, *kind));
+                self.note_facet_leaves(id, &f);
                 self.rec(Rec::Facet(*kind, id, Some(f)));
             }
         }
@@ -920,11 +940,14 @@ impl Document {
         }
         self.place(id);
         self.touch(id);
+        self.touched.on = on;
     }
 
     /// Tombstone one node. The caller tombstones descendants separately so
     /// each gets its own inverse op.
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("tombstone");
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.tombstoned = Some(at));
@@ -933,13 +956,27 @@ impl Document {
         let kinds: Vec<FacetKind> = self.facets.iter().filter(|(_, m)| m.contains_key(&id)).map(|(k, _)| *k).collect();
         for kind in kinds {
             self.facet_index_remove(kind, id);
+            self.touched.note(crate::structure::Key::FacetSet(id));
+            self.touched.note(crate::structure::Key::Facet(id, kind));
+            if self.touched.on
+                && let Some(f) = self.facets.get(&kind).and_then(|m| m.get(&id))
+            {
+                for field in f.field_names() {
+                    if let Ok(path) = LeafPath::new(kind, field) {
+                        self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
+                    }
+                }
+            }
         }
+        self.touched.on = on;
     }
 
     /// Remove a live node outright, leaving no tombstone: a derived copy,
     /// which its owner makes again when it is wanted (handoff §4.6). Its
     /// children go first; relations to it are the caller's.
     pub(crate) fn remove_node(&mut self, id: NodeId) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("remove_node");
         self.touch(id);
         debug_assert!(self.is_live(id), "only a live node is removed");
         self.unplace(id);
@@ -958,9 +995,12 @@ impl Document {
         if self.recording() {
             self.rec(Rec::Node(id, before));
         }
+        self.touched.on = on;
     }
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("set_parent");
         self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| {
@@ -969,6 +1009,7 @@ impl Document {
         });
         self.place(id);
         self.touch(id);
+        self.touched.on = on;
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
@@ -982,10 +1023,16 @@ impl Document {
     }
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("insert_facet");
         self.touch(id);
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
+        self.note_facet_leaves(id, &c);
         let before = self.facets.entry(kind).or_default().insert(id, c);
+        if let Some(prev) = &before {
+            self.note_facet_leaves(id, prev);
+        }
         self.touched.note(crate::structure::Key::FacetSet(id));
         self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
@@ -997,6 +1044,7 @@ impl Document {
         if self.is_live(id) {
             self.facet_index_insert(kind, id);
         }
+        self.touched.on = on;
     }
 
     pub(crate) fn remove_facet(
@@ -1004,19 +1052,66 @@ impl Document {
         id: NodeId,
         kind: FacetKind,
     ) -> Option<Facet> {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("remove_facet");
         self.touch(id);
-        let c = self.facets.get_mut(&kind)?.remove(&id)?;
+        let Some(c) = self.facets.get_mut(&kind).and_then(|m| m.remove(&id)) else {
+            self.touched.on = on;
+            return None;
+        };
         self.touched.note(crate::structure::Key::FacetSet(id));
         self.touched.note(crate::structure::Key::Facet(id, kind));
+        self.note_facet_leaves(id, &c);
         if self.recording() {
             self.rec(Rec::Facet(kind, id, Some(c.clone())));
         }
         self.facet_index_remove(kind, id);
+        self.touched.on = on;
         Some(c)
+    }
+
+    /// Set a single leaf slot in place: journals the facet and reports both
+    /// `Facet` and `Leaf` keys. Returns `None` if `id` lacks `path.facet`.
+    pub(crate) fn set_leaf(
+        &mut self,
+        id: NodeId,
+        path: LeafPath,
+        slot: Slot,
+    ) -> Option<Result<Slot, crate::facet::LeafError>> {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("set_leaf");
+        let before = if self.recording() {
+            Some(self.facets.get(&path.facet)?.get(&id)?.clone())
+        } else {
+            None
+        };
+        let comp = match self.facets.get_mut(&path.facet).and_then(|m| m.get_mut(&id)) {
+            Some(c) => c,
+            None => {
+                self.touched.on = on;
+                return None;
+            }
+        };
+        let old = match comp.set(path.field, slot) {
+            Ok(old) => old,
+            Err(e) => {
+                self.touched.on = on;
+                return Some(Err(e));
+            }
+        };
+        if let Some(before) = before {
+            self.rec(Rec::Facet(path.facet, id, Some(before)));
+        }
+        self.touch(id);
+        self.touched.note(crate::structure::Key::Facet(id, path.facet));
+        self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
+        self.touched.on = on;
+        Some(Ok(old))
     }
 
     /// The facet to change in place. While a journal is open it is recorded
     /// first, since what the caller writes through `&mut` cannot be seen.
+    #[cfg(test)]
     pub(crate) fn facet_mut(
         &mut self,
         id: NodeId,
@@ -1032,8 +1127,13 @@ impl Document {
     }
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("insert_relation");
         self.touch(r.from);
         let (id, from, to) = (r.id, r.from, r.to);
+        self.touched.note(crate::structure::Key::Relation(id));
+        self.touched.note(crate::structure::Key::Relations(from));
+        self.touched.note(crate::structure::Key::Relations(to));
         let created = !self.by_source.contains_key(&from);
         let inserted = self.by_source.entry(from).or_default().insert(id);
         if created {
@@ -1055,6 +1155,7 @@ impl Document {
             self.rec(Rec::Relation(id, before));
         }
         self.refresh_rooted(id);
+        self.touched.on = on;
     }
 
     /// Keep `by_root` true for relation `id`, present or not.
@@ -1076,7 +1177,15 @@ impl Document {
     }
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
-        let r = self.relations.remove(&id)?;
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("remove_relation");
+        let Some(r) = self.relations.remove(&id) else {
+            self.touched.on = on;
+            return None;
+        };
+        self.touched.note(crate::structure::Key::Relation(id));
+        self.touched.note(crate::structure::Key::Relations(r.from));
+        self.touched.note(crate::structure::Key::Relations(r.to));
         self.refresh_rooted(id);
         self.touch(r.from);
         if self.recording() {
@@ -1088,6 +1197,7 @@ impl Document {
         if self.by_target.get_mut(&r.to).is_some_and(|s| s.remove(&id)) {
             self.rec(Rec::ByTarget(r.to, id, false));
         }
+        self.touched.on = on;
         Some(r)
     }
 
@@ -1111,8 +1221,9 @@ impl Document {
             (&cn.order, c) < (&key, id)
         });
         container.insert(pos, id);
-        if let Some(p) = parent {
-            self.touched.note(crate::structure::Key::Children(p));
+        match parent {
+            Some(p) => self.touched.note(crate::structure::Key::Children(p)),
+            None => self.touched.note(crate::structure::Key::Roots),
         }
         self.rec(Rec::Placed(parent, pos));
     }
@@ -1128,8 +1239,9 @@ impl Document {
         };
         if let Some(pos) = container.iter().position(|&c| c == id) {
             container.remove(pos);
-            if let Some(p) = parent {
-                self.touched.note(crate::structure::Key::Children(p));
+            match parent {
+                Some(p) => self.touched.note(crate::structure::Key::Children(p)),
+                None => self.touched.note(crate::structure::Key::Roots),
             }
             self.rec(Rec::Unplaced(parent, pos, id));
         }

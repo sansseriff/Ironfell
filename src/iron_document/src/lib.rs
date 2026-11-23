@@ -20,7 +20,7 @@ pub mod facet;
 #[doc(hidden)]
 pub mod work;
 mod structure;
-#[cfg(feature = "structure-oracle")]
+#[cfg(any(test, feature = "structure-oracle"))]
 pub use structure::silence_for_canary;
 pub mod reads;
 mod engine;
@@ -237,6 +237,48 @@ impl Drop for Rollback {
         // While unwinding, a second panic would abort the test binary and
         // hide the first.
         debug_assert!(!self.0 || std::thread::panicking(), "a transaction was not committed");
+    }
+}
+
+/// How `StoreCore::settle` runs derived stages (engine.md §3.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettleMode {
+    /// A live update (drag preview, playhead, publish, stepper, observer).
+    Live { clusters: bool },
+    /// A non-document input changed (theme, fonts, layout preview): flush
+    /// pending/touched cells and fall through to `Live` only if escaped reads
+    /// woke.
+    Flush,
+    /// A new transaction: solve constraint clusters and record derived writes.
+    Transaction,
+    /// Undo: apply recorded solver inverses, release unheld copies, no solve.
+    Undo,
+    /// Redo or replay: keep solved inverses, apply recorded writes, release,
+    /// no solve.
+    Replay,
+}
+
+/// Typed read-only context for Stage 2 makers (engine.md §3.3). Holds only a
+/// recording `Tree` and the contexts library — by type, a maker cannot read
+/// evaluated leaves from `Reactive`.
+#[allow(dead_code)]
+pub(crate) struct MakerCx<'a> {
+    doc: Tree<'a>,
+    contexts: &'a contexts::Library,
+}
+
+#[allow(dead_code)]
+impl<'a> MakerCx<'a> {
+    pub(crate) fn new(doc: Tree<'a>, rec: &'a structure::Recorder, contexts: &'a contexts::Library) -> MakerCx<'a> {
+        MakerCx { doc: doc.recording(rec), contexts }
+    }
+
+    pub(crate) fn tree(&self) -> Tree<'a> {
+        self.doc
+    }
+
+    pub(crate) fn contexts(&self) -> &'a contexts::Library {
+        self.contexts
     }
 }
 
@@ -652,7 +694,7 @@ impl StoreCore {
             scratch.reactive.glide = None;
         }
         if relaxed {
-            scratch.pipeline();
+            scratch.settle(SettleMode::Live { clusters: true });
         } else if glided {
             scratch.reactive.flush(Tree::of(&scratch.docs));
         }
@@ -839,9 +881,10 @@ impl StoreCore {
         self.sync_layout(false);
         self.sync_repeats(false);
         self.prime_layout(&shaped);
-        // What the ops wrote reaches the keyed cells that read it, now that
-        // layout's outputs are reconciled (structure-in-the-graph.md §3.3).
-        self.drain_touched();
+        // What writes touched reaches keyed cells and leaf readers through
+        // the single write channel, now that layout's outputs are reconciled
+        // (engine.md §3.2).
+        let touched_leaves = self.reactive.prime_touched(self.docs.take_touched());
         // Constraints and their operands are structure to the grouping
         // and to validation: they look again when an op touched what they
         // read (DS-3b: not on every structural change). A reparent can move
@@ -871,7 +914,7 @@ impl StoreCore {
             graph::Rescope::Some { names, under }
         };
         let tokens = self.token_leaves();
-        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive, &tokens);
+        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, rederive, &tokens, &touched_leaves);
     }
 
     /// The theme's tokens by name, as cells read them: kept until a token
@@ -1043,7 +1086,9 @@ impl StoreCore {
         store.docs.gone.clear();
         store.rebuild_clusters();
         store.resolve_physics();
-        store.drain_touched();
+        // Initial load already ran rebuild and resolve_physics from scratch;
+        // leave the touched log empty before the first transaction.
+        let _ = store.docs.take_touched();
         store
     }
 
@@ -1509,7 +1554,7 @@ impl StoreCore {
             let _ = self.apply_session(vec![Op::Set { id: c, path: clock_path("t"), slot: Slot::Const(Value::Number(t)) }]);
         }
         self.resample_running();
-        self.pipeline();
+        self.settle(SettleMode::Live { clusters: true });
     }
 
     /// Clips that could not be sampled at the current time, by clip node.
@@ -1657,7 +1702,7 @@ impl StoreCore {
     /// in `signal_errors`.
     pub fn publish(&mut self, producer: ProducerId, values: std::collections::BTreeMap<Leaf, Value>) {
         self.reactive.publish(Tree::of(&self.docs), producer, values);
-        self.pipeline();
+        self.settle(SettleMode::Live { clusters: true });
     }
 
     /// Release everything a producer published; its leaves read as authored.
@@ -1796,7 +1841,7 @@ impl StoreCore {
         }
         // New faces measure differently: layouts holding text reflow.
         self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Fonts, Some(std::sync::Arc::new(generation)));
-        self.relayout();
+        self.settle(SettleMode::Flush);
         !ids.is_empty()
     }
 
@@ -1809,7 +1854,7 @@ impl StoreCore {
         self.drivers.insert(leaf);
         self.reactive.preview(Tree::of(&self.docs), leaf, value);
         self.sync_clock();
-        self.pipeline();
+        self.settle(SettleMode::Live { clusters: true });
     }
 
     /// Withdraw one leaf's preview (it reads as the document again).
@@ -1818,7 +1863,7 @@ impl StoreCore {
         self.drivers.remove(&leaf);
         self.reactive.unpreview(Tree::of(&self.docs), leaf);
         let clocked = self.sync_clock();
-        self.pipeline_from(clocked);
+        self.settle(SettleMode::Live { clusters: clocked });
     }
 
     /// How a gesture on this leaf would be realised right now: directly, by
@@ -1921,7 +1966,7 @@ impl StoreCore {
         self.reactive.clear_overlay(Tree::of(&self.docs));
         // A previewed playhead goes back to the clock's own `t`.
         if self.sync_clock() || previewed {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         if let Some(g) = self.gesture.take() {
             self.ended = Some((g.id, status));
@@ -1949,7 +1994,7 @@ impl StoreCore {
                 self.reactive.preview(Tree::of(&self.docs), leaf, v);
             }
         }
-        self.pipeline();
+        self.settle(SettleMode::Live { clusters: true });
     }
 
     /// Take back transaction `version` if it is the latest: undo it and drop
@@ -2162,27 +2207,13 @@ impl StoreCore {
         } else {
             self.prime_reorders(ops.iter());
             self.prime_grouping(ops.iter());
-            self.drain_touched();
-            let changed: Vec<Leaf> = ops.iter().filter_map(|op| match op { Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }), _ => None }).collect();
-            if !changed.is_empty() {
-                // Report each written leaf as changed, as a preview does, so
-                // the reconciler and the spatial scene see a session node
-                // move even when nothing binds to it (the Latency view's
-                // square, recentred by `engine_api::document_latency`).
-                for &leaf in &changed {
-                    if let Some(v) = self.reactive.read(Tree::of(&self.docs), leaf) {
-                        self.reactive.mark(leaf, v);
-                    }
-                }
-                self.reactive.invalidate(Tree::of(&self.docs), changed);
-            } else {
-                // A reorder sets no leaf: what its keys marked runs now.
-                self.reactive.flush(Tree::of(&self.docs));
-            }
+            // Session constant writes also mark their leaves so the host sees
+            // moved session nodes even with no readers (e.g. Latency view).
+            self.sync_touched(true);
         }
         self.session_version += 1;
         if self.sync_clock() {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         Ok(())
     }
@@ -2566,7 +2597,7 @@ impl StoreCore {
         }
         if gone {
             // The structure changes: settle again, without the ones gone.
-            self.pipeline_from(false);
+            self.settle(SettleMode::Live { clusters: false });
         }
         self.publish_presence();
         active
@@ -2626,7 +2657,7 @@ impl StoreCore {
             self.session_state.insert(leaf, value);
         }
         self.publish_state();
-        self.pipeline();
+        self.settle(SettleMode::Live { clusters: true });
         Ok(())
     }
 
@@ -3134,7 +3165,7 @@ impl StoreCore {
                 break;
             }
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, set, &unset);
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
             if round == ROUNDS {
                 break;
             }
@@ -3168,7 +3199,7 @@ impl StoreCore {
         };
         if !values.is_empty() {
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, values, &[]);
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         due
     }
@@ -3240,7 +3271,7 @@ impl StoreCore {
         };
         if !values.is_empty() {
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         active
     }
@@ -3318,7 +3349,7 @@ impl StoreCore {
         let rooted = |n: NodeId| solved.contains(&n) || doc.facets_of(n).any(|f| ROOTED.contains(&f.kind()));
         let unneeded = self.reactive.necessity(&hidden, &rooted);
         if self.reactive.set_unneeded(doc, unneeded) {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
     }
 
@@ -3330,38 +3361,42 @@ impl StoreCore {
     /// `advance`.
     pub fn exact(&mut self) {
         if self.reactive.relax(Tree::of(&self.docs)) {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
     }
 
     /// What follows values that moved outside a transaction, as after a
     /// publish: live solves, then what the store derives. Natives read
     /// through the graph; the store's own code between them reads leaves
-    /// directly (the repeat scan, the network's structure, the live
-    /// cluster solve, session state). If one was stale, the derivation runs
-    /// again with it up to date (handoff §4.10, RE-5.6: in the suite only
-    /// `current`'s callers still read one).
-    fn pipeline(&mut self) {
-        self.pipeline_from(true);
-    }
-
-    /// `pipeline`, solving the constraint clusters first only if
-    /// `clusters`. Every derivation outside a transaction comes here (or
-    /// to `relayout`), so that what it reads outside the graph is recorded.
-    fn pipeline_from(&mut self, clusters: bool) {
-        self.settle_reads();
-        for _ in 0..4 {
-            self.derive(clusters);
-            if !self.settle_reads() {
-                return;
+    /// The single driver for derived work (engine.md §3.3): every mutating
+    /// entry point settles through here in the written stage order.
+    fn settle(&mut self, mode: SettleMode) {
+        match mode {
+            SettleMode::Flush => {
+                self.sync_touched(false);
+                if self.settle_reads() {
+                    self.settle(SettleMode::Live { clusters: true });
+                }
+            }
+            SettleMode::Live { clusters } => {
+                self.settle_reads();
+                for _ in 0..4 {
+                    self.settle_pass(clusters);
+                    if !self.settle_reads() {
+                        return;
+                    }
+                }
+                // Reads that keep reaching further: derive from an exact graph.
+                self.reactive.relax(Tree::of(&self.docs));
+                self.settle_pass(clusters);
+            }
+            SettleMode::Transaction | SettleMode::Undo | SettleMode::Replay => {
+                debug_assert!(false, "use settle_tx for transaction modes");
             }
         }
-        // Reads that keep reaching further: derive from an exact graph.
-        self.reactive.relax(Tree::of(&self.docs));
-        self.derive(clusters);
     }
 
-    fn derive(&mut self, clusters: bool) {
+    fn settle_pass(&mut self, clusters: bool) {
         self.recorded(|s| {
             if clusters && !s.clusters.list.is_empty() {
                 s.resolve_clusters_live();
@@ -3370,13 +3405,36 @@ impl StoreCore {
         });
     }
 
-    /// After a change outside the document that layout reads (a theme, a
-    /// font, a gap previewed), which its natives took in that pass: what
-    /// read a stale cell runs again, like `pipeline`.
-    fn relayout(&mut self) {
-        self.reactive.flush(Tree::of(&self.docs));
-        if self.settle_reads() {
-            self.pipeline();
+    /// Unified post-`run` driver for `Transaction`, `Undo`, and `Replay`
+    /// (engine.md §3.3).
+    fn settle_tx(
+        &mut self,
+        mode: SettleMode,
+        tx: &mut Transaction,
+        expanded: &mut Vec<Op>,
+        full_inverse: &mut Vec<Op>,
+        recorded: Vec<Op>,
+        solved: Vec<(Leaf, Slot)>,
+    ) -> Option<SolverSummary> {
+        self.after_transaction(tx, expanded, full_inverse);
+        match mode {
+            SettleMode::Transaction => {
+                let held = self.keep_solved(tx, solved, expanded);
+                self.post_apply(tx, &held)
+            }
+            SettleMode::Undo => {
+                self.apply_recorded(tx, recorded, full_inverse);
+                let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
+                self.release(tx, &held, 0);
+                None
+            }
+            SettleMode::Replay => {
+                let held = self.keep_solved(tx, solved, expanded);
+                self.apply_recorded(tx, recorded, full_inverse);
+                self.release(tx, &held, 0);
+                None
+            }
+            _ => unreachable!("settle_tx takes Transaction, Undo, or Replay"),
         }
     }
 
@@ -3411,14 +3469,14 @@ impl StoreCore {
     /// that cell is current (a handle's target, an action's writes).
     fn current<T>(&mut self, mut f: impl FnMut(&mut Self) -> T) -> T {
         if self.settle_reads() {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         for _ in 0..4 {
             let out = self.recorded(&mut f);
             if !self.settle_reads() {
                 return out;
             }
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         self.exact();
         f(self)
@@ -3631,7 +3689,7 @@ impl StoreCore {
         // (what the player reads besides is rooted: `ROOTED`).
         let read = self.settle_reads();
         if read {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         let waiting = self.pending_queries();
         let doc = Tree::of(&self.docs);
@@ -3658,7 +3716,7 @@ impl StoreCore {
         let rest = !active && !read && self.reactive.propagations == self.evaluated_at;
         let swept = rest && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
         if swept {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         let changed = active || swept || read || !was_live.is_empty() || waiting != was_waiting;
         let next = (active || self.reactive.stale_count() > 0).then_some(now);
@@ -3723,7 +3781,7 @@ impl StoreCore {
         if self.dark != dark {
             self.dark = dark;
             self.resolve_theme();
-            self.relayout();
+            self.settle(SettleMode::Flush);
         }
     }
 
@@ -3757,7 +3815,7 @@ impl StoreCore {
             }
             let value = self.layout_preview.clone().map(|p| std::sync::Arc::new(p) as std::sync::Arc<dyn std::any::Any + Send + Sync>);
             self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::LayoutPreview, value);
-            self.relayout();
+            self.settle(SettleMode::Flush);
         }
     }
 
@@ -4022,14 +4080,29 @@ impl StoreCore {
         Ok(())
     }
 
-    /// Hand the graph what the documents' writes touched since this was
-    /// last done: the keyed cells that read it run in the next pass. Marks
-    /// only; called where the graph is primed (structure-in-the-graph.md
-    /// §3.3), never inside `run`.
-    fn drain_touched(&mut self) {
+    /// Consume every key written to `Docs` since the last sync through the
+    /// single write channel (engine.md §3.2): marks keyed natives, optionally
+    /// marks session leaves for the host, and evaluates invalidated cells and
+    /// pending natives.
+    fn sync_touched(&mut self, mark_session: bool) {
         let keys = self.docs.take_touched();
-        if !keys.is_empty() {
-            self.reactive.prime_keys(keys);
+        let leaves = if keys.is_empty() {
+            Vec::new()
+        } else {
+            self.reactive.prime_touched(keys)
+        };
+        let doc = Tree::of(&self.docs);
+        if mark_session {
+            for &leaf in &leaves {
+                if let Some(v) = self.reactive.read(doc, leaf) {
+                    self.reactive.mark(leaf, v);
+                }
+            }
+        }
+        if !leaves.is_empty() {
+            self.reactive.invalidate(doc, leaves);
+        } else {
+            self.reactive.flush(doc);
         }
     }
 
@@ -4168,7 +4241,7 @@ impl StoreCore {
         self.apply_session(ops)?;
         // Bindings that read the selection follow it.
         if Tree::of(&self.docs).nodes_with(facet::FacetKind::Selection).next().is_some() {
-            self.pipeline();
+            self.settle(SettleMode::Live { clusters: true });
         }
         Ok(())
     }
@@ -4213,24 +4286,9 @@ impl StoreCore {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
         } else {
-            // What re-expansion wrote counts too: an override updated in
-            // place changes its derived node's leaf, and whatever reads it.
-            let changed: Vec<Leaf> = tx
-                .ops
-                .iter()
-                .chain(expanded.iter())
-                .filter_map(|op| match op {
-                    Op::Set { id, path, .. } => Some(Leaf {
-                        node: *id,
-                        path: *path,
-                    }),
-                    _ => None,
-                })
-                .collect();
             self.prime_reorders(tx.ops.iter().chain(expanded.iter()));
             self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
-            self.drain_touched();
-            self.reactive.invalidate(Tree::of(&self.docs), changed);
+            self.sync_touched(false);
             // A clip's own leaves set (its `prop`, a key): every clip is
             // sampled, so what one stops driving is withdrawn; otherwise
             // the running ones (a constant one reads may have changed).
@@ -4246,7 +4304,7 @@ impl StoreCore {
         let copies = self.settle_repeats();
         expanded.extend(copies);
         self.rebuild_clusters();
-        self.pipeline_from(live);
+        self.settle(SettleMode::Live { clusters: live });
     }
 
     /// The authored document: what is saved, and what mints ids. It holds
@@ -4346,14 +4404,12 @@ impl StoreCore {
         // transaction brought (review of DS-7: after `after_transaction` it
         // was too late to see the grouping's).
         let problems_before: Vec<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
-        let Run { mut tx, mut expanded, full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
+        let Run { mut tx, mut expanded, mut full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
         if let Some(found) = problems {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&tx, &mut expanded, &full_inverse);
-        let held = self.keep_solved(&mut tx, solved, &expanded);
-        let mut solver = self.post_apply(&mut tx, &held);
+        let mut solver = self.settle_tx(SettleMode::Transaction, &mut tx, &mut expanded, &mut full_inverse, Vec::new(), solved);
         // What the reply tells: the constraints' problems this transaction
         // brought (a malformed or duplicate constraint, a cycle, a pose
         // that doesn't hold), and why a solve failed, unless that cluster
@@ -4416,10 +4472,7 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        self.after_transaction(&applied, &mut expanded, &full_inverse);
-        let held = self.keep_solved(&mut applied, solved, &expanded);
-        self.apply_recorded(&mut applied, recorded, &mut full_inverse);
-        let _ = self.release(&mut applied, &held, 0);
+        let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -4457,11 +4510,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&applied, &mut expanded, &full_inverse);
-                self.apply_recorded(&mut applied, recorded, &mut full_inverse);
-                // Undo has no solve: a copy it leaves in no cluster is let go.
-                let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
-                let _ = self.release(&mut applied, &held, 0);
+                let _ = self.settle_tx(SettleMode::Undo, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -4505,10 +4554,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                self.after_transaction(&applied, &mut expanded, &full_inverse);
-                let held = self.keep_solved(&mut applied, solved, &expanded);
-                self.apply_recorded(&mut applied, recorded, &mut full_inverse);
-                let _ = self.release(&mut applied, &held, 0);
+                let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
@@ -4605,7 +4651,7 @@ impl StoreCore {
                 self.pose(c);
                 continue;
             }
-            let mut changed = Vec::new();
+            let mut moved = false;
             for (leaf, v) in result.values {
                 let current = Tree::of(&self.docs).leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
                 if current.is_some_and(|c| (c - v).abs() < 1e-9) {
@@ -4616,16 +4662,15 @@ impl StoreCore {
                 self.geometry.note_ops([&op]);
                 tx.derived_ops.push(op);
                 tx.inverse.extend(inverse);
-                changed.push(leaf);
+                moved = true;
                 if !summary.moved.contains(&leaf.node) {
                     summary.moved.push(leaf.node);
                 }
             }
-            if !changed.is_empty() || !result.unmet.is_empty() {
+            if moved || !result.unmet.is_empty() {
                 summary.clusters.push(c.id);
             }
-            self.drain_touched();
-            self.reactive.invalidate(Tree::of(&self.docs), changed);
+            self.sync_touched(false);
             self.pose(c);
             summary.unmet.extend(result.unmet);
         }
@@ -4641,26 +4686,23 @@ impl StoreCore {
     /// owners' check and `after_transaction`, never translated into
     /// overrides. A copy the transaction left gone takes none.
     fn apply_recorded(&mut self, tx: &mut Transaction, recorded: Vec<Op>, full_inverse: &mut Vec<Op>) {
-        let mut changed = Vec::new();
         let mut applied = Vec::new();
         for op in recorded {
-            let Op::Set { id, path, .. } = &op else { continue };
-            let leaf = Leaf { node: *id, path: *path };
+            let Op::Set { id, .. } = &op else { continue };
             if !Tree::of(&self.docs).is_live(*id) {
                 continue;
             }
             if let Ok(inverse) = op::apply_op(&mut self.docs, 0, &op, tx.version) {
                 self.geometry.note_ops([&op]);
-                changed.push(leaf);
                 tx.inverse.extend(inverse.iter().cloned());
                 full_inverse.extend(inverse);
                 applied.push(op);
             }
         }
-        if !changed.is_empty() {
-            // A recorded write can put a binding back: the graph reads it.
+        if !applied.is_empty() {
+            // A recorded write can put a binding back: `regraph` consumes its
+            // touched keys (`Key::Leaf` included) through the single channel.
             self.regraph(applied.iter());
-            self.reactive.invalidate(Tree::of(&self.docs), changed);
         }
         tx.derived_ops.extend(applied);
     }
@@ -4679,7 +4721,6 @@ impl StoreCore {
         if released.is_empty() {
             return;
         }
-        let mut changed = Vec::new();
         let mut ops = Vec::new();
         for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
             if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
@@ -4691,13 +4732,12 @@ impl StoreCore {
             let Ok(inverse) = op::apply_op(&mut self.docs, at, &op, tx.version) else { continue };
             self.geometry.note_ops([&op]);
             tx.inverse.extend(inverse);
-            changed.push(leaf);
             ops.push(op);
         }
         if !ops.is_empty() {
-            // The template's value may be a binding: the graph reads it.
+            // The template's value may be a binding: `regraph` consumes its
+            // touched keys (`Key::Leaf` included) through the single channel.
             self.regraph(ops.iter());
-            self.reactive.invalidate(Tree::of(&self.docs), changed);
         }
         tx.derived_ops.extend(ops);
     }

@@ -229,7 +229,7 @@ pub(crate) fn apply_op(
         Op::Reorder { id, order } => {
             let n = live(Tree::of(docs), &cx, *id)?;
             let old = n.order.clone();
-            docs.of_node(*id).set_order(*id, order.clone());
+            docs.set_order(*id, order.clone());
             Ok(vec![Op::Reorder {
                 id: *id,
                 order: old,
@@ -241,7 +241,6 @@ pub(crate) fn apply_op(
         Op::Link { rel } => link(docs, &cx, rel),
         Op::Unlink { id } => {
             let r = docs
-                .of_relation(*id)
                 .remove_relation(*id)
                 .ok_or_else(|| cx.err(ErrorKind::UnknownRelation, format!("no relation {id}")))?;
             Ok(vec![Op::Link { rel: r }])
@@ -408,11 +407,10 @@ fn create(
     }
     check_parent(Tree::of(docs), cx, id, parent, ty)?;
     check_facets(cx, ty, comps)?;
-    let doc = docs.of_node(id);
     if restoring {
-        doc.restore_node(id, ty, parent, order.clone(), comps.to_vec());
+        docs.restore_node(id, ty, parent, order.clone(), comps.to_vec());
     } else {
-        doc.insert_node(
+        docs.insert_node(
             Node {
                 id,
                 ty,
@@ -422,7 +420,7 @@ fn create(
             },
             comps.to_vec(),
         );
-        doc.advance_next_id(id);
+        docs.of_node(id).advance_next_id(id);
     }
     // Bindings and entity rules are checked once the whole transaction has
     // applied (`check_created`): a restored subtree's nodes may read each
@@ -454,9 +452,8 @@ fn new_input_args(docs: &mut Docs, id: NodeId) -> Vec<Op> {
         }
         let mut args = old.clone();
         args.insert(spec.name, Slot::Const(spec.default.clone()));
-        let doc = docs.of_node(e);
-        doc.remove_facet(e, FacetKind::Args);
-        doc.insert_facet(e, args.wrap());
+        docs.remove_facet(e, FacetKind::Args);
+        docs.insert_facet(e, args.wrap());
         inverse.push(Op::AddFacet { id: e, facet: old.wrap() });
     }
     inverse
@@ -608,10 +605,10 @@ fn reparent(
         }
     }
     check_parent(Tree::of(docs), cx, id, parent, ty)?;
-    docs.of_node(id).set_parent(id, parent, order.clone());
+    docs.set_parent(id, parent, order.clone());
     // A refused op leaves the document as it was.
     if let Err(e) = check_embeds(Tree::of(docs), cx, id) {
-        docs.of_node(id).set_parent(id, old_parent, old_order);
+        docs.set_parent(id, old_parent, old_order);
         return Err(e);
     }
     Ok(vec![Op::Reparent {
@@ -707,22 +704,20 @@ fn set(
     {
         return Ok(inverse);
     }
-    let comp = docs.of_node(id).facet_mut(id, path.facet).ok_or_else(|| {
-        cx.err(
-            ErrorKind::UnknownPath,
-            format!("{id} has no {} component", path.facet.name()),
-        )
-    })?;
-    let old = comp
-        .set(path.field, slot.clone())
+    let old = docs
+        .set_leaf(id, path, slot.clone())
+        .ok_or_else(|| {
+            cx.err(
+                ErrorKind::UnknownPath,
+                format!("{id} has no {} component", path.facet.name()),
+            )
+        })?
         .map_err(|e| cx.err(ErrorKind::TypeMismatch, e.to_string()))?;
     if matches!(path.facet, FacetKind::Args | FacetKind::Instance | FacetKind::Embed | FacetKind::EmbedCamera)
         && let Err(e) = check_entity(Tree::of(docs), cx, id)
     {
         // A refused op leaves the document as it was.
-        if let Some(comp) = docs.of_node(id).facet_mut(id, path.facet) {
-            let _ = comp.set(path.field, old);
-        }
+        let _ = docs.set_leaf(id, path, old);
         return Err(e);
     }
     Ok(vec![Op::Set {
@@ -759,13 +754,11 @@ fn catch_up_args(docs: &mut Docs, cx: &Ctx, id: NodeId, field: &str, slot: &Slot
     }
     let default = args.slots.get(field).cloned().expect("declared input inserted above");
     args.insert(field, slot.clone());
-    let doc = docs.of_node(id);
-    doc.remove_facet(id, FacetKind::Args);
-    doc.insert_facet(id, crate::facet::LeafStruct::wrap(args));
+    docs.remove_facet(id, FacetKind::Args);
+    docs.insert_facet(id, crate::facet::LeafStruct::wrap(args));
     if let Err(e) = check_entity(Tree::of(docs), cx, id) {
-        let doc = docs.of_node(id);
-        doc.remove_facet(id, FacetKind::Args);
-        doc.insert_facet(id, crate::facet::LeafStruct::wrap(old));
+        docs.remove_facet(id, FacetKind::Args);
+        docs.insert_facet(id, crate::facet::LeafStruct::wrap(old));
         return Err(e);
     }
     Ok(Some(vec![Op::Set { id, path: LeafPath::new(FacetKind::Args, field).expect("an argument path"), slot: default }]))
@@ -798,18 +791,16 @@ fn add_comp(
         }
         None => None,
     };
-    let doc = docs.of_node(id);
     if replaced.is_some() {
-        doc.remove_facet(id, kind);
+        docs.remove_facet(id, kind);
     }
-    doc.insert_facet(id, comp.clone());
+    docs.insert_facet(id, comp.clone());
     let checked = check_facet_bindings(Tree::of(docs), cx, id, std::slice::from_ref(comp)).and_then(|_| check_entity(Tree::of(docs), cx, id));
     if let Err(e) = checked {
         // A refused op leaves the document as it was.
-        let doc = docs.of_node(id);
-        doc.remove_facet(id, kind);
+        docs.remove_facet(id, kind);
         if let Some(old) = replaced {
-            doc.insert_facet(id, old);
+            docs.insert_facet(id, old);
         }
         return Err(e);
     }
@@ -832,7 +823,7 @@ fn remove_comp(
             format!("{} requires {}", n.ty, kind.name()),
         ));
     }
-    let comp = docs.of_node(id).remove_facet(id, kind).ok_or_else(|| {
+    let comp = docs.remove_facet(id, kind).ok_or_else(|| {
         cx.err(
             ErrorKind::FacetAbsent,
             format!("{id} has no {}", kind.name()),
@@ -862,8 +853,7 @@ fn link(docs: &mut Docs, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError
             format!("relation {} already exists", rel.id),
         ));
     }
-    let doc = docs.of_relation(rel.id);
-    doc.insert_relation(rel.clone());
-    doc.advance_next_relation_id(rel.id);
+    docs.insert_relation(rel.clone());
+    docs.of_relation(rel.id).advance_next_relation_id(rel.id);
     Ok(vec![Op::Unlink { id: rel.id }])
 }

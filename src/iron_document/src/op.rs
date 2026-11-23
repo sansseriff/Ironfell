@@ -64,6 +64,15 @@ pub enum Op {
     Unlink {
         id: RelationId,
     },
+    /// Variation axis mutation (plans/specs/patches.md §3, EN-4).
+    Axis(crate::patch::AxisOp),
+    /// Authored patch mutation (plans/specs/patches.md §7, EN-4).
+    Patch(crate::patch::PatchOp),
+    /// Dedicated system-owned solve-layer write (plans/specs/patches.md P17, EN-4).
+    Solve {
+        leaf: crate::expr::Leaf,
+        slot: Option<Slot>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +172,8 @@ pub enum ErrorKind {
     MixedPath,
     /// A `context` node's markup does not parse (contexts.md §2.1).
     BadContext,
+    /// An axis or patch op violates patch-algebra invariants (patches.md §6–§7).
+    BadPatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -242,6 +253,22 @@ pub(crate) fn apply_op(
                 .ok_or_else(|| cx.err(ErrorKind::UnknownRelation, format!("no relation {id}")))?;
             Ok(vec![Op::Link { rel: r }])
         }
+        Op::Axis(aop) => {
+            let inv = docs
+                .apply_axis_op(aop)
+                .map_err(|msg| cx.err(ErrorKind::BadPatch, msg))?;
+            Ok(vec![Op::Axis(inv)])
+        }
+        Op::Patch(pop) => {
+            let inv = docs
+                .apply_patch_op(pop)
+                .map_err(|msg| cx.err(ErrorKind::BadPatch, msg))?;
+            Ok(vec![Op::Patch(inv)])
+        }
+        Op::Solve { leaf, slot } => {
+            let old = docs.apply_solve(*leaf, slot.clone());
+            Ok(vec![Op::Solve { leaf: *leaf, slot: old }])
+        }
     }
 }
 
@@ -256,6 +283,7 @@ pub(crate) fn apply_op(
 fn reshapes(op: &Op) -> bool {
     match op {
         Op::Set { path, .. } => matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
+        Op::Solve { .. } => false,
         _ => true,
     }
 }
@@ -275,7 +303,7 @@ fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
         Op::RemoveFacet { id, kind } => kinds.contains(kind) || is(*id),
         Op::Link { rel } => is(rel.from) || is(rel.to),
         Op::Unlink { id } => doc.relation(*id).is_none_or(|r| is(r.from) || is(r.to)),
-        Op::Reorder { .. } | Op::Set { .. } => false,
+        Op::Reorder { .. } | Op::Set { .. } | Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => false,
     }
 }
 

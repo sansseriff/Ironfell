@@ -16,7 +16,8 @@ use std::fmt;
 
 /// The format's version. Only this one loads: there are no saved files
 /// from earlier versions to keep (decided 2026-11-02), so a format change
-/// bumps it and drops the old reader rather than migrating. Schema 15 added
+/// bumps it and drops the old reader rather than migrating. Schema 16 added
+/// variation axes, patches, and the dedicated solve layer (EN-4); 15 added
 /// `layout.contain`; 14 permits a context on component templates; 13 added
 /// themed slider colours; 12 made
 /// ids `client_counter` and the header's counters one per client; 11 added
@@ -24,7 +25,7 @@ use std::fmt;
 /// (background, grid); 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
-pub const SCHEMA: u64 = 15;
+pub const SCHEMA: u64 = 16;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);
@@ -106,7 +107,39 @@ pub fn save(doc: &Document) -> String {
             n_compact(&serde_json::to_value(r).expect("relation serialises"))
         ));
     }
-    out.push_str("\n ]}\n");
+    out.push_str("\n ]");
+    let pt = doc.patches();
+    if !pt.is_empty() {
+        out.push_str(&format!(
+            ",\n \"next_patches\": [{}, {}, {}]",
+            pt.next_axis, pt.next_axis_value, pt.next_patch
+        ));
+        if !pt.axis_order.is_empty() {
+            out.push_str(&format!(",\n \"axis_order\": {}", n_compact(&json!(pt.axis_order))));
+        }
+        if !pt.axes.is_empty() {
+            out.push_str(&format!(",\n \"axes\": {}", n_compact(&json!(pt.axes))));
+        }
+        if !pt.patches.is_empty() {
+            let saved: BTreeMap<_, _> = pt
+                .patches
+                .iter()
+                .filter(|(_, p)| p.layer < crate::patch::SESSION_LAYER)
+                .collect();
+            if !saved.is_empty() {
+                out.push_str(&format!(",\n \"patches\": {}", n_compact(&json!(saved))));
+            }
+        }
+        if !pt.solve.is_empty() {
+            let solve_map: BTreeMap<String, &crate::value::Slot> = pt
+                .solve
+                .iter()
+                .map(|(l, s)| (format!("{}.{}", l.node, l.path), s))
+                .collect();
+            out.push_str(&format!(",\n \"solve\": {}", n_compact(&json!(solve_map))));
+        }
+    }
+    out.push_str("}\n");
     out
 }
 
@@ -330,7 +363,46 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         }
     }
 
-    let mut doc = Document::from_parts(nodes, facets, relations, next, version);
+    let mut patch_table = crate::patch::PatchTable::default();
+    if let Some(v) = obj.get("next_patches") {
+        let arr: [u64; 3] = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("next_patches: {e}")))?;
+        patch_table.next_axis = arr[0].max(1);
+        patch_table.next_axis_value = arr[1].max(1);
+        patch_table.next_patch = arr[2].max(1);
+    }
+    if let Some(v) = obj.get("axis_order") {
+        patch_table.axis_order = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("axis_order: {e}")))?;
+    }
+    if let Some(v) = obj.get("axes") {
+        patch_table.axes = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("axes: {e}")))?;
+        for ax in patch_table.axes.values() {
+            patch_table.next_axis = patch_table.next_axis.max(ax.id.0 + 1);
+            for val in &ax.values {
+                patch_table.next_axis_value = patch_table.next_axis_value.max(val.id.0 + 1);
+            }
+        }
+    }
+    if let Some(v) = obj.get("patches") {
+        patch_table.patches = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("patches: {e}")))?;
+        for p in patch_table.patches.values() {
+            if p.layer == crate::patch::SESSION_LAYER {
+                return Err(LoadError(format!("patch {} is in the session layer and may not be saved", p.id)));
+            }
+            patch_table.next_patch = patch_table.next_patch.max(p.id.0 + 1);
+        }
+    }
+    if let Some(v) = obj.get("solve") {
+        let raw_solve: BTreeMap<String, crate::value::Slot> = serde_json::from_value(v.clone()).map_err(|e| LoadError(format!("solve: {e}")))?;
+        for (k, slot) in raw_solve {
+            let (node_s, path_s) = k.split_once('.').ok_or_else(|| LoadError(format!("solve key {k:?} must be `<node>.<facet>.<field>`")))?;
+            let node: NodeId = node_s.parse().map_err(|e: crate::id::IdParseError| LoadError(e.to_string()))?;
+            let path: crate::facet::LeafPath = path_s.parse().map_err(|e: crate::facet::LeafError| LoadError(e.to_string()))?;
+            patch_table.solve.insert(crate::expr::Leaf { node, path }, slot);
+        }
+    }
+    patch_table.reindex();
+
+    let mut doc = Document::from_parts(nodes, facets, relations, next, version, patch_table);
     doc.set_scope(scope);
     doc.check_invariants().map_err(LoadError)?;
     if let Some(why) = doc.derived_content() {

@@ -40,6 +40,7 @@ mod machines;
 mod narrative;
 mod owners;
 mod packed_paths;
+mod patches;
 mod plot;
 mod plot_perf;
 mod ports;

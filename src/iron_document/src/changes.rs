@@ -208,6 +208,36 @@ impl Changes {
                         self.relations.push((a, b));
                     }
                 }
+                Op::Axis(_) => {}
+                Op::Patch(p) => {
+                    use crate::patch::{PatchKey, PatchOp};
+                    match p {
+                        PatchOp::Add { patch } => {
+                            for t in patch.entries.keys() {
+                                if let PatchKey::Leaf(path) = t.key {
+                                    self.slots.insert(Leaf { node: t.node, path });
+                                }
+                            }
+                        }
+                        PatchOp::SetEntry { target, .. } => {
+                            if let PatchKey::Leaf(path) = target.key {
+                                self.slots.insert(Leaf { node: target.node, path });
+                            }
+                        }
+                        PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
+                            if let Some(patch) = doc.patches().patches.get(id) {
+                                for t in patch.entries.keys() {
+                                    if let PatchKey::Leaf(path) = t.key {
+                                        self.slots.insert(Leaf { node: t.node, path });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Op::Solve { leaf, .. } => {
+                    self.slots.insert(*leaf);
+                }
             }
         }
         // A delete's inverse recreates what it took, deepest first: the

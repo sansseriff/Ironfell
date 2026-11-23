@@ -532,9 +532,6 @@ follow-ups (search/provenance UI, clock operators/ghosts) follow in `handoff-pro
 - **Continuous time:** `src/iron_patch`'s ordered axes are discrete; continuous real
   intervals are implemented and verified in `EN-6b` (or `EN-4` if `Time` is exposed
   early) and stored per `patch-storage.md` (`EN-11`).
-- **Release policy on constraint deletion:** user decision in `EN-3` — whether a solved
-  instance part clears its solve-layer entry on constraint deletion (current behaviour)
-  or retains its solved pose like authored nodes.
 
 ## 14. Decisions
 
@@ -556,7 +553,7 @@ follow-ups (search/provenance UI, clock operators/ghosts) follow in `handoff-pro
 | P14 | A variant is a layer between its definition and what places it; there are no classes |
 | P15 | Layers: where a patch is written; an outer layer is stronger than every patch of an inner one |
 | P16 | Regions are compared as written, over values not yet added, deleted ones included; queries, dead and stale answer over the points that exist |
-| P17 | Solver poses on instance parts live in a dedicated system-owned **solve layer** between the document layer and session (exact instance path, saved, below bindings and producers in `engine.md` §2.4, cleared on authored edit or release) |
+| P17 | Solver poses on instance parts live in a dedicated system-owned **solve layer** between the document layer and session (exact instance path, saved, below bindings and producers in `engine.md` §2.4, cleared on authored edit; on constraint deletion, the solve-layer entry is cleared so the part snaps back to its authored override/template value — confirmed 2026-11-23) |
 | P18 | A node's instance coordinate is the enclosing view's path (not the view it places), so presence patches on a `use` are never self-referential |
 | P19 | Presence, facet presence, `use.notation`, and bound entries vary directly on the instance axis and layers; dynamic state/sequence presence resolves in Stage 1 from pass-start coordinates (forbidden on time axes; use `hide`); dynamic bound entries are forbidden or compiled as fixed mux cells |
 | P20 | Body leaves and history key on entity; picture leaves key on `use` (no separate picture axis required in `EN-3`–`EN-6b`) |

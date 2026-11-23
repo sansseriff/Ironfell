@@ -358,7 +358,7 @@ pub(crate) fn eval_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, li
 /// the bodies at the anchors, named by the connection.
 pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
     let mut candidates = Vec::new();
-    for &root in doc.roots() {
+    for &root in doc.roots().iter() {
         candidates.extend(candidate_mates_in(doc, root));
     }
     eval_mates(doc, read, lib, &candidates)

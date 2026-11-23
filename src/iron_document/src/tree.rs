@@ -21,7 +21,7 @@ use crate::order::OrderKey;
 use crate::registry::TypeId;
 use crate::value::Slot;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Per-top-level-root type and facet indexes across both authored nodes and
 /// derived copies (engine.md §3.2). Maintained incrementally by `Docs`'s
@@ -156,6 +156,28 @@ impl ScopedIndexes {
     }
 }
 
+/// Sparse non-journaled store of effective authored state at the active point
+/// (engine.md §2.3, EN-3/EN-4). Empty when no authored patches exist, so
+/// unpatched reads are a single branch and zero allocations.
+#[derive(Clone, Default)]
+pub(crate) struct ResolvedStore {
+    /// Merged facets for nodes that have at least one active authored patch
+    /// affecting their facets or leaves at the active point.
+    pub(crate) facets: HashMap<NodeId, BTreeMap<FacetKind, Facet>>,
+    /// Authored nodes whose effective `Present` is false at the active point
+    /// (including descendants of absent ancestors, P6).
+    pub(crate) absent: HashSet<NodeId>,
+    /// Authored nodes whose effective `Hidden` is true at the active point
+    /// (including descendants of hidden ancestors, P6).
+    pub(crate) hidden: HashSet<NodeId>,
+}
+
+impl ResolvedStore {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.facets.is_empty() && self.absent.is_empty() && self.hidden.is_empty()
+    }
+}
+
 /// The store's documents (handoff §4.6): the authored one, and the one
 /// holding derived copies when they are kept apart. With `apart` false every
 /// node, copies included, is in `authored` and `copies` stays empty: 2b's
@@ -169,6 +191,12 @@ pub(crate) struct Docs {
     pub(crate) scoped: ScopedIndexes,
     scoped_journal: Option<Vec<ScopedRec>>,
     scoped_touched: crate::structure::Touched,
+    /// Active point on variation axes (`Point::default()` when no axes are set).
+    pub(crate) point: crate::patch::Point,
+    /// Session-layer patches (`SESSION_LAYER`, P8; never saved, never journaled).
+    pub(crate) session_patches: BTreeMap<crate::patch::PatchId, crate::patch::Patch>,
+    /// Sparse non-journaled resolved state at `point` (engine.md §2.3).
+    pub(crate) resolved: ResolvedStore,
     /// Each node deleted since the changes were last taken, as it was when
     /// it went: a copy leaves no tombstone to read it from afterwards
     /// (`Changes::note`, `Store::regraph`).
@@ -190,18 +218,25 @@ pub(crate) struct Docs {
 impl Docs {
     pub(crate) fn new(authored: Document, apart: bool) -> Docs {
         let scoped = ScopedIndexes::build(&authored);
-        Docs {
+        let mut docs = Docs {
             authored,
             copies: Document::new(),
             apart,
             scoped,
             scoped_journal: None,
             scoped_touched: Default::default(),
+            point: crate::patch::Point::default(),
+            session_patches: BTreeMap::new(),
+            resolved: ResolvedStore::default(),
             gone: Default::default(),
             gone_journal: None,
             reshaped: crate::stamp(),
             tokens_shaped: crate::stamp(),
+        };
+        if !docs.authored.patches().patches.is_empty() {
+            docs.reconcile_resolved(None);
         }
+        docs
     }
 
     fn root_for(&self, id: NodeId, parent: Option<NodeId>) -> NodeId {
@@ -231,6 +266,9 @@ impl Docs {
             self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
         }
         self.scoped_touched.on = on;
+        if self.needs_resolved_sync(id) || parent.is_some_and(|p| self.resolved.absent.contains(&p) || self.resolved.hidden.contains(&p)) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
     }
 
     pub(crate) fn restore_node(&mut self, id: NodeId, ty: TypeId, parent: Option<NodeId>, order: OrderKey, comps: Vec<Facet>) {
@@ -245,6 +283,9 @@ impl Docs {
             self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
         }
         self.scoped_touched.on = on;
+        if self.needs_resolved_sync(id) || parent.is_some_and(|p| self.resolved.absent.contains(&p) || self.resolved.hidden.contains(&p)) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
     }
 
     /// Delete one live node, its children already gone: a copy kept apart
@@ -283,42 +324,47 @@ impl Docs {
             }
             self.scoped_touched.on = on;
         }
+        self.resolved.facets.remove(&id);
+        self.resolved.absent.remove(&id);
+        self.resolved.hidden.remove(&id);
     }
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         let old_root = self.scoped.root_of.get(&id).copied();
         let new_root = self.root_for(id, parent);
         self.of_node(id).set_parent(id, parent, order);
-        if old_root == Some(new_root) {
-            return;
-        }
-        let moved: Vec<(NodeId, TypeId, Vec<FacetKind>)> = {
-            let tree = Tree::of(self);
-            std::iter::once(id)
-                .chain(tree.descendants(id))
-                .filter_map(|n| {
-                    let node = tree.live(n)?;
-                    let kinds = tree.facets_of(n).map(Facet::kind).collect();
-                    Some((n, node.ty, kinds))
-                })
-                .collect()
-        };
-        let on = self.scoped_touched.on;
-        self.scoped_touched.on &= !crate::structure::silenced("set_parent");
-        for (n, ty, kinds) in moved {
-            if let Some(prev) = self.scoped.root_of.get(&n).copied() {
-                self.scoped.remove_type(prev, ty, n, &mut self.scoped_journal, &mut self.scoped_touched);
-                for &k in &kinds {
-                    self.scoped.remove_facet(prev, k, n, &mut self.scoped_journal, &mut self.scoped_touched);
+        if old_root != Some(new_root) {
+            let moved: Vec<(NodeId, TypeId, Vec<FacetKind>)> = {
+                let tree = Tree::of(self);
+                std::iter::once(id)
+                    .chain(tree.descendants(id))
+                    .filter_map(|n| {
+                        let node = tree.live(n)?;
+                        let kinds = tree.facets_of(n).map(Facet::kind).collect();
+                        Some((n, node.ty, kinds))
+                    })
+                    .collect()
+            };
+            let on = self.scoped_touched.on;
+            self.scoped_touched.on &= !crate::structure::silenced("set_parent");
+            for (n, ty, kinds) in moved {
+                if let Some(prev) = self.scoped.root_of.get(&n).copied() {
+                    self.scoped.remove_type(prev, ty, n, &mut self.scoped_journal, &mut self.scoped_touched);
+                    for &k in &kinds {
+                        self.scoped.remove_facet(prev, k, n, &mut self.scoped_journal, &mut self.scoped_touched);
+                    }
+                }
+                self.scoped.set_root(n, Some(new_root), &mut self.scoped_journal);
+                self.scoped.insert_type(new_root, ty, n, &mut self.scoped_journal, &mut self.scoped_touched);
+                for k in kinds {
+                    self.scoped.insert_facet(new_root, k, n, &mut self.scoped_journal, &mut self.scoped_touched);
                 }
             }
-            self.scoped.set_root(n, Some(new_root), &mut self.scoped_journal);
-            self.scoped.insert_type(new_root, ty, n, &mut self.scoped_journal, &mut self.scoped_touched);
-            for k in kinds {
-                self.scoped.insert_facet(new_root, k, n, &mut self.scoped_journal, &mut self.scoped_touched);
-            }
+            self.scoped_touched.on = on;
         }
-        self.scoped_touched.on = on;
+        if self.needs_resolved_sync(id) || parent.is_some_and(|p| self.resolved.absent.contains(&p) || self.resolved.hidden.contains(&p)) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
@@ -328,29 +374,41 @@ impl Docs {
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let kind = c.kind();
         let root = self.scoped.root_of.get(&id).copied();
+        let patched_here = self.resolved.absent.contains(&id) || self.resolved.facets.contains_key(&id);
         self.of_node(id).insert_facet(id, c);
-        if let Some(root) = root {
+        if !patched_here && let Some(root) = root {
             let on = self.scoped_touched.on;
             self.scoped_touched.on &= !crate::structure::silenced("insert_facet");
             self.scoped.insert_facet(root, kind, id, &mut self.scoped_journal, &mut self.scoped_touched);
             self.scoped_touched.on = on;
         }
+        if self.needs_resolved_sync(id) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
     }
 
     pub(crate) fn remove_facet(&mut self, id: NodeId, kind: FacetKind) -> Option<Facet> {
         let root = self.scoped.root_of.get(&id).copied();
+        let patched_here = self.resolved.absent.contains(&id) || self.resolved.facets.contains_key(&id);
         let removed = self.of_node(id).remove_facet(id, kind)?;
-        if let Some(root) = root {
+        if !patched_here && let Some(root) = root {
             let on = self.scoped_touched.on;
             self.scoped_touched.on &= !crate::structure::silenced("remove_facet");
             self.scoped.remove_facet(root, kind, id, &mut self.scoped_journal, &mut self.scoped_touched);
             self.scoped_touched.on = on;
         }
+        if self.needs_resolved_sync(id) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
         Some(removed)
     }
 
     pub(crate) fn set_leaf(&mut self, id: NodeId, path: LeafPath, slot: Slot) -> Option<Result<Slot, crate::facet::LeafError>> {
-        self.of_node(id).set_leaf(id, path, slot)
+        let res = self.of_node(id).set_leaf(id, path, slot);
+        if res.as_ref().is_some_and(Result::is_ok) && self.needs_resolved_sync(id) {
+            self.reconcile_resolved(Some(&BTreeSet::from([id])));
+        }
+        res
     }
 
     pub(crate) fn insert_relation(&mut self, rel: Relation) {
@@ -359,6 +417,364 @@ impl Docs {
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
         self.of_relation(id).remove_relation(id)
+    }
+
+    pub(crate) fn apply_axis_op(&mut self, op: &crate::patch::AxisOp) -> Result<crate::patch::AxisOp, String> {
+        let (inv, targets) = self.authored.apply_axis_op(op)?;
+        if !targets.is_empty() {
+            self.reconcile_resolved(Some(&targets));
+        }
+        Ok(inv)
+    }
+
+    pub(crate) fn apply_patch_op(&mut self, op: &crate::patch::PatchOp) -> Result<crate::patch::PatchOp, String> {
+        let (inv, targets) = self.authored.apply_patch_op(op)?;
+        if !targets.is_empty() {
+            self.reconcile_resolved(Some(&targets));
+        }
+        Ok(inv)
+    }
+
+    pub(crate) fn apply_solve(&mut self, leaf: crate::expr::Leaf, slot: Option<Slot>) -> Option<Slot> {
+        self.authored.apply_solve(leaf, slot)
+    }
+
+    /// Move the active point on variation axes, reconciling only nodes whose
+    /// patches reference the changed axes (O(targets on changed axes), EN-4).
+    pub(crate) fn set_point(&mut self, point: crate::patch::Point) -> BTreeSet<NodeId> {
+        let changed = self.point.changed_axes(&point);
+        if changed.is_empty() {
+            return BTreeSet::new();
+        }
+        self.point = point;
+        let mut targets = BTreeSet::new();
+        for a in &changed {
+            targets.extend(self.authored.patches().targets_for_axis(*a));
+            for p in self.session_patches.values() {
+                if p.region.sels.contains_key(a) {
+                    targets.extend(p.entries.keys().map(|t| t.node));
+                }
+            }
+        }
+        if !targets.is_empty() {
+            self.reconcile_resolved(Some(&targets));
+            // Also emit Leaf keys for session-patched leaves on changed axes.
+            for p in self.session_patches.values() {
+                if p.region.sels.keys().any(|a| changed.contains(a)) {
+                    for t in p.entries.keys() {
+                        if let crate::patch::PatchKey::Leaf(lp) = t.key {
+                            self.scoped_touched.note(crate::structure::Key::Leaf(crate::expr::Leaf { node: t.node, path: lp }));
+                        }
+                    }
+                }
+            }
+        }
+        targets
+    }
+
+    /// Install or replace a session-layer patch (`SESSION_LAYER`, P8; never saved).
+    pub(crate) fn set_session_patch(&mut self, mut patch: crate::patch::Patch) -> Vec<crate::expr::Leaf> {
+        patch.layer = crate::patch::SESSION_LAYER;
+        let mut leaves = Vec::new();
+        if let Some(old) = self.session_patches.insert(patch.id, patch.clone()) {
+            for t in old.entries.keys() {
+                if let crate::patch::PatchKey::Leaf(lp) = t.key {
+                    leaves.push(crate::expr::Leaf { node: t.node, path: lp });
+                }
+                self.scoped_touched.note(crate::structure::Key::Patch(t.node));
+            }
+        }
+        for t in patch.entries.keys() {
+            if let crate::patch::PatchKey::Leaf(lp) = t.key {
+                leaves.push(crate::expr::Leaf { node: t.node, path: lp });
+            }
+            self.scoped_touched.note(crate::structure::Key::Patch(t.node));
+        }
+        for &l in &leaves {
+            self.scoped_touched.note(crate::structure::Key::Leaf(l));
+        }
+        leaves
+    }
+
+    /// Remove a session-layer patch by id, returning the leaves it touched.
+    pub(crate) fn remove_session_patch(&mut self, id: crate::patch::PatchId) -> Vec<crate::expr::Leaf> {
+        let mut leaves = Vec::new();
+        if let Some(old) = self.session_patches.remove(&id) {
+            for t in old.entries.keys() {
+                if let crate::patch::PatchKey::Leaf(lp) = t.key {
+                    let l = crate::expr::Leaf { node: t.node, path: lp };
+                    leaves.push(l);
+                    self.scoped_touched.note(crate::structure::Key::Leaf(l));
+                }
+                self.scoped_touched.note(crate::structure::Key::Patch(t.node));
+            }
+        }
+        leaves
+    }
+
+    /// Clear every session-layer patch, returning the leaves they touched.
+    pub(crate) fn clear_session_patches(&mut self) -> Vec<crate::expr::Leaf> {
+        let ids: Vec<_> = self.session_patches.keys().copied().collect();
+        let mut leaves = Vec::new();
+        for id in ids {
+            leaves.extend(self.remove_session_patch(id));
+        }
+        leaves
+    }
+
+    fn needs_resolved_sync(&self, id: NodeId) -> bool {
+        !self.authored.patches().patches.is_empty()
+            && (self.authored.patches().patches_for_target(id).next().is_some()
+                || self.resolved.facets.contains_key(&id)
+                || self.resolved.absent.contains(&id)
+                || self.resolved.hidden.contains(&id))
+    }
+
+    /// Evaluate whether authored node `id` is effectively present at `point`
+    /// (recursive over authored ancestors, P6).
+    pub(crate) fn authored_present_at(&self, point: &crate::patch::Point, id: NodeId) -> bool {
+        let Some(node) = self.authored.live(id) else { return false };
+        let pt = self.authored.patches();
+        if let Some(p) = pt.winner_authored(point, crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::Present })
+            && p.entries.get(&crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::Present }).and_then(|v| v.as_bool()) == Some(false)
+        {
+            return false;
+        }
+        node.parent.is_none_or(|p| self.authored_present_at(point, p))
+    }
+
+    /// Evaluate whether authored node `id` is effectively hidden at `point`
+    /// (cascades down from hidden ancestors, P6).
+    pub(crate) fn authored_hidden_at(&self, point: &crate::patch::Point, id: NodeId) -> bool {
+        let Some(node) = self.authored.live(id) else { return false };
+        let pt = self.authored.patches();
+        let own = pt
+            .winner_authored(point, crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::Hidden })
+            .and_then(|p| p.entries.get(&crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::Hidden }))
+            .and_then(|v| v.as_bool())
+            == Some(true);
+        own || node.parent.is_some_and(|p| self.authored_hidden_at(point, p))
+    }
+
+    /// Evaluate whether authored node `id` carries `kind` at `point` (base or
+    /// explicit `FacetPresent(kind)` patch, P21).
+    pub(crate) fn authored_has_facet_at(&self, point: &crate::patch::Point, id: NodeId, kind: FacetKind) -> bool {
+        if !self.authored_present_at(point, id) {
+            return false;
+        }
+        let target = crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::FacetPresent(kind) };
+        if let Some(p) = self.authored.patches().winner_authored(point, target)
+            && let Some(on) = p.entries.get(&target).and_then(|v| v.as_bool())
+        {
+            return on;
+        }
+        self.authored.facet(id, kind).is_some()
+    }
+
+    /// Stage 1 eager reconciliation of the sparse `ResolvedStore` at
+    /// `self.point` (engine.md §2.3, EN-4). Fast-paths to O(1) no-op when no
+    /// authored patches exist. Emits exact effective `structure::Key`s and
+    /// keeps `ScopedIndexes` in sync with effective presence & optional facets.
+    pub(crate) fn reconcile_resolved(&mut self, dirty_targets: Option<&BTreeSet<NodeId>>) {
+        if self.authored.patches().patches.is_empty() && self.resolved.is_empty() {
+            return;
+        }
+        let mut work: Vec<NodeId> = match dirty_targets {
+            Some(set) => set.iter().copied().collect(),
+            None => {
+                let mut all = self.authored.patches().all_targets();
+                all.extend(self.resolved.facets.keys().copied());
+                all.extend(self.resolved.absent.iter().copied());
+                all.extend(self.resolved.hidden.iter().copied());
+                all.into_iter().collect()
+            }
+        };
+        let mut seen: HashSet<NodeId> = HashSet::with_capacity(work.len());
+        let point = self.point.clone();
+        while let Some(id) = work.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let base_live = self.authored.live(id).cloned();
+            let old_absent = self.resolved.absent.contains(&id);
+            let old_hidden = self.resolved.hidden.contains(&id);
+            let old_facets = self.resolved.facets.remove(&id);
+
+            let Some(node) = base_live else {
+                self.resolved.absent.remove(&id);
+                self.resolved.hidden.remove(&id);
+                continue;
+            };
+            let present = self.authored_present_at(&point, id);
+            let hidden = present && self.authored_hidden_at(&point, id);
+            if !present {
+                self.resolved.absent.insert(id);
+                self.resolved.hidden.remove(&id);
+            } else {
+                self.resolved.absent.remove(&id);
+                if hidden {
+                    self.resolved.hidden.insert(id);
+                } else {
+                    self.resolved.hidden.remove(&id);
+                }
+            }
+            // Cascade down authored children only when effective presence or
+            // visibility changed (keeps leaf edits on containers O(1)).
+            if old_absent != !present || old_hidden != hidden {
+                work.extend_from_slice(self.authored.children(id));
+            }
+
+            // Compute effective facets if present and touched by any active patch on `id`.
+            let new_facets: Option<BTreeMap<FacetKind, Facet>> = if !present {
+                None
+            } else {
+                let pt = self.authored.patches();
+                let mut opt_facets: BTreeMap<FacetKind, bool> = BTreeMap::new();
+                let mut leaf_paths: BTreeSet<LeafPath> = BTreeSet::new();
+                for p in pt.patches_for_target(id) {
+                    if !p.region.contains_anchored(&pt.axes, &point, p.anchor) {
+                        continue;
+                    }
+                    for target in p.entries.keys() {
+                        if target.node != id {
+                            continue;
+                        }
+                        match target.key {
+                            crate::patch::PatchKey::FacetPresent(fk) => {
+                                if let Some(w) = pt.winner_authored(&point, *target)
+                                    && let Some(on) = w.entries.get(target).and_then(|v| v.as_bool())
+                                {
+                                    opt_facets.insert(fk, on);
+                                }
+                            }
+                            crate::patch::PatchKey::Leaf(lp) => {
+                                leaf_paths.insert(lp);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if opt_facets.is_empty() && leaf_paths.is_empty() {
+                    None
+                } else {
+                    let mut map: BTreeMap<FacetKind, Facet> = self.authored.facets_of(id).map(|f| (f.kind(), f.clone())).collect();
+                    let mut differs = false;
+                    for (fk, on) in opt_facets {
+                        if on && !map.contains_key(&fk) && node.ty.spec().allows(fk) {
+                            map.insert(fk, fk.default_facet());
+                            differs = true;
+                        } else if !on && map.remove(&fk).is_some() {
+                            differs = true;
+                        }
+                    }
+                    for lp in leaf_paths {
+                        let target = crate::patch::PatchTarget { node: id, key: crate::patch::PatchKey::Leaf(lp) };
+                        if let Some(w) = pt.winner_authored(&point, target)
+                            && let Some(slot) = w.entries.get(&target).and_then(|v| v.as_slot())
+                            && let Some(f) = map.get_mut(&lp.facet)
+                            && f.set(lp.field, slot.clone()).is_ok()
+                        {
+                            differs = true;
+                        }
+                    }
+                    differs.then_some(map)
+                }
+            };
+
+            let old_kinds: BTreeSet<FacetKind> = if old_absent {
+                BTreeSet::new()
+            } else if let Some(m) = &old_facets {
+                m.keys().copied().collect()
+            } else {
+                self.authored.facets_of(id).map(Facet::kind).collect()
+            };
+            let new_kinds: BTreeSet<FacetKind> = if !present {
+                BTreeSet::new()
+            } else if let Some(m) = &new_facets {
+                m.keys().copied().collect()
+            } else {
+                self.authored.facets_of(id).map(Facet::kind).collect()
+            };
+
+            // Update ScopedIndexes when effective presence or facet set changed.
+            let root = self.scoped.root_of.get(&id).copied().or_else(|| Some(self.root_for(id, node.parent)));
+            if let Some(root) = root {
+                if old_absent != !present {
+                    if !present {
+                        self.scoped.set_root(id, None, &mut self.scoped_journal);
+                        self.scoped.remove_type(root, node.ty, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                        for &k in &old_kinds {
+                            self.scoped.remove_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                        }
+                    } else {
+                        self.scoped.set_root(id, Some(root), &mut self.scoped_journal);
+                        self.scoped.insert_type(root, node.ty, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                        for &k in &new_kinds {
+                            self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                        }
+                    }
+                } else if present && old_kinds != new_kinds {
+                    for &k in old_kinds.difference(&new_kinds) {
+                        self.scoped.remove_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                    }
+                    for &k in new_kinds.difference(&old_kinds) {
+                        self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
+                    }
+                }
+            }
+
+            // Emit effective structural keys for anything that changed.
+            if old_absent != !present || old_hidden != hidden {
+                self.scoped_touched.note(crate::structure::Key::Node(id));
+                if let Some(p) = node.parent {
+                    self.scoped_touched.note(crate::structure::Key::Children(p));
+                } else {
+                    self.scoped_touched.note(crate::structure::Key::Roots);
+                }
+            }
+            if old_kinds != new_kinds {
+                self.scoped_touched.note(crate::structure::Key::FacetSet(id));
+            }
+            if old_absent != !present || old_facets != new_facets {
+                for &k in old_kinds.union(&new_kinds) {
+                    let before = if old_absent {
+                        None
+                    } else {
+                        old_facets.as_ref().and_then(|m| m.get(&k)).or_else(|| self.authored.facet(id, k))
+                    };
+                    let after = if !present {
+                        None
+                    } else {
+                        new_facets.as_ref().and_then(|m| m.get(&k)).or_else(|| self.authored.facet(id, k))
+                    };
+                    if before != after {
+                        self.scoped_touched.note(crate::structure::Key::Facet(id, k));
+                        match (before, after) {
+                            (Some(b), Some(a)) => {
+                                for field in a.field_names() {
+                                    if b.get(field) != a.get(field)
+                                        && let Ok(lp) = LeafPath::new(k, field)
+                                    {
+                                        self.scoped_touched.note(crate::structure::Key::Leaf(crate::expr::Leaf { node: id, path: lp }));
+                                    }
+                                }
+                            }
+                            (Some(f), None) | (None, Some(f)) => {
+                                for field in f.field_names() {
+                                    if let Ok(lp) = LeafPath::new(k, field) {
+                                        self.scoped_touched.note(crate::structure::Key::Leaf(crate::expr::Leaf { node: id, path: lp }));
+                                    }
+                                }
+                            }
+                            (None, None) => {}
+                        }
+                    }
+                }
+            }
+            if let Some(m) = new_facets {
+                self.resolved.facets.insert(id, m);
+            }
+        }
     }
 
     /// The document a write to node `id` goes to.
@@ -425,12 +841,38 @@ impl Docs {
                 None => self.gone.remove(&id),
             };
         }
+        if !self.resolved.is_empty() || !self.authored.patches().patches.is_empty() {
+            let on = self.scoped_touched.on;
+            self.scoped_touched.on = false;
+            self.resolved = ResolvedStore::default();
+            self.reconcile_resolved(None);
+            self.scoped_touched.on = on;
+        }
         #[cfg(feature = "differential")]
         if let Err(e) = Tree::of(self).check_invariants() {
             panic!("journal rollback broke an invariant: {e}");
         }
     }
 
+}
+
+/// Zero-allocation iterator over a node's facets (either from `ResolvedStore`
+/// or straight from `Document`).
+enum FacetsIter<'a, I> {
+    Empty,
+    Resolved(std::collections::btree_map::Values<'a, FacetKind, Facet>),
+    Base(I),
+}
+
+impl<'a, I: Iterator<Item = &'a Facet>> Iterator for FacetsIter<'a, I> {
+    type Item = &'a Facet;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            FacetsIter::Empty => None,
+            FacetsIter::Resolved(it) => it.next(),
+            FacetsIter::Base(it) => it.next(),
+        }
+    }
 }
 
 /// A read view of the nodes, authored and derived.
@@ -441,6 +883,12 @@ pub struct Tree<'a> {
     copies: Option<&'a Document>,
     /// Per-root indexes when backed by `Docs`.
     scoped: Option<&'a ScopedIndexes>,
+    /// Sparse non-journaled resolved state at `point` (engine.md §2.3, EN-4).
+    resolved: Option<&'a ResolvedStore>,
+    /// Active point on variation axes.
+    point: Option<&'a crate::patch::Point>,
+    /// Session-layer patches (`SESSION_LAYER`, P8).
+    session_patches: Option<&'a BTreeMap<crate::patch::PatchId, crate::patch::Patch>>,
     /// Where a cell's reads are noted, when it reads through a recording
     /// tree (engine.md §3.2).
     rec: Option<&'a crate::structure::Recorder>,
@@ -449,7 +897,15 @@ pub struct Tree<'a> {
 impl<'a> Tree<'a> {
     /// The tree over a store's documents.
     pub(crate) fn of(docs: &'a Docs) -> Tree<'a> {
-        Tree { doc: &docs.authored, copies: docs.apart.then_some(&docs.copies), scoped: Some(&docs.scoped), rec: None }
+        Tree {
+            doc: &docs.authored,
+            copies: docs.apart.then_some(&docs.copies),
+            scoped: Some(&docs.scoped),
+            resolved: Some(&docs.resolved),
+            point: Some(&docs.point),
+            session_patches: Some(&docs.session_patches),
+            rec: None,
+        }
     }
 
     /// This tree, noting what is read through it in `rec`.
@@ -480,7 +936,7 @@ impl<'a> Tree<'a> {
     /// scratch document cloned for planning, a fragment, a document being
     /// loaded. A derived node it does not hold is not there.
     pub fn authored_only(doc: &'a Document) -> Tree<'a> {
-        Tree { doc, copies: None, scoped: None, rec: None }
+        Tree { doc, copies: None, scoped: None, resolved: None, point: None, session_patches: None, rec: None }
     }
 
     /// Each document's invariants, with parents answered across both (a
@@ -488,7 +944,7 @@ impl<'a> Tree<'a> {
     /// id says. A live node's parent is live, so no live copy is under a
     /// dead authored ancestor.
     pub fn check_invariants(self) -> Result<(), String> {
-        self.doc.check_invariants_over(&|p| self.is_live(p))?;
+        self.doc.check_invariants_over(&|p| self.at(p).is_live(p))?;
         if let Some(copies) = self.copies {
             if let Some(n) = self.doc.nodes().find(|n| n.id.is_expanded()) {
                 return Err(format!("derived {} is in the authored document", n.id));
@@ -496,7 +952,7 @@ impl<'a> Tree<'a> {
             if let Some(n) = copies.nodes().find(|n| !n.id.is_expanded()) {
                 return Err(format!("{} is in the copies document", n.id));
             }
-            copies.check_invariants_over(&|p| self.is_live(p))?;
+            copies.check_invariants_over(&|p| self.at(p).is_live(p))?;
         }
         if let Some(scoped) = self.scoped {
             let mut expected_root: BTreeMap<NodeId, NodeId> = BTreeMap::new();
@@ -583,12 +1039,34 @@ impl<'a> Tree<'a> {
 
     pub fn live(self, id: NodeId) -> Option<&'a Node> {
         self.note(crate::structure::Key::Node(id));
+        if self.resolved.is_some_and(|r| r.absent.contains(&id)) {
+            return None;
+        }
         self.at(id).live(id)
     }
 
     pub fn is_live(self, id: NodeId) -> bool {
         self.note(crate::structure::Key::Node(id));
+        if self.resolved.is_some_and(|r| r.absent.contains(&id)) {
+            return false;
+        }
         self.at(id).is_live(id)
+    }
+
+    /// Whether `id` is hidden at the active point (cascading `PatchKey::Hidden`, P6).
+    pub fn is_hidden(self, id: NodeId) -> bool {
+        self.note(crate::structure::Key::Node(id));
+        self.resolved.is_some_and(|r| r.hidden.contains(&id))
+    }
+
+    /// The authored patch table (axes, patches, solve layer).
+    pub fn patches(self) -> &'a crate::patch::PatchTable {
+        self.doc.patches()
+    }
+
+    /// The active point on variation axes, when backed by `Docs`.
+    pub fn point(self) -> Option<&'a crate::patch::Point> {
+        self.point
     }
 
     pub fn nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
@@ -598,18 +1076,28 @@ impl<'a> Tree<'a> {
 
     pub fn live_nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
         self.unkeyed("live_nodes");
-        self.both().flat_map(Document::live_nodes)
+        let resolved = self.resolved;
+        self.both().flat_map(Document::live_nodes).filter(move |n| !resolved.is_some_and(|r| r.absent.contains(&n.id)))
     }
 
-    pub fn roots(self) -> &'a [NodeId] {
+    pub fn roots(self) -> Cow<'a, [NodeId]> {
         self.note(crate::structure::Key::Roots);
-        self.doc.roots()
+        let raw = self.doc.roots();
+        match self.resolved.filter(|r| !r.absent.is_empty()) {
+            Some(r) if raw.iter().any(|id| r.absent.contains(id)) => {
+                Cow::Owned(raw.iter().copied().filter(|id| !r.absent.contains(id)).collect())
+            }
+            _ => Cow::Borrowed(raw),
+        }
     }
 
     /// The last root in root order, without visiting the others.
     pub fn last_root(self) -> Option<NodeId> {
         self.unkeyed("last_root");
-        self.doc.last_root()
+        match self.resolved.filter(|r| !r.absent.is_empty()) {
+            Some(r) => self.doc.roots().iter().rev().copied().find(|id| !r.absent.contains(id)),
+            None => self.doc.last_root(),
+        }
     }
 
     /// Live children in sibling order. Merged by (order, id), the
@@ -617,11 +1105,27 @@ impl<'a> Tree<'a> {
     /// an owner, the authored parent of its copies.
     pub fn children(self, id: NodeId) -> Cow<'a, [NodeId]> {
         self.note(crate::structure::Key::Children(id));
+        let absent = self.resolved.filter(|r| !r.absent.is_empty());
+        if absent.is_some_and(|r| r.absent.contains(&id)) {
+            return Cow::Borrowed(&[]);
+        }
         let mine = self.at(id).children(id);
-        let Some(copies) = self.copies.filter(|_| !id.is_expanded()) else { return Cow::Borrowed(mine) };
+        let Some(copies) = self.copies.filter(|_| !id.is_expanded()) else {
+            return match absent {
+                Some(r) if mine.iter().any(|c| r.absent.contains(c)) => {
+                    Cow::Owned(mine.iter().copied().filter(|c| !r.absent.contains(c)).collect())
+                }
+                _ => Cow::Borrowed(mine),
+            };
+        };
         let derived = copies.children(id);
         if derived.is_empty() {
-            return Cow::Borrowed(mine);
+            return match absent {
+                Some(r) if mine.iter().any(|c| r.absent.contains(c)) => {
+                    Cow::Owned(mine.iter().copied().filter(|c| !r.absent.contains(c)).collect())
+                }
+                _ => Cow::Borrowed(mine),
+            };
         }
         if mine.is_empty() {
             return Cow::Borrowed(derived);
@@ -631,14 +1135,20 @@ impl<'a> Tree<'a> {
         let (mut a, mut b) = (mine.iter().peekable(), derived.iter().peekable());
         while let (Some(x), Some(y)) = (a.peek(), b.peek()) {
             if key(x) <= key(y) {
-                out.push(**x);
+                if absent.is_none_or(|r| !r.absent.contains(*x)) {
+                    out.push(**x);
+                }
                 a.next();
             } else {
                 out.push(**y);
                 b.next();
             }
         }
-        out.extend(a.copied());
+        for &x in a {
+            if absent.is_none_or(|r| !r.absent.contains(&x)) {
+                out.push(x);
+            }
+        }
         out.extend(b.copied());
         Cow::Owned(out)
     }
@@ -764,47 +1274,165 @@ impl<'a> Tree<'a> {
         Some(cur.id)
     }
 
-    /// A facet, what it holds included: a recording tree notes the whole
-    /// facet, so any write to it reaches the reader (§3.1).
+    /// Effective facet at the active point (sparse `ResolvedStore`, 0 heap
+    /// allocations): a recording tree notes the whole facet (§3.1).
     pub fn facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
         self.note(crate::structure::Key::Facet(id, kind));
+        if let Some(r) = self.resolved {
+            if r.absent.contains(&id) {
+                return None;
+            }
+            if let Some(map) = r.facets.get(&id) {
+                return map.get(&kind);
+            }
+        }
         self.at(id).facet(id, kind)
+    }
+
+    /// Unpatched base facet from the authored document (for inspector and drag
+    /// planner, engine.md §2.3, EN-4).
+    pub fn base_facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
+        self.note(crate::structure::Key::Facet(id, kind));
+        self.at(id).facet(id, kind)
+    }
+
+    /// Unpatched base leaf slot from the authored document (EN-4).
+    pub fn base_leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
+        self.note(crate::structure::Key::Facet(id, path.facet));
+        self.at(id).leaf(id, path)
+    }
+
+    /// Dedicated system-owned solve-layer value for `leaf` (engine.md §2.4 Tier 4, P17).
+    pub(crate) fn solve_leaf(self, leaf: Leaf) -> Option<&'a crate::value::Value> {
+        if self.doc.patches().solve.is_empty() {
+            return None;
+        }
+        if !self.is_live(leaf.node) || !self.has(leaf.node, leaf.path.facet) {
+            return None;
+        }
+        self.doc.patches().solve.get(&leaf)?.constant()
+    }
+
+    /// Session-layer patch value for `leaf` at the active point (engine.md §2.4 Tier 1, P8).
+    pub(crate) fn session_leaf(self, leaf: Leaf) -> Option<&'a crate::value::Value> {
+        let session = self.session_patches.filter(|s| !s.is_empty())?;
+        let point = self.point?;
+        if !self.is_live(leaf.node) || !self.has(leaf.node, leaf.path.facet) {
+            return None;
+        }
+        let target = crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) };
+        let win = self.doc.patches().winner_session(session, point, target)?;
+        win.entries.get(&target)?.as_slot()?.constant()
     }
 
     /// Whether `id` carries `kind`, and nothing of what it holds: a reader
     /// that asks only this is not reached by a write to the facet's fields.
     pub fn has(self, id: NodeId, kind: FacetKind) -> bool {
         self.note(crate::structure::Key::FacetSet(id));
+        if let Some(r) = self.resolved {
+            if r.absent.contains(&id) {
+                return false;
+            }
+            if let Some(map) = r.facets.get(&id) {
+                return map.contains_key(&kind);
+            }
+        }
         self.at(id).facet(id, kind).is_some()
     }
 
     pub fn get<T: LeafStruct>(self, id: NodeId) -> Option<&'a T> {
         self.note(crate::structure::Key::Facet(id, T::KIND));
+        if let Some(r) = self.resolved {
+            if r.absent.contains(&id) {
+                return None;
+            }
+            if let Some(map) = r.facets.get(&id) {
+                return map.get(&T::KIND).and_then(T::unwrap_ref);
+            }
+        }
         self.at(id).get::<T>(id)
     }
 
-    /// All facets of a node, in kind order.
+    /// All effective facets of a node at the active point, in kind order.
     pub fn facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        if let Some(r) = self.resolved {
+            if r.absent.contains(&id) {
+                if self.rec.is_some() {
+                    self.note(crate::structure::Key::FacetSet(id));
+                }
+                return FacetsIter::Empty;
+            }
+            if let Some(map) = r.facets.get(&id) {
+                if self.rec.is_some() {
+                    self.note(crate::structure::Key::FacetSet(id));
+                    for &k in map.keys() {
+                        self.note(crate::structure::Key::Facet(id, k));
+                    }
+                }
+                return FacetsIter::Resolved(map.values());
+            }
+        }
         if self.rec.is_some() {
             self.note(crate::structure::Key::FacetSet(id));
             for f in self.at(id).facets_of(id) {
                 self.note(crate::structure::Key::Facet(id, f.kind()));
             }
         }
-        self.at(id).facets_of(id)
+        FacetsIter::Base(self.at(id).facets_of(id))
     }
 
     pub fn leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
         self.note(crate::structure::Key::Facet(id, path.facet));
+        if let Some(r) = self.resolved {
+            if r.absent.contains(&id) {
+                return None;
+            }
+            if let Some(map) = r.facets.get(&id) {
+                return map.get(&path.facet)?.get(path.field);
+            }
+        }
         self.at(id).leaf(id, path)
     }
 
-    /// Every bound slot on a live node, with its expression: facet kind by
-    /// kind, and by id within a kind, as one document gives them.
+    /// Every effective bound slot on a live node, with its expression: facet
+    /// kind by kind, and by id within a kind, as one document gives them.
     pub fn bound_slots(self) -> impl Iterator<Item = (Leaf, &'a Expr)> + 'a {
         self.unkeyed("bound_slots");
+        let resolved = self.resolved.filter(|r| !r.is_empty());
+        let mut out: Vec<(Leaf, &'a Expr)> = Vec::new();
+        if let Some(r) = resolved {
+            for n in self.both().flat_map(Document::live_nodes) {
+                if r.absent.contains(&n.id) {
+                    continue;
+                }
+                if let Some(map) = r.facets.get(&n.id) {
+                    for f in map.values() {
+                        for field in f.field_names() {
+                            if let Some(e) = f.get(field).and_then(Slot::expr) {
+                                out.push((Leaf { node: n.id, path: LeafPath::new(f.kind(), field).expect("declared") }, e));
+                            }
+                        }
+                    }
+                } else {
+                    for f in self.at(n.id).facets_of(n.id) {
+                        for field in f.field_names() {
+                            if let Some(e) = f.get(field).and_then(Slot::expr) {
+                                out.push((Leaf { node: n.id, path: LeafPath::new(f.kind(), field).expect("declared") }, e));
+                            }
+                        }
+                    }
+                }
+            }
+            out.sort_by_key(|(l, _)| (l.path.facet, l.node, l.path.field));
+            return out.into_iter();
+        }
         let kinds: BTreeSet<FacetKind> = self.both().flat_map(|d| d.raw_facets().keys().copied()).collect();
-        kinds.into_iter().flat_map(move |kind| self.both().flat_map(move |d| d.bound_slots_of(kind)))
+        for kind in kinds {
+            for d in self.both() {
+                out.extend(d.bound_slots_of(kind));
+            }
+        }
+        out.into_iter()
     }
 
     /// Whether binding `target` to `expr` would let a value depend on itself,
@@ -1095,5 +1723,23 @@ mod tests {
         });
         assert!(e.contains(&Key::Node(r)) && e.contains(&Key::In(a, rect_ty)), "{e:?}");
         assert!(s.is_empty(), "restore_node silenced: {s:?}");
+
+        let (e, s) = run(&docs, "apply_patch", |d| {
+            let p = crate::patch::Patch {
+                id: crate::patch::PatchId(1),
+                layer: 0,
+                rank: OrderKey::first(),
+                region: crate::patch::Product::default(),
+                anchor: None,
+                writable: true,
+                entries: BTreeMap::from([(
+                    crate::patch::PatchTarget { node: a, key: crate::patch::PatchKey::Hidden },
+                    crate::patch::PatchValue::Bool { v: true },
+                )]),
+            };
+            let _ = d.authored.apply_patch_op(&crate::patch::PatchOp::Add { patch: p });
+        });
+        assert!(e.contains(&Key::Patch(a)), "{e:?}");
+        assert!(s.is_empty(), "apply_patch silenced: {s:?}");
     }
 }

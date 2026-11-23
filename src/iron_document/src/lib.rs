@@ -58,6 +58,7 @@ pub mod id;
 pub mod op;
 pub mod order;
 pub mod parts;
+pub mod patch;
 pub mod port;
 pub mod registry;
 pub mod reply;
@@ -695,6 +696,7 @@ impl StoreCore {
     pub(crate) fn scratch(&self) -> StoreCore {
         let mut docs = self.docs.clone();
         docs.gone.clear();
+        docs.session_patches.clear();
         let mut reactive = self.reactive.clone();
         reactive.clear_overlay(Tree::of(&docs));
         // A plan reads every cell exact.
@@ -838,6 +840,37 @@ impl StoreCore {
                     nodes.insert(rel.to);
                 }
                 Op::Unlink { .. } => {}
+                Op::Solve { leaf, .. } => {
+                    nodes.insert(leaf.node);
+                }
+                Op::Axis(a) => {
+                    use crate::patch::AxisOp;
+                    match a {
+                        AxisOp::Add { axis } => nodes.extend(doc.patches().targets_for_axis(axis.id)),
+                        AxisOp::Remove { .. } | AxisOp::SetOrder { .. } => nodes.extend(doc.patches().all_targets()),
+                        AxisOp::AddValue { axis, .. }
+                        | AxisOp::RemoveValue { axis, .. }
+                        | AxisOp::DeleteValue { axis, .. }
+                        | AxisOp::RestoreValue { axis, .. }
+                        | AxisOp::MoveValue { axis, .. } => nodes.extend(doc.patches().targets_for_axis(*axis)),
+                    }
+                }
+                Op::Patch(p) => {
+                    use crate::patch::PatchOp;
+                    match p {
+                        PatchOp::Add { patch } => nodes.extend(patch.entries.keys().map(|t| t.node)),
+                        PatchOp::SetEntry { target, .. } => {
+                            nodes.insert(target.node);
+                        }
+                        PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
+                            if let Some(patch) = doc.patches().patches.get(id) {
+                                nodes.extend(patch.entries.keys().map(|t| t.node));
+                            } else {
+                                nodes.extend(doc.patches().all_targets());
+                            }
+                        }
+                    }
+                }
             }
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
@@ -2174,6 +2207,7 @@ impl StoreCore {
                 Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => id.is_session(),
                 Op::Link { rel } => rel.id.is_session() && rel.from.is_session(),
                 Op::Unlink { id } => id.is_session(),
+                Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => false,
             };
             let result = if in_session {
                 op::apply_op(&mut self.docs, i, op, stamp)
@@ -3015,7 +3049,7 @@ impl StoreCore {
         let mut markups: Vec<(NodeId, String)> = {
             let doc = Tree::of(&self.docs).recording(&rec);
             let mut out = Vec::new();
-            for &root in doc.roots() {
+            for &root in doc.roots().iter() {
                 for n in doc.nodes_of_type_in(root, ty) {
                     if let Some(m) = doc.get::<facet::ContextDef>(n).and_then(|c| c.markup.constant()).and_then(|v| v.as_str()) {
                         out.push((n, m.to_owned()));
@@ -4298,7 +4332,7 @@ impl StoreCore {
         }
         let doc = Tree::of(&self.docs);
         let mut expected: BTreeMap<graph::NativeKey, layout::LayoutRule> = BTreeMap::new();
-        for &root in doc.roots() {
+        for &root in doc.roots().iter() {
             let rec = structure::Recorder::default();
             let cx = MakerCx::new(doc, &rec, self.contexts());
             expected.extend(layout::make_root(&cx, root));
@@ -4394,7 +4428,7 @@ impl StoreCore {
         }
 
         let mut per_root = Vec::new();
-        for &root in doc.roots() {
+        for &root in doc.roots().iter() {
             let rec = structure::Recorder::default();
             let cx = MakerCx::new(doc, &rec, self.contexts());
             per_root.push(solve::root_candidates(&cx, root));
@@ -4647,6 +4681,30 @@ impl StoreCore {
             Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
             // The first provider among siblings answers `@name`.
             Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
+            // Solve-layer writes only set/clear a constant in tier 4.
+            Op::Solve { .. } => false,
+            Op::Axis(_) => true,
+            Op::Patch(p) => {
+                use crate::patch::{PatchKey, PatchOp};
+                let entry_structural = |target: &crate::patch::PatchTarget, value: Option<&crate::patch::PatchValue>| -> bool {
+                    let PatchKey::Leaf(lp) = target.key else { return true };
+                    if value.and_then(|v| v.as_slot()).is_some_and(|s| s.expr().is_some()) {
+                        return true;
+                    }
+                    self.reactive.is_bound(Leaf { node: target.node, path: lp }) || names_context(&lp) || rederives(&lp)
+                };
+                match p {
+                    PatchOp::SetEntry { target, value, .. } => entry_structural(target, value.as_ref()),
+                    PatchOp::Add { patch } => patch.entries.iter().any(|(t, v)| entry_structural(t, Some(v))),
+                    PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
+                        match self.docs.authored.patches().patches.get(id) {
+                            Some(patch) => patch.entries.iter().any(|(t, v)| entry_structural(t, Some(v))),
+                            // If removed, its inverse `PatchOp::Add` is checked too; still safe to inspect.
+                            None => false,
+                        }
+                    }
+                }
+            }
         });
         // The clips' end reads clips, keys, relations and the transitions a
         // keyed state runs on: any edit may move it, so it is read again
@@ -4695,6 +4753,172 @@ impl StoreCore {
     /// The document, without copying it; the store's history goes with it.
     pub fn into_document(self) -> Document {
         self.docs.authored
+    }
+
+    // ---- Patches & point evaluation (engine.md §2.3, patches.md, EN-4) ----
+
+    /// The active point on variation axes (`Point::default()` until moved).
+    pub fn point(&self) -> &patch::Point {
+        &self.docs.point
+    }
+
+    /// Move the active point on variation axes (`engine.md` §2.3, EN-4).
+    /// Reconciles only nodes whose patches reference the changed axes,
+    /// restructures reactive bindings when needed, and settles live.
+    pub fn set_point(&mut self, point: patch::Point) {
+        let targets = self.docs.set_point(point);
+        if targets.is_empty() {
+            return;
+        }
+        let keys = self.docs.take_touched();
+        let structural = keys.iter().any(|k| !matches!(k, structure::Key::Leaf(_) | structure::Key::Facet(_, _) | structure::Key::Patch(_)))
+            || targets.iter().any(|&id| {
+                let doc = Tree::of(&self.docs);
+                doc.facets_of(id).any(|f| {
+                    f.field_names().into_iter().any(|field| {
+                        f.get(field).is_some_and(|s| s.expr().is_some())
+                            || LeafPath::new(f.kind(), field).is_ok_and(|path| self.reactive.is_bound(Leaf { node: id, path }))
+                    })
+                })
+            });
+        if !keys.is_empty() {
+            self.context_maker.note_touched(&keys);
+            self.layout_makers.note_touched(&keys);
+            self.constraint_makers.note_touched(&keys);
+            self.network_makers.note_touched(&keys);
+            self.derived_makers.note_touched(&keys);
+            self.sync_contexts(false);
+            self.sync_layout_makers(false);
+            self.sync_constraint_makers(false);
+            self.sync_network_makers(false);
+            self.sync_derived_makers(false);
+        }
+        let leaves = if keys.is_empty() {
+            Vec::new()
+        } else {
+            self.reactive.prime_touched(keys)
+        };
+        for &l in &leaves {
+            self.pending.slots.insert(l);
+        }
+        if structural {
+            self.geometry.note_structure();
+            let tokens = self.token_leaves();
+            self.reactive.restructure(Tree::of(&self.docs), &targets, graph::Rescope::No, &tokens, &leaves);
+            self.resample();
+        } else {
+            let doc = Tree::of(&self.docs);
+            for &l in &leaves {
+                if let Some(v) = self.reactive.read(doc, l) {
+                    self.reactive.mark(l, v);
+                }
+            }
+            if !leaves.is_empty() {
+                self.reactive.invalidate(doc, leaves);
+            } else {
+                self.reactive.flush(doc);
+            }
+            self.resample_running();
+        }
+        self.settle(SettleMode::Live { clusters: true });
+    }
+
+    /// Install or replace a session-layer patch (`SESSION_LAYER`, P8; never saved).
+    pub fn set_session_patch(&mut self, patch: patch::Patch) {
+        let leaves = self.docs.set_session_patch(patch);
+        if !leaves.is_empty() {
+            for &l in &leaves {
+                self.pending.slots.insert(l);
+            }
+            self.sync_touched(true);
+            self.settle(SettleMode::Live { clusters: true });
+        }
+    }
+
+    /// Remove a session-layer patch by id (`SESSION_LAYER`, P8).
+    pub fn remove_session_patch(&mut self, id: patch::PatchId) {
+        let leaves = self.docs.remove_session_patch(id);
+        if !leaves.is_empty() {
+            for &l in &leaves {
+                self.pending.slots.insert(l);
+            }
+            self.sync_touched(true);
+            self.settle(SettleMode::Live { clusters: true });
+        }
+    }
+
+    /// Clear all session-layer patches (`SESSION_LAYER`, P8).
+    pub fn clear_session_patches(&mut self) {
+        let leaves = self.docs.clear_session_patches();
+        if !leaves.is_empty() {
+            for &l in &leaves {
+                self.pending.slots.insert(l);
+            }
+            self.sync_touched(true);
+            self.settle(SettleMode::Live { clusters: true });
+        }
+    }
+
+    /// Evaluate `leaf` at an arbitrary variation `point` without mutating this store
+    /// (`engine.md` §2.3, EN-4). Uses the live store directly when `point == self.point()`.
+    pub fn eval_at(&self, point: &patch::Point, leaf: Leaf) -> Option<Value> {
+        if *point == self.docs.point {
+            return self.resolved(leaf.node, leaf.path);
+        }
+        // Fast path: when no patches exist at all, every point yields the same value.
+        if self.docs.authored.patches().patches.is_empty() && self.docs.session_patches.is_empty() {
+            return self.resolved(leaf.node, leaf.path);
+        }
+        let mut s = self.scratch();
+        // Preserve session patches for point evaluation (scratch clears them for planning).
+        s.docs.session_patches = self.docs.session_patches.clone();
+        s.set_point(point.clone());
+        s.resolved(leaf.node, leaf.path)
+    }
+
+    /// Winning patches covering `target` at the active point (including session
+    /// patches), ordered highest precedence first (`patches.md` §10).
+    pub fn patch_stack(&self, target: patch::PatchTarget) -> Vec<(&patch::Patch, &patch::PatchValue)> {
+        self.docs.authored.patches().patch_stack(&self.docs.session_patches, &self.docs.point, target)
+    }
+
+    /// The exact region where patch `id` wins for `target` (`patches.md` §7.3).
+    pub fn winning_region(&self, id: patch::PatchId, target: patch::PatchTarget) -> patch::Region {
+        self.docs.authored.patches().winning_region(id, target)
+    }
+
+    /// Patch diagnostics: dead patches, ties, contradictions, and stale entries (`patches.md` §7.5).
+    pub fn patch_lints(&self) -> patch::PatchLints {
+        let pt = self.docs.authored.patches();
+        let is_present = |point: &patch::Point, id: NodeId| self.docs.authored_present_at(point, id);
+        let has_facet = |point: &patch::Point, id: NodeId, fk: FacetKind| self.docs.authored_has_facet_at(point, id, fk);
+        pt.lints(&is_present, &has_facet)
+    }
+
+    /// Plan the ops for dragging `target` to `value` over `edit` in `layer`
+    /// (`patches.md` §7.2, P12, P17: clears any solve-layer entry on that leaf first).
+    pub fn plan_patch_drag(
+        &self,
+        edit: &patch::Product,
+        target: patch::PatchTarget,
+        value: patch::PatchValue,
+        layer: u32,
+    ) -> Result<Vec<Op>, String> {
+        let doc = Tree::of(&self.docs);
+        let point = &self.docs.point;
+        let node_present = self.docs.authored_present_at(point, target.node);
+        let facet_present = match target.key {
+            patch::PatchKey::Leaf(lp) => self.docs.authored_has_facet_at(point, target.node, lp.facet),
+            _ => true,
+        };
+        let base_val = match target.key {
+            patch::PatchKey::Present => Some(patch::PatchValue::Bool { v: doc.node(target.node).is_some_and(|n| n.tombstoned.is_none()) }),
+            patch::PatchKey::Hidden => Some(patch::PatchValue::Bool { v: false }),
+            patch::PatchKey::FacetPresent(fk) => Some(patch::PatchValue::Bool { v: doc.base_facet(target.node, fk).is_some() }),
+            patch::PatchKey::Leaf(lp) => doc.base_leaf(target.node, lp).cloned().map(|slot| patch::PatchValue::Slot { slot }),
+            patch::PatchKey::Notation => Some(patch::PatchValue::Notation { notation: String::new() }),
+        };
+        patch::plan_drag(self.docs.authored.patches(), point, edit, target, value, layer, node_present, facet_present, base_val)
     }
 
     pub fn history(&self) -> &History {
@@ -5252,6 +5476,7 @@ impl StoreCore {
             Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => !id.is_expanded(),
             Op::Link { rel } => !rel.id.is_expanded(),
             Op::Unlink { id } => !id.is_expanded(),
+            Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => true,
         });
         Ok(Run {
             tx: Transaction {

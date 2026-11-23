@@ -57,3 +57,5 @@ work = []
 # Only for the test that pins `geom::world_affine` to Bevy's own transform
 # arithmetic. Same version as bevy_math's, so the comparison is exact.
 glam = "0.32"
+# Reference patch model for EN-4 differential parity tests.
+iron_patch = { path = "../iron_patch" }

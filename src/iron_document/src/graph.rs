@@ -3061,6 +3061,9 @@ fn read_with(
     if let Some(v) = overlay.get(&leaf) {
         return Some(v.clone());
     }
+    if let Some(v) = doc.session_leaf(leaf) {
+        return Some(v.clone());
+    }
     if nodes.contains_key(&leaf) {
         return resolved.get(&leaf).cloned();
     }
@@ -3070,6 +3073,11 @@ fn read_with(
     // A node that went has no stored value: a tombstone's facets are kept
     // for undo, and a copy removed outright has none (handoff §4.6).
     doc.live(leaf.node)?;
+    // Tier 4: dedicated system-owned solve layer (engine.md §2.4, P17).
+    if let Some(v) = doc.solve_leaf(leaf) {
+        return Some(v.clone());
+    }
+    // Tiers 5 & 6: winning authored patch > base authored constant.
     doc.leaf(leaf.node, leaf.path)?.constant().cloned()
 }
 

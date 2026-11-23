@@ -224,7 +224,7 @@ pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fra
             }
         }
     }
-    let fragment_doc = Document::from_parts(nodes, facets, relations, Default::default(), doc.version());
+    let fragment_doc = Document::from_parts(nodes, facets, relations, Default::default(), doc.version(), Default::default());
 
     let mut homes = BTreeMap::new();
     let mut parent_world = BTreeMap::new();
@@ -244,7 +244,7 @@ pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fra
 fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
-        None => std::borrow::Cow::Borrowed(doc.roots()),
+        None => doc.roots(),
     };
     let next = siblings.iter().filter_map(|&s| doc.live(s)).map(|s| &s.order).find(|k| *k > after);
     OrderKey::between(Some(after), next).unwrap_or_else(|_| OrderKey::after(after))
@@ -254,7 +254,7 @@ fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKe
 fn key_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {
     let siblings = match parent {
         Some(p) => doc.children(p),
-        None => std::borrow::Cow::Borrowed(doc.roots()),
+        None => doc.roots(),
     };
     siblings.last().and_then(|&s| doc.live(s)).map_or_else(OrderKey::first, |s| OrderKey::after(&s.order))
 }

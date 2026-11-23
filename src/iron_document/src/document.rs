@@ -149,6 +149,9 @@ pub struct Document {
     /// Which scope this document is (scopes.md §3). Identity metadata, not
     /// content: set by the store, saved in the header, never an op.
     scope: Option<ScopeId>,
+    /// Variation axes, authored patches, dedicated solve layer (P17), and
+    /// in-memory patch indexes (plans/specs/patches.md, EN-4).
+    patches: crate::patch::PatchTable,
 
     // Derived. Rebuilt incrementally by the mutators, wholesale by `reindex`.
     // Only live nodes appear in these.
@@ -233,6 +236,12 @@ enum Rec {
     Placed(Option<NodeId>, usize),
     /// `id` was removed from a child list at `pos`.
     Unplaced(Option<NodeId>, usize, NodeId),
+    /// Patch / axis / solve-layer rollback records (EN-4).
+    Axis(crate::patch::AxisId, Option<crate::patch::Axis>),
+    AxisOrder(Vec<crate::patch::AxisId>),
+    Patch(crate::patch::PatchId, Option<crate::patch::Patch>),
+    Solve(Leaf, Option<Slot>),
+    PatchCounters(u64, u64, u64),
 }
 
 #[derive(Default)]
@@ -279,6 +288,11 @@ impl Document {
 
     pub fn version(&self) -> Version {
         self.version
+    }
+
+    /// Authored variation axes, patches, and dedicated solve layer (EN-4).
+    pub fn patches(&self) -> &crate::patch::PatchTable {
+        &self.patches
     }
 
     /// The scope this document belongs to, once it has been given one.
@@ -761,6 +775,34 @@ impl Document {
                 self.container(parent).remove(pos);
             }
             Rec::Unplaced(parent, pos, id) => self.container(parent).insert(pos, id),
+            Rec::Axis(id, old) => put(&mut self.patches.axes, id, old),
+            Rec::AxisOrder(old) => self.patches.axis_order = old,
+            Rec::Patch(id, old) => {
+                if let Some(cur) = self.patches.patches.remove(&id) {
+                    self.patches.unindex_patch(&cur);
+                }
+                if let Some(p) = old {
+                    self.patches.index_patch(&p);
+                    self.patches.patches.insert(id, p);
+                }
+            }
+            Rec::Solve(leaf, old) => {
+                match old {
+                    Some(s) => {
+                        self.patches.solve.insert(leaf, s);
+                        self.patches.index_solve(leaf, true);
+                    }
+                    None => {
+                        self.patches.solve.remove(&leaf);
+                        self.patches.index_solve(leaf, false);
+                    }
+                }
+            }
+            Rec::PatchCounters(a, v, p) => {
+                self.patches.next_axis = a;
+                self.patches.next_axis_value = v;
+                self.patches.next_patch = p;
+            }
         }
     }
 
@@ -1247,6 +1289,245 @@ impl Document {
         }
     }
 
+    /// Apply an axis op to the document, recording rollback records and
+    /// returning `(inverse, affected_targets)` (EN-4).
+    pub(crate) fn apply_axis_op(&mut self, op: &crate::patch::AxisOp) -> Result<(crate::patch::AxisOp, BTreeSet<NodeId>), String> {
+        use crate::patch::AxisOp;
+        let counters = (self.patches.next_axis, self.patches.next_axis_value, self.patches.next_patch);
+        let rec_counters = |doc: &mut Self| {
+            if doc.recording() {
+                doc.rec(Rec::PatchCounters(counters.0, counters.1, counters.2));
+            }
+        };
+        match op {
+            AxisOp::Add { axis } => {
+                if self.patches.axes.contains_key(&axis.id) {
+                    return Err(format!("axis {} already exists", axis.id));
+                }
+                if self.recording() {
+                    self.rec(Rec::Axis(axis.id, None));
+                }
+                rec_counters(self);
+                self.patches.next_axis = self.patches.next_axis.max(axis.id.0 + 1);
+                for v in &axis.values {
+                    self.patches.next_axis_value = self.patches.next_axis_value.max(v.id.0 + 1);
+                }
+                self.patches.axes.insert(axis.id, axis.clone());
+                let targets = self.patches.targets_for_axis(axis.id);
+                Ok((AxisOp::Remove { id: axis.id }, targets))
+            }
+            AxisOp::Remove { id } => {
+                let old = self.patches.axes.remove(id).ok_or_else(|| format!("no axis {id}"))?;
+                if self.recording() {
+                    self.rec(Rec::Axis(*id, Some(old.clone())));
+                }
+                let targets = self.patches.targets_for_axis(*id);
+                Ok((AxisOp::Add { axis: old }, targets))
+            }
+            AxisOp::SetOrder { order } => {
+                let old = std::mem::replace(&mut self.patches.axis_order, order.clone());
+                if self.recording() {
+                    self.rec(Rec::AxisOrder(old.clone()));
+                }
+                let targets = self.patches.all_targets();
+                Ok((AxisOp::SetOrder { order: old }, targets))
+            }
+            AxisOp::AddValue { axis, at, value } => {
+                let recording = self.recording();
+                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
+                if ax.values.iter().any(|v| v.id == value.id) {
+                    return Err(format!("axis {axis} already has value {}", value.id));
+                }
+                let before = recording.then(|| ax.clone());
+                ax.insert(*at, value.clone());
+                if let Some(b) = before {
+                    self.rec(Rec::Axis(*axis, Some(b)));
+                }
+                rec_counters(self);
+                self.patches.next_axis_value = self.patches.next_axis_value.max(value.id.0 + 1);
+                let targets = self.patches.targets_for_axis(*axis);
+                Ok((AxisOp::RemoveValue { axis: *axis, id: value.id }, targets))
+            }
+            AxisOp::RemoveValue { axis, id } => {
+                let recording = self.recording();
+                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
+                let pos = ax.position(*id).ok_or_else(|| format!("axis {axis} has no value {id}"))?;
+                let before = recording.then(|| ax.clone());
+                let val = ax.values.remove(pos);
+                if let Some(b) = before {
+                    self.rec(Rec::Axis(*axis, Some(b)));
+                }
+                let targets = self.patches.targets_for_axis(*axis);
+                Ok((AxisOp::AddValue { axis: *axis, at: pos, value: val }, targets))
+            }
+            AxisOp::DeleteValue { axis, id } => {
+                let recording = self.recording();
+                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
+                if ax.position(*id).is_none() {
+                    return Err(format!("axis {axis} has no value {id}"));
+                }
+                let before = recording.then(|| ax.clone());
+                ax.delete(*id);
+                if let Some(b) = before {
+                    self.rec(Rec::Axis(*axis, Some(b)));
+                }
+                let targets = self.patches.targets_for_axis(*axis);
+                Ok((AxisOp::RestoreValue { axis: *axis, id: *id }, targets))
+            }
+            AxisOp::RestoreValue { axis, id } => {
+                let recording = self.recording();
+                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
+                if ax.position(*id).is_none() {
+                    return Err(format!("axis {axis} has no value {id}"));
+                }
+                let before = recording.then(|| ax.clone());
+                ax.restore(*id);
+                if let Some(b) = before {
+                    self.rec(Rec::Axis(*axis, Some(b)));
+                }
+                let targets = self.patches.targets_for_axis(*axis);
+                Ok((AxisOp::DeleteValue { axis: *axis, id: *id }, targets))
+            }
+            AxisOp::MoveValue { axis, id, at } => {
+                let recording = self.recording();
+                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
+                let before = recording.then(|| ax.clone());
+                let old_pos = ax.move_to(*id, *at).ok_or_else(|| format!("axis {axis} has no value {id}"))?;
+                if let Some(b) = before {
+                    self.rec(Rec::Axis(*axis, Some(b)));
+                }
+                let targets = self.patches.targets_for_axis(*axis);
+                Ok((AxisOp::MoveValue { axis: *axis, id: *id, at: old_pos }, targets))
+            }
+        }
+    }
+
+    /// Apply an authored patch op to the document, enforcing distinct ranks
+    /// per layer and non-session layer, maintaining the in-memory patch index,
+    /// and returning `(inverse, affected_targets)` (EN-4).
+    pub(crate) fn apply_patch_op(&mut self, op: &crate::patch::PatchOp) -> Result<(crate::patch::PatchOp, BTreeSet<NodeId>), String> {
+        use crate::patch::{PatchOp, SESSION_LAYER};
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("apply_patch");
+        let res = (|| -> Result<(PatchOp, BTreeSet<NodeId>), String> {
+            match op {
+                PatchOp::Add { patch } => {
+                    if patch.layer == SESSION_LAYER {
+                        return Err("authored patch may not use SESSION_LAYER".into());
+                    }
+                    if self.patches.patches.contains_key(&patch.id) {
+                        return Err(format!("patch {} already exists", patch.id));
+                    }
+                    if self.patches.patches.values().any(|q| q.layer == patch.layer && q.rank == patch.rank) {
+                        return Err(format!("another patch in layer {} already has rank {}", patch.layer, patch.rank));
+                    }
+                    if self.recording() {
+                        self.rec(Rec::Patch(patch.id, None));
+                        self.rec(Rec::PatchCounters(self.patches.next_axis, self.patches.next_axis_value, self.patches.next_patch));
+                    }
+                    self.patches.next_patch = self.patches.next_patch.max(patch.id.0 + 1);
+                    let targets: BTreeSet<NodeId> = patch.entries.keys().map(|t| t.node).collect();
+                    self.patches.index_patch(patch);
+                    self.patches.patches.insert(patch.id, patch.clone());
+                    for &n in &targets {
+                        self.touched.note(crate::structure::Key::Patch(n));
+                    }
+                    Ok((PatchOp::Remove { id: patch.id }, targets))
+                }
+                PatchOp::Remove { id } => {
+                    let old = self.patches.patches.remove(id).ok_or_else(|| format!("no patch {id}"))?;
+                    self.patches.unindex_patch(&old);
+                    if self.recording() {
+                        self.rec(Rec::Patch(*id, Some(old.clone())));
+                    }
+                    let targets: BTreeSet<NodeId> = old.entries.keys().map(|t| t.node).collect();
+                    for &n in &targets {
+                        self.touched.note(crate::structure::Key::Patch(n));
+                    }
+                    Ok((PatchOp::Add { patch: old }, targets))
+                }
+                PatchOp::SetEntry { patch, target, value } => {
+                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
+                    let before = self.recording().then(|| cur.clone());
+                    let old_p = self.patches.patches.remove(patch).expect("checked");
+                    self.patches.unindex_patch(&old_p);
+                    let mut next = old_p;
+                    let prev_val = match value {
+                        Some(v) => next.entries.insert(*target, v.clone()),
+                        None => next.entries.remove(target),
+                    };
+                    self.patches.index_patch(&next);
+                    self.patches.patches.insert(*patch, next);
+                    if let Some(b) = before {
+                        self.rec(Rec::Patch(*patch, Some(b)));
+                    }
+                    self.touched.note(crate::structure::Key::Patch(target.node));
+                    Ok((PatchOp::SetEntry { patch: *patch, target: *target, value: prev_val }, BTreeSet::from([target.node])))
+                }
+                PatchOp::SetRegion { patch, region } => {
+                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
+                    let before = self.recording().then(|| cur.clone());
+                    let old_p = self.patches.patches.remove(patch).expect("checked");
+                    self.patches.unindex_patch(&old_p);
+                    let mut next = old_p;
+                    let prev_region = std::mem::replace(&mut next.region, region.clone());
+                    let targets: BTreeSet<NodeId> = next.entries.keys().map(|t| t.node).collect();
+                    self.patches.index_patch(&next);
+                    self.patches.patches.insert(*patch, next);
+                    if let Some(b) = before {
+                        self.rec(Rec::Patch(*patch, Some(b)));
+                    }
+                    for &n in &targets {
+                        self.touched.note(crate::structure::Key::Patch(n));
+                    }
+                    Ok((PatchOp::SetRegion { patch: *patch, region: prev_region }, targets))
+                }
+                PatchOp::SetRank { patch, rank } => {
+                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
+                    if self.patches.patches.values().any(|q| q.id != *patch && q.layer == cur.layer && &q.rank == rank) {
+                        return Err(format!("another patch in layer {} already has rank {}", cur.layer, rank));
+                    }
+                    let before = self.recording().then(|| cur.clone());
+                    let p = self.patches.patches.get_mut(patch).expect("checked");
+                    let prev_rank = std::mem::replace(&mut p.rank, rank.clone());
+                    let targets: BTreeSet<NodeId> = p.entries.keys().map(|t| t.node).collect();
+                    if let Some(b) = before {
+                        self.rec(Rec::Patch(*patch, Some(b)));
+                    }
+                    for &n in &targets {
+                        self.touched.note(crate::structure::Key::Patch(n));
+                    }
+                    Ok((PatchOp::SetRank { patch: *patch, rank: prev_rank }, targets))
+                }
+            }
+        })();
+        self.touched.on = on;
+        res
+    }
+
+    /// Write or clear one entry in the dedicated system-owned solve layer (P17).
+    pub(crate) fn apply_solve(&mut self, leaf: Leaf, slot: Option<Slot>) -> Option<Slot> {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("apply_solve");
+        let old = match slot {
+            Some(s) => {
+                self.patches.index_solve(leaf, true);
+                self.patches.solve.insert(leaf, s)
+            }
+            None => {
+                self.patches.index_solve(leaf, false);
+                self.patches.solve.remove(&leaf)
+            }
+        };
+        if self.recording() {
+            self.rec(Rec::Solve(leaf, old.clone()));
+        }
+        self.touched.note(crate::structure::Key::Leaf(leaf));
+        self.touched.note(crate::structure::Key::Patch(leaf.node));
+        self.touched.on = on;
+        old
+    }
+
     // ---- bulk construction (used by load) -----------------------------
 
     /// Build from raw tables without validation beyond what `reindex` checks.
@@ -1258,7 +1539,9 @@ impl Document {
         relations: BTreeMap<RelationId, Relation>,
         next: Counters,
         version: Version,
+        mut patches: crate::patch::PatchTable,
     ) -> Document {
+        patches.reindex();
         let mut d = Document {
             nodes,
             facets,
@@ -1266,6 +1549,7 @@ impl Document {
             next_ids: next.nodes,
             next_rels: next.relations,
             version,
+            patches,
             ..Default::default()
         };
         for (client, n) in d.nodes.keys().filter_map(|id| id.minted()).collect::<Vec<_>>() {
@@ -1650,7 +1934,7 @@ mod journal_tests {
         nodes.insert(id, Node { id, ty: ty("group"), parent: None, order: OrderKey::first(), tombstoned: Some(Version(1)) });
         let mut facets = BTreeMap::new();
         facets.insert(FacetKind::Name, BTreeMap::from([(id, name("old"))]));
-        let mut doc = Document::from_parts(nodes, facets, BTreeMap::new(), Counters::default(), Version(1));
+        let mut doc = Document::from_parts(nodes, facets, BTreeMap::new(), Counters::default(), Version(1), Default::default());
         assert!(!doc.children.contains_key(&id));
         let before = doc.clone();
         doc.begin();

@@ -1072,6 +1072,8 @@ fn op_node(doc: Tree<'_>, op: &Op) -> Option<NodeId> {
         Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
         Op::Link { rel } => Some(rel.from),
         Op::Unlink { id } => doc.relation(*id).map(|r| r.from),
+        Op::Solve { leaf, .. } => Some(leaf.node),
+        Op::Axis(_) | Op::Patch(_) => None,
     }
 }
 
@@ -1080,6 +1082,9 @@ fn op_target(op: &Op) -> String {
         Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => id.to_string(),
         Op::Link { rel } => rel.id.to_string(),
         Op::Unlink { id } => id.to_string(),
+        Op::Solve { leaf, .. } => leaf.node.to_string(),
+        Op::Axis(_) => "axis".into(),
+        Op::Patch(_) => "patch".into(),
     }
 }
 
@@ -1110,7 +1115,7 @@ pub fn refuse(op: &Op) -> Option<String> {
         Op::Reparent { id, parent, .. } => [Some(*id), *parent].into_iter().flatten().find(|n| n.is_expanded()),
         Op::Link { rel } => Some(rel.from).filter(|n| n.is_expanded()),
         Op::Unlink { id } if id.is_expanded() => return Some(format!("{id} is a derived relation: its instance's definition makes it")),
-        Op::Unlink { .. } => None,
+        Op::Unlink { .. } | Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => None,
     }?;
     Some(match target.expanded_parts() {
         Some((owner, _)) => format!("{target} is part of instance {owner}, derived from its definition; edit the definition or detach the instance"),
@@ -1141,7 +1146,7 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             Op::Delete { id } | Op::Reorder { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
             Op::Set { id, .. } | Op::AddFacet { id, .. } => Some(*id).filter(|n| n.is_item_scope()),
             Op::Link { rel } => Some(rel.from),
-            Op::Unlink { .. } => None,
+            Op::Unlink { .. } | Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => None,
         };
         if let Some((target, (repeat, k, template))) = target.and_then(|t| t.repeat_item().map(|r| (t, r))) {
             let what = if template == repeat { format!("set {repeat}'s repeat.each, repeat.count or when.is") } else { format!("edit its template, {template}; only a copy's values can differ per item") };

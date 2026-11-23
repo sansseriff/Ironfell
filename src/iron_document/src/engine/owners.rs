@@ -385,7 +385,27 @@ impl Owners {
                 Op::Link { rel } => {
                     all |= touch(rel.from, &mut out);
                 }
-                Op::Unlink { .. } => {}
+                Op::Unlink { .. } | Op::Axis(_) | Op::Solve { .. } => {}
+                Op::Patch(p) => {
+                    use crate::patch::PatchOp;
+                    match p {
+                        PatchOp::Add { patch } => {
+                            for t in patch.entries.keys() {
+                                all |= touch(t.node, &mut out);
+                            }
+                        }
+                        PatchOp::SetEntry { target, .. } => {
+                            all |= touch(target.node, &mut out);
+                        }
+                        PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
+                            if let Some(patch) = doc.patches().patches.get(id) {
+                                for t in patch.entries.keys() {
+                                    all |= touch(t.node, &mut out);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         // What the ops took with them: a deleted subtree's nodes (each an

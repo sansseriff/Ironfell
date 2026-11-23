@@ -341,6 +341,88 @@ impl LayoutMakers {
     }
 }
 
+/// Stage 2 maker for document `context` nodes (engine.md §3.6, EN-2b).
+/// Records `Key::Roots`, `Key::In(root, context)`, and `Key::Facet(n, ContextDef)`
+/// so non-context edits never scan for `context` nodes.
+#[derive(Clone, Debug, Default)]
+struct ContextMaker {
+    init: bool,
+    dirty: bool,
+    keys: BTreeSet<structure::Key>,
+    runs: u64,
+}
+
+impl ContextMaker {
+    fn note_touched(&mut self, keys: &[structure::Key]) {
+        if !self.init || self.dirty {
+            return;
+        }
+        if keys.iter().any(|k| self.keys.contains(k)) {
+            self.dirty = true;
+        }
+    }
+}
+
+/// Per-top-level-root Stage 2 makers for structural constraint candidate
+/// components (engine.md §3.6, EN-2b). Each dirty root runs
+/// `solve::root_candidates` through `MakerCx`, recording `structure::Key`
+/// dependencies; when any root's candidates change, candidate components are
+/// repartitioned into `NativeKey::Component(_)` natives.
+#[derive(Clone, Debug, Default)]
+struct ConstraintMakers {
+    init: bool,
+    roots_dirty: bool,
+    dirty: BTreeSet<NodeId>,
+    keys_of: BTreeMap<NodeId, Vec<structure::Key>>,
+    readers: BTreeMap<structure::Key, BTreeSet<NodeId>>,
+    per_root: BTreeMap<NodeId, solve::RootCandidates>,
+    runs_of: BTreeMap<NodeId, u64>,
+}
+
+impl ConstraintMakers {
+    fn note_touched(&mut self, keys: &[structure::Key]) {
+        if !self.init {
+            return;
+        }
+        for &key in keys {
+            if key == structure::Key::Roots {
+                self.roots_dirty = true;
+            }
+            if let Some(roots) = self.readers.get(&key) {
+                self.dirty.extend(roots.iter().copied());
+            }
+        }
+    }
+
+    fn unindex(&mut self, root: NodeId) {
+        if let Some(old) = self.keys_of.remove(&root) {
+            for k in old {
+                if let Some(set) = self.readers.get_mut(&k) {
+                    set.remove(&root);
+                    if set.is_empty() {
+                        self.readers.remove(&k);
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_keys(&mut self, root: NodeId, mut keys: Vec<structure::Key>) {
+        keys.sort();
+        keys.dedup();
+        if self.keys_of.get(&root).is_some_and(|old| *old == keys) {
+            return;
+        }
+        self.unindex(root);
+        for &k in &keys {
+            self.readers.entry(k).or_default().insert(root);
+        }
+        if !keys.is_empty() {
+            self.keys_of.insert(root, keys);
+        }
+    }
+}
+
 /// How many times one pass solves a cluster whose inputs another
 /// cluster's write changed (through a binding or a layout): enough for a
 /// chain, bounded for a loop.
@@ -484,9 +566,11 @@ pub struct StoreCore {
     /// The clusters, by key, whose last solve converged and whose change
     /// native has not run since: not solved again (§9.4, A6).
     committed: BTreeSet<NodeId>,
-    /// The grouping native's run count when its result was last taken
-    /// (`grouped`), and the error it gave then.
-    grouped_at: Option<u64>,
+    /// The `Reactive::components_rev` when `clusters` was last assembled.
+    clusters_rev: Option<u64>,
+    /// Stage 2 keyed makers for `context` nodes and constraint partitions.
+    context_maker: ContextMaker,
+    constraint_makers: ConstraintMakers,
     /// Leaves the current gesture explicitly moved (as opposed to leaves the
     /// solver moved for it): what a commit writes.
     drivers: std::collections::BTreeSet<Leaf>,
@@ -672,7 +756,9 @@ impl StoreCore {
             time_errors: self.time_errors.clone(),
             clusters: self.clusters.clone(),
             committed: self.committed.clone(),
-            grouped_at: self.grouped_at,
+            clusters_rev: self.clusters_rev,
+            context_maker: self.context_maker.clone(),
+            constraint_makers: self.constraint_makers.clone(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: self.session_version,
@@ -761,7 +847,6 @@ impl StoreCore {
         self.update_drawn(ops.iter().copied());
         let ops = ops.into_iter();
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
-        let mut reparented = false;
         // Which `@name` readers to look at again: the names whose providers
         // a let or token made, removed, renamed or reflagged may move, and
         // the readers under a moved node; all of them only when a name
@@ -780,16 +865,6 @@ impl StoreCore {
         let derives = |kind: FacetKind| matches!(kind, FacetKind::Port | FacetKind::Anchor | FacetKind::Connection | FacetKind::Transform2d);
         // A deleted node is read as it was when it went (`Docs::gone`).
         let gone = &self.docs.gone;
-        // What grouping and validation read of structure, as of their last
-        // run (`solve::grouping_reach`); unknown before one, when every
-        // structural change makes them look again.
-        let reach = self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()).map(|g| &g.reach);
-        let grouping_kind = |k: FacetKind| matches!(k, FacetKind::Constraint | FacetKind::Anchor | FacetKind::Port | FacetKind::Connection);
-        let in_reach = |n: NodeId| reach.is_none_or(|r| r.contains(&n));
-        let mut regroup = false;
-        // The nodes a move took in or out of the grouping's reach: the
-        // clusters beneath them read a changed chain of ancestors.
-        let mut moved: Vec<NodeId> = Vec::new();
         let made_of = |id: NodeId| match gone.get(&id) {
             Some(w) => matches!(w.ty.name(), "port" | "connection") || w.port_or_anchor,
             None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
@@ -811,7 +886,6 @@ impl StoreCore {
                     nodes.insert(*id);
                 }
                 Op::Reparent { id, .. } => {
-                    reparented = true;
                     nodes.insert(*id);
                     under.push(*id);
                     // A let moved provides to its new siblings' readers.
@@ -832,23 +906,6 @@ impl StoreCore {
                 }
                 Op::Unlink { .. } => {}
             }
-            regroup |= match op {
-                // A copy made again may be an operand that went.
-                Op::Create { id, ty, facets, .. } => in_reach(*id) || matches!(ty.name(), "constraint" | "port" | "connection") || facets.iter().any(|f| grouping_kind(f.kind())),
-                Op::AddFacet { id, facet } => grouping_kind(facet.kind()) || in_reach(*id),
-                Op::RemoveFacet { id, kind } => grouping_kind(*kind) || in_reach(*id),
-                Op::Delete { id } | Op::Set { id, .. } => in_reach(*id),
-                Op::Reparent { id, .. } => {
-                    if in_reach(*id) {
-                        moved.push(*id);
-                    }
-                    in_reach(*id)
-                }
-                Op::Link { rel } => matches!(rel.rel, RelKind::Constrains | RelKind::Connects | RelKind::Exposes) || in_reach(rel.from) || in_reach(rel.to),
-                // Its relation is gone; the inverse link names its ends.
-                Op::Unlink { id } => doc.relation(*id).is_none_or(|r| in_reach(r.from) || in_reach(r.to)),
-                Op::Reorder { .. } => false,
-            };
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
             let touches = match op {
@@ -883,7 +940,6 @@ impl StoreCore {
                 }
             }
         }
-        let reach_unknown = reach.is_none();
         // A boundary check on an instance's argument reads its definition's
         // port_specs (`types::declared`): an edit inside a definition
         // reaches the arguments of every entity naming it.
@@ -896,38 +952,26 @@ impl StoreCore {
                 .collect();
             nodes.extend(naming);
         }
-        // The network's islands and the layout natives first, so that this
-        // pass runs the new ones and not the old against the new structure
-        // (handoff §4.10); and the layouts whose structure changed run.
+        // The network's islands and Stage 2 makers first, so that this pass
+        // runs the new natives and not the old against the new structure.
         let (net, fresh) = self.network_now();
         if fresh {
             self.sync_islands(&net, false);
         }
         // Stage 2 -> Stage 3: consume touched keys from Docs, reconcile dirty
-        // per-root layout makers before priming keyed cells so updated layout
-        // outputs exist before this pass runs (engine.md §3.2, §3.3).
+        // contexts, layout, and constraint makers before priming keyed cells
+        // (engine.md §3.2, §3.3).
         let keys = self.docs.take_touched();
-        self.layout_makers.note_touched(&keys);
+        if !keys.is_empty() {
+            self.context_maker.note_touched(&keys);
+            self.layout_makers.note_touched(&keys);
+            self.constraint_makers.note_touched(&keys);
+        }
+        self.sync_contexts(false);
         self.sync_layout_makers(false);
+        self.sync_constraint_makers(false);
         self.sync_repeats(false);
         let touched_leaves = self.reactive.prime_touched(keys);
-        // Constraints and their operands are structure to the grouping
-        // and to validation: they look again when an op touched what they
-        // read (DS-3b: not on every structural change). A reparent can move
-        // an operand's ancestry without touching it (a wrapper swapped):
-        // the clusters beneath what moved look again.
-        if regroup {
-            self.reactive.prime_natives([graph::NativeKey::Clusters]);
-        }
-        if reparented && !moved.is_empty() {
-            let doc = Tree::of(&self.docs);
-            let keys: BTreeSet<graph::NativeKey> = if reach_unknown {
-                self.reactive.native_keys().filter(|k| matches!(k, graph::NativeKey::Cluster(_))).collect()
-            } else {
-                moved.iter().flat_map(|&m| std::iter::once(m).chain(doc.descendants(m))).filter_map(|n| self.clusters.by_node.get(&n)).map(|&k| graph::NativeKey::Cluster(k)).collect()
-            };
-            self.reactive.prime_natives(keys);
-        }
         // What waited on the leaves of every node gone, subtrees included,
         // goes with them: nothing is promoted onto a deleted leaf (review
         // of DS-10a, Sol). A lookup in the waiting requests, which are few.
@@ -1038,7 +1082,9 @@ impl StoreCore {
             time_errors: Default::default(),
             clusters: Default::default(),
             committed: BTreeSet::new(),
-            grouped_at: None,
+            clusters_rev: None,
+            context_maker: ContextMaker::default(),
+            constraint_makers: ConstraintMakers::default(),
             drivers: Default::default(),
             fingers: Vec::new(),
             session_version: 0,
@@ -1108,7 +1154,9 @@ impl StoreCore {
         store.settle_repeats();
         store.pending = Changes::default();
         store.docs.gone.clear();
-        store.rebuild_clusters();
+        store.sync_contexts(false);
+        store.sync_constraint_makers(false);
+        store.sync_clusters();
         store.resolve_physics();
         // Initial load already ran rebuild and resolve_physics from scratch;
         // leave the touched log empty before the first transaction.
@@ -1121,41 +1169,41 @@ impl StoreCore {
         &self.clusters
     }
 
-    fn rebuild_clusters(&mut self) {
-        self.regroup();
-    }
-
-    /// Under the differential check: the grouping not run since it was last
-    /// taken (DS-3b: no structural op touched its reach) is what grouping
-    /// from scratch makes now.
+    /// Under the differential check: the clusters assembled from per-component
+    /// cells match grouping from scratch.
     #[cfg(feature = "differential")]
     fn check_grouping(&self) {
         let fresh = solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts());
-        assert!(fresh == self.clusters, "the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>());
+        assert!(fresh == self.clusters, "structure oracle: the grouping was not run, but grouping from scratch differs:\n kept {:?}\n fresh {:?}", self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(), fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>());
     }
 
-    /// Take the constraints as grouped now into `clusters`: the grouping
-    /// native's result, made again only when what it read changed (handoff
-    /// §4.10, RE-5.5), and taken only when it ran since it was last taken
-    /// (DS-3b: an unchanged grouping costs nothing). Grouping is total: what
-    /// it can't use or solve is in `clusters.problems` (DS-7).
-    fn regroup(&mut self) {
-        if self.reactive.native(graph::NativeKey::Clusters).is_none() {
-            self.reactive.set_natives(Tree::of(&self.docs), vec![(graph::NativeKey::Clusters, Some((std::sync::Arc::new(solve::ClustersNative::default()), true)))], true);
-        }
-        // A claim that came or went on an operand waits to run it.
+    /// Assemble `self.clusters` from the per-candidate-component Stage 3 cells
+    /// (`NativeKey::Component(_)`) whenever any component cell was added,
+    /// removed, or ran (`Reactive::components_rev`), and reconcile per-cluster
+    /// watchers (`NativeKey::Cluster(_)`). O(1) when nothing changed.
+    fn sync_clusters(&mut self) {
+        self.sync_contexts(false);
+        self.sync_constraint_makers(false);
         self.reactive.flush(Tree::of(&self.docs));
-        let runs = self.reactive.runs_of(graph::NativeKey::Clusters);
-        if runs.is_some() && runs == self.grouped_at {
+        let rev = self.reactive.components_rev();
+        if self.clusters_rev == Some(rev) {
             #[cfg(feature = "differential")]
             self.check_grouping();
             return;
         }
-        let c = match self.reactive.native_extra(graph::NativeKey::Clusters).and_then(|e| e.downcast_ref::<solve::Grouping>()) {
-            Some(g) => g.result.clone(),
-            None => solve::clusters(Tree::of(&self.docs), &self.reactive, self.contexts()),
-        };
-        self.grouped_at = runs;
+        let mut entries: Vec<(solve::Cluster, BTreeMap<Leaf, Leaf>)> = Vec::new();
+        let mut problems: Vec<(NodeId, String)> = Vec::new();
+        for k in self.reactive.native_keys() {
+            if !matches!(k, graph::NativeKey::Component(_)) {
+                continue;
+            }
+            if let Some(out) = self.reactive.native_extra(k).and_then(|e| e.downcast_ref::<solve::ComponentOut>()) {
+                entries.extend(out.clusters.iter().cloned());
+                problems.extend(out.problems.iter().cloned());
+            }
+        }
+        let c = solve::assemble_clusters(entries, problems);
+        self.clusters_rev = Some(rev);
         if c != self.clusters {
             self.owners.hold(c.copies().clone());
             // `committed` names current clusters only: `resolve_clusters_live`
@@ -1165,8 +1213,23 @@ impl StoreCore {
             // `to_solve` doesn't look at every cluster for it (review of
             // DS-7, Opus).
             self.committed.extend(c.failed.iter().copied());
+            let want: BTreeMap<graph::NativeKey, &solve::Cluster> = c.list.iter().map(|cl| (graph::NativeKey::Cluster(cl.key()), cl)).collect();
+            let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
+                .reactive
+                .native_keys()
+                .filter(|k| matches!(k, graph::NativeKey::Cluster(_)) && !want.contains_key(k))
+                .map(|k| (k, None))
+                .collect();
+            for (k, cl) in &want {
+                let n = solve::ClusterNative::new((*cl).clone());
+                if self.reactive.native(*k).and_then(|x| x.as_any().downcast_ref::<solve::ClusterNative>()) != Some(&n) {
+                    batch.push((*k, Some((std::sync::Arc::new(n), true))));
+                }
+            }
+            if !batch.is_empty() {
+                self.reactive.set_natives(Tree::of(&self.docs), batch, true);
+            }
             self.clusters = c;
-            self.sync_cluster_natives();
         }
     }
 
@@ -1176,7 +1239,7 @@ impl StoreCore {
     /// later one that reads it (council review of DS-9, Sol), or make a
     /// cluster cyclic, which is then not solved (review of DS-7, Sol).
     fn next_to_solve(&mut self, drivers: &[solve::Driver], solved: &BTreeMap<NodeId, usize>) -> Option<solve::Cluster> {
-        self.regroup();
+        self.sync_clusters();
         // Once each; again only if what it reads changed since (its
         // watcher ran), as through a layout another cluster's write moved
         // (review of DS-7, Sol), up to `RESOLVES` times.
@@ -1210,27 +1273,6 @@ impl StoreCore {
             assert!(order.contains(&i) || self.clusters.failed.contains(&c.key()) || self.unmoved(c, drivers), "cluster {} could move but is not solved", c.id);
         }
         order
-    }
-
-    /// A watching native per cluster (`solve::ClusterNative`): made for a
-    /// cluster that is new or changed, dropped for one gone.
-    fn sync_cluster_natives(&mut self) {
-        let want: BTreeMap<graph::NativeKey, &solve::Cluster> = self.clusters.list.iter().map(|c| (graph::NativeKey::Cluster(c.key()), c)).collect();
-        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
-            .reactive
-            .native_keys()
-            .filter(|k| matches!(k, graph::NativeKey::Cluster(_)) && !want.contains_key(k))
-            .map(|k| (k, None))
-            .collect();
-        for (k, c) in &want {
-            let n = solve::ClusterNative::new((*c).clone());
-            if self.reactive.native(*k).and_then(|x| x.as_any().downcast_ref::<solve::ClusterNative>()) != Some(&n) {
-                batch.push((*k, Some((std::sync::Arc::new(n), true))));
-            }
-        }
-        if !batch.is_empty() {
-            self.reactive.set_natives(Tree::of(&self.docs), batch, true);
-        }
     }
 
     /// Re-solve every cluster from the current resolved values, with the
@@ -2229,7 +2271,6 @@ impl StoreCore {
         if structural {
             self.regraph(ops.iter().chain(&undo));
         } else {
-            self.prime_grouping(ops.iter());
             // Session constant writes also mark their leaves so the host sees
             // moved session nodes even with no readers (e.g. Latency view).
             self.sync_touched(true);
@@ -2984,32 +3025,147 @@ impl StoreCore {
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
+            self.sync_contexts(true);
             self.sync_layout_makers(true);
+            self.sync_constraint_makers(true);
             self.reactive.flush(Tree::of(&self.docs));
         }
         self.repeat_changes.clear();
-        self.resolve_contexts();
+        self.sync_clusters();
     }
 
-    /// Merge the document's `context` nodes over the built-in library when
-    /// their markup changed (contexts.md §2.2).
-    fn resolve_contexts(&mut self) {
+    /// How many times the keyed `context` library maker has run (for locality
+    /// tests in EN-2b).
+    #[doc(hidden)]
+    pub fn context_maker_runs(&self) -> u64 {
+        self.context_maker.runs
+    }
+
+    /// How many times top-level `root`'s constraint partition maker has run
+    /// (for locality tests in EN-2b).
+    #[doc(hidden)]
+    pub fn constraint_maker_runs(&self, root: NodeId) -> u64 {
+        self.constraint_makers.runs_of.get(&root).copied().unwrap_or(0)
+    }
+
+    /// Stage 2 keyed contexts library maker (engine.md §3.6, EN-2b): merges
+    /// document `context` nodes over the built-in library only when `Roots`,
+    /// `In(root, context)`, or a live `context`'s `ContextDef` facet changed.
+    fn sync_contexts(&mut self, run: bool) {
+        if !self.context_maker.init {
+            self.context_maker.init = true;
+            self.context_maker.dirty = true;
+        }
+        if !self.context_maker.dirty {
+            return;
+        }
+        self.context_maker.dirty = false;
+        self.context_maker.runs += 1;
         let ty = TypeId::lookup("context").expect("registered");
-        let markups: Vec<(NodeId, String)> = Tree::of(&self.docs)
-            .nodes_of_type(ty)
-            .filter(|&n| Tree::of(&self.docs).is_live(n))
-            .filter_map(|n| Some((n, Tree::of(&self.docs).get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
-            .collect();
+        let rec = structure::Recorder::default();
+        let mut markups: Vec<(NodeId, String)> = {
+            let doc = Tree::of(&self.docs).recording(&rec);
+            let mut out = Vec::new();
+            for &root in doc.roots() {
+                for n in doc.nodes_of_type_in(root, ty) {
+                    if let Some(m) = doc.get::<facet::ContextDef>(n).and_then(|c| c.markup.constant()).and_then(|v| v.as_str()) {
+                        out.push((n, m.to_owned()));
+                    }
+                }
+            }
+            out
+        };
+        markups.sort_by_key(|(id, _)| *id);
+        self.context_maker.keys = rec.into_inner().into_iter().collect();
         if markups.is_empty() {
             if self.contexts.take().is_some() {
                 self.glide_specs();
-                self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, None);
+                self.reactive.set_input_run(Tree::of(&self.docs), graph::InputKey::Contexts, None, run);
             }
         } else if self.contexts.as_ref().is_none_or(|(m, _)| *m != markups) {
             let lib = contexts::Library::with_document(&markups);
-            self.reactive.set_input(Tree::of(&self.docs), graph::InputKey::Contexts, Some(std::sync::Arc::new(lib.clone())));
-            self.contexts = Some((markups, lib));
+            self.contexts = Some((markups, lib.clone()));
+            self.reactive.set_input_run(Tree::of(&self.docs), graph::InputKey::Contexts, Some(std::sync::Arc::new(lib)), run);
             self.glide_specs();
+        }
+    }
+
+    /// Reconcile per-root structural constraint candidate makers (Stage 2,
+    /// engine.md §3.6, EN-2b). Only dirty top-level roots re-run
+    /// `solve::root_candidates`; when any root's candidates change, candidate
+    /// components are repartitioned into `NativeKey::Component(_)` natives.
+    fn sync_constraint_makers(&mut self, run: bool) {
+        if !self.constraint_makers.init {
+            self.constraint_makers.init = true;
+            self.constraint_makers.roots_dirty = true;
+        }
+        if !self.constraint_makers.roots_dirty && self.constraint_makers.dirty.is_empty() {
+            return;
+        }
+        let mut changed = false;
+        if self.constraint_makers.roots_dirty {
+            self.constraint_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let removed: Vec<NodeId> = self.constraint_makers.per_root.keys().copied().filter(|r| !current.contains(r)).collect();
+            for r in removed {
+                self.constraint_makers.unindex(r);
+                self.constraint_makers.dirty.remove(&r);
+                if let Some(old) = self.constraint_makers.per_root.remove(&r)
+                    && (!old.explicit.is_empty() || !old.mates.is_empty())
+                {
+                    changed = true;
+                }
+            }
+            for &r in &current {
+                if !self.constraint_makers.per_root.contains_key(&r) {
+                    self.constraint_makers.dirty.insert(r);
+                }
+            }
+        }
+        let dirty = std::mem::take(&mut self.constraint_makers.dirty);
+        for root in dirty {
+            if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).live(root).and_then(|n| n.parent).is_some() {
+                self.constraint_makers.unindex(root);
+                if let Some(old) = self.constraint_makers.per_root.remove(&root)
+                    && (!old.explicit.is_empty() || !old.mates.is_empty())
+                {
+                    changed = true;
+                }
+                continue;
+            }
+            *self.constraint_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let cand = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                solve::root_candidates(&cx, root)
+            };
+            self.constraint_makers.set_keys(root, rec.into_inner());
+            if self.constraint_makers.per_root.get(&root) != Some(&cand) {
+                changed = true;
+                self.constraint_makers.per_root.insert(root, cand);
+            }
+        }
+        if !changed {
+            return;
+        }
+        let want = solve::partition_candidates(self.constraint_makers.per_root.values());
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = self
+            .reactive
+            .native_keys()
+            .filter(|k| match k {
+                graph::NativeKey::Component(id) => !want.contains_key(id),
+                _ => false,
+            })
+            .map(|k| (k, None))
+            .collect();
+        for (id, comp) in want {
+            let k = graph::NativeKey::Component(id);
+            if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<solve::ComponentNative>()) != Some(&comp) {
+                batch.push((k, Some((std::sync::Arc::new(comp), true))));
+            }
+        }
+        if !batch.is_empty() {
+            self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
     }
 
@@ -3421,6 +3577,7 @@ impl StoreCore {
 
     fn settle_pass(&mut self, clusters: bool) {
         self.recorded(|s| {
+            s.sync_clusters();
             if clusters && !s.clusters.list.is_empty() {
                 s.resolve_clusters_live();
             }
@@ -3995,21 +4152,6 @@ impl StoreCore {
         self.glide_specs_of(&rebuilt);
     }
 
-    /// What decides whether a plugged pair mates, read from the document by
-    /// the contexts resolver (a notation, an inline style, a context's name),
-    /// and a session link or unlink: grouping and validation look again
-    /// (RE-5.5).
-    fn prime_grouping<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        let touches = |op: &Op| match op {
-            Op::Set { path, .. } => matches!(path.facet, FacetKind::Composition | FacetKind::Template | FacetKind::Use | FacetKind::ContextOf | FacetKind::Affords | FacetKind::ContextDef),
-            Op::Link { .. } | Op::Unlink { .. } => true,
-            _ => false,
-        };
-        if ops.into_iter().any(touches) {
-            self.reactive.prime_natives([graph::NativeKey::Clusters]);
-        }
-    }
-
     /// Make a repeat native for each drawn repeat and conditional, and drop
     /// the rest, when the document's structure changed.
     fn sync_repeats(&mut self, run: bool) {
@@ -4123,15 +4265,98 @@ impl StoreCore {
         Ok(())
     }
 
+    /// The per-family structure oracle for constraints and contexts (engine.md
+    /// §6, EN-2b):
+    /// 1. The cached contexts library matches a fresh scan of `context` nodes.
+    /// 2. Live `NativeKey::Component(_)` natives match fresh `root_candidates` +
+    ///    `partition_candidates`.
+    /// 3. `self.clusters` matches fresh `solve::clusters` (catching any missed
+    ///    key in `ComponentNative`, `ContextMaker`, or `ConstraintMakers`).
+    /// 4. Every up-to-date `ClusterNative` matches fresh `solve::violated`.
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn check_keyed_constraints(&self) -> Result<(), String> {
+        let doc = Tree::of(&self.docs);
+        let ctx_ty = TypeId::lookup("context").expect("registered");
+        let mut markups: Vec<(NodeId, String)> = doc
+            .nodes_of_type(ctx_ty)
+            .filter(|&n| doc.is_live(n))
+            .filter_map(|n| Some((n, doc.get::<facet::ContextDef>(n)?.markup.constant()?.as_str()?.to_owned())))
+            .collect();
+        markups.sort_by_key(|(id, _)| *id);
+        let kept_markups = self.contexts.as_ref().map(|(m, _)| m.as_slice()).unwrap_or(&[]);
+        if kept_markups != markups.as_slice() {
+            return Err(format!("contexts library stale: kept {kept_markups:?}, fresh {markups:?}"));
+        }
+
+        let mut per_root = Vec::new();
+        for &root in doc.roots() {
+            let rec = structure::Recorder::default();
+            let cx = MakerCx::new(doc, &rec, self.contexts());
+            per_root.push(solve::root_candidates(&cx, root));
+        }
+        let expected_comps = solve::partition_candidates(&per_root);
+        for k in self.reactive.native_keys() {
+            if let graph::NativeKey::Component(id) = k
+                && !expected_comps.contains_key(&id)
+            {
+                return Err(format!("stale constraint component native {k:?} still present"));
+            }
+        }
+        for (id, comp) in expected_comps {
+            let k = graph::NativeKey::Component(id);
+            let Some(native) = self.reactive.native(k) else {
+                return Err(format!("constraint component native {k:?} is missing"));
+            };
+            if native.as_any().downcast_ref::<solve::ComponentNative>() != Some(&comp) {
+                return Err(format!("constraint component native {k:?} differs from fresh partition"));
+            }
+        }
+
+        let fresh = solve::clusters(doc, &self.reactive, self.contexts());
+        if fresh != self.clusters {
+            return Err(format!(
+                "clusters differ from fresh grouping:\n kept {:?} (problems {:?})\n fresh {:?} (problems {:?})",
+                self.clusters.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(),
+                self.clusters.problems,
+                fresh.list.iter().map(|c| (c.id, &c.nodes)).collect::<Vec<_>>(),
+                fresh.problems,
+            ));
+        }
+
+        if !self.reactive.gliding() {
+            for c in self.clusters.list.iter().filter(|c| !self.clusters.failed.contains(&c.key())) {
+                let k = graph::NativeKey::Cluster(c.key());
+                let Some(native) = self.reactive.native(k) else {
+                    return Err(format!("cluster watcher {k:?} is missing"));
+                };
+                if !native.keyed() || !self.reactive.native_current(k) {
+                    continue;
+                }
+                let kept = self.reactive.native_extra_of(k).and_then(|e| e.downcast_ref::<solve::Violated>()).map(|v| v.0.as_slice()).unwrap_or(&[]);
+                let fresh_v = solve::violated(doc, &|l| self.reactive.settled(doc, l), c);
+                let same = kept.len() == fresh_v.len() && kept.iter().zip(&fresh_v).all(|((a, ra), (b, rb))| a == b && ((ra.is_infinite() && rb.is_infinite()) || (ra - rb).abs() < 1e-6));
+                if !same {
+                    return Err(format!("cluster watcher {k:?} violated differs: kept {kept:?}, fresh {fresh_v:?}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Consume every key written to `Docs` since the last sync through the
-    /// single write channel (engine.md §3.2): reconciles dirty Stage 2 layout
-    /// makers, marks keyed natives, optionally marks session leaves for the
-    /// host, and evaluates invalidated cells and pending natives.
+    /// single write channel (engine.md §3.2): reconciles dirty Stage 2
+    /// contexts, layout, and constraint makers, marks keyed natives, optionally
+    /// marks session leaves for the host, and evaluates invalidated cells and
+    /// pending natives.
     fn sync_touched(&mut self, mark_session: bool) {
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
+            self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
+            self.constraint_makers.note_touched(&keys);
+            self.sync_contexts(false);
             self.sync_layout_makers(false);
+            self.sync_constraint_makers(false);
         }
         let leaves = if keys.is_empty() {
             Vec::new()
@@ -4309,7 +4534,6 @@ impl StoreCore {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
         } else {
-            self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
             self.sync_touched(false);
             // A clip's own leaves set (its `prop`, a key): every clip is
             // sampled, so what one stops driving is withdrawn; otherwise
@@ -4325,7 +4549,7 @@ impl StoreCore {
         // that the transaction drew or undrew.
         let copies = self.settle_repeats();
         expanded.extend(copies);
-        self.rebuild_clusters();
+        self.sync_clusters();
         self.settle(SettleMode::Live { clusters: live });
     }
 
@@ -4631,7 +4855,7 @@ impl StoreCore {
     /// problem is read from the pose (`cluster_problems`).
     fn post_apply(&mut self, tx: &mut Transaction, held: &[Leaf]) -> Option<SolverSummary> {
         let last = tx.ops.len().saturating_sub(1);
-        self.regroup();
+        self.sync_clusters();
         let mut summary = SolverSummary::default();
         self.release(tx, held, last);
         if self.clusters.list.is_empty() {

@@ -109,6 +109,10 @@ impl Store {
         if let Err(e) = self.subject.check_keyed_layouts() {
             panic!("structure oracle: after `{method}`, {e}");
         }
+        #[cfg(feature = "structure-oracle")]
+        if let Err(e) = self.subject.check_keyed_constraints() {
+            panic!("structure oracle: after `{method}`, {e}");
+        }
         let (mut a, mut b) = (snapshot(&self.subject), snapshot(&self.reference));
         let Some(mut left) = a.diff(&b) else { return };
         for e in intended::entries() {

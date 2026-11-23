@@ -109,11 +109,13 @@ impl Cluster {
     pub(crate) fn posed(&self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>) -> Posed {
         let mut leaves = Vec::new();
         for &n in &self.nodes {
-            for f in doc.facets_of(n).filter(|f| matches!(f.kind(), FacetKind::Transform2d | FacetKind::Size | FacetKind::Radius)) {
-                for field in f.field_names() {
-                    let Ok(path) = crate::LeafPath::new(f.kind(), field) else { continue };
-                    let leaf = Leaf { node: n, path };
-                    leaves.push((leaf, read(leaf)));
+            for kind in [FacetKind::Transform2d, FacetKind::Size, FacetKind::Radius] {
+                if let Some(f) = doc.facet(n, kind) {
+                    for field in f.field_names() {
+                        let Ok(path) = crate::LeafPath::new(f.kind(), field) else { continue };
+                        let leaf = Leaf { node: n, path };
+                        leaves.push((leaf, read(leaf)));
+                    }
                 }
             }
         }
@@ -211,27 +213,19 @@ fn num(read: &dyn Fn(Leaf) -> Option<Value>, node: NodeId, path: LeafPath, defau
     read(Leaf { node, path }).and_then(|v| v.as_f64()).unwrap_or(default)
 }
 
-/// Whether a leaf may move: a constant, not bound, not clip-driven.
+/// Whether a transform leaf may move: its facet is present, not bound, not
+/// clip- or producer-driven. Uses `doc.has` (`Key::FacetSet`) + `Wiring` so
+/// constant value edits to `transform2d` do not rerun constraint grouping.
 fn is_free(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, leaf: Leaf) -> bool {
-    doc.leaf(leaf.node, leaf.path).is_some_and(|s| s.constant().is_some())
-        && !wiring.is_bound(leaf)
-        && !wiring.is_driven(leaf)
+    doc.has(leaf.node, leaf.path.facet) && !wiring.is_bound(leaf) && !wiring.is_driven(leaf)
 }
 
-/// Group the document's constraints into clusters. Total (DS-7): a
-/// constraint that can't be used, and clusters that bindings join in a
-/// cycle, are problems in the result.
-pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Clusters {
-    clusters_with(doc, reactive, lib, &|l| reactive.read(doc, l))
-}
-
-/// `clusters`, reading values through `read` and graph wiring through `wiring`
-/// (`Cx` records `Key::Wiring` for every check and transitive dep walked).
-pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, lib: &crate::contexts::Library, read: &dyn Fn(Leaf) -> Option<Value>) -> Clusters {
-    let (usable, problems) = constraint::usable(doc, read);
-    let all: Vec<ConstraintInfo> = usable.into_iter().chain(crate::plug::implied_mates(doc, read, lib)).filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n))).collect();
+/// Partition effective constraints `all` into `(Cluster, dep_leaves)` pairs,
+/// where `dep_leaves` maps each upstream leaf to the cluster input leaf that
+/// reached it through `wiring`.
+fn group_effective(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, all: Vec<ConstraintInfo>) -> Vec<(Cluster, BTreeMap<Leaf, Leaf>)> {
     if all.is_empty() {
-        return Clusters { problems, ..Clusters::default() };
+        return Vec::new();
     }
     let fixed: BTreeSet<NodeId> = all.iter().filter(|c| c.spec.kind == "fix").flat_map(|c| c.nodes()).collect();
 
@@ -261,7 +255,7 @@ pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, li
         groups.entry(root).or_default().push(c.clone());
     }
 
-    let mut list = Vec::new();
+    let mut out = Vec::with_capacity(groups.len());
     for (_, constraints) in groups {
         let lowest = constraints.iter().map(|c| c.id).min().expect("non-empty");
         let id = doc.live(lowest).and_then(|n| n.parent).unwrap_or(lowest);
@@ -282,7 +276,7 @@ pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, li
             }
             let mut cur = doc.live(n).and_then(|x| x.parent);
             while let Some(p) = cur {
-                if doc.facet(p, FacetKind::Transform2d).is_some() {
+                if doc.has(p, FacetKind::Transform2d) {
                     for f in ["x", "y", "rot", "sx", "sy"] {
                         inputs.insert(Leaf { node: p, path: t2(f) });
                     }
@@ -290,45 +284,60 @@ pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, li
                 cur = doc.live(p).and_then(|x| x.parent);
             }
         }
+        let mut dep_roots: BTreeSet<Leaf> = BTreeSet::new();
         for c in &constraints {
-            inputs.insert(constraint::value_leaf(c.id));
+            let v = constraint::value_leaf(c.id);
+            inputs.insert(v);
+            dep_roots.insert(v);
+            if c.spec.kind != "mate" {
+                dep_roots.insert(constraint::kind_leaf(c.id));
+                dep_roots.insert(constraint::enabled_leaf(c.id));
+            }
         }
-        list.push(Cluster { id, constraints, nodes, vars, inputs });
+        dep_roots.extend(inputs.iter().copied());
+        let mut dep_leaves: BTreeMap<Leaf, Leaf> = BTreeMap::new();
+        for input in dep_roots {
+            for dep in wiring.transitive_deps(input).into_iter().chain(std::iter::once(input)) {
+                dep_leaves.entry(dep).or_insert(input);
+            }
+        }
+        out.push((Cluster { id, constraints, nodes, vars, inputs }, dep_leaves));
     }
+    out
+}
 
-    // A binding that reads a cluster's variable and feeds the same
-    // cluster's input is a cycle; across clusters, inputs order the solves.
-    // `edges[i]` holds the clusters `i` reads a variable of.
+/// Assemble effective clusters (already grouped per candidate component with
+/// their precomputed upstream dependency leaves) into solve order via Tarjan
+/// SCC, marking self- and multi-cluster cycles as failed problems.
+pub(crate) fn assemble_clusters(mut entries: Vec<(Cluster, BTreeMap<Leaf, Leaf>)>, mut problems: Vec<(NodeId, String)>) -> Clusters {
+    if entries.is_empty() {
+        problems.sort_by_key(|(id, _)| *id);
+        return Clusters { problems, ..Clusters::default() };
+    }
+    // Canonical order by lowest operand NodeId (matches whole-document union-find).
+    entries.sort_by_key(|(c, _)| c.nodes.iter().next().copied());
+    let list: Vec<Cluster> = entries.iter().map(|(c, _)| c.clone()).collect();
     let var_owner: BTreeMap<Leaf, usize> = list.iter().enumerate().flat_map(|(i, c)| c.vars.iter().map(move |v| (*v, i))).collect();
     let mut edges: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); list.len()];
     let mut own: Vec<Option<String>> = vec![None; list.len()];
-    for (i, c) in list.iter().enumerate() {
-        for input in &c.inputs {
-            for dep in wiring.transitive_deps(*input).into_iter().chain(std::iter::once(*input)) {
-                if let Some(&j) = var_owner.get(&dep) {
-                    if j == i {
-                        own[i].get_or_insert_with(|| format!("binding {input} reads {dep}, a variable of cluster {}, and feeds the same cluster", c.id));
-                    } else {
-                        edges[i].insert(j);
-                    }
+    for (i, (c, dep_leaves)) in entries.iter().enumerate() {
+        for (&dep, &via) in dep_leaves {
+            if let Some(&j) = var_owner.get(&dep) {
+                if j == i {
+                    own[i].get_or_insert_with(|| format!("binding {via} reads {dep}, a variable of cluster {}, and feeds the same cluster", c.id));
+                } else {
+                    edges[i].insert(j);
                 }
             }
         }
     }
-    // Strongly connected components, each emitted after every component
-    // it reads (Tarjan): that is the solve order. A component of more than
-    // one cluster, or a cluster that feeds itself, is a cycle: its members
-    // fail and are not solved; what only reads them is solved after them
-    // as usual (DS-7).
     let comps = strongly_connected(&edges);
     let mut order = Vec::with_capacity(list.len());
     let mut failed = BTreeSet::new();
-    let mut problems = problems;
     for comp in comps {
         let ring = comp.len() > 1;
         for &i in &comp {
             let why = if ring {
-                // By key (the lowest constraint): clusters can share a parent.
                 let names: Vec<String> = comp.iter().map(|&k| list[k].key().to_string()).collect();
                 Some(format!("the clusters of constraints {} depend on each other through bindings", names.join(", ")))
             } else {
@@ -345,6 +354,21 @@ pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, li
     let var_cluster = ordered.iter().flat_map(|c| c.vars.iter().map(move |v| (*v, c.id))).collect();
     problems.sort_by_key(|(id, _)| *id);
     Clusters { failed, problems, ..Clusters::new(ordered, var_cluster) }
+}
+
+/// Group the document's constraints into clusters from scratch. Total (DS-7):
+/// a constraint that can't be used, and clusters that bindings join in a cycle,
+/// are problems in the result. Used by the from-scratch oracle check.
+pub fn clusters(doc: Tree<'_>, reactive: &crate::graph::Reactive, lib: &crate::contexts::Library) -> Clusters {
+    clusters_with(doc, reactive, lib, &|l| reactive.read(doc, l))
+}
+
+/// `clusters`, reading values through `read` and graph wiring through `wiring`.
+pub(crate) fn clusters_with(doc: Tree<'_>, wiring: &dyn crate::graph::Wiring, lib: &crate::contexts::Library, read: &dyn Fn(Leaf) -> Option<Value>) -> Clusters {
+    let (usable, problems) = constraint::usable(doc, read);
+    let all: Vec<ConstraintInfo> = usable.into_iter().chain(crate::plug::implied_mates(doc, read, lib)).filter(|c| c.enabled && c.nodes().all(|n| doc.is_live(n))).collect();
+    let entries = group_effective(doc, wiring, all);
+    assemble_clusters(entries, problems)
 }
 
 /// Tarjan's strongly connected components of `edges` (`i` reads `j`),
@@ -731,17 +755,136 @@ pub(crate) fn violated(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, clus
     out
 }
 
-/// The document's constraint clusters as one native cell (reactive-engine
-/// handoff §4.10, RE-5.5): grouping runs again only when what it read
-/// changed (a constraint's value, `enabled`, a claim on an operand, the
-/// contexts' mates) or structure did, not on every transaction. Its result
-/// is its extra; it claims nothing.
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct ClustersNative {
+/// Structural constraint candidates discovered for one top-level root by the
+/// Stage 2 partition maker (engine.md §3.6, EN-2b).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RootCandidates {
+    /// Explicit constraint nodes under this root and their `Constrains` targets.
+    pub(crate) explicit: Vec<(NodeId, Vec<NodeId>)>,
+    /// Candidate implied mates under this root (per-composition attachment).
+    pub(crate) mates: Vec<crate::plug::CandidateMate>,
+}
+
+/// Stage 2 maker for one top-level root: reads only through `MakerCx`'s
+/// recording `Tree` and scoped indexes (`In(root, constraint)`,
+/// `With(root, Anchor)`).
+pub(crate) fn root_candidates(cx: &crate::MakerCx<'_>, root: NodeId) -> RootCandidates {
+    let doc = cx.tree();
+    let mut explicit = Vec::new();
+    for c in doc.nodes_of_type_in(root, constraint::constraint_type()) {
+        let targets: Vec<NodeId> = doc
+            .relations_from(c)
+            .filter(|r| r.rel == crate::document::RelKind::Constrains)
+            .map(|r| r.to)
+            .collect();
+        explicit.push((c, targets));
+    }
+    let mates = crate::plug::candidate_mates_in(doc, root);
+    RootCandidates { explicit, mates }
+}
+
+/// Partition structural candidates across all roots into connected
+/// `ComponentNative`s keyed by each component's lowest constraint/connection id.
+pub(crate) fn partition_candidates<'a>(roots: impl IntoIterator<Item = &'a RootCandidates>) -> BTreeMap<NodeId, ComponentNative> {
+    let mut explicit: Vec<(NodeId, &[NodeId])> = Vec::new();
+    let mut mates: Vec<crate::plug::CandidateMate> = Vec::new();
+    let mut nodes_set: BTreeSet<NodeId> = BTreeSet::new();
+    for rc in roots {
+        for (c, targets) in &rc.explicit {
+            explicit.push((*c, targets.as_slice()));
+            nodes_set.extend(targets.iter().copied());
+        }
+        for m in &rc.mates {
+            mates.push(*m);
+            nodes_set.insert(m.body_a);
+            nodes_set.insert(m.body_b);
+        }
+    }
+    if explicit.is_empty() && mates.is_empty() {
+        return BTreeMap::new();
+    }
+    let nodes: Vec<NodeId> = nodes_set.into_iter().collect();
+    let index: BTreeMap<NodeId, usize> = nodes.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    let mut parent: Vec<usize> = (0..nodes.len()).collect();
+    fn find(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    let union = |p: &mut [usize], a: usize, b: usize| {
+        let (ra, rb) = (find(p, a), find(p, b));
+        if ra != rb {
+            p[ra.max(rb)] = ra.min(rb);
+        }
+    };
+    for (_, targets) in &explicit {
+        if let Some((&first, rest)) = targets.split_first() {
+            let a = index[&first];
+            for &t in rest {
+                union(&mut parent, a, index[&t]);
+            }
+        }
+    }
+    for m in &mates {
+        union(&mut parent, index[&m.body_a], index[&m.body_b]);
+    }
+    let mut by_root: BTreeMap<usize, (Vec<NodeId>, Vec<crate::plug::CandidateMate>)> = BTreeMap::new();
+    let mut singletons: Vec<NodeId> = Vec::new();
+    for (c, targets) in explicit {
+        if let Some(&first) = targets.first() {
+            let r = find(&mut parent, index[&first]);
+            by_root.entry(r).or_default().0.push(c);
+        } else {
+            singletons.push(c);
+        }
+    }
+    for m in mates {
+        let r = find(&mut parent, index[&m.body_a]);
+        by_root.entry(r).or_default().1.push(m);
+    }
+    let mut out = BTreeMap::new();
+    for c in singletons {
+        out.insert(c, ComponentNative::new(vec![c], Vec::new()));
+    }
+    for (_, (mut cs, mut ms)) in by_root {
+        cs.sort();
+        cs.dedup();
+        ms.sort();
+        ms.dedup();
+        let key = cs.iter().copied().chain(ms.iter().map(|m| m.connection)).min().expect("non-empty component");
+        out.insert(key, ComponentNative::new(cs, ms));
+    }
+    out
+}
+
+/// Output of one candidate component's Stage 3 evaluation (`ComponentNative`).
+#[derive(Clone, Debug)]
+pub(crate) struct ComponentOut {
+    pub(crate) clusters: Vec<(Cluster, BTreeMap<Leaf, Leaf>)>,
+    pub(crate) problems: Vec<(NodeId, String)>,
+}
+
+/// One structural candidate component of constraints and implied mates as a
+/// keyed Stage 3 native cell (engine.md §3.6, EN-2b): evaluates `kind`,
+/// `enabled`, `value`, mate eligibility (`plug.mate`), free leaves (`Wiring`),
+/// and upstream transitive dependency leaves. Claims nothing; its output lives
+/// in `extra` as [`ComponentOut`].
+#[derive(Debug, PartialEq)]
+pub(crate) struct ComponentNative {
+    constraints: Vec<NodeId>,
+    mates: Vec<crate::plug::CandidateMate>,
     outputs: BTreeSet<Leaf>,
 }
 
-impl crate::graph::Native for ClustersNative {
+impl ComponentNative {
+    pub(crate) fn new(constraints: Vec<NodeId>, mates: Vec<crate::plug::CandidateMate>) -> ComponentNative {
+        ComponentNative { constraints, mates, outputs: BTreeSet::new() }
+    }
+}
+
+impl crate::graph::Native for ComponentNative {
     fn producer(&self) -> crate::graph::ProducerId {
         crate::graph::ProducerId::NETWORK
     }
@@ -751,61 +894,27 @@ impl crate::graph::Native for ClustersNative {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    fn keyed(&self) -> bool {
+        true
+    }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
-        let lib = cx.input::<crate::contexts::Library>(crate::graph::InputKey::Contexts).unwrap_or_else(|| crate::contexts::Library::builtin());
-        let result = clusters_with(cx.tree(), cx, lib, &|l| cx.read(l));
-        cx.set_extra(std::sync::Arc::new(Grouping { result, reach: grouping_reach(cx.tree()) }));
+        let (usable, problems) = constraint::usable_in(cx.tree(), &|l| cx.read(l), &self.constraints);
+        let mut all = usable;
+        if !self.mates.is_empty() {
+            let lib = cx.input::<crate::contexts::Library>(crate::graph::InputKey::Contexts).unwrap_or_else(|| crate::contexts::Library::builtin());
+            all.extend(crate::plug::eval_mates(cx.tree(), &|l| cx.read(l), lib, &self.mates));
+        }
+        all.retain(|c| c.enabled && c.nodes().all(|n| cx.tree().is_live(n)));
+        let clusters = group_effective(cx.tree(), cx, all);
+        cx.set_extra(std::sync::Arc::new(ComponentOut { clusters, problems }));
         Ok(BTreeMap::new())
     }
 }
 
-/// What the grouping native made: the clusters, and what it read of the
-/// document's structure (`grouping_reach`).
-pub(crate) struct Grouping {
-    pub(crate) result: Clusters,
-    pub(crate) reach: BTreeSet<NodeId>,
-}
-
-/// The nodes whose structure grouping and validation read: every
-/// constraint and its operands, every anchor with the port it names, that
-/// port's outer port, its connection and partner, an expanded anchor's
-/// root, and the ancestors of all of these (operands' transform chains,
-/// clusters' parents, compositions and context chains). A structural op
-/// that touches none of them, and makes no constraint, anchor, port or
-/// connection, leaves both as they were (DS-3b: `Store::regraph`).
-pub(crate) fn grouping_reach(doc: Tree<'_>) -> BTreeSet<NodeId> {
-    let mut seeds: Vec<NodeId> = Vec::new();
-    for c in doc.nodes_of_type(constraint::constraint_type()) {
-        seeds.push(c);
-        seeds.extend(doc.relations_from(c).filter(|r| r.rel == crate::document::RelKind::Constrains).map(|r| r.to));
-    }
-    for a in doc.nodes_with(FacetKind::Anchor) {
-        seeds.push(a);
-        seeds.extend(a.expanded_root());
-        let Some(port) = doc.get::<crate::facet::Anchor>(a).and_then(|f| f.port.constant().and_then(|v| v.as_ref())) else { continue };
-        let outer = crate::plug::outer_port(doc, port);
-        seeds.extend([port, outer]);
-        if let Some((c, partner)) = crate::plug::connection_of(doc, outer) {
-            seeds.extend([c, partner]);
-        }
-    }
-    let mut reach = BTreeSet::new();
-    for s in seeds {
-        let mut at = Some(s);
-        while let Some(n) = at {
-            if !reach.insert(n) {
-                break;
-            }
-            at = doc.node(n).and_then(|x| x.parent);
-        }
-    }
-    reach
-}
-
-/// One cluster as a native cell that only watches (RE-5.5): it reads what a
-/// solve of the cluster reads, so that it ran says something of it changed
-/// since the cluster was last solved and committed. It replaces comparing
-/// every cluster's `Posed` on every transaction.
+/// One cluster as a keyed native cell that only watches (EN-2b): it reads what
+/// a solve of the cluster reads (including operand ancestry through the
+/// recording `Tree`), so that it ran says something of it changed since the
+/// cluster was last solved and committed.
 #[derive(Debug, PartialEq)]
 pub(crate) struct ClusterNative {
     cluster: Cluster,
@@ -831,6 +940,9 @@ impl crate::graph::Native for ClusterNative {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn keyed(&self) -> bool {
+        true
     }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         let _ = self.cluster.posed(cx.tree(), &|l| cx.read(l));

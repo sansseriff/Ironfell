@@ -229,23 +229,34 @@ pub fn plug_ops(doc: Tree<'_>, a: NodeId, b: NodeId, held: Option<NodeId>, id: N
     ])
 }
 
-/// The mates connections imply (§4.3): for every connection between two
-/// rigid anchors on different bodies in one composition, a `mate` between
-/// the bodies at the anchors, named by the connection.
-pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
-    let spec = constraint::spec("mate").expect("declared kind");
-    // Only an anchor whose port is connected can mate: find the connection
-    // first, before the rest of what `port_anchors` works out for each.
+/// A structurally connected pair of rigid anchors on different bodies in one
+/// composition (Stage 2 candidate mate, engine.md §3.6 EN-2b). Eligibility
+/// (`plug.mate` context rule) and local anchor frames are evaluated in Stage 3
+/// (`eval_mates`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CandidateMate {
+    pub(crate) connection: NodeId,
+    pub(crate) composition: NodeId,
+    pub(crate) anchor_a: NodeId,
+    pub(crate) body_a: NodeId,
+    pub(crate) anchor_b: NodeId,
+    pub(crate) body_b: NodeId,
+}
+
+/// Candidate mates scoped to one top-level root (per-composition attachment,
+/// reading only through keyed `Tree` lookups and `With(root, Anchor)`).
+pub(crate) fn candidate_mates_in(doc: Tree<'_>, root: NodeId) -> Vec<CandidateMate> {
     struct Plugged {
         anchor: NodeId,
         outer: NodeId,
-        composition: Option<NodeId>,
+        composition: NodeId,
         body: NodeId,
         connection: NodeId,
         partner: NodeId,
     }
     let anchors: Vec<Plugged> = doc
-        .nodes_with(FacetKind::Anchor)
+        .nodes_with_in(root, FacetKind::Anchor)
+        .into_iter()
         .filter_map(|a| {
             if !doc.live(a).is_some_and(|n| n.ty.name() == "empty") {
                 return None;
@@ -260,18 +271,10 @@ pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &
                 return None;
             }
             let (connection, partner) = connection_of(doc, outer)?;
-            let composition = crate::composition::composition_of(doc, a);
-            composition?;
+            let composition = crate::composition::composition_of(doc, a)?;
             Some(Plugged { anchor: a, outer, composition, body: body_of(doc, a), connection, partner })
         })
         .collect();
-    // Whether an anchor's context lets a connection hold it (`plug.mate`):
-    // a schematic's wires join pins without moving parts.
-    let resolver = crate::contexts::Resolver::new(doc, lib);
-    let mates = |anchor: NodeId| {
-        let chain = crate::contexts::chain_of(doc, anchor);
-        chain.is_empty() || resolver.get(&chain, chain.len() - 1, crate::contexts::Field::MATE) != "no"
-    };
     let mut out = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for a in &anchors {
@@ -280,30 +283,83 @@ pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &
             continue;
         }
         let Some(b) = anchors.iter().find(|b| b.outer == partner && b.composition == a.composition) else { continue };
-        if a.body == b.body || !mates(a.anchor) || !mates(b.anchor) {
+        if a.body == b.body {
             continue;
         }
-        let operand = |role: &'static str, x: &Plugged| -> Option<Operand> {
-            doc.facet(x.body, FacetKind::Transform2d)?;
+        out.push(CandidateMate {
+            connection: c,
+            composition: a.composition,
+            anchor_a: a.anchor,
+            body_a: a.body,
+            anchor_b: b.anchor,
+            body_b: b.body,
+        });
+    }
+    out
+}
+
+/// Evaluate candidate mates in Stage 3: filters by context eligibility
+/// (`plug.mate != "no"`) and computes each anchor's local frame in its body's
+/// space.
+pub(crate) fn eval_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library, mates_list: &[CandidateMate]) -> Vec<ConstraintInfo> {
+    if mates_list.is_empty() {
+        return Vec::new();
+    }
+    let spec = constraint::spec("mate").expect("declared kind");
+    // Whether an anchor's context lets a connection hold it (`plug.mate`):
+    // a schematic's wires join pins without moving parts.
+    let resolver = crate::contexts::Resolver::new(doc, lib);
+    let eligible = |anchor: NodeId| {
+        let chain = crate::contexts::chain_of(doc, anchor);
+        chain.is_empty() || resolver.get(&chain, chain.len() - 1, crate::contexts::Field::MATE) != "no"
+    };
+    let mut out = Vec::new();
+    for m in mates_list {
+        if !doc.is_live(m.connection)
+            || !doc.is_live(m.anchor_a)
+            || !doc.is_live(m.anchor_b)
+            || !doc.is_live(m.body_a)
+            || !doc.is_live(m.body_b)
+        {
+            continue;
+        }
+        if !eligible(m.anchor_a) || !eligible(m.anchor_b) {
+            continue;
+        }
+        let operand = |role: &'static str, anchor: NodeId, body: NodeId| -> Option<Operand> {
+            if !doc.has(body, FacetKind::Transform2d) {
+                return None;
+            }
             // The anchor's frame in its body's space: the local transforms
             // between them, not the body's world chain (which a solve moves,
             // and which a native grouping would then follow on every frame).
             let mut chain = Vec::new();
-            let mut cur = Some(x.anchor);
-            while let Some(n) = cur.filter(|&n| n != x.body) {
+            let mut cur = Some(anchor);
+            while let Some(n) = cur.filter(|&n| n != body) {
                 chain.push(n);
                 cur = doc.live(n).and_then(|l| l.parent);
             }
-            let m = if cur == Some(x.body) {
+            let xf = if cur == Some(body) {
                 chain.iter().rev().fold(geom::Affine2::IDENTITY, |acc, &n| acc.then(geom::local_affine(doc, read, n)))
             } else {
-                geom::world_affine(doc, read, x.body).inverse()?.then(geom::world_affine(doc, read, x.anchor))
+                geom::world_affine(doc, read, body).inverse()?.then(geom::world_affine(doc, read, anchor))
             };
-            let [ma, mb, ..] = m.0;
-            Some(Operand { role, node: x.body, anchor: m.apply([0.0, 0.0]), at: None, turn: mb.atan2(ma) })
+            let [ma, mb, ..] = xf.0;
+            Some(Operand { role, node: body, anchor: xf.apply([0.0, 0.0]), at: None, turn: mb.atan2(ma) })
         };
-        let (Some(oa), Some(ob)) = (operand("a", a), operand("b", b)) else { continue };
-        out.push(ConstraintInfo { id: c, spec, value: 0.0, enabled: true, operands: vec![oa, ob] });
+        let (Some(oa), Some(ob)) = (operand("a", m.anchor_a, m.body_a), operand("b", m.anchor_b, m.body_b)) else { continue };
+        out.push(ConstraintInfo { id: m.connection, spec, value: 0.0, enabled: true, operands: vec![oa, ob] });
     }
     out
+}
+
+/// The mates connections imply (§4.3): for every connection between two
+/// rigid anchors on different bodies in one composition, a `mate` between
+/// the bodies at the anchors, named by the connection.
+pub fn implied_mates(doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, lib: &crate::contexts::Library) -> Vec<ConstraintInfo> {
+    let mut candidates = Vec::new();
+    for &root in doc.roots() {
+        candidates.extend(candidate_mates_in(doc, root));
+    }
+    eval_mates(doc, read, lib, &candidates)
 }

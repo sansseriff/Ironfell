@@ -89,6 +89,16 @@ pub fn value_leaf(id: NodeId) -> Leaf {
     Leaf { node: id, path: LeafPath::new(crate::facet::FacetKind::Constraint, "value").expect("declared") }
 }
 
+/// The kind leaf of a constraint node.
+pub fn kind_leaf(id: NodeId) -> Leaf {
+    Leaf { node: id, path: LeafPath::new(crate::facet::FacetKind::Constraint, "kind").expect("declared") }
+}
+
+/// The enabled leaf of a constraint node.
+pub fn enabled_leaf(id: NodeId) -> Leaf {
+    Leaf { node: id, path: LeafPath::new(crate::facet::FacetKind::Constraint, "enabled").expect("declared") }
+}
+
 fn vec2(v: Option<&Value>) -> Option<[f64; 2]> {
     v.and_then(|v| v.as_vec2())
 }
@@ -101,22 +111,22 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
         return Ok(None);
     }
     let c = doc.get::<Constraint>(id).ok_or_else(|| format!("{id} has no constraint component"))?;
-    // Read through `read_value` too, though only their constants count: a
-    // native grouping or validating constraints follows their edits.
-    for f in ["kind", "enabled"] {
-        let _ = read_value(Leaf { node: id, path: crate::facet::LeafPath::new(crate::facet::FacetKind::Constraint, f).expect("declared") });
-    }
-    // A bound kind is reported on its own leaf (`LeafPath::is_structural`),
-    // not again as an unknown kind here.
-    if c.kind.expr().is_some() {
-        return Ok(None);
-    }
-    let kind = c.kind.constant().and_then(|v| v.as_str()).unwrap_or("");
+    let kind_val = read_value(kind_leaf(id));
+    let kind = match kind_val.as_ref().and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None if c.kind.expr().is_some() => return Err(format!("{id}: its kind can't be read")),
+        None => "",
+    };
     let spec = spec(kind).ok_or_else(|| {
         let names: Vec<&str> = KINDS.iter().map(|s| s.kind).collect();
         format!("{id}: unknown constraint kind {kind:?}; kinds: {}", names.join(", "))
     })?;
-    let enabled = c.enabled.constant().and_then(|v| v.as_bool()).unwrap_or(true);
+    let enabled = match read_value(enabled_leaf(id)) {
+        Some(Value::Bool(b)) => b,
+        Some(v) => return Err(format!("{id}: enabled must be a bool, got {}", v.kind().name())),
+        None if c.enabled.expr().is_some() => return Err(format!("{id}: its enabled flag can't be read")),
+        None => true,
+    };
     let value = match read_value(value_leaf(id)) {
         Some(Value::Number(n)) if n.is_finite() => n,
         Some(Value::Number(_)) => return Err(format!("{id}: its value isn't a finite number")),
@@ -151,8 +161,10 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
         };
         // A copy that went (an instance deleted, a repeat's item gone)
         // leaves the operand dead, and the constraint inactive (`solve`).
+        // Use `has` (`Key::FacetSet`) so moving an operand's transform does
+        // not re-run constraint grouping.
         let gone_copy = r.to.is_expanded() && !doc.is_live(r.to);
-        if !gone_copy && doc.facet(r.to, crate::facet::FacetKind::Transform2d).is_none() {
+        if !gone_copy && !doc.has(r.to, crate::facet::FacetKind::Transform2d) {
             return Err(format!("{id} ({kind}): operand {} has no transform2d", r.to));
         }
         operands.push(Operand { role, node: r.to, anchor, at, turn });
@@ -173,9 +185,14 @@ pub fn read(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, id: NodeI
 /// Every live constraint that can be read, and a problem for each that
 /// cannot: one malformed constraint leaves the rest usable (DS-7).
 pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
+    let ids: Vec<NodeId> = doc.nodes_of_type(constraint_type()).collect();
+    all_in(doc, read_value, &ids)
+}
+
+fn all_in(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, ids: &[NodeId]) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
     let mut out = Vec::new();
     let mut problems = Vec::new();
-    for id in doc.nodes_of_type(constraint_type()) {
+    for &id in ids {
         match read(doc, read_value, id) {
             Ok(Some(c)) => out.push(c),
             Ok(None) => {}
@@ -185,13 +202,11 @@ pub fn all(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<Co
     (out, problems)
 }
 
-/// The constraints the solver may use, and a problem for each it may not:
-/// a malformed one, or the second of two of one kind over the same
-/// anchored operands (Inkling unified duplicates silently; for an author
-/// that is an LLM, an explicit problem teaches more). The first of a pair,
-/// in id order, is kept.
-pub fn usable(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
-    let (mut all, mut problems) = all(doc, read_value);
+/// The constraints in `ids` the solver may use, and a problem for each it may
+/// not (malformed, or second of a duplicate pair). Used per candidate component
+/// (`solve::ComponentNative`) as well as whole-document by [`usable`].
+pub fn usable_in(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>, ids: &[NodeId]) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
+    let (mut all, mut problems) = all_in(doc, read_value, ids);
     // Only what the solver would use can hide a duplicate: a disabled one,
     // or one with an operand gone, doesn't (review of DS-7, Opus).
     all.retain(|c| c.enabled && c.nodes().all(|n| doc.is_live(n)));
@@ -212,6 +227,16 @@ pub fn usable(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec
     }
     problems.sort_by_key(|(id, _)| *id);
     (kept, problems)
+}
+
+/// The constraints the solver may use, and a problem for each it may not:
+/// a malformed one, or the second of two of one kind over the same
+/// anchored operands (Inkling unified duplicates silently; for an author
+/// that is an LLM, an explicit problem teaches more). The first of a pair,
+/// in id order, is kept.
+pub fn usable(doc: Tree<'_>, read_value: &dyn Fn(Leaf) -> Option<Value>) -> (Vec<ConstraintInfo>, Vec<(NodeId, String)>) {
+    let ids: Vec<NodeId> = doc.nodes_of_type(constraint_type()).collect();
+    usable_in(doc, read_value, &ids)
 }
 
 #[cfg(test)]

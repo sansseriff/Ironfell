@@ -718,9 +718,9 @@ fn a_deref_retargeted_onto_its_own_clusters_variable_is_a_cycle() {
     assert!(problems.iter().any(|(id, m)| *id == n["d"] && m.contains("feeds the same cluster")), "the distance reads b's x, a variable of its own cluster: {problems:?}");
 }
 
-/// RE-5.5's natives do no work where nothing of theirs changed: an edit
-/// nothing constrained reads runs neither the grouping, nor validation, nor
-/// any cluster's watcher.
+/// EN-2b's constraint natives do no work where nothing of theirs changed: an
+/// edit nothing constrained reads runs neither any component cell, nor any
+/// constraint/context maker, nor any cluster's watcher.
 #[test]
 fn an_unrelated_edit_runs_no_constraint_native() {
     let (mut store, n) = two_parents();
@@ -730,32 +730,61 @@ fn an_unrelated_edit_runs_no_constraint_native() {
     s.w = Slot::Const(Value::Number(5.0));
     s.h = Slot::Const(Value::Number(5.0));
     store.apply(tx("lone", vec![Op::Create { id: lone, ty: ty("rect"), parent: Some(comp), order: OrderKey::first(), facets: vec![facet::Transform2d::default().wrap(), s.wrap()] }])).unwrap();
-    let runs = |s: &Store| {
-        let r = s.reactive();
-        [graph::NativeKey::Clusters].map(|k| r.runs_of(k))
-    };
-    let cluster = graph::NativeKey::Cluster(store.clusters().list[0].constraints.iter().map(|c| c.id).min().unwrap());
-    let (before, cluster_before) = (runs(&store), store.reactive().runs_of(cluster));
+    let key0 = store.clusters().list[0].constraints.iter().map(|c| c.id).min().unwrap();
+    let component = graph::NativeKey::Component(key0);
+    let cluster = graph::NativeKey::Cluster(key0);
+    let (comp_before, cluster_before, maker_before, ctx_before) = (
+        store.reactive().runs_of(component),
+        store.reactive().runs_of(cluster),
+        store.constraint_maker_runs(comp),
+        store.context_maker_runs(),
+    );
     store.apply(tx("move", vec![Op::Set { id: lone, path: path("transform2d.x"), slot: Slot::Const(Value::Number(30.0)) }])).unwrap();
-    assert_eq!(runs(&store), before, "grouping (which validates) did not run");
+    assert_eq!(store.reactive().runs_of(component), comp_before, "component cell did not run");
     assert_eq!(store.reactive().runs_of(cluster), cluster_before, "nor the cluster's watcher");
-    assert!(before.iter().all(|r| r.is_some()), "the natives exist: {before:?}");
+    assert_eq!(store.constraint_maker_runs(comp), maker_before, "nor the constraint maker");
+    assert_eq!(store.context_maker_runs(), ctx_before, "nor the context maker");
+    assert!(comp_before.is_some() && cluster_before.is_some());
 }
 
-/// A formula on a field that decides structure (`constraint.enabled`) is
-/// reported on its leaf, not silently read as its default (DS-10a, decided
-/// by the user: such fields become bindable in DS-13 and DS-16).
+/// EN-2b: `constraint.enabled` and `constraint.kind` are evaluated as formulas
+/// in Stage 3 (no longer structural-field errors). Flipping a bound `enabled`
+/// activates/deactivates the constraint; changing a bound `kind` changes the
+/// constraint's behavior.
 #[test]
-fn a_formula_on_a_structural_field_is_reported() {
-    let mut p = pendulum();
-    p.store.apply(tx("bind", vec![Op::Set { id: p.links[0], path: path("constraint.enabled"), slot: bind("1 > 0") }])).unwrap();
-    let problems = p.store.problems();
-    assert!(problems.iter().any(|q| q.node == p.links[0] && q.kind == "binding" && q.message.contains("decides structure")), "{problems:?}");
-    assert_eq!(p.store.clusters().list.len(), 1, "the constraint still groups, enabled as set");
-    // A bound kind is reported once, on its leaf, not again as unknown.
-    p.store.apply(tx("kind", vec![Op::Set { id: p.links[1], path: path("constraint.kind"), slot: bind("'distance'") }])).unwrap();
-    let problems = p.store.problems();
-    assert_eq!(problems.iter().filter(|q| q.node == p.links[1]).count(), 1, "{problems:?}");
+fn bound_constraint_enabled_and_kind_are_evaluated() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("comp", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("scene").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(
+        r#"<let id="$on" value="0"/><let id="$k" value="distance"/><rect id="$a" x="0" y="0" w="10" h="10"/><rect id="$b" x="100" y="0" w="10" h="10"/><constraint id="$fa" kind="fix" value="0"/><constraint id="$d" kind="{= $k.let.value}" enabled="{= $on.let.value > 0}" value="40"/>"#,
+        Some(comp),
+        OrderKey::first(),
+        store.authored().next_id(),
+    )
+    .unwrap();
+    let n = built.named;
+    let r = store.authored().next_relation_ids(3);
+    store
+        .apply(tx("setup", built.ops.into_iter().chain([constrains(r[0], n["fa"], n["a"], "a"), constrains(r[1], n["d"], n["a"], "a"), constrains(r[2], n["d"], n["b"], "b")]).collect()))
+        .unwrap();
+    // Initially disabled: no binding error, and b stays at x = 100.
+    assert!(store.problems().is_empty(), "{:?}", store.problems());
+    assert!((pos(&store, n["b"])[0] - 100.0).abs() < 1e-6);
+    // Enabling via the bound formula wakes the component cell and solves b to distance 40.
+    store.apply(tx("enable", vec![Op::Set { id: n["on"], path: path("let.value"), slot: Slot::Const(Value::Number(1.0)) }])).unwrap();
+    assert!(store.problems().is_empty(), "{:?}", store.problems());
+    assert!((dist(pos(&store, n["a"]), pos(&store, n["b"])) - 40.0).abs() < 1e-4, "b moved to distance 40");
+    // Changing bound `kind` to `"coincident"` pulls b onto a.
+    store.apply(tx("coincident", vec![Op::Set { id: n["k"], path: path("let.value"), slot: Slot::Const(Value::Str("coincident".into())) }])).unwrap();
+    assert!(store.problems().is_empty(), "{:?}", store.problems());
+    assert!(dist(pos(&store, n["a"]), pos(&store, n["b"])) < 1e-4, "b pulled onto a");
+    // Invalid bound `kind` reports a constraint problem cleanly.
+    store.apply(tx("bad kind", vec![Op::Set { id: n["k"], path: path("let.value"), slot: Slot::Const(Value::Str("bogus".into())) }])).unwrap();
+    let probs = constraint_problems(&store);
+    assert!(probs.iter().any(|(id, m)| *id == n["d"] && m.contains("unknown constraint kind")), "{probs:?}");
 }
 
 /// A constraint whose value can't be read (its formula fails, with no value
@@ -866,6 +895,171 @@ fn a_retargeted_binding_with_same_value_regroups_via_wiring_key() {
     let problems = constraint_problems(&p.store);
     assert!(
         problems.iter().any(|(_, m)| m.contains("reads") && m.contains("feeds the same cluster")),
-        "ClustersNative must regroup via Key::Wiring and report the cycle: {problems:?}"
+        "ComponentNative must regroup via Key::Wiring and report the cycle: {problems:?}"
     );
+}
+
+/// EN-2b: when a runtime claim arrives on or leaves a constrained operand leaf,
+/// `Key::Wiring` wakes its `ComponentNative` (zero constraint maker runs) and
+/// moves that leaf between `cluster.vars` and `cluster.inputs`.
+#[test]
+fn a_claim_arriving_or_leaving_updates_cluster_free_leaves() {
+    let mut store = Store::new();
+    let comp = store.authored().next_id();
+    let mut c = facet::Composition::default();
+    c.dims = Slot::Const(Value::Enum("2d".into()));
+    store.apply(tx("comp", vec![Op::Create { id: comp, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![named("scene").wrap(), c.wrap()] }])).unwrap();
+    let built = markup::ops(
+        r#"<rect id="$a" x="0" y="0" w="10" h="10"/><rect id="$b" x="50" y="0" w="10" h="10"/><constraint id="$fa" kind="fix" value="0"/><constraint id="$d" kind="distance" value="50"/>"#,
+        Some(comp),
+        OrderKey::first(),
+        store.authored().next_id(),
+    )
+    .unwrap();
+    let n = built.named;
+    let r = store.authored().next_relation_ids(3);
+    store
+        .apply(tx("setup", built.ops.into_iter().chain([constrains(r[0], n["fa"], n["a"], "a"), constrains(r[1], n["d"], n["a"], "a"), constrains(r[2], n["d"], n["b"], "b")]).collect()))
+        .unwrap();
+    let bx = Leaf { node: n["b"], path: path("transform2d.x") };
+    assert!(store.clusters().list[0].vars.contains(&bx), "b.x starts free");
+
+    let maker_before = store.constraint_maker_runs(comp);
+    let prod = store.register_producer("driver");
+    store.publish(prod, BTreeMap::from([(bx, Value::Number(30.0))]));
+    assert_eq!(store.constraint_maker_runs(comp), maker_before, "claim arrival must not rerun constraint maker");
+    assert!(!store.clusters().list[0].vars.contains(&bx), "driven leaf leaves vars");
+    assert!(store.clusters().list[0].inputs.contains(&bx), "driven leaf enters inputs");
+
+    store.publish(prod, BTreeMap::new());
+    assert_eq!(store.constraint_maker_runs(comp), maker_before, "claim departure must not rerun constraint maker");
+    assert!(store.clusters().list[0].vars.contains(&bx), "released leaf returns to vars");
+}
+
+/// EN-2b: independent constraint components in two compositions are isolated
+/// (editing a constraint value in A wakes only A's ComponentNative, 0 maker
+/// runs; adding a constraint in A runs only A's maker; context maker only runs
+/// when a `context` node changes).
+#[test]
+fn independent_constraint_components_and_context_maker_are_isolated() {
+    let mut store = Store::new();
+    let src = r#"<edit>
+      <composition id="$ca" name="a" dims="2d">
+        <rect id="$a0" x="0" y="0" w="10" h="10"/><rect id="$a1" x="40" y="0" w="10" h="10"/>
+        <constraint id="$fa" kind="fix" value="0"/><constraint id="$da" kind="distance" value="40"/>
+      </composition>
+      <composition id="$cb" name="b" dims="2d">
+        <rect id="$b0" x="0" y="0" w="10" h="10"/><rect id="$b1" x="40" y="0" w="10" h="10"/>
+        <constraint id="$fb" kind="fix" value="0"/><constraint id="$db" kind="distance" value="40"/>
+      </composition>
+    </edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (ca, cb) = (plan.aliases["$ca"], plan.aliases["$cb"]);
+    let (a0, a1, fa, da) = (plan.aliases["$a0"], plan.aliases["$a1"], plan.aliases["$fa"], plan.aliases["$da"]);
+    let (b0, b1, fb, db) = (plan.aliases["$b0"], plan.aliases["$b1"], plan.aliases["$fb"], plan.aliases["$db"]);
+    let r = store.authored().next_relation_ids(6);
+    let mut ops = plan.ops;
+    ops.extend([
+        constrains(r[0], fa, a0, "a"),
+        constrains(r[1], da, a0, "a"),
+        constrains(r[2], da, a1, "b"),
+        constrains(r[3], fb, b0, "a"),
+        constrains(r[4], db, b0, "a"),
+        constrains(r[5], db, b1, "b"),
+    ]);
+    store.apply(tx("two constrained comps", ops)).unwrap();
+
+    let comp_a = graph::NativeKey::Component(fa.min(da));
+    let comp_b = graph::NativeKey::Component(fb.min(db));
+    let clus_b = graph::NativeKey::Cluster(fb.min(db));
+    let (ma0, mb0, ctx0) = (store.constraint_maker_runs(ca), store.constraint_maker_runs(cb), store.context_maker_runs());
+    let (ca_runs0, cb_runs0, clus_b0) = (
+        store.reactive().runs_of(comp_a).unwrap(),
+        store.reactive().runs_of(comp_b).unwrap(),
+        store.reactive().runs_of(clus_b).unwrap(),
+    );
+
+    // Value edit on constraint in A: runs only A's ComponentNative, 0 makers, 0 context maker, B untouched.
+    store.apply(tx("widen da", vec![Op::Set { id: da, path: path("constraint.value"), slot: num(60.0) }])).unwrap();
+    assert_eq!(store.constraint_maker_runs(ca), ma0);
+    assert_eq!(store.constraint_maker_runs(cb), mb0);
+    assert_eq!(store.context_maker_runs(), ctx0);
+    assert!(store.reactive().runs_of(comp_a).unwrap() > ca_runs0);
+    assert_eq!(store.reactive().runs_of(comp_b).unwrap(), cb_runs0, "B's ComponentNative must stay idle");
+    assert_eq!(store.reactive().runs_of(clus_b).unwrap(), clus_b0, "B's ClusterNative must stay idle");
+
+    // Structural edit in A (add a constraint): runs only A's constraint maker, not B's or context maker.
+    let extra = store.authored().next_id();
+    let mut f = Constraint::default();
+    f.kind = Slot::Const(Value::Enum("fix".into()));
+    let rel = store.authored().next_relation_id();
+    store
+        .apply(tx("extra fix in A", vec![
+            Op::Create { id: extra, ty: ty("constraint"), parent: Some(ca), order: OrderKey::first(), facets: vec![f.wrap()] },
+            constrains(rel, extra, a0, "a"),
+        ]))
+        .unwrap();
+    assert!(store.constraint_maker_runs(ca) > ma0);
+    assert_eq!(store.constraint_maker_runs(cb), mb0);
+    assert_eq!(store.context_maker_runs(), ctx0);
+
+    // Adding and editing a `context` node runs the context maker; a subsequent non-context edit does not.
+    let ctx_node = store.authored().next_id();
+    let mut cd = facet::ContextDef::default();
+    cd.markup = Slot::Const(Value::Str(r#"<context name="custom_ctx"><rule match="all" plug.mate="no"/></context>"#.into()));
+    store.apply(tx("add context", vec![Op::Create { id: ctx_node, ty: ty("context"), parent: Some(ca), order: OrderKey::first(), facets: vec![cd.wrap()] }])).unwrap();
+    let ctx1 = store.context_maker_runs();
+    assert!(ctx1 > ctx0, "creating a context node must run ContextMaker");
+    store.apply(tx("edit a1", vec![Op::Set { id: da, path: path("constraint.value"), slot: num(70.0) }])).unwrap();
+    assert_eq!(store.context_maker_runs(), ctx1, "non-context edit must not rerun ContextMaker");
+}
+
+/// EN-2b canary: silencing `insert_node` stops `Key::In(root, constraint)` from
+/// waking `ConstraintMakers` when a constraint is added, and the oracle catches it.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_constraint_create_fails_the_oracle() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition id="$c" name="scene" dims="2d"><rect id="$a" x="0" y="0" w="10" h="10"/></composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (c, a) = (plan.aliases["$c"], plan.aliases["$a"]);
+    store.apply(tx("scene", plan.ops)).unwrap();
+    let cid = store.authored().next_id();
+    let rel = store.authored().next_relation_id();
+    let mut f = Constraint::default();
+    f.kind = Slot::Const(Value::Enum("fix".into()));
+    iron_document::silence_for_canary(Some("insert_node"));
+    store
+        .apply(tx("add fix", vec![
+            Op::Create { id: cid, ty: ty("constraint"), parent: Some(c), order: OrderKey::first(), facets: vec![f.wrap()] },
+            constrains(rel, cid, a, "a"),
+        ]))
+        .unwrap();
+}
+
+/// EN-2b canary: silencing `set_leaf` stops `Key::Facet(ctx, ContextDef)` from
+/// waking `ContextMaker` when a `context` node's markup is edited, and the
+/// oracle catches it.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_context_edit_fails_the_oracle() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition id="$c" name="scene" dims="2d"></composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let c = plan.aliases["$c"];
+    store.apply(tx("scene", plan.ops)).unwrap();
+    let ctx_node = store.authored().next_id();
+    let mut cd = facet::ContextDef::default();
+    cd.markup = Slot::Const(Value::Str(r#"<context name="k"><rule match="all" plug.mate="yes"/></context>"#.into()));
+    store.apply(tx("context", vec![Op::Create { id: ctx_node, ty: ty("context"), parent: Some(c), order: OrderKey::first(), facets: vec![cd.wrap()] }])).unwrap();
+    iron_document::silence_for_canary(Some("set_leaf"));
+    store
+        .apply(tx("edit context", vec![Op::Set {
+            id: ctx_node,
+            path: path("context_def.markup"),
+            slot: Slot::Const(Value::Str(r#"<context name="k"><rule match="all" plug.mate="no"/></context>"#.into())),
+        }]))
+        .unwrap();
 }

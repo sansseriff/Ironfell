@@ -129,9 +129,11 @@ pub enum NativeKey {
     /// A drawn repeat or conditional: what its items are settled from
     /// (`Store::settle_repeats`).
     Repeat(NodeId),
-    /// The grouping of the document's constraints (`solve::ClustersNative`).
-    Clusters,
-    /// One constraint cluster, by its lowest constraint (`solve::ClusterNative`).
+    /// One structural candidate component of constraints and implied mates,
+    /// by its lowest constraint or connection id (`solve::ComponentNative`).
+    Component(NodeId),
+    /// One effective constraint cluster watcher, by its lowest constraint
+    /// (`solve::ClusterNative`).
     Cluster(NodeId),
     /// A native for the graph's own tests.
     #[cfg(test)]
@@ -142,8 +144,7 @@ impl NativeKey {
     fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
-            NativeKey::Layout(n) | NativeKey::Pins(n) | NativeKey::Repeat(n) | NativeKey::Cluster(n) => n,
-            NativeKey::Clusters => NodeId::from_raw(0),
+            NativeKey::Layout(n) | NativeKey::Pins(n) | NativeKey::Repeat(n) | NativeKey::Component(n) | NativeKey::Cluster(n) => n,
             #[cfg(test)]
             NativeKey::Test(n, _) => n,
         }
@@ -685,9 +686,11 @@ pub struct Reactive {
     /// The natives that read each structural or wiring key at their last run
     /// (engine.md §3.2).
     key_readers: BTreeMap<crate::structure::Key, BTreeSet<NativeKey>>,
-    /// Repeat natives that ran since the store last took them: the repeats
-    /// whose inputs changed.
+    /// Repeat and cluster natives that ran since the store last took them.
     ran: BTreeSet<NativeKey>,
+    /// Monotonic revision bumped whenever any `NativeKey::Component(_)` is
+    /// added, replaced, removed, or finishes running.
+    components_rev: u64,
     /// Glides, while the host runs transitions (`None`: it does not).
     pub(crate) glide: Option<Glide>,
 }
@@ -2137,6 +2140,9 @@ impl Reactive {
         if matches!(k, NativeKey::Repeat(_) | NativeKey::Cluster(_)) {
             self.ran.insert(k);
         }
+        if matches!(k, NativeKey::Component(_)) {
+            self.components_rev += 1;
+        }
         let (result, reads, base, reached, inputs, marks, extra, mut keys) = {
             let mut cx = Cx {
                 doc,
@@ -2565,6 +2571,12 @@ impl Reactive {
 
     /// Set an input (`None` clears it) and run the natives that read it.
     pub(crate) fn set_input(&mut self, doc: Tree<'_>, key: InputKey, value: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>) {
+        self.set_input_run(doc, key, value, true);
+    }
+
+    /// Set an input (`None` clears it); with `run == false`, prime its readers
+    /// into `pending` for the upcoming pass instead of evaluating immediately.
+    pub(crate) fn set_input_run(&mut self, doc: Tree<'_>, key: InputKey, value: Option<std::sync::Arc<dyn std::any::Any + Send + Sync>>, run: bool) {
         match value {
             Some(v) => {
                 self.inputs.insert(key, Held(v));
@@ -2577,8 +2589,18 @@ impl Reactive {
         if primed.is_empty() {
             return;
         }
+        if !run {
+            self.pending.extend(primed);
+            return;
+        }
         let dirty = self.readers(&primed);
         self.evaluate(doc, &dirty, &primed);
+    }
+
+    /// Monotonic revision bumped whenever any `NativeKey::Component(_)` is
+    /// added, replaced, removed, or finishes running.
+    pub(crate) fn components_rev(&self) -> u64 {
+        self.components_rev
     }
 
     /// What native `k` handed the store at its last run.
@@ -2862,6 +2884,9 @@ impl Reactive {
         let mut runs_of: BTreeMap<NativeKey, u64> = BTreeMap::new();
         self.structure += 1;
         self.wired = crate::stamp();
+        if batch.iter().any(|(k, _)| matches!(k, NativeKey::Component(_))) {
+            self.components_rev += 1;
+        }
         for (k, new) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
             if new.is_none()

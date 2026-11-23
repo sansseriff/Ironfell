@@ -1,5 +1,5 @@
-//! The reactive engine's owners (plans/specs/reactive-engine.md; handoff
-//! §4.4): which authored nodes derive what, expanded per owner.
+//! The reactive engine's owners, templates, and virtual views (plans/specs/engine.md).
 
 pub(crate) mod owners;
 pub(crate) mod template;
+pub(crate) mod views;

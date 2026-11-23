@@ -196,6 +196,40 @@ impl Axis {
 /// continuous `times`): keys persisted solve-layer poses (P17).
 pub type DiscretePoint = BTreeMap<AxisId, AxisValueId>;
 
+/// Per-view coordinate (`engine.md` §2.3, `EN-5a`): combines a virtual view's
+/// derived placement path & enclosing scope chain (never saved as authored
+/// `AxisValue`s) with its component-local discrete coordinates (e.g. machine
+/// state or variant). Structural layer precedence is derived from `scopes`
+/// (outermost scope wins without globally renumbering `u32` layer integers).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ViewCoord {
+    /// Placement steps from outermost placement to this view's owner.
+    pub path: Vec<NodeId>,
+    /// Enclosing scope chain (definition / variant IDs, parallel to `path`,
+    /// outermost first).
+    pub scopes: Vec<NodeId>,
+    /// Component-local discrete coordinates (e.g. machine state, variant).
+    pub local: DiscretePoint,
+}
+
+impl ViewCoord {
+    pub fn new(path: Vec<NodeId>, scopes: Vec<NodeId>) -> Self {
+        debug_assert!(scopes.is_empty() || scopes.len() == path.len());
+        ViewCoord { path, scopes, local: BTreeMap::new() }
+    }
+
+    pub fn with_local(mut self, axis: AxisId, value: AxisValueId) -> Self {
+        self.local.insert(axis, value);
+        self
+    }
+
+    /// Look up a discrete coordinate on `axis`, preferring component-local over
+    /// the global document point.
+    pub fn value_on(&self, global: &Point, axis: AxisId) -> Option<AxisValueId> {
+        self.local.get(&axis).copied().or_else(|| global.get(axis))
+    }
+}
+
 /// One coordinate per axis in play: discrete axis values plus continuous
 /// clock times.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -415,6 +449,30 @@ impl Sel {
         }
     }
 
+    /// Direct path/scope matching for derived virtual-view instance coordinates
+    /// (`engine.md` §2.3, `EN-5a`): requires no saved instance `AxisValue`.
+    pub fn contains_path(&self, path: &[NodeId], scopes: &[NodeId], anchor: Option<NodeId>) -> bool {
+        match anchor {
+            None => match self {
+                Sel::All => true,
+                Sel::Suffix { tail, not } => ends_with(path, tail) && !not.iter().any(|n| ends_with(path, n)),
+                _ => false,
+            },
+            Some(scope) => match self {
+                Sel::All => scopes.contains(&scope),
+                Sel::Suffix { tail, not } => scopes
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, &s)| s == scope && k < path.len())
+                    .any(|(k, _)| {
+                        let sub = &path[k..];
+                        ends_with(sub, tail) && !not.iter().any(|n| ends_with(sub, n))
+                    }),
+                _ => false,
+            },
+        }
+    }
+
     /// Containment with optional scope anchoring (patches.md §4, P18).
     pub fn contains_anchored(&self, axis: &Axis, v: AxisValueId, anchor: Option<NodeId>) -> bool {
         let Some(scope) = anchor else {
@@ -445,6 +503,9 @@ impl Sel {
 
     pub fn is_empty(&self, axis: &Axis) -> bool {
         if axis.kind == AxisKind::Time {
+            return self.void(axis);
+        }
+        if axis.kind == AxisKind::Instance && axis.values.is_empty() && matches!(self, Sel::All | Sel::Suffix { .. }) {
             return self.void(axis);
         }
         !axis.live().any(|v| self.contains(axis, v))
@@ -676,6 +737,44 @@ impl Product {
         axes.iter()
             .filter(|(a, ax)| ax.kind == AxisKind::Instance && !self.sels.contains_key(a))
             .all(|(a, ax)| point.get(*a).is_some_and(|v| Sel::All.contains_anchored(ax, v, Some(scope))))
+    }
+
+    /// Whether this box applies at a virtual view's derived coordinate
+    /// (`global` document point + `view` placement path, enclosing scope chain,
+    /// and component-local discrete coordinates; `engine.md` §2.3, `EN-5a`).
+    pub fn contains_at_view(
+        &self,
+        axes: &BTreeMap<AxisId, Axis>,
+        global: &Point,
+        view: &ViewCoord,
+        anchor: Option<NodeId>,
+    ) -> bool {
+        let mut checked_instance = false;
+        for (a, sel) in &self.sels {
+            let Some(ax) = axes.get(a) else { return false };
+            let ok = match ax.kind {
+                AxisKind::Time => global.time(*a).is_some_and(|t| sel.contains_time(t)),
+                AxisKind::Instance => {
+                    checked_instance = true;
+                    if matches!(sel, Sel::All | Sel::Suffix { .. }) {
+                        sel.contains_path(&view.path, &view.scopes, anchor)
+                    } else {
+                        view.value_on(global, *a).is_some_and(|v| sel.contains_anchored(ax, v, anchor))
+                    }
+                }
+                AxisKind::Ordered | AxisKind::Unordered => view.value_on(global, *a).is_some_and(|v| sel.contains(ax, v)),
+            };
+            if !ok {
+                return false;
+            }
+        }
+        if let Some(scope) = anchor
+            && !checked_instance
+            && !view.scopes.contains(&scope)
+        {
+            return false;
+        }
+        true
     }
 
     pub fn is_empty(&self, axes: &BTreeMap<AxisId, Axis>) -> bool {
@@ -1429,6 +1528,77 @@ impl PatchTable {
                 .collect();
         }
         out
+    }
+
+    /// Derive structural layer precedence for a patch anchored at `anchor`
+    /// inside a view whose enclosing scope chain is `scopes` (outermost first;
+    /// `engine.md` §2.3, `patches.md` §6.1, `EN-5a`).
+    ///
+    /// Outermost wins by structure without globally renumbering `u32` layers:
+    /// - `anchor == None` (document-level) -> `Some(usize::MAX - 1)` (outermost authored)
+    /// - `anchor == Some(scope)` at index `pos` in `scopes` -> `Some(scopes.len() - 1 - pos)`
+    /// - `anchor == Some(scope)` not in `scopes` -> `None` (cannot apply in this view)
+    pub fn derived_layer(anchor: Option<NodeId>, scopes: &[NodeId]) -> Option<usize> {
+        match anchor {
+            None => Some(usize::MAX - 1),
+            Some(scope) => scopes.iter().position(|&s| s == scope).map(|pos| scopes.len() - 1 - pos),
+        }
+    }
+
+    /// Compare two patches within a virtual view: session layer first, then
+    /// derived enclosing scope-chain layer (outermost scope wins), then stored
+    /// `(layer, rank, id)` within the same scope (`EN-5a`).
+    pub fn compare_at_view(&self, p: &Patch, q: &Patch, view: &ViewCoord) -> Ordering {
+        let eff_layer = |x: &Patch| -> usize {
+            if x.layer == SESSION_LAYER {
+                usize::MAX
+            } else {
+                Self::derived_layer(x.anchor, &view.scopes).unwrap_or(0)
+            }
+        };
+        eff_layer(p)
+            .cmp(&eff_layer(q))
+            .then_with(|| p.layer.cmp(&q.layer))
+            .then_with(|| p.rank.cmp(&q.rank))
+            .then_with(|| p.id.cmp(&q.id))
+    }
+
+    /// Strongest authored patch setting `target` at a virtual view's derived
+    /// coordinate `(global, view)` (`engine.md` §2.3, `EN-5a`).
+    pub fn winner_authored_at_view(&self, global: &Point, view: &ViewCoord, target: PatchTarget) -> Option<&Patch> {
+        let mut best: Option<&Patch> = None;
+        for p in self.patches_for_target(target.node) {
+            if p.layer < SESSION_LAYER
+                && p.entries.contains_key(&target)
+                && p.region.contains_at_view(&self.axes, global, view, p.anchor)
+                && best.is_none_or(|b| self.compare_at_view(p, b, view) == Ordering::Greater)
+            {
+                best = Some(p);
+            }
+        }
+        best
+    }
+
+    /// Strongest session patch setting `target` at a virtual view's derived
+    /// coordinate `(global, view)` (`engine.md` §2.3, `EN-5a`).
+    pub fn winner_session_at_view<'a>(
+        &self,
+        session: &'a BTreeMap<PatchId, Patch>,
+        global: &Point,
+        view: &ViewCoord,
+        target: PatchTarget,
+    ) -> Option<&'a Patch> {
+        let mut best: Option<&Patch> = None;
+        for p in session.values() {
+            if p.layer == SESSION_LAYER
+                && p.entries.contains_key(&target)
+                && p.region.contains_at_view(&self.axes, global, view, p.anchor)
+                && best.is_none_or(|b| self.compare_at_view(p, b, view) == Ordering::Greater)
+            {
+                best = Some(p);
+            }
+        }
+        best
     }
 
     /// Strongest authored patch (`layer < SESSION_LAYER`) setting `target` at `point`.

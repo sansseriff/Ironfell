@@ -932,6 +932,8 @@ impl StoreCore {
         // Stage 2 -> Stage 3: consume touched keys from Docs, reconcile dirty
         // contexts, layout, constraint, network, and derived-binding makers
         // before priming keyed cells (engine.md §3.2, §3.3).
+        let tkeys = self.docs.drain_template_touched();
+        self.owners.note_touched(&tkeys);
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
             self.context_maker.note_touched(&keys);
@@ -2229,6 +2231,7 @@ impl StoreCore {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
                     self.docs.rollback();
+                    self.owners.clear_templates();
                     return Err(e);
                 }
             }
@@ -4537,6 +4540,8 @@ impl StoreCore {
     /// marks keyed natives, optionally marks session leaves for the host, and
     /// evaluates invalidated cells and pending natives.
     fn sync_touched(&mut self, mark_session: bool) {
+        let tkeys = self.docs.drain_template_touched();
+        self.owners.note_touched(&tkeys);
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
             self.context_maker.note_touched(&keys);
@@ -4800,6 +4805,8 @@ impl StoreCore {
             self.pending.note_resolved_delta(Tree::of(&self.docs), &self.docs.gone, &delta);
             targets.extend(delta.changed_nodes);
         }
+        let tkeys = self.docs.drain_template_touched();
+        self.owners.note_touched(&tkeys);
         let keys = self.docs.take_touched();
         if keys.iter().any(|k| {
             matches!(k, structure::Key::Facet(_, FacetKind::Token))
@@ -4899,6 +4906,32 @@ impl StoreCore {
             self.sync_touched(true);
             self.settle(SettleMode::Live { clusters: true });
         }
+    }
+
+    /// Materialized-view parity oracle (`EN-5a`): build a static virtual
+    /// `ViewRegistry` purely from `docs.authored` (+ `docs.resolved` at
+    /// `self.point()`, reading nothing from `docs.copies`) and compare
+    /// `Tree::with_views` bit-for-bit against `Tree::of(&self.docs)`.
+    pub fn check_virtual_views_parity(&self) -> Result<(), String> {
+        let empty = engine::views::ViewRegistry::new();
+        let authored_tree = Tree::with_views(&self.docs, &empty);
+        let mut tcache = self.owners.templates().clone();
+        let mut tmpls = engine::template::Templates::new(&mut tcache);
+        let (views, _) = engine::views::ViewRegistry::build_static(authored_tree, &mut tmpls, &self.docs.point, None);
+        engine::views::check_parity(&self.docs, &self.reactive, &views)
+    }
+
+    /// Summary stats `(view_count, virtual_nodes, resolved_nodes, borrowed_nodes)`
+    /// for a static virtual `ViewRegistry` built from this store (`EN-5a`).
+    pub fn virtual_views_stats(&self) -> (usize, usize, usize, usize) {
+        let empty = engine::views::ViewRegistry::new();
+        let authored_tree = Tree::with_views(&self.docs, &empty);
+        let mut tcache = self.owners.templates().clone();
+        let mut tmpls = engine::template::Templates::new(&mut tcache);
+        let (views, _) = engine::views::ViewRegistry::build_static(authored_tree, &mut tmpls, &self.docs.point, None);
+        let resolved: usize = views.views.values().map(|v| v.resolved_count()).sum();
+        let borrowed: usize = views.views.values().map(|v| v.borrowed_count()).sum();
+        (views.view_count(), views.virtual_node_count(), resolved, borrowed)
     }
 
     /// Evaluate `leaf` at an arbitrary variation `point` without mutating this store
@@ -5382,6 +5415,8 @@ impl StoreCore {
             return;
         }
         let mut ops = Vec::new();
+        let tkeys = self.docs.drain_template_touched();
+        self.owners.note_touched(&tkeys);
         for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
             if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
                 continue;
@@ -5528,6 +5563,7 @@ impl StoreCore {
         }
         if !errors.is_empty() {
             self.docs.rollback();
+            self.owners.clear_templates();
             return Err(errors);
         }
         docs.authored.set_version(stamp);

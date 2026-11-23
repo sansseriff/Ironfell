@@ -211,6 +211,9 @@ pub(crate) struct Docs {
     pub(crate) scoped: ScopedIndexes,
     scoped_journal: Option<Vec<ScopedRec>>,
     scoped_touched: crate::structure::Touched,
+    /// Offsets into `(authored.touched, copies.touched, scoped_touched)` already
+    /// observed by `TemplateCache::note_touched` since the last `take_touched`.
+    template_cursor: (usize, usize, usize),
     /// Active point on variation axes (`Point::default()` when no axes are set).
     pub(crate) point: crate::patch::Point,
     /// Session-layer patches (`SESSION_LAYER`, P8; never saved, never journaled).
@@ -248,6 +251,7 @@ impl Docs {
             scoped,
             scoped_journal: None,
             scoped_touched: Default::default(),
+            template_cursor: (0, 0, 0),
             point: crate::patch::Point::default(),
             session_patches: BTreeMap::new(),
             resolved: ResolvedStore::default(),
@@ -914,9 +918,32 @@ impl Docs {
         self.scoped_touched.keys.clear();
     }
 
+    /// Keys touched since the last `drain_template_touched`, `take_touched`,
+    /// or `rollback` (for recorded-read template invalidation without removing
+    /// keys from the main `take_touched` log, `EN-5a`).
+    pub(crate) fn drain_template_touched(&mut self) -> Vec<crate::structure::Key> {
+        let a = self.authored.touched_slice();
+        let c = self.copies.touched_slice();
+        let s = &self.scoped_touched.keys;
+        let (ia, ic, is) = self.template_cursor;
+        let mut out = Vec::new();
+        if ia < a.len() {
+            out.extend_from_slice(&a[ia..]);
+        }
+        if ic < c.len() {
+            out.extend_from_slice(&c[ic..]);
+        }
+        if is < s.len() {
+            out.extend_from_slice(&s[is..]);
+        }
+        self.template_cursor = (a.len(), c.len(), s.len());
+        out
+    }
+
     /// The keys both documents' writes and scoped index updates touched since
     /// they were last taken.
     pub(crate) fn take_touched(&mut self) -> Vec<crate::structure::Key> {
+        self.template_cursor = (0, 0, 0);
         let mut keys = self.authored.take_touched();
         keys.append(&mut self.copies.take_touched());
         keys.append(&mut self.scoped_touched.keys);
@@ -950,6 +977,7 @@ impl Docs {
         self.authored.rollback();
         self.copies.rollback();
         self.scoped_touched.keys.clear();
+        self.template_cursor = (0, 0, 0);
         if let Some(recs) = self.scoped_journal.take() {
             self.scoped.undo(recs);
         }
@@ -976,11 +1004,12 @@ impl Docs {
 
 }
 
-/// Zero-allocation iterator over a node's facets (either from `ResolvedStore`
-/// or straight from `Document`).
+/// Zero-allocation iterator over a node's facets (either from `ResolvedStore`,
+/// a borrowed `Template` slice in `ViewRegistry`, or straight from `Document`).
 enum FacetsIter<'a, I> {
     Empty,
     Resolved(std::collections::btree_map::Values<'a, FacetKind, Facet>),
+    Slice(std::slice::Iter<'a, Facet>),
     Base(I),
 }
 
@@ -990,7 +1019,23 @@ impl<'a, I: Iterator<Item = &'a Facet>> Iterator for FacetsIter<'a, I> {
         match self {
             FacetsIter::Empty => None,
             FacetsIter::Resolved(it) => it.next(),
+            FacetsIter::Slice(it) => it.next(),
             FacetsIter::Base(it) => it.next(),
+        }
+    }
+}
+
+enum EitherIter<A, B> {
+    Left(A),
+    Right(B),
+}
+
+impl<T, A: Iterator<Item = T>, B: Iterator<Item = T>> Iterator for EitherIter<A, B> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        match self {
+            EitherIter::Left(a) => a.next(),
+            EitherIter::Right(b) => b.next(),
         }
     }
 }
@@ -1001,6 +1046,9 @@ pub struct Tree<'a> {
     doc: &'a Document,
     /// The copies, when they are kept apart from `doc`.
     copies: Option<&'a Document>,
+    /// Virtual views registry (`EN-5a`); when `Some`, derived/expanded ids are
+    /// answered from virtual views instead of materialized `copies`.
+    views: Option<&'a crate::engine::views::ViewRegistry>,
     /// Per-root indexes when backed by `Docs`.
     scoped: Option<&'a ScopedIndexes>,
     /// Sparse non-journaled resolved state at `point` (engine.md §2.3, EN-4).
@@ -1020,6 +1068,22 @@ impl<'a> Tree<'a> {
         Tree {
             doc: &docs.authored,
             copies: docs.apart.then_some(&docs.copies),
+            views: None,
+            scoped: Some(&docs.scoped),
+            resolved: Some(&docs.resolved),
+            point: Some(&docs.point),
+            session_patches: Some(&docs.session_patches),
+            rec: None,
+        }
+    }
+
+    /// Read view over authored `docs` + virtual `views`, ignoring materialized
+    /// `docs.copies` (`EN-5a` dual-run oracle & virtual read path).
+    pub(crate) fn with_views(docs: &'a Docs, views: &'a crate::engine::views::ViewRegistry) -> Tree<'a> {
+        Tree {
+            doc: &docs.authored,
+            copies: None,
+            views: Some(views),
             scoped: Some(&docs.scoped),
             resolved: Some(&docs.resolved),
             point: Some(&docs.point),
@@ -1045,18 +1109,11 @@ impl<'a> Tree<'a> {
         debug_assert!(self.rec.is_none(), "a recording tree has no key for `{what}` (engine.md §3.2)");
     }
 
-    /// When anything under definition or repeat `id` was last written
-    /// (`Document::scope_stamp`).
-    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
-        self.unkeyed("scope_stamp");
-        self.doc.scope_stamp(id)
-    }
-
     /// The tree over a document that holds no copies apart from it: a
     /// scratch document cloned for planning, a fragment, a document being
     /// loaded. A derived node it does not hold is not there.
     pub fn authored_only(doc: &'a Document) -> Tree<'a> {
-        Tree { doc, copies: None, scoped: None, resolved: None, point: None, session_patches: None, rec: None }
+        Tree { doc, copies: None, views: None, scoped: None, resolved: None, point: None, session_patches: None, rec: None }
     }
 
     /// Each document's invariants, with parents answered across both (a
@@ -1151,14 +1208,33 @@ impl<'a> Tree<'a> {
         self.doc.next_session_relation_ids(n)
     }
 
+    fn is_absent(self, id: NodeId) -> bool {
+        if id.is_expanded()
+            && let Some(v) = self.views
+        {
+            return v.is_absent(id);
+        }
+        self.resolved.is_some_and(|r| r.absent.contains(&id))
+    }
+
     /// Any node, live or tombstoned.
     pub fn node(self, id: NodeId) -> Option<&'a Node> {
         self.note(crate::structure::Key::Node(id));
+        if id.is_expanded()
+            && let Some(v) = self.views
+        {
+            return v.node(id);
+        }
         self.at(id).node(id)
     }
 
     pub fn live(self, id: NodeId) -> Option<&'a Node> {
         self.note(crate::structure::Key::Node(id));
+        if id.is_expanded()
+            && let Some(v) = self.views
+        {
+            return v.live(id);
+        }
         if self.resolved.is_some_and(|r| r.absent.contains(&id)) {
             return None;
         }
@@ -1167,6 +1243,11 @@ impl<'a> Tree<'a> {
 
     pub fn is_live(self, id: NodeId) -> bool {
         self.note(crate::structure::Key::Node(id));
+        if id.is_expanded()
+            && let Some(v) = self.views
+        {
+            return v.is_live(id);
+        }
         if self.resolved.is_some_and(|r| r.absent.contains(&id)) {
             return false;
         }
@@ -1176,6 +1257,11 @@ impl<'a> Tree<'a> {
     /// Whether `id` is hidden at the active point (cascading `PatchKey::Hidden`, P6).
     pub fn is_hidden(self, id: NodeId) -> bool {
         self.note(crate::structure::Key::Node(id));
+        if id.is_expanded()
+            && let Some(v) = self.views
+        {
+            return v.is_hidden(id);
+        }
         self.resolved.is_some_and(|r| r.hidden.contains(&id))
     }
 
@@ -1191,13 +1277,21 @@ impl<'a> Tree<'a> {
 
     pub fn nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
         self.unkeyed("nodes");
-        self.both().flat_map(Document::nodes)
+        let has_views = self.views.is_some();
+        self.both()
+            .flat_map(Document::nodes)
+            .filter(move |n| !has_views || !n.id.is_expanded())
+            .chain(self.views.into_iter().flat_map(|v| v.nodes()))
     }
 
     pub fn live_nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
         self.unkeyed("live_nodes");
         let resolved = self.resolved;
-        self.both().flat_map(Document::live_nodes).filter(move |n| !resolved.is_some_and(|r| r.absent.contains(&n.id)))
+        let has_views = self.views.is_some();
+        self.both()
+            .flat_map(Document::live_nodes)
+            .filter(move |n| (!has_views || !n.id.is_expanded()) && !resolved.is_some_and(|r| r.absent.contains(&n.id)))
+            .chain(self.views.into_iter().flat_map(|v| v.live_nodes()))
     }
 
     pub fn roots(self) -> Cow<'a, [NodeId]> {
@@ -1225,9 +1319,44 @@ impl<'a> Tree<'a> {
     /// an owner, the authored parent of its copies.
     pub fn children(self, id: NodeId) -> Cow<'a, [NodeId]> {
         self.note(crate::structure::Key::Children(id));
-        let absent = self.resolved.filter(|r| !r.absent.is_empty());
-        if absent.is_some_and(|r| r.absent.contains(&id)) {
+        if self.is_absent(id) {
             return Cow::Borrowed(&[]);
+        }
+        let absent = self.resolved.filter(|r| !r.absent.is_empty());
+        if let Some(views) = self.views {
+            if id.is_expanded() {
+                return views.children_of(id);
+            }
+            let mine_raw = self.doc.children(id);
+            let derived = views.children_of(id);
+            let filter_mine = |c: &NodeId| !c.is_expanded() && absent.is_none_or(|r| !r.absent.contains(c));
+            if derived.is_empty() {
+                return if mine_raw.iter().all(filter_mine) {
+                    Cow::Borrowed(mine_raw)
+                } else {
+                    Cow::Owned(mine_raw.iter().copied().filter(filter_mine).collect())
+                };
+            }
+            if mine_raw.iter().all(|c| !filter_mine(c)) {
+                return derived;
+            }
+            let mut out = Vec::with_capacity(mine_raw.len() + derived.len());
+            let mut a = mine_raw.iter().copied().filter(filter_mine).peekable();
+            let mut b = derived.iter().copied().peekable();
+            let key_a = |n: NodeId| (&self.doc.node(n).expect("authored child").order, n);
+            let key_b = |n: NodeId| (&views.node(n).expect("virtual child").order, n);
+            while let (Some(&x), Some(&y)) = (a.peek(), b.peek()) {
+                if key_a(x) <= key_b(y) {
+                    out.push(x);
+                    a.next();
+                } else {
+                    out.push(y);
+                    b.next();
+                }
+            }
+            out.extend(a);
+            out.extend(b);
+            return Cow::Owned(out);
         }
         let mine = self.at(id).children(id);
         let Some(copies) = self.copies.filter(|_| !id.is_expanded()) else {
@@ -1320,7 +1449,10 @@ impl<'a> Tree<'a> {
     /// Expanded ids sort after every other id, so this is a range read.
     pub fn expanded_ids(self) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("expanded_ids");
-        self.both().flat_map(Document::expanded_ids)
+        match self.views {
+            Some(v) => EitherIter::Left(v.expanded_ids()),
+            None => EitherIter::Right(self.both().flat_map(Document::expanded_ids)),
+        }
     }
 
     /// How many ancestors a node has.
@@ -1349,15 +1481,21 @@ impl<'a> Tree<'a> {
     pub fn nodes_of_type(self, ty: TypeId) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_of_type");
         let resolved = self.resolved;
+        let has_views = self.views.is_some();
         self.both()
             .flat_map(move |d| d.nodes_of_type(ty))
-            .filter(move |id| !resolved.is_some_and(|r| r.absent.contains(id)))
+            .filter(move |id| (!has_views || !id.is_expanded()) && !resolved.is_some_and(|r| r.absent.contains(id)))
+            .chain(self.views.into_iter().flat_map(move |v| v.nodes_of_type(ty)))
     }
 
     pub fn nodes_with(self, kind: FacetKind) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_with");
         let resolved = self.resolved;
+        let has_views = self.views.is_some();
         let base = self.both().flat_map(move |d| d.nodes_with(kind)).filter(move |id| {
+            if has_views && id.is_expanded() {
+                return false;
+            }
             let Some(r) = resolved else { return true };
             if r.absent.contains(id) {
                 return false;
@@ -1368,18 +1506,39 @@ impl<'a> Tree<'a> {
             .into_iter()
             .flat_map(|r| r.facets.iter())
             .filter(move |(id, map)| {
-                !resolved.is_some_and(|r| r.absent.contains(id))
+                (!has_views || !id.is_expanded())
+                    && !resolved.is_some_and(|r| r.absent.contains(id))
                     && map.contains_key(&kind)
                     && self.at(**id).facet(**id, kind).is_none()
             })
             .map(|(&id, _)| id);
-        base.chain(added)
+        base.chain(added).chain(self.views.into_iter().flat_map(move |v| v.nodes_with(kind)))
     }
 
     /// Live nodes of `ty` under top-level `root` (engine.md §3.2): O(matches
     /// in root) and keyed by `Key::In(root, ty)`.
     pub fn nodes_of_type_in(self, root: NodeId, ty: TypeId) -> Vec<NodeId> {
         self.note(crate::structure::Key::In(root, ty));
+        if let Some(views) = self.views {
+            let mut out: Vec<NodeId> = match self.scoped {
+                Some(scoped) => scoped
+                    .by_type
+                    .get(&(root, ty))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|id| !id.is_expanded())
+                    .collect(),
+                None => self
+                    .doc
+                    .nodes_of_type(ty)
+                    .filter(|&id| !id.is_expanded() && !self.is_absent(id) && self.top_root(id) == Some(root))
+                    .collect(),
+            };
+            out.extend(views.nodes_of_type_in(root, ty));
+            out.sort();
+            return out;
+        }
         if let Some(scoped) = self.scoped {
             return scoped.by_type.get(&(root, ty)).into_iter().flatten().copied().collect();
         }
@@ -1393,6 +1552,26 @@ impl<'a> Tree<'a> {
     /// O(matches in root) and keyed by `Key::With(root, kind)`.
     pub fn nodes_with_in(self, root: NodeId, kind: FacetKind) -> Vec<NodeId> {
         self.note(crate::structure::Key::With(root, kind));
+        if let Some(views) = self.views {
+            let mut out: Vec<NodeId> = match self.scoped {
+                Some(scoped) => scoped
+                    .by_facet
+                    .get(&(root, kind))
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(|id| !id.is_expanded())
+                    .collect(),
+                None => self
+                    .doc
+                    .nodes_with(kind)
+                    .filter(|&id| !id.is_expanded() && !self.is_absent(id) && self.top_root(id) == Some(root))
+                    .collect(),
+            };
+            out.extend(views.nodes_with_in(root, kind));
+            out.sort();
+            return out;
+        }
         if let Some(scoped) = self.scoped {
             return scoped.by_facet.get(&(root, kind)).into_iter().flatten().copied().collect();
         }
@@ -1404,6 +1583,11 @@ impl<'a> Tree<'a> {
 
     /// Top-level root of live node `id`, if live.
     pub fn top_root(self, id: NodeId) -> Option<NodeId> {
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.top_root(id);
+        }
         if let Some(scoped) = self.scoped {
             return scoped.root_of.get(&id).copied();
         }
@@ -1414,10 +1598,15 @@ impl<'a> Tree<'a> {
         Some(cur.id)
     }
 
-    /// Effective facet at the active point (sparse `ResolvedStore`, 0 heap
-    /// allocations): a recording tree notes the whole facet (§3.1).
+    /// Effective facet at the active point (sparse `ResolvedStore` / virtual
+    /// `ViewRegistry`, 0 heap allocations): a recording tree notes the whole facet (§3.1).
     pub fn facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
         self.note(crate::structure::Key::Facet(id, kind));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.facet(id, kind);
+        }
         if let Some(r) = self.resolved {
             if r.absent.contains(&id) {
                 return None;
@@ -1429,16 +1618,26 @@ impl<'a> Tree<'a> {
         self.at(id).facet(id, kind)
     }
 
-    /// Unpatched base facet from the authored document (for inspector and drag
-    /// planner, engine.md §2.3, EN-4).
+    /// Unpatched base facet from the authored document or template (for inspector
+    /// and drag planner, engine.md §2.3, EN-4/EN-5a).
     pub fn base_facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
         self.note(crate::structure::Key::Facet(id, kind));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.base_facet(id, kind);
+        }
         self.at(id).facet(id, kind)
     }
 
-    /// Unpatched base leaf slot from the authored document (EN-4).
+    /// Unpatched base leaf slot from the authored document or template (EN-4/EN-5a).
     pub fn base_leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
         self.note(crate::structure::Key::Facet(id, path.facet));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.base_facet(id, path.facet)?.get(path.field);
+        }
         self.at(id).leaf(id, path)
     }
 
@@ -1468,7 +1667,14 @@ impl<'a> Tree<'a> {
             return None;
         }
         let target = crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) };
-        let win = self.doc.patches().winner_session(session, point, target)?;
+        let win = if leaf.node.is_expanded()
+            && let Some(views) = self.views
+            && let Some(coord) = views.coord_of(leaf.node)
+        {
+            self.doc.patches().winner_session_at_view(session, point, coord, target)?
+        } else {
+            self.doc.patches().winner_session(session, point, target)?
+        };
         win.entries.get(&target)?.as_slot()?.constant()
     }
 
@@ -1476,6 +1682,11 @@ impl<'a> Tree<'a> {
     /// that asks only this is not reached by a write to the facet's fields.
     pub fn has(self, id: NodeId, kind: FacetKind) -> bool {
         self.note(crate::structure::Key::FacetSet(id));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.has(id, kind);
+        }
         if let Some(r) = self.resolved {
             if r.absent.contains(&id) {
                 return false;
@@ -1489,6 +1700,11 @@ impl<'a> Tree<'a> {
 
     pub fn get<T: LeafStruct>(self, id: NodeId) -> Option<&'a T> {
         self.note(crate::structure::Key::Facet(id, T::KIND));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.facet(id, T::KIND).and_then(T::unwrap_ref);
+        }
         if let Some(r) = self.resolved {
             if r.absent.contains(&id) {
                 return None;
@@ -1502,6 +1718,32 @@ impl<'a> Tree<'a> {
 
     /// All effective facets of a node at the active point, in kind order.
     pub fn facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            if self.rec.is_some() {
+                self.note(crate::structure::Key::FacetSet(id));
+            }
+            return match views.facets_of(id) {
+                crate::engine::views::VirtualFacets::Empty => FacetsIter::Empty,
+                crate::engine::views::VirtualFacets::Borrowed(slice) => {
+                    if self.rec.is_some() {
+                        for f in slice {
+                            self.note(crate::structure::Key::Facet(id, f.kind()));
+                        }
+                    }
+                    FacetsIter::Slice(slice.iter())
+                }
+                crate::engine::views::VirtualFacets::Resolved(map) => {
+                    if self.rec.is_some() {
+                        for &k in map.keys() {
+                            self.note(crate::structure::Key::Facet(id, k));
+                        }
+                    }
+                    FacetsIter::Resolved(map.values())
+                }
+            };
+        }
         if let Some(r) = self.resolved {
             if r.absent.contains(&id) {
                 if self.rec.is_some() {
@@ -1530,6 +1772,11 @@ impl<'a> Tree<'a> {
 
     pub fn leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
         self.note(crate::structure::Key::Facet(id, path.facet));
+        if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            return views.leaf(id, path);
+        }
         if let Some(r) = self.resolved {
             if r.absent.contains(&id) {
                 return None;
@@ -1547,12 +1794,16 @@ impl<'a> Tree<'a> {
         self.unkeyed("bound_slots");
         let resolved = self.resolved.filter(|r| !r.is_empty());
         let mut out: Vec<(Leaf, &'a Expr)> = Vec::new();
-        if let Some(r) = resolved {
+        if resolved.is_some() || self.views.is_some() {
+            let has_views = self.views.is_some();
             for n in self.both().flat_map(Document::live_nodes) {
-                if r.absent.contains(&n.id) {
+                if has_views && n.id.is_expanded() {
                     continue;
                 }
-                if let Some(map) = r.facets.get(&n.id) {
+                if resolved.is_some_and(|r| r.absent.contains(&n.id)) {
+                    continue;
+                }
+                if let Some(map) = resolved.and_then(|r| r.facets.get(&n.id)) {
                     for f in map.values() {
                         for field in f.field_names() {
                             if let Some(e) = f.get(field).and_then(Slot::expr) {
@@ -1570,7 +1821,12 @@ impl<'a> Tree<'a> {
                     }
                 }
             }
-            out.sort_by_key(|(l, _)| (l.path.facet, l.node, l.path.field));
+            if let Some(views) = self.views {
+                out.extend(views.bound_slots());
+            }
+            // Stable sort by (facet, node) preserves each facet's declared
+            // `field_names()` order, matching `Document::bound_slots_of`.
+            out.sort_by_key(|(l, _)| (l.path.facet, l.node));
             return out.into_iter();
         }
         let kinds: BTreeSet<FacetKind> = self.both().flat_map(|d| d.raw_facets().keys().copied()).collect();
@@ -1624,11 +1880,17 @@ impl<'a> Tree<'a> {
 
     pub fn relation(self, id: RelationId) -> Option<&'a Relation> {
         self.note(crate::structure::Key::Relation(id));
-        let rel = match self.copies {
-            Some(c) if id.is_expanded() => c.relation(id),
-            _ => self.doc.relation(id),
+        let rel = if id.is_expanded()
+            && let Some(views) = self.views
+        {
+            views.relation(id)
+        } else {
+            match self.copies {
+                Some(c) if id.is_expanded() => c.relation(id),
+                _ => self.doc.relation(id),
+            }
         }?;
-        if self.resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)) {
+        if self.is_absent(rel.from) || self.is_absent(rel.to) {
             return None;
         }
         Some(rel)
@@ -1642,29 +1904,35 @@ impl<'a> Tree<'a> {
 
     pub fn relations(self) -> impl Iterator<Item = &'a Relation> + 'a {
         self.unkeyed("relations");
-        let resolved = self.resolved;
+        let has_views = self.views.is_some();
         self.both()
             .flat_map(Document::relations)
-            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
+            .filter(move |rel| !has_views || !rel.id.is_expanded())
+            .chain(self.views.into_iter().flat_map(|v| v.relations()))
+            .filter(move |rel| !self.is_absent(rel.from) && !self.is_absent(rel.to))
     }
 
     /// Edges leaving `id`, from either document: an authored relation can
     /// end at a copy and a derived one start at an authored node.
     pub fn relations_from(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        let resolved = self.resolved;
+        let has_views = self.views.is_some();
         self.both()
             .flat_map(move |d| d.relations_from(id))
-            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
+            .filter(move |rel| !has_views || !rel.id.is_expanded())
+            .chain(self.views.into_iter().flat_map(move |v| v.relations_from(id)))
+            .filter(move |rel| !self.is_absent(rel.from) && !self.is_absent(rel.to))
     }
 
     /// Edges arriving at `id`: "what drives this node" (doc 05 §3.1).
     pub fn relations_to(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        let resolved = self.resolved;
+        let has_views = self.views.is_some();
         self.both()
             .flat_map(move |d| d.relations_to(id))
-            .filter(move |rel| !resolved.is_some_and(|r| r.absent.contains(&rel.from) || r.absent.contains(&rel.to)))
+            .filter(move |rel| !has_views || !rel.id.is_expanded())
+            .chain(self.views.into_iter().flat_map(move |v| v.relations_to(id)))
+            .filter(move |rel| !self.is_absent(rel.from) && !self.is_absent(rel.to))
     }
 }
 
@@ -1758,22 +2026,14 @@ mod tests {
         assert!(store.tree().nodes_with_in(a, FacetKind::Layout).is_empty());
     }
 
-    /// Recording tree enforces keys: reading `version()` or `scope_stamp()`
-    /// under a recording tree fails a debug assertion (EN-1).
+    /// Recording tree enforces keys: reading `version()` under a recording
+    /// tree fails a debug assertion (EN-1).
     #[test]
     #[should_panic(expected = "a recording tree has no key for `version`")]
     fn recording_tree_rejects_unkeyed_version() {
         let doc = Document::new();
         let rec = crate::structure::Recorder::default();
         let _ = Tree::authored_only(&doc).recording(&rec).version();
-    }
-
-    #[test]
-    #[should_panic(expected = "a recording tree has no key for `scope_stamp`")]
-    fn recording_tree_rejects_unkeyed_scope_stamp() {
-        let doc = Document::new();
-        let rec = crate::structure::Recorder::default();
-        let _ = Tree::authored_only(&doc).recording(&rec).scope_stamp(NodeId::authored(0, 1));
     }
 
     /// Choke-point canary sweep (EN-1): every mutation choke point emits keys

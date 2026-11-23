@@ -99,8 +99,20 @@ impl Delta {
 }
 
 impl Owners {
+    /// Notify the template cache of touched structural keys (EN-5a).
+    pub(crate) fn note_touched(&mut self, keys: &[crate::structure::Key]) {
+        self.templates.note_touched(keys);
+    }
+
+    /// Clear cached templates after a transaction rollback (EN-5a).
+    pub(crate) fn clear_templates(&mut self) {
+        self.templates.clear();
+    }
+
     /// Expand `which` again in `doc`: the ops applied, and what to record.
     pub(crate) fn expand(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
+        let tkeys = docs.drain_template_touched();
+        self.templates.note_touched(&tkeys);
         let Which::Some(mut todo) = which else { return self.expand_all(docs, stamp, counts) };
         // Owners whose last expansion failed in part are tried again: what
         // failed may depend on something outside them that has changed.
@@ -144,6 +156,8 @@ impl Owners {
     /// want meets the budget or a nesting limit. An op that fails to apply
     /// is repaired by expanding its owner whole, in the same call.
     pub(crate) fn expand_items(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+        let tkeys = docs.drain_template_touched();
+        self.templates.note_touched(&tkeys);
         // The whole-document rules (`expand`): any owner's failed or cut
         // expansion is tried again on every update, and past the budget
         // everything expands in id order. Neither is this path's.
@@ -254,7 +268,6 @@ impl Owners {
     }
 
     /// The templates compiled so far.
-    #[cfg(feature = "differential")]
     pub(crate) fn templates(&self) -> &TemplateCache {
         &self.templates
     }

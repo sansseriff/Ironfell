@@ -159,10 +159,22 @@ js-sys = "0.3.78"
 [dev-dependencies]
 iron_document = { path = "./src/iron_document", features = ["work"] }
 
+# Optimise third-party crates (taffy, parley, kurbo, serde_json, …) in dev and
+# test builds so tests aren't bottlenecked on unoptimised dependency code;
+# incremental rebuilds of workspace crates stay fast.
+[profile.dev.package."*"]
+opt-level = 2
+
 # The patch algebra's property tests enumerate every point of 10,000 scripts
 # per property: optimised even in a debug build (plans/handoff-patches.md PT-3).
 [profile.dev.package.iron_patch]
 opt-level = 2
+
+# Light optimisation for `cargo test` while keeping debug-assertions,
+# overflow-checks, debuginfo and incremental compilation on.
+[profile.test]
+opt-level = 1
+codegen-units = 256
 
 [profile.wasm-release]
 inherits = "release"

@@ -56,7 +56,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `snapping.txt` | ~30 s |
 | `canvas-grid.txt` (`GPU=1`): grid snapping, text edit under a pan, token rebinding, grid opacity | ~15 s (15.2 s, 2026-11-11) |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, after a facet change, worktree-local cache | ~1 min (1m 07s, 2026-11-11) |
-| ⏱ `cargo test -p iron_document --features differential --target aarch64-apple-darwin`: the suite through the differential facade (reactive-engine handoff §3) | ~6 min warm, debug (5m 58s, 2026-11-21; 2m 38s, 2m 44s, 2026-11-18): `observing_part_of_the_time_changes_nothing_once_all_is_observed` alone takes ~3.5 min since the native cells (RE-5.3 on; one seed is up to 22 s), and four tests take 45–55 s each; skipping all five (`--skip observing_part_of_the_time_changes_nothing --skip two_hundred_random_scripts --skip every_page_builds_in_one_transaction --skip a_plot_s_new_tick_writes_nothing_outside_it --skip sibling_order_survives_many_inserts`) leaves about 20 s of tests |
+| `cargo test -p iron_document --features differential --target aarch64-apple-darwin` (or `--features structure-oracle` with `IRON_OWNER_CHECK=1`): the full suite through the differential facade | ~27 s warm, all 510 tests with no skips (26.8 s, 2026-11-22, after `[profile.dev.package."*"] opt-level = 2`, `[profile.test] opt-level = 1`, and threaded `observing_part_of_the_time`; was 5m 58s unoptimised) |
 | `cargo test -p iron_document --release --features differential --target aarch64-apple-darwin --test suite differential_random::ten_thousand -- --ignored` | ~4.5 min (4m 33s, 2026-11-18) |
 | ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
 | ⏱ `differential_random::observing_part_of_the_time_over_a_thousand_seeds` (release, `--features differential`, `--ignored`): §8.8 over 1,000 seeds, one test so one thread | ~9 min (537 s at load average 16, 2026-11-20) |
@@ -81,7 +81,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `slider.ts`, each DPR | ~18–22 s (2026-11-16; includes hover and animation pixel checks) |
 | `narrative-resize.ts` | ~5–10 s |
 | `timeline.txt` | ~30 s |
-| `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~30–50 s (31 s, 50 s, 2026-11-18). The integration tests are one binary, `suite` (plus `fonts` and `instance_cost`), so a change relinks one test executable, not ~60; filter by module, `--test suite contexts::` |
+| `cargo test -p iron_document --target aarch64-apple-darwin`, warm after an `iron_document` change | ~5–10 s warm (suite runs in 1.7 s, 2026-11-22; was 31–50 s before `[profile.test]` optimisation). The integration tests are one binary, `suite` (plus `fonts` and `instance_cost`), so a change relinks one test executable, not ~60; filter by module, `--test suite contexts::` |
 | `cargo test -p iron_document --target aarch64-apple-darwin`, cold isolated document-test cache | ~15 s (14.42 s, 2026-11-03) |
 | `agent-vision.ts`, one browser backend/runtime/DPR | ~3–5 s warm; 29.5 s with a cold worktree GPU capture (2026-11-10) |
 | `image-usability-check.ts`, one DPR (pill hover, SVG and HEIC attachments) | ~5–12 s (2026-11-10) |

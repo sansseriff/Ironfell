@@ -121,11 +121,11 @@ impl CellId {
 pub enum NativeKey {
     /// An island of the across/through network, by its lowest unknown.
     Island(Leaf),
-    /// The layout of a structural root (`layout::structural_roots`).
+    /// The layout of a structural root (`layout::make_root`).
     Layout(NodeId),
-    /// The parts pinned in resized pictures (`layout::constrained`), for
-    /// the whole document.
-    Pins,
+    /// The parts pinned in resized pictures (`layout::constrained_of`) not
+    /// held by any layout root, scoped to one top-level root.
+    Pins(NodeId),
     /// A drawn repeat or conditional: what its items are settled from
     /// (`Store::settle_repeats`).
     Repeat(NodeId),
@@ -142,9 +142,8 @@ impl NativeKey {
     fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
-            NativeKey::Layout(n) | NativeKey::Repeat(n) | NativeKey::Cluster(n) => n,
+            NativeKey::Layout(n) | NativeKey::Pins(n) | NativeKey::Repeat(n) | NativeKey::Cluster(n) => n,
             NativeKey::Clusters => NodeId::from_raw(0),
-            NativeKey::Pins => NodeId::from_raw(0),
             #[cfg(test)]
             NativeKey::Test(n, _) => n,
         }
@@ -452,6 +451,10 @@ pub(crate) struct Glide {
     pub floating: Option<NodeId>,
     /// Where layout last put each placement.
     targets: BTreeMap<Leaf, Value>,
+    /// The target leaves recorded for each layout native, so replacing or
+    /// dropping one updates `targets` in O(|native|) instead of sweeping the
+    /// whole map.
+    targets_by: BTreeMap<NativeKey, Vec<Leaf>>,
     anims: BTreeMap<NodeId, Anim>,
 }
 
@@ -2470,13 +2473,23 @@ impl Reactive {
             .filter(|(l, v)| g.targets.get(l) != Some(*v))
             .map(|(l, _)| *l)
             .collect();
-        for l in g.targets.keys() {
-            if mine.contains(&l.node) && !values.contains_key(l) {
-                settled_changed.push(*l);
+        let prev = g.targets_by.remove(&k).unwrap_or_default();
+        for l in prev {
+            if !values.contains_key(&l)
+                && self.owned.get(&l).is_none_or(|o| *o == k)
+                && g.targets.remove(&l).is_some()
+            {
+                settled_changed.push(l);
             }
         }
-        g.targets.retain(|l, _| !mine.contains(&l.node));
-        g.targets.extend(values.iter().map(|(l, v)| (*l, v.clone())));
+        let mut next = Vec::with_capacity(values.len());
+        for (l, v) in &values {
+            g.targets.insert(*l, v.clone());
+            next.push(*l);
+        }
+        if !next.is_empty() {
+            g.targets_by.insert(k, next);
+        }
         g.apply(&mut values, &|n| mine.contains(&n));
         (values, settled_changed)
     }
@@ -2849,8 +2862,19 @@ impl Reactive {
         let mut runs_of: BTreeMap<NativeKey, u64> = BTreeMap::new();
         self.structure += 1;
         self.wired = crate::stamp();
-        for (k, _) in &batch {
+        for (k, new) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
+            if new.is_none()
+                && old.rule.producer() == ProducerId::LAYOUT
+                && let Some(g) = self.glide.as_mut()
+                && let Some(prev) = g.targets_by.remove(k)
+            {
+                for l in prev {
+                    if !incoming.contains_key(&l) {
+                        g.targets.remove(&l);
+                    }
+                }
+            }
             let cell = CellId::Native(*k);
             for r in &old.reads {
                 if let Some(ds) = self.dependents.get_mut(r) {

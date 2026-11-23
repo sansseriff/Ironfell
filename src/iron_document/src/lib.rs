@@ -261,13 +261,12 @@ enum SettleMode {
 /// Typed read-only context for Stage 2 makers (engine.md §3.3). Holds only a
 /// recording `Tree` and the contexts library — by type, a maker cannot read
 /// evaluated leaves from `Reactive`.
-#[allow(dead_code)]
 pub(crate) struct MakerCx<'a> {
     doc: Tree<'a>,
+    #[allow(dead_code)]
     contexts: &'a contexts::Library,
 }
 
-#[allow(dead_code)]
 impl<'a> MakerCx<'a> {
     pub(crate) fn new(doc: Tree<'a>, rec: &'a structure::Recorder, contexts: &'a contexts::Library) -> MakerCx<'a> {
         MakerCx { doc: doc.recording(rec), contexts }
@@ -277,8 +276,68 @@ impl<'a> MakerCx<'a> {
         self.doc
     }
 
+    #[allow(dead_code)]
     pub(crate) fn contexts(&self) -> &'a contexts::Library {
         self.contexts
+    }
+}
+
+/// Per-top-level-root Stage 2 makers for `Layout` and `Pins` natives
+/// (engine.md §3.3, EN-2a). Each root's maker runs through `MakerCx`,
+/// recording `structure::Key` dependencies so only roots whose read keys
+/// were touched re-run.
+#[derive(Clone, Debug, Default)]
+struct LayoutMakers {
+    init: bool,
+    roots_dirty: bool,
+    dirty: BTreeSet<NodeId>,
+    keys_of: BTreeMap<NodeId, Vec<structure::Key>>,
+    readers: BTreeMap<structure::Key, BTreeSet<NodeId>>,
+    owned: BTreeMap<NodeId, Vec<graph::NativeKey>>,
+    runs_of: BTreeMap<NodeId, u64>,
+}
+
+impl LayoutMakers {
+    fn note_touched(&mut self, keys: &[structure::Key]) {
+        if !self.init {
+            return;
+        }
+        for &key in keys {
+            if key == structure::Key::Roots {
+                self.roots_dirty = true;
+            }
+            if let Some(roots) = self.readers.get(&key) {
+                self.dirty.extend(roots.iter().copied());
+            }
+        }
+    }
+
+    fn unindex(&mut self, root: NodeId) {
+        if let Some(old) = self.keys_of.remove(&root) {
+            for k in old {
+                if let Some(set) = self.readers.get_mut(&k) {
+                    set.remove(&root);
+                    if set.is_empty() {
+                        self.readers.remove(&k);
+                    }
+                }
+            }
+        }
+    }
+
+    fn set_keys(&mut self, root: NodeId, mut keys: Vec<structure::Key>) {
+        keys.sort();
+        keys.dedup();
+        if self.keys_of.get(&root).is_some_and(|old| *old == keys) {
+            return;
+        }
+        self.unindex(root);
+        for &k in &keys {
+            self.readers.entry(k).or_default().insert(root);
+        }
+        if !keys.is_empty() {
+            self.keys_of.insert(root, keys);
+        }
     }
 }
 
@@ -510,13 +569,9 @@ pub struct StoreCore {
     /// The across/through network as of a count of document
     /// writes (`Document::edits`): a cache.
     network: Option<(u64, std::sync::Arc<crate::port::Network>)>,
-    /// The structural roots, each with the nodes its layout covers; each
-    /// `use`'s pinned parts; the nodes structural changes shaped since the
-    /// last `sync_layout`; and the x-placed nodes of each root (for glide
-    /// specs). Kept, not found by a pass (DS-3b).
-    layout_roots: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
-    pinned_by_use: Option<BTreeMap<NodeId, BTreeSet<NodeId>>>,
-    layout_touched: BTreeSet<NodeId>,
+    /// Per-root layout makers (Stage 2, engine.md §3.3), and the x-placed
+    /// nodes of each layout root (for glide specs).
+    layout_makers: LayoutMakers,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// The count of document writes the repeat natives were made for.
     /// The drawn repeats and conditionals, and each one's `each`, `count`,
@@ -653,9 +708,7 @@ impl StoreCore {
             repeats: self.repeats.clone(),
             item_memo: self.item_memo.clone(),
             network: self.network.clone(),
-            layout_roots: self.layout_roots.clone(),
-            pinned_by_use: self.pinned_by_use.clone(),
-            layout_touched: self.layout_touched.clone(),
+            layout_makers: self.layout_makers.clone(),
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
             drawn: self.drawn.clone(),
@@ -708,10 +761,6 @@ impl StoreCore {
         self.update_drawn(ops.iter().copied());
         let ops = ops.into_iter();
         let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
-        // The nodes a structural op made, moved, removed or reshaped, and
-        // their parents (the inverse ops name the old ones): what a layout
-        // whose subtree holds one must lay out again.
-        let mut shaped: BTreeSet<NodeId> = BTreeSet::new();
         let mut reparented = false;
         // Which `@name` readers to look at again: the names whose providers
         // a let or token made, removed, renamed or reflagged may move, and
@@ -746,30 +795,6 @@ impl StoreCore {
             None => doc.node(id).is_some_and(|n| matches!(n.ty.name(), "port" | "connection")) || doc.facet(id, FacetKind::Port).is_some() || doc.facet(id, FacetKind::Anchor).is_some(),
         };
         for op in ops {
-            match op {
-                Op::Create { id, parent, .. } => {
-                    shaped.insert(*id);
-                    shaped.extend(*parent);
-                }
-                Op::Reparent { id, parent, .. } => {
-                    reparented = true;
-                    shaped.insert(*id);
-                    shaped.extend(*parent);
-                }
-                Op::Delete { id } => {
-                    shaped.insert(*id);
-                    shaped.extend(gone.get(id).and_then(|w| w.parent).or_else(|| doc.live(*id).and_then(|n| n.parent)));
-                }
-                Op::Reorder { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
-                    shaped.insert(*id);
-                    shaped.extend(doc.live(*id).and_then(|n| n.parent));
-                }
-                Op::Link { rel } => {
-                    shaped.insert(rel.from);
-                    shaped.insert(rel.to);
-                }
-                Op::Unlink { .. } | Op::Set { .. } => {}
-            }
             rederive |= match op {
                 Op::Reparent { .. } | Op::Link { .. } | Op::Unlink { .. } => true,
                 Op::AddFacet { facet, .. } => derives(facet.kind()),
@@ -786,6 +811,7 @@ impl StoreCore {
                     nodes.insert(*id);
                 }
                 Op::Reparent { id, .. } => {
+                    reparented = true;
                     nodes.insert(*id);
                     under.push(*id);
                     // A let moved provides to its new siblings' readers.
@@ -877,14 +903,14 @@ impl StoreCore {
         if fresh {
             self.sync_islands(&net, false);
         }
-        self.layout_touched.extend(shaped.iter().copied());
-        self.sync_layout(false);
+        // Stage 2 -> Stage 3: consume touched keys from Docs, reconcile dirty
+        // per-root layout makers before priming keyed cells so updated layout
+        // outputs exist before this pass runs (engine.md §3.2, §3.3).
+        let keys = self.docs.take_touched();
+        self.layout_makers.note_touched(&keys);
+        self.sync_layout_makers(false);
         self.sync_repeats(false);
-        self.prime_layout(&shaped);
-        // What writes touched reaches keyed cells and leaf readers through
-        // the single write channel, now that layout's outputs are reconciled
-        // (engine.md §3.2).
-        let touched_leaves = self.reactive.prime_touched(self.docs.take_touched());
+        let touched_leaves = self.reactive.prime_touched(keys);
         // Constraints and their operands are structure to the grouping
         // and to validation: they look again when an op touched what they
         // read (DS-3b: not on every structural change). A reparent can move
@@ -1052,9 +1078,7 @@ impl StoreCore {
             repeat_natives: Default::default(),
             item_memo: Default::default(),
             network: None,
-            layout_roots: None,
-            pinned_by_use: None,
-            layout_touched: BTreeSet::new(),
+            layout_makers: LayoutMakers::default(),
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -2205,7 +2229,6 @@ impl StoreCore {
         if structural {
             self.regraph(ops.iter().chain(&undo));
         } else {
-            self.prime_reorders(ops.iter());
             self.prime_grouping(ops.iter());
             // Session constant writes also mark their leaves so the host sees
             // moved session nodes even with no readers (e.g. Latency view).
@@ -2961,7 +2984,7 @@ impl StoreCore {
             self.publish_state();
             self.solve_network();
             self.resolve_theme();
-            self.sync_layout(true);
+            self.sync_layout_makers(true);
             self.reactive.flush(Tree::of(&self.docs));
         }
         self.repeat_changes.clear();
@@ -3876,109 +3899,96 @@ impl StoreCore {
         }
     }
 
-    /// Make the layout natives (handoff §4.10, RE-5.4): one per structural
-    /// root, and the pins, keeping each that is as it would be made now.
-    fn sync_layout(&mut self, run: bool) {
-        // The first time, every structural root and pinned part; after
-        // that, the roots the nodes a structural change shaped belong to,
-        // and the uses among them (DS-3b: no pass over every group, table
-        // and use on each structural change).
-        let doc = Tree::of(&self.docs);
-        let use_ty = TypeId::lookup("use").expect("registered");
-        let (mut roots, mut pinned_by) = match (self.layout_roots.take(), self.pinned_by_use.take()) {
-            (Some(r), Some(p)) => (r, p),
-            _ => {
-                self.layout_touched.clear();
-                let roots: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
-                let pinned: BTreeMap<NodeId, BTreeSet<NodeId>> = doc.nodes_of_type(use_ty).map(|u| (u, layout::pinned_parts_of(doc, u))).filter(|(_, p)| !p.is_empty()).collect();
-                let all = layout::structural_roots(doc);
-                self.layout_touched.extend(all);
-                (roots, pinned)
-            }
-        };
-        let touched = std::mem::take(&mut self.layout_touched);
-        if touched.is_empty() {
-            self.layout_roots = Some(roots);
-            self.pinned_by_use = Some(pinned_by);
+    /// How many times top-level `root`'s layout maker has run (for locality
+    /// tests in EN-2a).
+    #[doc(hidden)]
+    pub fn layout_maker_runs(&self, root: NodeId) -> u64 {
+        self.layout_makers.runs_of.get(&root).copied().unwrap_or(0)
+    }
+
+    /// Reconcile per-root layout and pins natives for every dirty top-level
+    /// root (Stage 2, engine.md §3.3, EN-2a). Each dirty root runs
+    /// `layout::make_root` through `MakerCx`, recording its `structure::Key`
+    /// set so future edits only re-run roots whose read keys were touched.
+    fn sync_layout_makers(&mut self, run: bool) {
+        if !self.layout_makers.init {
+            self.layout_makers.init = true;
+            self.layout_makers.roots_dirty = true;
+        }
+        if !self.layout_makers.roots_dirty && self.layout_makers.dirty.is_empty() {
             return;
         }
-        // The uses whose pinned parts may have changed: those touched, and
-        // the owners of copies touched.
-        let mut uses: BTreeSet<NodeId> = BTreeSet::new();
-        for &t in &touched {
-            if doc.node(t).is_some_and(|n| n.ty == use_ty) {
-                uses.insert(t);
-            }
-            if let Some((owner, _)) = t.expanded_parts()
-                && doc.node(owner).is_some_and(|n| n.ty == use_ty)
-            {
-                uses.insert(owner);
-            }
-        }
-        let mut changed_parts: BTreeSet<NodeId> = BTreeSet::new();
-        for u in uses {
-            let now = layout::pinned_parts_of(doc, u);
-            let was = pinned_by.remove(&u).unwrap_or_default();
-            changed_parts.extend(now.symmetric_difference(&was).copied());
-            if !now.is_empty() {
-                pinned_by.insert(u, now);
-            }
-        }
-        let pinned: BTreeSet<NodeId> = pinned_by.values().flatten().copied().collect();
-        // The top of the chain of placing nodes above `n`: the structural
-        // root whose layout covers it.
-        let top = |n: NodeId| -> Option<NodeId> {
-            let mut at = if layout::lays_out(doc, n) { Some(n) } else { doc.live(n).and_then(|x| x.parent) };
-            let mut found = None;
-            while let Some(x) = at.filter(|&x| layout::lays_out(doc, x)) {
-                found = Some(x);
-                at = doc.live(x).and_then(|y| y.parent);
-            }
-            found
-        };
-        // A node's children too: whether a child is a root depends on
-        // whether its parent lays out, so a `layout` facet added to or taken
-        // from `t` makes or unmakes the roots just below it.
-        let mut candidates: BTreeSet<NodeId> = BTreeSet::new();
-        for &t in touched.iter().chain(&changed_parts) {
-            candidates.insert(t);
-            candidates.extend(top(t));
-            candidates.extend(doc.children(t).iter().copied());
-        }
-        let mut want: Vec<(graph::NativeKey, std::sync::Arc<dyn graph::Native>)> = Vec::new();
-        let mut drop: Vec<graph::NativeKey> = Vec::new();
-        let mut rebuilt: Vec<NodeId> = Vec::new();
-        for c in candidates {
-            let is_root = layout::lays_out(doc, c) && !doc.live(c).and_then(|x| x.parent).is_some_and(|p| layout::lays_out(doc, p));
-            let k = graph::NativeKey::Layout(c);
-            if is_root {
-                let n = layout::LayoutNative::new(doc, c, &pinned);
-                roots.insert(c, n.nodes());
-                rebuilt.push(c);
-                if self.reactive.native(k).and_then(|x| x.as_any().downcast_ref::<layout::LayoutNative>()) != Some(&n) {
-                    want.push((k, std::sync::Arc::new(n)));
+        let mut dropped: BTreeSet<graph::NativeKey> = BTreeSet::new();
+        if self.layout_makers.roots_dirty {
+            self.layout_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let removed: Vec<NodeId> = self.layout_makers.owned.keys().copied().filter(|r| !current.contains(r)).collect();
+            for r in removed {
+                self.layout_makers.unindex(r);
+                self.layout_makers.dirty.remove(&r);
+                if let Some(old) = self.layout_makers.owned.remove(&r) {
+                    dropped.extend(old);
                 }
-            } else if roots.remove(&c).is_some() || self.reactive.native(k).is_some() {
-                drop.push(k);
-                rebuilt.push(c);
+            }
+            for &r in &current {
+                if !self.layout_makers.owned.contains_key(&r) {
+                    self.layout_makers.dirty.insert(r);
+                }
             }
         }
-        // The pins of parts no layout holds.
-        let uncovered: BTreeSet<NodeId> = pinned.iter().copied().filter(|&p| top(p).is_none_or(|t| !roots.get(&t).is_some_and(|ns| ns.contains(&p)))).collect();
-        let pins = layout::PinsNative::new(&uncovered);
-        let keep_pins = !uncovered.is_empty();
-        if keep_pins && self.reactive.native(graph::NativeKey::Pins).and_then(|x| x.as_any().downcast_ref::<layout::PinsNative>()) != Some(&pins) {
-            want.push((graph::NativeKey::Pins, std::sync::Arc::new(pins)));
-        } else if !keep_pins && self.reactive.native(graph::NativeKey::Pins).is_some() {
-            drop.push(graph::NativeKey::Pins);
+        let dirty = std::mem::take(&mut self.layout_makers.dirty);
+        let mut wanted: BTreeMap<graph::NativeKey, layout::LayoutRule> = BTreeMap::new();
+        for root in dirty {
+            if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).live(root).and_then(|n| n.parent).is_some() {
+                // No longer a live top-level root (already dropped above if removed).
+                self.layout_makers.unindex(root);
+                if let Some(old) = self.layout_makers.owned.remove(&root) {
+                    dropped.extend(old);
+                }
+                continue;
+            }
+            *self.layout_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let want = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                layout::make_root(&cx, root)
+            };
+            self.layout_makers.set_keys(root, rec.into_inner());
+            if let Some(old) = self.layout_makers.owned.get(&root) {
+                for &k in old {
+                    if !want.contains_key(&k) {
+                        dropped.insert(k);
+                    }
+                }
+            }
+            let keys: Vec<graph::NativeKey> = want.keys().copied().collect();
+            self.layout_makers.owned.insert(root, keys);
+            wanted.extend(want);
         }
-        self.layout_roots = Some(roots);
-        self.pinned_by_use = Some(pinned_by);
         // Rooted, so a hidden composition stays laid out: an unrun native
         // claims nothing, so a host could take a placement first, and a
         // capture draws what no observer shows (handoff §4.10, RE-5.6).
-        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = drop.into_iter().map(|k| (k, None)).collect();
-        batch.extend(want.into_iter().map(|(k, n)| (k, Some((n, true)))));
+        let mut batch: Vec<(graph::NativeKey, Option<(std::sync::Arc<dyn graph::Native>, bool)>)> = Vec::new();
+        let mut rebuilt: Vec<NodeId> = Vec::new();
+        for (k, rule) in wanted {
+            let transferred = dropped.remove(&k);
+            if !rule.same_as(self.reactive.native(k)) {
+                if let graph::NativeKey::Layout(r) = k {
+                    rebuilt.push(r);
+                }
+                batch.push((k, Some((rule.into_arc(), true))));
+            } else if transferred
+                && let graph::NativeKey::Layout(r) = k
+            {
+                rebuilt.push(r);
+            }
+        }
+        for k in dropped {
+            if let graph::NativeKey::Layout(r) = k {
+                rebuilt.push(r);
+            }
+            batch.push((k, None));
+        }
         if !batch.is_empty() {
             self.reactive.set_natives(Tree::of(&self.docs), batch, run);
         }
@@ -3998,14 +4008,6 @@ impl StoreCore {
         if ops.into_iter().any(touches) {
             self.reactive.prime_natives([graph::NativeKey::Clusters]);
         }
-    }
-
-    /// A reorder that moved nothing else (not structural to the graph)
-    /// still changes how its parent lays out.
-    fn prime_reorders<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        let doc = Tree::of(&self.docs);
-        let shaped: BTreeSet<NodeId> = ops.filter_map(|op| match op { Op::Reorder { id, .. } => Some(*id), _ => None }).flat_map(|id| std::iter::once(id).chain(doc.live(id).and_then(|n| n.parent))).collect();
-        self.prime_layout(&shaped);
     }
 
     /// Make a repeat native for each drawn repeat and conditional, and drop
@@ -4036,56 +4038,101 @@ impl StoreCore {
         }
     }
 
-    /// The structure oracle (structure-in-the-graph.md §3.5): every keyed
-    /// layout that is up to date, laid out again from the store as it is
-    /// now, must give what its native claims, claim nothing more, and give
-    /// the same tables' grids. (A layout run has no errors to compare: it
-    /// always places.)
-    /// What a missed key leaves stale fails here, whatever primed it or
-    /// not. Skipped mid-glide, when claims are eased.
+    /// The structure oracle (engine.md §3.3, EN-2a):
+    /// 1. Every top-level root's live layout and pins natives must equal what
+    ///    a fresh `layout::make_root` produces (catching any missed maker key).
+    /// 2. Every up-to-date `Layout` and `Pins` native, re-run from the store
+    ///    as it is now, must match its claims and table grids (catching any
+    ///    missed cell key). Skipped mid-glide, when claims are eased.
     #[cfg(feature = "structure-oracle")]
     pub(crate) fn check_keyed_layouts(&self) -> Result<(), String> {
         if self.reactive.gliding() {
             return Ok(());
         }
         let doc = Tree::of(&self.docs);
-        for root in layout::structural_roots(doc) {
-            let k = graph::NativeKey::Layout(root);
-            let Some(native) = self.reactive.native(k) else { return Err(format!("layout root {root} has no native")) };
+        let mut expected: BTreeMap<graph::NativeKey, layout::LayoutRule> = BTreeMap::new();
+        for &root in doc.roots() {
+            let rec = structure::Recorder::default();
+            let cx = MakerCx::new(doc, &rec, self.contexts());
+            expected.extend(layout::make_root(&cx, root));
+        }
+        for k in self.reactive.native_keys() {
+            if matches!(k, graph::NativeKey::Layout(_) | graph::NativeKey::Pins(_)) && !expected.contains_key(&k) {
+                return Err(format!("stale layout/pins native {k:?} still present"));
+            }
+        }
+        for (k, rule) in expected {
+            let Some(native) = self.reactive.native(k) else {
+                return Err(format!("layout/pins native {k:?} is missing"));
+            };
+            if !rule.same_as(Some(native)) {
+                return Err(format!("layout/pins native {k:?} differs from fresh make_root"));
+            }
             if !native.keyed() || !self.reactive.native_current(k) {
                 continue;
             }
-            let (values, grids) = layout::lay_out(self, root);
-            for (leaf, v) in values.iter().filter(|(l, _)| native.outputs().contains(l)) {
-                let kept = self.reactive.signal(*leaf).filter(|s| s.producer == ProducerId::LAYOUT).map(|s| &s.value);
-                let same = match (kept, v) {
-                    (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
-                    (Some(a), b) => a == b,
-                    (None, _) => false,
-                };
-                if !same {
-                    return Err(format!("layout of {root}: {leaf} is {kept:?}, laid out again {v:?}"));
+            match rule {
+                layout::LayoutRule::Layout(ln) => {
+                    let root = match k {
+                        graph::NativeKey::Layout(r) => r,
+                        _ => unreachable!(),
+                    };
+                    let (mut values, grids) = layout::lay_out(self, root);
+                    if !ln.uses().is_empty() {
+                        values.extend(layout::constrained_of(self, ln.uses()));
+                    }
+                    let filtered: BTreeMap<Leaf, Value> = values.into_iter().filter(|(l, _)| native.outputs().contains(l)).collect();
+                    for (leaf, v) in &filtered {
+                        let kept = self.reactive.signal(*leaf).filter(|s| s.producer == ProducerId::LAYOUT).map(|s| &s.value);
+                        let same = match (kept, v) {
+                            (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
+                            (Some(a), b) => a == b,
+                            (None, _) => false,
+                        };
+                        if !same {
+                            return Err(format!("layout of {root}: {leaf} is {kept:?}, laid out again {v:?}"));
+                        }
+                    }
+                    if let Some(extra) = self.reactive.claims_of(k).into_iter().find(|l| !filtered.contains_key(l)) {
+                        return Err(format!("layout of {root} claims {extra}, which laying out again does not place"));
+                    }
+                    let kept = self.reactive.native_extra_of(k).and_then(|e| e.downcast_ref::<BTreeMap<NodeId, table::Grid>>());
+                    if kept.map_or(!grids.is_empty(), |g| *g != grids) {
+                        return Err(format!("layout of {root}: its tables' grids differ laid out again"));
+                    }
                 }
-            }
-            // Nor does it claim what laying out again no longer places (a
-            // child gone out of flow).
-            if let Some(extra) = self.reactive.claims_of(k).into_iter().find(|l| !values.contains_key(l)) {
-                return Err(format!("layout of {root} claims {extra}, which laying out again does not place"));
-            }
-            let kept = self.reactive.native_extra_of(k).and_then(|e| e.downcast_ref::<BTreeMap<NodeId, table::Grid>>());
-            if kept.map_or(!grids.is_empty(), |g| *g != grids) {
-                return Err(format!("layout of {root}: its tables' grids differ laid out again"));
+                layout::LayoutRule::Pins(pn) => {
+                    let filtered: BTreeMap<Leaf, Value> = layout::constrained_of(self, pn.uses()).into_iter().filter(|(l, _)| native.outputs().contains(l)).collect();
+                    for (leaf, v) in &filtered {
+                        let kept = self.reactive.signal(*leaf).filter(|s| s.producer == ProducerId::LAYOUT).map(|s| &s.value);
+                        let same = match (kept, v) {
+                            (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
+                            (Some(a), b) => a == b,
+                            (None, _) => false,
+                        };
+                        if !same {
+                            return Err(format!("pins {k:?}: {leaf} is {kept:?}, recomputed {v:?}"));
+                        }
+                    }
+                    if let Some(extra) = self.reactive.claims_of(k).into_iter().find(|l| !filtered.contains_key(l)) {
+                        return Err(format!("pins {k:?} claims {extra}, which recomputing does not place"));
+                    }
+                }
             }
         }
         Ok(())
     }
 
     /// Consume every key written to `Docs` since the last sync through the
-    /// single write channel (engine.md §3.2): marks keyed natives, optionally
-    /// marks session leaves for the host, and evaluates invalidated cells and
-    /// pending natives.
+    /// single write channel (engine.md §3.2): reconciles dirty Stage 2 layout
+    /// makers, marks keyed natives, optionally marks session leaves for the
+    /// host, and evaluates invalidated cells and pending natives.
     fn sync_touched(&mut self, mark_session: bool) {
         let keys = self.docs.take_touched();
+        if !keys.is_empty() {
+            self.layout_makers.note_touched(&keys);
+            self.sync_layout_makers(false);
+        }
         let leaves = if keys.is_empty() {
             Vec::new()
         } else {
@@ -4104,30 +4151,6 @@ impl StoreCore {
         } else {
             self.reactive.flush(doc);
         }
-    }
-
-    /// Run the pinned layouts whose subtree holds one of `shaped`, and the
-    /// pins: what reads `constrained`, which scans every `use`. An unpinned
-    /// layout is keyed (`Native::keyed`): what it read being written runs
-    /// it, with no rule (structure-in-the-graph.md DS-9).
-    fn prime_layout(&mut self, shaped: &BTreeSet<NodeId>) {
-        if shaped.is_empty() {
-            return;
-        }
-        let doc = Tree::of(&self.docs);
-        let gone = &self.docs.gone;
-        let mut keys: BTreeSet<graph::NativeKey> = BTreeSet::from([graph::NativeKey::Pins]);
-        for &n in shaped {
-            let mut at = Some(n);
-            while let Some(x) = at {
-                let k = graph::NativeKey::Layout(x);
-                if self.reactive.native(k).is_some_and(|n| !n.keyed()) {
-                    keys.insert(k);
-                }
-                at = doc.live(x).and_then(|l| l.parent).or_else(|| gone.get(&x).and_then(|w| w.parent));
-            }
-        }
-        self.reactive.prime_natives(keys);
     }
 
     /// Make the network's islands native cells, keeping each one whose
@@ -4286,7 +4309,6 @@ impl StoreCore {
             self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
             self.resample();
         } else {
-            self.prime_reorders(tx.ops.iter().chain(expanded.iter()));
             self.prime_grouping(tx.ops.iter().chain(expanded.iter()));
             self.sync_touched(false);
             // A clip's own leaves set (its `prop`, a key): every clip is

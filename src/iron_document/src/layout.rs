@@ -384,19 +384,6 @@ pub(crate) fn lays_out(doc: DocTree<'_>, n: NodeId) -> bool {
     })
 }
 
-/// The structural roots (reactive-engine handoff §4.10, RE-5.4): each live
-/// node that places its children and whose parent does not. Which of them
-/// a run lays out depends on values (a bound `layout.mode`, an absolute
-/// item); these do not, so a layout native is keyed by one.
-pub(crate) fn structural_roots(doc: DocTree<'_>) -> Vec<NodeId> {
-    let group = TypeId::lookup("group").expect("registered");
-    let table = TypeId::lookup("table").expect("registered");
-    doc.nodes_of_type(group)
-        .chain(doc.nodes_of_type(table))
-        .filter(|&n| lays_out(doc, n) && !doc.live(n).and_then(|x| x.parent).is_some_and(|p| lays_out(doc, p)))
-        .collect()
-}
-
 /// How many ancestors a node has.
 fn depth(doc: DocTree<'_>, n: NodeId) -> usize {
     std::iter::successors(doc.live(n).and_then(|x| x.parent), |p| doc.live(*p).and_then(|x| x.parent)).count()
@@ -536,17 +523,18 @@ pub(crate) fn lay_out(store: &dyn Reads, root: NodeId) -> (BTreeMap<Leaf, Value>
     (out, grids)
 }
 
-/// Figma's constraints (frame-constraints.md §3): on every picture of a
-/// resizable component at a size other than its template's, each part
-/// with a `constraints` facet placed for the new box. Read from the
-/// picture's own copy (so an instance's overrides count) and published on
-/// it; a bound leaf keeps its binding (one writer, F5).
-fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
-    use crate::facet::Constraints;
+/// Figma's constraints (frame-constraints.md §3): for each `use` in `uses`
+/// that is a resized picture of a component, each part with a `constraints`
+/// facet placed for the new box. Read from the picture's own copy (so an
+/// instance's overrides count) and published on it; a bound leaf keeps its
+/// binding (one writer, F5).
+pub(crate) fn constrained_of(store: &dyn Reads, uses: &[NodeId]) -> BTreeMap<Leaf, Value> {
     let doc = store.tree();
     let mut out = BTreeMap::new();
-    let use_ty = TypeId::lookup("use").expect("registered");
-    for u in doc.nodes_of_type(use_ty).filter(|&u| doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some()) {
+    for &u in uses {
+        if !doc.is_live(u) || !doc.has(u, FacetKind::Size) {
+            continue;
+        }
         let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
         let Some(def) = def else { continue };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
@@ -558,12 +546,13 @@ fn constrained(store: &dyn Reads) -> BTreeMap<Leaf, Value> {
             continue;
         }
         for &part in doc.children(t).iter() {
-            let Some(c) = doc.get::<Constraints>(part) else { continue };
+            if !doc.has(part, FacetKind::Constraints) {
+                continue;
+            }
             let Some(copy) = NodeId::expanded(u, part) else { continue };
             if !doc.is_live(copy) {
                 continue;
             }
-            let _ = c;
             // Read as values: an edit of a part's constraint moves its copy.
             let mode = |field: &str, d: &str| store.constant(part, path(field)).and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_else(|| d.to_owned());
             let (mh, mv) = (mode("constraints.horizontal", "left"), mode("constraints.vertical", "top"));
@@ -722,19 +711,22 @@ pub fn lay_out_count() -> u64 {
 const WRITES: [&str; 7] = ["transform2d.x", "transform2d.y", "size.w", "size.h", "text.sizing", "radius.rx", "radius.ry"];
 
 /// The pinned parts of one `use`: the parts of a resized picture that
-/// `constrained` places, copies of template parts with a `constraints`
+/// `constrained_of` places, copies of template parts with a `constraints`
 /// facet. Their placement is the pins', not a container's (it overrode the
 /// container's before natives). None unless the use is live and sized.
+/// Uses `has` (recording `Key::FacetSet`, not `Key::Facet`) for `Size` and
+/// `Constraints` so value edits to box sizes or constraint modes do not
+/// rerun the layout maker.
 pub(crate) fn pinned_parts_of(doc: DocTree<'_>, u: NodeId) -> BTreeSet<NodeId> {
     let mut out = BTreeSet::new();
     let use_ty = TypeId::lookup("use").expect("registered");
-    if doc.node(u).is_some_and(|n| n.ty == use_ty) && doc.is_live(u) && doc.facet(u, FacetKind::Size).is_some() {
+    if doc.node(u).is_some_and(|n| n.ty == use_ty) && doc.is_live(u) && doc.has(u, FacetKind::Size) {
         let def = crate::expand::main_definition(doc, u).or_else(|| crate::expand::use_entity(doc, u).and_then(|e| crate::expand::linked_definition(doc, e)));
         let Some(def) = def else { return out };
         let notation = doc.get::<crate::facet::Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).unwrap_or("free").to_owned();
         let Some(t) = crate::definition::template_of(doc, def, &notation) else { return out };
         for &part in doc.children(t).iter() {
-            if doc.facet(part, FacetKind::Constraints).is_some()
+            if doc.has(part, FacetKind::Constraints)
                 && let Some(copy) = NodeId::expanded(u, part)
                 && doc.is_live(copy)
             {
@@ -745,22 +737,21 @@ pub(crate) fn pinned_parts_of(doc: DocTree<'_>, u: NodeId) -> BTreeSet<NodeId> {
     out
 }
 
-/// A structural root's layout as a native cell (reactive-engine handoff
-/// §4.10, RE-5.4): it lays the root out through `lay_out`, reading every
-/// value through its `Cx`, and claims the placements. Its outputs are what
-/// it may write on the nodes that place children and their children, fixed
-/// by structure; a pinned part is the pins'.
+/// A structural root's layout as a native cell (engine.md §3.3, EN-2a): it
+/// lays the root out through `lay_out`, reading every value and structural
+/// key through its `Cx`, and claims the placements. Its outputs are fixed by
+/// structure; if any node in its subtree is a pinned part, `uses` names the
+/// owning `use` nodes so `constrained_of` runs keyed with no document scan.
 #[derive(Debug, PartialEq)]
 pub(crate) struct LayoutNative {
     root: NodeId,
     outputs: BTreeSet<Leaf>,
-    /// Whether a pinned part is among its nodes: its pins are its own, over
-    /// what it lays out (they overrode a container's before natives).
-    pins: bool,
+    /// The `use` nodes whose pinned parts lie in `outputs` (sorted, deduped).
+    uses: Vec<NodeId>,
 }
 
 impl LayoutNative {
-    pub(crate) fn new(doc: DocTree<'_>, root: NodeId, pinned: &BTreeSet<NodeId>) -> LayoutNative {
+    pub(crate) fn new(doc: DocTree<'_>, root: NodeId, pinned_owner: &BTreeMap<NodeId, NodeId>) -> (LayoutNative, BTreeSet<NodeId>) {
         let mut nodes = BTreeSet::new();
         let mut stack = vec![root];
         while let Some(n) = stack.pop() {
@@ -777,14 +768,17 @@ impl LayoutNative {
                 }
             }
         }
-        let pins = nodes.iter().any(|n| pinned.contains(n));
-        let outputs = nodes.into_iter().flat_map(|n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect();
-        LayoutNative { root, outputs, pins }
+        let mut uses: Vec<NodeId> = nodes.iter().filter_map(|n| pinned_owner.get(n).copied()).collect();
+        uses.sort();
+        uses.dedup();
+        let writes: [LeafPath; 7] = WRITES.map(path);
+        let outputs = nodes.iter().copied().flat_map(|n| writes.into_iter().map(move |path| Leaf { node: n, path })).collect();
+        (LayoutNative { root, outputs, uses }, nodes)
     }
 
-    /// The nodes it may write.
-    pub(crate) fn nodes(&self) -> BTreeSet<NodeId> {
-        self.outputs.iter().map(|l| l.node).collect()
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn uses(&self) -> &[NodeId] {
+        &self.uses
     }
 }
 
@@ -798,20 +792,16 @@ impl crate::graph::Native for LayoutNative {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    /// An unpinned layout reads its subtree through a recording tree and
-    /// runs again when what it read is written (structure-in-the-graph.md
-    /// DS-9); a pinned one's `constrained` scans every `use`, and keeps
-    /// `prime_layout`.
     fn keyed(&self) -> bool {
-        !self.pins
+        true
     }
     fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
         // Text measures through the engine's fonts.
         let _ = cx.input::<u64>(crate::graph::InputKey::Fonts);
         let (mut values, grids) = lay_out(&*cx, self.root);
         debug_assert!(values.keys().all(|l| self.outputs.contains(l)), "layout of {} wrote outside its outputs", self.root);
-        if self.pins {
-            values.extend(constrained(&*cx));
+        if !self.uses.is_empty() {
+            values.extend(constrained_of(&*cx, &self.uses));
         }
         // A table whose tracks moved redraws its lines.
         let columns: LeafPath = path("table.columns");
@@ -825,16 +815,28 @@ impl crate::graph::Native for LayoutNative {
     }
 }
 
-/// `constrained` as a native cell, for the pinned parts no layout native
-/// holds.
+/// `constrained_of` as a native cell, scoped to one top-level root, for the
+/// pinned parts under that root no layout native holds.
 #[derive(Debug, PartialEq)]
 pub(crate) struct PinsNative {
+    root: NodeId,
+    uses: Vec<NodeId>,
     outputs: BTreeSet<Leaf>,
 }
 
 impl PinsNative {
-    pub(crate) fn new(pinned: &BTreeSet<NodeId>) -> PinsNative {
-        PinsNative { outputs: pinned.iter().flat_map(|&n| WRITES.iter().map(move |w| Leaf { node: n, path: path(w) })).collect() }
+    pub(crate) fn new(root: NodeId, uses: Vec<NodeId>, pinned: &BTreeSet<NodeId>) -> PinsNative {
+        let writes: [LeafPath; 7] = WRITES.map(path);
+        PinsNative {
+            root,
+            uses,
+            outputs: pinned.iter().copied().flat_map(|node| writes.into_iter().map(move |path| Leaf { node, path })).collect(),
+        }
+    }
+
+    #[cfg(feature = "structure-oracle")]
+    pub(crate) fn uses(&self) -> &[NodeId] {
+        &self.uses
     }
 }
 
@@ -848,7 +850,80 @@ impl crate::graph::Native for PinsNative {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
-        Ok(constrained(&*cx).into_iter().filter(|(l, _)| self.outputs.contains(l)).collect())
+    fn keyed(&self) -> bool {
+        true
     }
+    fn compute(&self, cx: &mut crate::graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, crate::graph::Failure> {
+        Ok(constrained_of(&*cx, &self.uses).into_iter().filter(|(l, _)| self.outputs.contains(l)).collect())
+    }
+}
+
+/// A native produced by the per-root layout maker (`make_root`).
+#[derive(Debug, PartialEq)]
+pub(crate) enum LayoutRule {
+    Layout(LayoutNative),
+    Pins(PinsNative),
+}
+
+impl LayoutRule {
+    pub(crate) fn same_as(&self, existing: Option<&dyn crate::graph::Native>) -> bool {
+        let Some(existing) = existing else { return false };
+        match self {
+            LayoutRule::Layout(n) => existing.as_any().downcast_ref::<LayoutNative>() == Some(n),
+            LayoutRule::Pins(n) => existing.as_any().downcast_ref::<PinsNative>() == Some(n),
+        }
+    }
+
+    pub(crate) fn into_arc(self) -> std::sync::Arc<dyn crate::graph::Native> {
+        match self {
+            LayoutRule::Layout(n) => std::sync::Arc::new(n),
+            LayoutRule::Pins(n) => std::sync::Arc::new(n),
+        }
+    }
+}
+
+/// Stage 2 layout maker for one top-level root (engine.md §3.3, EN-2a):
+/// reads only through `MakerCx`'s recording `Tree` and scoped indexes, and
+/// returns the exact set of `Layout(_)` and `Pins(root)` natives for `root`.
+pub(crate) fn make_root(cx: &crate::MakerCx<'_>, root: NodeId) -> BTreeMap<crate::graph::NativeKey, LayoutRule> {
+    let doc = cx.tree();
+    let table_ty = TypeId::lookup("table").expect("registered");
+    let use_ty = TypeId::lookup("use").expect("registered");
+
+    let mut pinned_owner: BTreeMap<NodeId, NodeId> = BTreeMap::new();
+    for u in doc.nodes_of_type_in(root, use_ty) {
+        for part in pinned_parts_of(doc, u) {
+            pinned_owner.insert(part, u);
+        }
+    }
+
+    let mut roots: BTreeSet<NodeId> = BTreeSet::new();
+    for n in doc.nodes_with_in(root, FacetKind::Layout).into_iter().chain(doc.nodes_of_type_in(root, table_ty)) {
+        if lays_out(doc, n) && !doc.live(n).and_then(|x| x.parent).is_some_and(|p| lays_out(doc, p)) {
+            roots.insert(n);
+        }
+    }
+
+    let mut out: BTreeMap<crate::graph::NativeKey, LayoutRule> = BTreeMap::new();
+    let mut covered: BTreeSet<NodeId> = BTreeSet::new();
+    for r in roots {
+        let (native, nodes) = LayoutNative::new(doc, r, &pinned_owner);
+        covered.extend(nodes);
+        out.insert(crate::graph::NativeKey::Layout(r), LayoutRule::Layout(native));
+    }
+
+    let mut uncovered: BTreeSet<NodeId> = BTreeSet::new();
+    let mut pin_uses: Vec<NodeId> = Vec::new();
+    for (&part, &u) in &pinned_owner {
+        if !covered.contains(&part) {
+            uncovered.insert(part);
+            pin_uses.push(u);
+        }
+    }
+    if !uncovered.is_empty() {
+        pin_uses.sort();
+        pin_uses.dedup();
+        out.insert(crate::graph::NativeKey::Pins(root), LayoutRule::Pins(PinsNative::new(root, pin_uses, &uncovered)));
+    }
+    out
 }

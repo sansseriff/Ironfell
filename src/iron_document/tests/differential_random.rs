@@ -751,18 +751,54 @@ fn observed_script(seed: u64, steps: usize) -> usize {
     stale
 }
 
+fn run_observed(seeds: std::ops::Range<u64>) -> usize {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    let next = AtomicU64::new(seeds.start);
+    let stale = AtomicUsize::new(0);
+    let failed: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min((seeds.end - seeds.start) as usize).max(1);
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            s.spawn(|| {
+                loop {
+                    let seed = next.fetch_add(1, Ordering::Relaxed);
+                    if seed >= seeds.end || failed.lock().unwrap().is_some() {
+                        break;
+                    }
+                    match std::panic::catch_unwind(|| observed_script(seed, 30)) {
+                        Ok(n) => {
+                            stale.fetch_add(n, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+                            let mut f = failed.lock().unwrap();
+                            if f.as_ref().is_none_or(|(s, _)| seed < *s) {
+                                *f = Some((seed, why));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+    if let Some((seed, why)) = failed.into_inner().unwrap() {
+        panic!("seed {seed}: {why}");
+    }
+    stale.into_inner()
+}
+
 #[test]
 fn observing_part_of_the_time_changes_nothing_once_all_is_observed() {
     // Twenty: each compares every shown leaf twice a step (the thousand
     // below, ignored, for breadth).
-    let stale: usize = (0..20).map(|seed| observed_script(seed, 30)).sum();
+    let stale = run_observed(0..20);
     assert!(stale > 0, "no script left a cell stale");
 }
 
 #[test]
 #[ignore]
 fn observing_part_of_the_time_over_a_thousand_seeds() {
-    let stale: usize = (0..1000).map(|seed| observed_script(seed, 30)).sum();
+    let stale = run_observed(0..1000);
     println!("{stale} stale cells over the scripts' steps");
 }
 

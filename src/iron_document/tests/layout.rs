@@ -600,3 +600,82 @@ fn a_stack_whose_gap_reads_its_own_item_settles() {
     let xs: Vec<f64> = store.tree().children(g).iter().map(|&c| num(&store, c, "transform2d.x")).collect();
     assert!(xs.len() == 3 && xs.windows(2).all(|w| w[1] > w[0]), "{xs:?}");
 }
+
+/// EN-2a: layout makers are per top-level root and keyed by structure.
+/// Structural edits in composition A run only A's maker; value edits run no
+/// layout maker at all.
+#[test]
+fn layout_maker_is_per_root_and_ignores_value_edits() {
+    let mut store = Store::new();
+    let src = r#"<edit>
+      <composition id="$ca" name="a" dims="2d">
+        <group id="$ga" name="ga" x="0" y="0" layout.mode="stack_x">
+          <rect id="$ra0" w="10" h="10"/><rect id="$ra1" w="10" h="10"/>
+        </group>
+        <group id="$plain" name="plain" x="0" y="40">
+          <rect w="10" h="10"/>
+        </group>
+      </composition>
+      <composition id="$cb" name="b" dims="2d">
+        <group id="$gb" name="gb" x="0" y="0" layout.mode="stack_x">
+          <rect id="$rb0" w="10" h="10"/><rect id="$rb1" w="10" h="10"/>
+        </group>
+      </composition>
+    </edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let (ca, cb, ga, gb, ra0, plain) = (plan.aliases["$ca"], plan.aliases["$cb"], plan.aliases["$ga"], plan.aliases["$gb"], plan.aliases["$ra0"], plan.aliases["$plain"]);
+    store.apply(tx("two comps", plan.ops)).unwrap();
+
+    let (ma0, mb0) = (store.layout_maker_runs(ca), store.layout_maker_runs(cb));
+    let (la0, lb0) = (store.reactive().runs_of(graph::NativeKey::Layout(ga)).unwrap(), store.reactive().runs_of(graph::NativeKey::Layout(gb)).unwrap());
+
+    // Value edit in A: no layout maker runs in A or B, only A's layout native runs.
+    store.apply(tx("widen", vec![Op::Set { id: ra0, path: path("size.w"), slot: n(40.0) }])).unwrap();
+    assert_eq!(store.layout_maker_runs(ca), ma0, "value edit must not rerun A's layout maker");
+    assert_eq!(store.layout_maker_runs(cb), mb0, "value edit must not rerun B's layout maker");
+    assert!(store.reactive().runs_of(graph::NativeKey::Layout(ga)).unwrap() > la0);
+    assert_eq!(store.reactive().runs_of(graph::NativeKey::Layout(gb)).unwrap(), lb0, "B's layout native must stay idle");
+
+    // Structural edit in A (add a child to ga): A's maker runs, B's does not.
+    let extra = store.authored().next_id();
+    let last_order = store.tree().live(plan.aliases["$ra1"]).unwrap().order.clone();
+    store
+        .apply(tx("add child", vec![Op::Create { id: extra, ty: ty("rect"), parent: Some(ga), order: OrderKey::after(&last_order), facets: vec![at(0.0, 0.0), Size { w: n(10.0), h: n(10.0) }.wrap()] }]))
+        .unwrap();
+    let ma1 = store.layout_maker_runs(ca);
+    assert!(ma1 > ma0, "structural edit in A must run A's layout maker");
+    assert_eq!(store.layout_maker_runs(cb), mb0, "structural edit in A must not run B's layout maker");
+    assert_eq!(store.reactive().runs_of(graph::NativeKey::Layout(gb)).unwrap(), lb0);
+
+    // Adding and removing a `layout` facet in A only touches A's maker.
+    store.apply(tx("add layout", vec![Op::AddFacet { id: plain, facet: Layout { mode: e("stack_y"), ..Layout::default() }.wrap() }])).unwrap();
+    let ma2 = store.layout_maker_runs(ca);
+    assert!(ma2 > ma1);
+    assert_eq!(store.layout_maker_runs(cb), mb0);
+    assert!(store.reactive().runs_of(graph::NativeKey::Layout(plain)).is_some());
+
+    store.apply(tx("rm layout", vec![Op::RemoveFacet { id: plain, kind: FacetKind::Layout }])).unwrap();
+    assert!(store.layout_maker_runs(ca) > ma2);
+    assert_eq!(store.layout_maker_runs(cb), mb0);
+    assert!(store.reactive().runs_of(graph::NativeKey::Layout(plain)).is_none());
+}
+
+/// EN-2a maker canary: silencing `insert_facet` stops `Key::With(root, Layout)`
+/// from waking the layout maker when a group gains a `layout` facet, and the
+/// structure oracle catches the missing `LayoutNative`.
+#[cfg(feature = "structure-oracle")]
+#[test]
+#[should_panic(expected = "structure oracle")]
+fn canary_a_silenced_layout_facet_fails_the_oracle() {
+    let mut store = Store::new();
+    let src = r#"<edit><composition name="scene" dims="2d">
+      <group id="$g" name="g" x="0" y="0">
+        <rect w="10" h="10"/><rect w="10" h="10"/>
+      </group>
+    </composition></edit>"#;
+    let plan = iron_document::edit::plan(&store, src, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    let g = plan.aliases["$g"];
+    store.apply(tx("plain group", plan.ops)).unwrap();
+    iron_document::silence_for_canary(Some("insert_facet"));
+    store.apply(tx("add layout", vec![Op::AddFacet { id: g, facet: Layout { mode: e("stack_y"), ..Layout::default() }.wrap() }])).unwrap();
+}

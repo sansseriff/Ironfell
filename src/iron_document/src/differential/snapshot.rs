@@ -134,7 +134,9 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
             }
         }
     }
-    leaves.extend(s.reactive().overlay().keys().copied());
+    leaves.extend(s.reactive().gesture_preview().keys().copied());
+    leaves.extend(s.reactive().live_solve_preview().keys().copied());
+    leaves.extend(s.authored().solved().keys().copied());
     leaves.extend(s.signals().keys().copied());
     leaves.extend(s.session_state.keys().copied());
     leaves.extend(s.reactive().errors.keys().copied());

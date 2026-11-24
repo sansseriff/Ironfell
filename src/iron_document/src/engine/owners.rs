@@ -39,15 +39,8 @@ pub(crate) struct Owners {
     /// Owner -> owners whose pictures figure its derived entities. Only
     /// grows.
     readers: BTreeMap<NodeId, BTreeSet<NodeId>>,
-    /// The templates compiled so far. Each knows whether it is current, so
-    /// a refused transaction leaves none to put back.
+    /// The templates compiled so far, invalidated via recorded reads (`EN-12`).
     templates: TemplateCache,
-    /// The copies a constraint cluster holds: expansion leaves the leaves
-    /// the solver writes on them as they are (`solve::writes`).
-    solved: BTreeSet<NodeId>,
-    /// The solver leaves of copies the current transaction's own ops set:
-    /// always written, whatever was wanted before (`Owners::edit`).
-    edited: BTreeSet<crate::Leaf>,
     /// What each piece's last accepted expansion copied: a copy it records
     /// as current is kept as it is (2c stage 3, step 2). An entry outlives
     /// its owner; a copy is kept only when it is there.
@@ -99,8 +92,20 @@ impl Delta {
 }
 
 impl Owners {
+    /// Evict cached templates whose recorded structural reads intersect `keys`.
+    pub(crate) fn note_touched(&mut self, keys: &[crate::structure::Key]) {
+        self.templates.note_touched(keys);
+    }
+
+    /// Clear cached templates on journal rollback so uncommitted reads never linger.
+    pub(crate) fn clear_templates(&mut self) {
+        self.templates.clear();
+    }
+
     /// Expand `which` again in `doc`: the ops applied, and what to record.
     pub(crate) fn expand(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
+        let keys = docs.drain_template_touched();
+        self.templates.note_touched(&keys);
         let Which::Some(mut todo) = which else { return self.expand_all(docs, stamp, counts) };
         // Owners whose last expansion failed in part are tried again: what
         // failed may depend on something outside them that has changed.
@@ -119,7 +124,9 @@ impl Owners {
             }
             let held = held.min(expand::NODE_BUDGET);
             let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.made.0, &troubled);
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), &self.made.0, &troubled);
+            let keys = docs.drain_template_touched();
+            self.templates.note_touched(&keys);
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
@@ -144,6 +151,8 @@ impl Owners {
     /// want meets the budget or a nesting limit. An op that fails to apply
     /// is repaired by expanding its owner whole, in the same call.
     pub(crate) fn expand_items(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
+        let keys = docs.drain_template_touched();
+        self.templates.note_touched(&keys);
         // The whole-document rules (`expand`): any owner's failed or cut
         // expansion is tried again on every update, and past the budget
         // everything expands in id order. Neither is this path's.
@@ -175,13 +184,15 @@ impl Owners {
             // the first owner leaves the document as it was. A later
             // owner's `None` is repaired by expanding it whole.
             let room = room + self.held_under(Tree::of(docs), rs);
-            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, (&self.solved, &self.edited), &self.made.0) else {
+            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, &self.made.0) else {
                 if ops.is_empty() {
                     return None;
                 }
                 repair.insert(*owner);
                 continue;
             };
+            let keys = docs.drain_template_touched();
+            self.templates.note_touched(&keys);
             ops.extend(done.ops);
             let whole = (self.counts[owner] + done.wanted).saturating_sub(done.held);
             held = (held + whole).saturating_sub(self.counts[owner]);
@@ -208,9 +219,13 @@ impl Owners {
 
     /// Every owner, in id order.
     fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
+        let keys = docs.drain_template_touched();
+        self.templates.note_touched(&keys);
         let owners = expand::top_owners(Tree::of(docs));
         let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, (&self.solved, &self.edited), &self.made.0, &troubled);
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, &self.made.0, &troubled);
+        let keys = docs.drain_template_touched();
+        self.templates.note_touched(&keys);
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         delta.add(done);
@@ -257,30 +272,6 @@ impl Owners {
     #[cfg(feature = "differential")]
     pub(crate) fn templates(&self) -> &TemplateCache {
         &self.templates
-    }
-
-    /// What each of `leaves`, leaves of copies, is as its owner's expansion
-    /// wants it now (`expand::wanted_slots`).
-    pub(crate) fn wanted_slots(&mut self, doc: Tree<'_>, counts: &Items, leaves: &[crate::Leaf]) -> Vec<(crate::Leaf, crate::Slot)> {
-        expand::wanted_slots(doc, &mut self.templates, counts, leaves)
-    }
-
-    /// The copies a constraint cluster holds now (`solve::Clusters::copies`).
-    pub(crate) fn hold(&mut self, solved: BTreeSet<NodeId>) {
-        self.solved = solved;
-    }
-
-    /// The solver leaves of copies the transaction being applied sets
-    /// itself: an edit of a held copy reaches it even when what is wanted
-    /// for the leaf comes out as before (its template's value, or the
-    /// override it already had).
-    pub(crate) fn edit(&mut self, leaves: BTreeSet<crate::Leaf>) {
-        self.edited = leaves;
-    }
-
-    /// The copies a constraint cluster held when last told.
-    pub(crate) fn held(&self) -> &BTreeSet<NodeId> {
-        &self.solved
     }
 
     /// Every owner's problems, in the order `expand::sort_problems` gives.
@@ -385,7 +376,7 @@ impl Owners {
                 Op::Link { rel } => {
                     all |= touch(rel.from, &mut out);
                 }
-                Op::Unlink { .. } => {}
+                Op::Unlink { .. } | Op::Solve { .. } => {}
             }
         }
         // What the ops took with them: a deleted subtree's nodes (each an

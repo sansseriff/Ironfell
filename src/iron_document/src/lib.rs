@@ -496,11 +496,10 @@ struct Run {
     /// the transaction is accepted.
     shared: bool,
     rollback: Rollback,
-    /// The copies' leaves the solver held before the transaction, and
-    /// their values then (`StoreCore::keep_solved`).
-    solved: Vec<(Leaf, Slot)>,
-    /// A recorded transaction's writes to copies, for `apply_recorded`.
-    recorded: Vec<Op>,
+    /// Copy leaves edited by this transaction before `expand::translate`
+    /// (EN-12: clear their `Document::solved` entries and feed them as drivers).
+    edited_copy_leaves: BTreeSet<Leaf>,
+    copy_drivers: Vec<solve::Driver>,
 }
 
 pub struct StoreCore {
@@ -696,7 +695,7 @@ impl StoreCore {
         let mut docs = self.docs.clone();
         docs.gone.clear();
         let mut reactive = self.reactive.clone();
-        reactive.clear_overlay(Tree::of(&docs));
+        reactive.clear_previews(Tree::of(&docs));
         // A plan reads every cell exact.
         let relaxed = reactive.relax(Tree::of(&docs));
         let mut scratch = StoreCore {
@@ -837,7 +836,7 @@ impl StoreCore {
                     nodes.insert(rel.from);
                     nodes.insert(rel.to);
                 }
-                Op::Unlink { .. } => {}
+                Op::Unlink { .. } | Op::Solve { .. } => {}
             }
             // What can move a provider (`@name`): a let or a token made,
             // removed or renamed, a provide flag set.
@@ -890,6 +889,7 @@ impl StoreCore {
         // before priming keyed cells (engine.md §3.2, §3.3).
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
+            self.owners.note_touched(&keys);
             self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
             self.constraint_makers.note_touched(&keys);
@@ -959,11 +959,7 @@ impl StoreCore {
         }
         let mut whole = self.docs.clone();
         let stamp = whole.authored.version();
-        let (mut ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
-        // A leaf the solver writes on a copy a cluster holds keeps the
-        // solved value, which expansion cannot know (`apply_wanted` leaves
-        // it; `post_apply` lets go of a copy when it leaves every cluster).
-        ops.retain(|op| !matches!(op, Op::Set { id, path, .. } if solve::writes(*path) && self.owners.held().contains(id)));
+        let (ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
         assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
     }
 
@@ -1139,7 +1135,6 @@ impl StoreCore {
         let c = solve::assemble_clusters(entries, problems);
         self.clusters_rev = Some(rev);
         if c != self.clusters {
-            self.owners.hold(c.copies().clone());
             // `committed` names current clusters only: `resolve_clusters_live`
             // counts on it.
             self.committed.retain(|k| c.at.contains_key(k));
@@ -1246,7 +1241,7 @@ impl StoreCore {
             for (leaf, v) in result.values {
                 let value = Value::Number(v);
                 if self.reactive.read(Tree::of(&self.docs), leaf) != Some(value.clone()) {
-                    self.reactive.preview(Tree::of(&self.docs), leaf, value);
+                    self.reactive.preview_live_solve(Tree::of(&self.docs), leaf, value);
                 }
             }
             // Its own previews ran its watcher: not a reason to solve it
@@ -1901,7 +1896,8 @@ impl StoreCore {
     }
 
     pub fn gesture_in_progress(&self) -> bool {
-        !self.reactive.overlay().is_empty()
+        !self.reactive.gesture_preview().is_empty()
+            || (self.gesture.is_some() && !self.reactive.live_solve_preview().is_empty())
     }
 
     // ---- Gesture ownership (`gesture`) ---------------------------------------
@@ -1962,8 +1958,8 @@ impl StoreCore {
         self.fingers.clear();
         // What the previews moved is derived again from the document: a
         // repeat's items, layout, the network.
-        let previewed = !self.reactive.overlay().is_empty();
-        self.reactive.clear_overlay(Tree::of(&self.docs));
+        let previewed = !self.reactive.gesture_preview().is_empty() || !self.reactive.live_solve_preview().is_empty();
+        self.reactive.clear_previews(Tree::of(&self.docs));
         // A previewed playhead goes back to the clock's own `t`.
         if self.sync_clock() || previewed {
             self.settle(SettleMode::Live { clusters: true });
@@ -1977,9 +1973,9 @@ impl StoreCore {
     /// applies and solves against the document alone.
     fn suspend_gesture(&mut self) -> Option<gesture::Suspended> {
         self.gesture.as_ref()?;
-        let values = self.reactive.overlay().iter().filter(|(l, _)| self.drivers.contains(l)).map(|(l, v)| (*l, v.clone())).collect();
+        let values = self.reactive.gesture_preview().iter().filter(|(l, _)| self.drivers.contains(l)).map(|(l, v)| (*l, v.clone())).collect();
         let suspended = gesture::Suspended { values, drivers: std::mem::take(&mut self.drivers), fingers: std::mem::take(&mut self.fingers) };
-        self.reactive.clear_overlay(Tree::of(&self.docs));
+        self.reactive.clear_previews(Tree::of(&self.docs));
         Some(suspended)
     }
 
@@ -2040,7 +2036,7 @@ impl StoreCore {
     pub fn set_through_handle(&mut self, id: NodeId, path: LeafPath, value: Value, label: impl Into<String>, actor: Actor, ts: u64) -> Result<Option<Applied>, String> {
         let leaf = Leaf { node: id, path };
         let (target, v) = self.current(|s| handle::resolve_target(Tree::of(&s.docs), &s.reactive, leaf, value.clone()))?;
-        let same = match (Tree::of(&self.docs).leaf(target.node, target.path).and_then(|s| s.constant()), &v) {
+        let same = match (Tree::of(&self.docs).stored_leaf(target).and_then(|s| s.constant()), &v) {
             (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
             (c, v) => c == Some(v),
         };
@@ -2078,9 +2074,10 @@ impl StoreCore {
         // owner's expansion removed) commits nothing: the node is not there
         // to write to, whether it is a tombstone or gone outright.
         let gone = |l: &Leaf| !Tree::of(&self.docs).is_live(l.node);
-        let driven: Vec<(Leaf, Value)> = self
-            .reactive
-            .overlay()
+        // Combine live-solve and user-gesture previews (gesture wins) for driven leaves.
+        let mut previewed: BTreeMap<Leaf, Value> = self.reactive.live_solve_preview().clone();
+        previewed.extend(self.reactive.gesture_preview().iter().map(|(l, v)| (*l, v.clone())));
+        let driven: Vec<(Leaf, Value)> = previewed
             .iter()
             .filter(|_| !unkeyed)
             .filter(|(l, _)| !gone(l))
@@ -2092,7 +2089,7 @@ impl StoreCore {
         // Leaves of facets the node lacks but allows: the facet is
         // added, defaults with the previewed fields set, before the `Set`s.
         let mut added: BTreeMap<(NodeId, FacetKind), Facet> = BTreeMap::new();
-        for (leaf, value) in self.reactive.overlay() {
+        for (leaf, value) in &previewed {
             if !self.drivers.contains(leaf) || keyed.contains(leaf) || gone(leaf) {
                 continue;
             }
@@ -2107,7 +2104,8 @@ impl StoreCore {
             if slot.expr().is_some() {
                 continue;
             }
-            let same = match (slot.constant(), value) {
+            let stored = Tree::of(&self.docs).stored_leaf(*leaf).and_then(|s| s.constant());
+            let same = match (stored, value) {
                 (Some(Value::Number(a)), Value::Number(b)) => (a - b).abs() < 1e-9,
                 (c, v) => c == Some(v),
             };
@@ -2131,6 +2129,11 @@ impl StoreCore {
             self.cancel_gesture();
             return None;
         }
+        // Clear user-gesture previews before applying so dropped previews
+        // (e.g. bound leaves) never skew `apply_now` or `cluster_problems()`;
+        // `live_solve_preview` + `self.fingers` remain briefly for `post_apply`
+        // warm-starting and are cleared before `cluster_problems()` runs.
+        self.reactive.clear_gesture_preview(Tree::of(&self.docs));
         let result = self.apply(TransactionInput {
             label: label.into(),
             actor,
@@ -2141,7 +2144,7 @@ impl StoreCore {
         });
         self.drivers.clear();
         self.fingers.clear();
-        self.reactive.clear_overlay(Tree::of(&self.docs));
+        self.reactive.clear_previews(Tree::of(&self.docs));
         Some(result)
     }
 
@@ -2174,6 +2177,7 @@ impl StoreCore {
                 Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => id.is_session(),
                 Op::Link { rel } => rel.id.is_session() && rel.from.is_session(),
                 Op::Unlink { id } => id.is_session(),
+                Op::Solve { .. } => false,
             };
             let result = if in_session {
                 op::apply_op(&mut self.docs, i, op, stamp)
@@ -2184,6 +2188,7 @@ impl StoreCore {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
                     self.docs.rollback();
+                    self.owners.clear_templates();
                     return Err(e);
                 }
             }
@@ -3535,32 +3540,46 @@ impl StoreCore {
     }
 
     /// Unified post-`run` driver for `Transaction`, `Undo`, and `Replay`
-    /// (engine.md §3.3).
+    /// (engine.md §3.3). Undo and Replay are 100% solver-free (`EN-12`):
+    /// persisted copy poses travel as ordinary `Op::Solve` ops in history.
     fn settle_tx(
         &mut self,
         mode: SettleMode,
         tx: &mut Transaction,
         expanded: &mut Vec<Op>,
         full_inverse: &mut Vec<Op>,
-        recorded: Vec<Op>,
-        solved: Vec<(Leaf, Slot)>,
+        edited_copy_leaves: BTreeSet<Leaf>,
+        copy_drivers: &[solve::Driver],
     ) -> Option<SolverSummary> {
-        self.after_transaction(tx, expanded, full_inverse);
         match mode {
             SettleMode::Transaction => {
-                let held = self.keep_solved(tx, solved, expanded);
-                self.post_apply(tx, &held)
+                // Authored edits targeting a copy (directly or via override/
+                // template expansion) clear its `Document::solved` entry first
+                // so the new value is visible to repeats and acts as a driver.
+                let mut to_clear: BTreeSet<Leaf> = edited_copy_leaves;
+                for op in expanded.iter() {
+                    if let Op::Set { id, path, .. } = op
+                        && id.is_expanded()
+                    {
+                        to_clear.insert(Leaf { node: *id, path: *path });
+                    }
+                }
+                let last = tx.ops.len().saturating_sub(1);
+                for leaf in to_clear {
+                    if self.docs.authored.solve_leaf(leaf).is_some() {
+                        let op = Op::Solve { leaf, slot: None };
+                        let inv = op::apply_op(&mut self.docs, last, &op, tx.version).expect("clearing solve entry succeeds");
+                        self.geometry.note_ops([&op]);
+                        tx.derived_ops.push(op);
+                        tx.inverse.extend(inv.iter().cloned());
+                        full_inverse.extend(inv);
+                    }
+                }
+                self.after_transaction(tx, expanded, full_inverse, true);
+                self.post_apply(tx, copy_drivers, expanded, full_inverse)
             }
-            SettleMode::Undo => {
-                self.apply_recorded(tx, recorded, full_inverse);
-                let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
-                self.release(tx, &held, 0);
-                None
-            }
-            SettleMode::Replay => {
-                let held = self.keep_solved(tx, solved, expanded);
-                self.apply_recorded(tx, recorded, full_inverse);
-                self.release(tx, &held, 0);
+            SettleMode::Undo | SettleMode::Replay => {
+                self.after_transaction(tx, expanded, full_inverse, false);
                 None
             }
             _ => unreachable!("settle_tx takes Transaction, Undo, or Replay"),
@@ -4494,6 +4513,7 @@ impl StoreCore {
     fn sync_touched(&mut self, mark_session: bool) {
         let keys = self.docs.take_touched();
         if !keys.is_empty() {
+            self.owners.note_touched(&keys);
             self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
             self.constraint_makers.note_touched(&keys);
@@ -4625,20 +4645,17 @@ impl StoreCore {
     /// derived nodes included (a deleted entity's ports); `expanded` is what
     /// expansion wrote for it, to which settling adds the repeats' copies.
     /// Derived ops are never history: undo, redo and replay re-derive.
-    fn after_transaction(&mut self, tx: &Transaction, expanded: &mut Vec<Op>, full_inverse: &[Op]) {
+    fn after_transaction(&mut self, tx: &Transaction, expanded: &mut Vec<Op>, full_inverse: &[Op], resolve_live: bool) {
         // A repeat held as feedback tries again (`restless`).
         self.feedback.clear();
         self.restless.clear();
-        // Outside a gesture the overlay holds only a live solve's pose (a
-        // producer's publish or a playhead move re-solves the clusters).
-        // Nothing else owns it, so it would shadow what this transaction
-        // wrote, even after the cluster is gone: drop it, and re-solve
-        // against the new document below. A gesture's own commit has taken
-        // the gesture but still holds its drivers, and clears its previews
-        // itself.
-        let live = self.gesture.is_none() && self.drivers.is_empty() && self.fingers.is_empty() && !self.reactive.overlay().is_empty();
-        if live {
-            self.reactive.clear_overlay(Tree::of(&self.docs));
+        // Outside a gesture (and outside a gesture's own commit, where
+        // `drivers`/`fingers` stay populated until `apply` returns so
+        // `post_apply` keeps the live-solve warm start), drop any stale
+        // live-solve preview so it cannot shadow what this transaction wrote.
+        let had_live_solve = self.gesture.is_none() && self.drivers.is_empty() && self.fingers.is_empty() && !self.reactive.live_solve_preview().is_empty();
+        if had_live_solve {
+            self.reactive.clear_live_solve(Tree::of(&self.docs));
         }
         self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(expanded.iter()));
         let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(expanded.iter()).any(|op| match op {
@@ -4647,6 +4664,7 @@ impl StoreCore {
             Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
             // The first provider among siblings answers `@name`.
             Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
+            Op::Solve { .. } => false,
         });
         // The clips' end reads clips, keys, relations and the transitions a
         // keyed state runs on: any edit may move it, so it is read again
@@ -4676,7 +4694,7 @@ impl StoreCore {
         let copies = self.settle_repeats();
         expanded.extend(copies);
         self.sync_clusters();
-        self.settle(SettleMode::Live { clusters: live });
+        self.settle(SettleMode::Live { clusters: resolve_live && had_live_solve });
     }
 
     /// The authored document: what is saved, and what mints ids. It holds
@@ -4776,12 +4794,17 @@ impl StoreCore {
         // transaction brought (review of DS-7: after `after_transaction` it
         // was too late to see the grouping's).
         let problems_before: Vec<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
-        let Run { mut tx, mut expanded, mut full_inverse, problems, shared, rollback, recorded: _, solved } = self.run(input, false)?;
+        let Run { mut tx, mut expanded, mut full_inverse, problems, shared, rollback, edited_copy_leaves, copy_drivers } = self.run(input, false)?;
         if let Some(found) = problems {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        let mut solver = self.settle_tx(SettleMode::Transaction, &mut tx, &mut expanded, &mut full_inverse, Vec::new(), solved);
+        let mut solver = self.settle_tx(SettleMode::Transaction, &mut tx, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
+        // Clear a gesture commit's live-solve preview before
+        // `cluster_problems()` inspects the committed pose (EN-12).
+        if self.gesture.is_none() && (!self.drivers.is_empty() || !self.fingers.is_empty()) && !self.reactive.live_solve_preview().is_empty() {
+            self.reactive.clear_live_solve(Tree::of(&self.docs));
+        }
         // What the reply tells: the constraints' problems this transaction
         // brought (a malformed or duplicate constraint, a cycle, a pose
         // that doesn't hold), and why a solve failed, unless that cluster
@@ -4835,7 +4858,7 @@ impl StoreCore {
             ops: tx.replay_ops(),
             exact: false,
         };
-        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved } = self.run(input, true)?;
+        let Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, edited_copy_leaves, copy_drivers } = self.run(input, true)?;
         self.commit(rollback);
         if shared {
             self.machines.shared += 1;
@@ -4844,7 +4867,7 @@ impl StoreCore {
             self.store_found(found);
         }
         self.check_owners("a transaction");
-        let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
+        let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
         self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
         let version = applied.version;
         self.history.future.clear();
@@ -4872,7 +4895,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, edited_copy_leaves, copy_drivers }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -4882,7 +4905,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                let _ = self.settle_tx(SettleMode::Undo, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
+                let _ = self.settle_tx(SettleMode::Undo, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.record(applied);
@@ -4916,7 +4939,7 @@ impl StoreCore {
             exact: false,
         };
         Some(match self.run(input, true) {
-            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, recorded, solved }) => {
+            Ok(Run { tx: mut applied, mut expanded, mut full_inverse, problems, shared, rollback, edited_copy_leaves, copy_drivers }) => {
                 self.commit(rollback);
                 self.machines.snap.extend(snap);
                 if shared {
@@ -4926,7 +4949,7 @@ impl StoreCore {
                     self.store_found(found);
                 }
                 self.check_owners("a transaction");
-                let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, recorded, solved);
+                let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
                 self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
                 let version = applied.version;
                 self.history.past.push(applied.clone());
@@ -4944,34 +4967,6 @@ impl StoreCore {
         })
     }
 
-    /// The solved copy leaves `solved` held before this transaction that its
-    /// expansion and repeat settling rewrote or removed: undo writes each
-    /// solved value back after the expansion it undoes (`apply_recorded`),
-    /// and after undoing any solver write of the same transaction, which
-    /// comes later in the inverse. Returns the leaves held.
-    fn keep_solved(&mut self, tx: &mut Transaction, solved: Vec<(Leaf, Slot)>, expanded: &[Op]) -> Vec<Leaf> {
-        let held: Vec<Leaf> = solved.iter().map(|(l, _)| *l).collect();
-        // A leaf expansion wrote, even to the value it had: undo's
-        // expansion writes it again, so the restore is needed.
-        let written: BTreeSet<Leaf> = expanded.iter().filter_map(|op| match op {
-            Op::Set { id, path, .. } => Some(Leaf { node: *id, path: *path }),
-            _ => None,
-        }).collect();
-        let doc = Tree::of(&self.docs);
-        for (leaf, was) in solved {
-            if written.contains(&leaf) || doc.live(leaf.node).and_then(|_| doc.leaf(leaf.node, leaf.path)) != Some(&was) {
-                tx.inverse.push(Op::Set { id: leaf.node, path: leaf.path, slot: was });
-            }
-        }
-        held
-    }
-
-    /// What needs the whole transaction in place (constraint-system.md §7):
-    /// every constraint is well formed, bindings and clusters form no cycle,
-    /// and every cluster is solved, with leaves this transaction set treated
-    /// as drivers. The solver's writes are applied and recorded as
-    /// `derived_ops`. Runs on the committed document; the caller rolls back
-    /// on `Err`.
     /// Solve what the transaction moved and write the solutions as its
     /// derived ops. Nothing here refuses (DS-7, decided by the user): a
     /// constraint that can't be used and a cycle are problems of the
@@ -4979,15 +4974,54 @@ impl StoreCore {
     /// when its solve began, the transaction's own writes included, and is
     /// posed so that only a change to its inputs solves it again. Its
     /// problem is read from the pose (`cluster_problems`).
-    fn post_apply(&mut self, tx: &mut Transaction, held: &[Leaf]) -> Option<SolverSummary> {
+    ///
+    /// Solver writes on derived copies go to flat `Document::solved` via
+    /// `Op::Solve` (`EN-12`); when a copy leaves every cluster (or goes dead),
+    /// its solved entries are cleared as derived `Op::Solve { leaf, slot: None }`
+    /// ops so it snaps back cleanly to its authored override/template value.
+    fn post_apply(
+        &mut self,
+        tx: &mut Transaction,
+        copy_drivers: &[solve::Driver],
+        expanded: &mut Vec<Op>,
+        full_inverse: &mut Vec<Op>,
+    ) -> Option<SolverSummary> {
         let last = tx.ops.len().saturating_sub(1);
         self.sync_clusters();
         let mut summary = SolverSummary::default();
-        self.release(tx, held, last);
+        // Release persisted solve poses on copies no cluster holds (or no longer live).
+        let released: Vec<Leaf> = {
+            let doc = Tree::of(&self.docs);
+            let now = self.clusters.copies();
+            self.docs
+                .authored
+                .solved()
+                .keys()
+                .copied()
+                .filter(|l| !doc.is_live(l.node) || !now.contains(&l.node))
+                .collect()
+        };
+        let mut solve_changed = false;
+        for leaf in released {
+            let op = Op::Solve { leaf, slot: None };
+            let inv = op::apply_op(&mut self.docs, last, &op, tx.version).expect("clearing solve entry succeeds");
+            self.geometry.note_ops([&op]);
+            tx.derived_ops.push(op);
+            tx.inverse.extend(inv.iter().cloned());
+            full_inverse.extend(inv);
+            solve_changed = true;
+        }
+        if solve_changed {
+            self.sync_touched(false);
+        }
         if self.clusters.list.is_empty() {
+            if solve_changed {
+                let copies = self.settle_repeats();
+                expanded.extend(copies);
+            }
             return None;
         }
-        let drivers: Vec<solve::Driver> = tx
+        let mut drivers: Vec<solve::Driver> = tx
             .ops
             .iter()
             .filter_map(|op| match op {
@@ -4998,6 +5032,7 @@ impl StoreCore {
                 _ => None,
             })
             .collect();
+        drivers.extend_from_slice(copy_drivers);
         let mut solved = BTreeMap::new();
         while let Some(c) = self.next_to_solve(&drivers, &solved) {
             *solved.entry(c.key()).or_insert(0) += 1;
@@ -5025,16 +5060,22 @@ impl StoreCore {
             }
             let mut moved = false;
             for (leaf, v) in result.values {
-                let current = Tree::of(&self.docs).leaf(leaf.node, leaf.path).and_then(|s| s.constant()).and_then(|x| x.as_f64());
+                let current = Tree::of(&self.docs).stored_leaf(leaf).and_then(|s| s.constant()).and_then(|x| x.as_f64());
                 if current.is_some_and(|c| (c - v).abs() < 1e-9) {
                     continue;
                 }
-                let op = Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) };
+                let op = if leaf.node.is_expanded() {
+                    Op::Solve { leaf, slot: Some(Slot::Const(Value::Number(v))) }
+                } else {
+                    Op::Set { id: leaf.node, path: leaf.path, slot: Slot::Const(Value::Number(v)) }
+                };
                 let inverse = op::apply_op(&mut self.docs, last, &op, tx.version).expect("a solved leaf is a live constant slot");
                 self.geometry.note_ops([&op]);
                 tx.derived_ops.push(op);
-                tx.inverse.extend(inverse);
+                tx.inverse.extend(inverse.iter().cloned());
+                full_inverse.extend(inverse);
                 moved = true;
+                solve_changed = true;
                 if !summary.moved.contains(&leaf.node) {
                     summary.moved.push(leaf.node);
                 }
@@ -5048,70 +5089,13 @@ impl StoreCore {
         }
         // The watchers read the pose just written, so `problems` is current.
         self.reactive.flush(Tree::of(&self.docs));
+        if solve_changed {
+            let copies = self.settle_repeats();
+            expanded.extend(copies);
+        }
         // Drivers that are not variables of any cluster were plain sets;
         // only a moved node is a cause worth telling the model about.
         (!summary.is_empty()).then_some(summary)
-    }
-
-    /// A recorded transaction's writes to copies (the solver's, or their
-    /// inverses), applied as `post_apply` writes them: after expansion, the
-    /// owners' check and `after_transaction`, never translated into
-    /// overrides. A copy the transaction left gone takes none.
-    fn apply_recorded(&mut self, tx: &mut Transaction, recorded: Vec<Op>, full_inverse: &mut Vec<Op>) {
-        let mut applied = Vec::new();
-        for op in recorded {
-            let Op::Set { id, .. } = &op else { continue };
-            if !Tree::of(&self.docs).is_live(*id) {
-                continue;
-            }
-            if let Ok(inverse) = op::apply_op(&mut self.docs, 0, &op, tx.version) {
-                self.geometry.note_ops([&op]);
-                tx.inverse.extend(inverse.iter().cloned());
-                full_inverse.extend(inverse);
-                applied.push(op);
-            }
-        }
-        if !applied.is_empty() {
-            // A recorded write can put a binding back: `regraph` consumes its
-            // touched keys (`Key::Leaf` included) through the single channel.
-            self.regraph(applied.iter());
-        }
-        tx.derived_ops.extend(applied);
-    }
-
-    /// Let go of the copies whose solver leaves `held` were held before the
-    /// transaction and that no cluster holds `now`: each such leaf goes back
-    /// to what its owner's expansion wants, written as the solver writes,
-    /// so undo puts the solved value back. A copy still in a cluster keeps
-    /// it, as a variable or as a fixed or driven input.
-    fn release(&mut self, tx: &mut Transaction, held: &[Leaf], at: usize) {
-        let released: Vec<Leaf> = {
-            let doc = Tree::of(&self.docs);
-            let now = self.clusters.copies();
-            held.iter().filter(|l| doc.is_live(l.node) && !now.contains(&l.node)).copied().collect()
-        };
-        if released.is_empty() {
-            return;
-        }
-        let mut ops = Vec::new();
-        for (leaf, slot) in self.owners.wanted_slots(Tree::of(&self.docs), &self.repeats, &released) {
-            if Tree::of(&self.docs).leaf(leaf.node, leaf.path) == Some(&slot) {
-                continue;
-            }
-            let op = Op::Set { id: leaf.node, path: leaf.path, slot };
-            // A template's binding can fail `apply_op`'s checks: the copy
-            // keeps the solved value rather than refuse (DS-7).
-            let Ok(inverse) = op::apply_op(&mut self.docs, at, &op, tx.version) else { continue };
-            self.geometry.note_ops([&op]);
-            tx.inverse.extend(inverse);
-            ops.push(op);
-        }
-        if !ops.is_empty() {
-            // The template's value may be a binding: `regraph` consumes its
-            // touched keys (`Key::Leaf` included) through the single channel.
-            self.regraph(ops.iter());
-        }
-        tx.derived_ops.extend(ops);
     }
 
     /// Apply the ops, expand, and check; on success the document holds the
@@ -5122,25 +5106,37 @@ impl StoreCore {
     fn run(&mut self, input: TransactionInput, history: bool) -> Result<Run, Vec<ApplyError>> {
         self.exact();
         let mut input = input;
-        // A recorded transaction's sets on copies are the solver's writes
-        // and their inverses, not edits: they are not translated into
-        // overrides, and apply after the transaction (`apply_recorded`).
-        let recorded: Vec<Op> = if history {
-            let (recorded, ops) = std::mem::take(&mut input.ops).into_iter().partition(|op| matches!(op, Op::Set { id, .. } if id.is_expanded()));
-            input.ops = ops;
-            recorded
-        } else {
-            Vec::new()
-        };
-        // A solver leaf of a copy this transaction sets itself is written
-        // even where what is wanted for it comes out as before.
-        self.owners.edit(input.ops.iter().filter_map(|op| match op {
-            Op::Set { id, path, .. } if id.is_expanded() && solve::writes(*path) => Some(Leaf { node: *id, path: *path }),
-            _ => None,
-        }).collect());
+        // Capture copy leaves edited before `expand::translate` turns them
+        // into overrides/args, so `settle_tx` clears their `Document::solved`
+        // entries and feeds them to `post_apply` as solver drivers (`EN-12`).
+        let mut edited_copy_leaves = BTreeSet::new();
+        let mut copy_drivers = Vec::new();
+        if !history {
+            for op in &input.ops {
+                match op {
+                    Op::Set { id, path, slot } if id.is_expanded() => {
+                        let leaf = Leaf { node: *id, path: *path };
+                        edited_copy_leaves.insert(leaf);
+                        if let Some(requested) = slot.constant().and_then(|v| v.as_f64()) {
+                            copy_drivers.push(solve::Driver { leaf, requested });
+                        }
+                    }
+                    Op::AddFacet { id, facet } if id.is_expanded() => {
+                        for field in facet.field_names() {
+                            if let Ok(path) = LeafPath::new(facet.kind(), field) {
+                                edited_copy_leaves.insert(Leaf { node: *id, path });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Edits aimed inside an instance become edits to what it derives from
         // (component-model.md §7): an argument, a slider, an override.
-        input.ops = expand::translate(Tree::of(&self.docs), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
+        if !history {
+            input.ops = expand::translate(Tree::of(&self.docs), &self.reactive, std::mem::take(&mut input.ops)).map_err(|e| vec![e])?;
+        }
         // A state pinned on its main records number edits to the component's
         // parts as that state's pose (machine.rs `record`).
         let mut shared = false;
@@ -5152,19 +5148,6 @@ impl StoreCore {
         // What `attachment::validate` compares against: the points attached
         // before.
         let attached: Vec<NodeId> = Tree::of(&self.docs).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
-        // The leaves the solver writes on the copies a cluster holds, as it
-        // left them: expansion and repeat settling remove a copy without
-        // knowing the solved value (`keep_solved`).
-        let solved: Vec<(Leaf, Slot)> = {
-            let doc = Tree::of(&self.docs);
-            self.owners
-                .held()
-                .iter()
-                .filter(|&&n| doc.is_live(n))
-                .flat_map(|&n| solve::TRANSFORM_LEAVES.map(|f| Leaf { node: n, path: LeafPath::new(FacetKind::Transform2d, f).expect("declared leaf") }))
-                .filter_map(|l| doc.leaf(l.node, l.path).map(|s| (l, s.clone())))
-                .collect()
-        };
         self.docs.begin();
         let docs = &mut self.docs;
         let stamp = docs.authored.version().next();
@@ -5192,8 +5175,6 @@ impl StoreCore {
                 problems = Some(delta);
             }
         }
-        // Only this transaction's own expansion writes its edits.
-        self.owners.edit(BTreeSet::new());
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
             // transaction holds.
@@ -5240,18 +5221,21 @@ impl StoreCore {
         }
         if !errors.is_empty() {
             self.docs.rollback();
+            self.owners.clear_templates();
             return Err(errors);
         }
         docs.authored.set_version(stamp);
         let rollback = Rollback(true);
         // Derived nodes and relations come back by re-expansion, never by
         // undo: a deleted instance's expanded children are not restored by
-        // its inverse (the guard would refuse them anyway).
+        // its inverse (the guard would refuse them anyway). `Op::Solve` lives
+        // on `docs.authored.solved`, so it stays in `inverse`.
         let full_inverse = inverse.clone();
         inverse.retain(|op| match op {
             Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => !id.is_expanded(),
             Op::Link { rel } => !rel.id.is_expanded(),
             Op::Unlink { id } => !id.is_expanded(),
+            Op::Solve { .. } => true,
         });
         Ok(Run {
             tx: Transaction {
@@ -5270,8 +5254,8 @@ impl StoreCore {
             problems,
             shared,
             rollback,
-            recorded,
-            solved,
+            edited_copy_leaves,
+            copy_drivers,
         })
     }
 

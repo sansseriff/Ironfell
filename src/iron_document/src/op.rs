@@ -64,6 +64,12 @@ pub enum Op {
     Unlink {
         id: RelationId,
     },
+    /// Set or clear a persisted solver pose on a derived copy's leaf (EN-12).
+    Solve {
+        leaf: crate::expr::Leaf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot: Option<Slot>,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,7 +248,24 @@ pub(crate) fn apply_op(
                 .ok_or_else(|| cx.err(ErrorKind::UnknownRelation, format!("no relation {id}")))?;
             Ok(vec![Op::Link { rel: r }])
         }
+        Op::Solve { leaf, slot } => solve_op(docs, &cx, *leaf, slot),
     }
+}
+
+fn solve_op(docs: &mut Docs, cx: &Ctx, leaf: crate::expr::Leaf, slot: &Option<Slot>) -> Result<Vec<Op>, ApplyError> {
+    if !leaf.node.is_expanded() {
+        return Err(cx.err(ErrorKind::BadId, format!("solve op requires a derived copy id, got {}", leaf.node)));
+    }
+    if let Some(s) = slot {
+        let Some(v) = s.constant() else {
+            return Err(cx.err(ErrorKind::TypeMismatch, format!("solve pose on {leaf} must be a constant")));
+        };
+        if !leaf.path.kind().matches(v) {
+            return Err(cx.err(ErrorKind::TypeMismatch, format!("solve pose on {leaf} has wrong type")));
+        }
+    }
+    let old = docs.set_solve(leaf, slot.clone());
+    Ok(vec![Op::Solve { leaf, slot: old }])
 }
 
 /// `apply_op` on a scratch document that holds no copies apart from it (a
@@ -256,6 +279,7 @@ pub(crate) fn apply_op(
 fn reshapes(op: &Op) -> bool {
     match op {
         Op::Set { path, .. } => matches!((path.facet, path.field), (FacetKind::Composition, "run") | (FacetKind::Embed, "source")),
+        Op::Solve { .. } => false,
         _ => true,
     }
 }
@@ -275,7 +299,7 @@ fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
         Op::RemoveFacet { id, kind } => kinds.contains(kind) || is(*id),
         Op::Link { rel } => is(rel.from) || is(rel.to),
         Op::Unlink { id } => doc.relation(*id).is_none_or(|r| is(r.from) || is(r.to)),
-        Op::Reorder { .. } | Op::Set { .. } => false,
+        Op::Reorder { .. } | Op::Set { .. } | Op::Solve { .. } => false,
     }
 }
 
@@ -284,6 +308,7 @@ fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
 fn retokens(docs: &Docs, op: &Op) -> bool {
     match op {
         Op::Set { id, path, .. } => path.facet == FacetKind::Token || (path.facet == FacetKind::Name && Tree::of(docs).node(*id).is_some_and(|n| n.ty.name() == "token")),
+        Op::Solve { .. } => false,
         _ => touches(docs, op, &["token"], &[FacetKind::Token]),
     }
 }

@@ -26,7 +26,7 @@ class FakeEngine implements ScopeEngine {
     }
   }
   async save() {
-    return `{"schema": 15,${this.scope ? ` "scope": "${this.scope}",` : ''} "next_ids": {}, "next_rels": {}, "version": ${this.version},\n "nodes": {}}`;
+    return `{"schema": 16,${this.scope ? ` "scope": "${this.scope}",` : ''} "next_ids": {}, "next_rels": {}, "version": ${this.version},\n "nodes": {}}`;
   }
   async call(fn: string, args: any[]): Promise<any> {
     switch (fn) {
@@ -47,7 +47,7 @@ class FakeEngine implements ScopeEngine {
         return { version: this.version, replayed, skipped, failed };
       }
       case 'scope_assign': this.scope = args[0] || null; return { scope: this.scope };
-      case 'scope_template': return { snapshot: `{"schema": 15, "next_ids": {}, "next_rels": {}, "version": ${args[0] === 'demo' ? 30 : 1},\n "nodes": {}}` };
+      case 'scope_template': return { snapshot: `{"schema": 16, "next_ids": {}, "next_rels": {}, "version": ${args[0] === 'demo' ? 30 : 1},\n "nodes": {}}` };
       case 'scope_log': {
         if (this.pendingFor > 0) { this.pendingFor--; return { pending: true }; }
         const since = args[0] as number;

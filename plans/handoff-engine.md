@@ -36,13 +36,13 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 | **EN-2b** | 1 · Spine | Per-component Constraints & Contexts makers (`a26395a`) | **Done 2026-11-22** |
 | **EN-2c** | 1 · Spine | Per-root Network & DerivedBinding makers (`05df865`) | **Done 2026-11-22** |
 | **EN-3**..**EN-6b** | *(Retired)* | Universal N-axis patch algebra experiment (`14e4534`..`85c4c45`, archived on `archive/universal-patch-experiment`, reverted in `cc9f380`; see post-mortem) | **Retired 2026-11-23** |
+| **EN-12** | 2 · Lean Core | Flat `Document::solved` (`Op::Solve`, schema 16, solver-free undo/redo/replay/load), split `gesture_preview` & `live_solve_preview`, zero-alloc `NodeId::expanded_parts()`, recorded-read `TemplateCache` (deleted `Document::scopes`, `Owners::solved`/`edited`/`wanted_slots`, `keep_solved`, `apply_recorded`, `release`, `solve::writes`, and `check_owners` solver exemption) | **Done 2026-11-23** |
 
-### Active Work Order (`EN-12` → `EN-13` → `EN-7` → `EN-8` → `EN-9` → `EN-10` → `EN-14` → `EN-15` → `EN-16` → `EN-11`)
+### Active Work Order (`EN-13` → `EN-7` → `EN-8` → `EN-9` → `EN-10` → `EN-14` → `EN-15` → `EN-16` → `EN-11`)
 
 | Key | Stage | Builds | Deletes | Net-LOC target / Exit | State |
 |---|---|---|---|---|---|
-| **EN-12** | 2 · Lean Core | **Flat solver poses, split previews & Stage-1 carryovers:** flat `Document::solved: BTreeMap<Leaf, Slot>` via `Op::Solve` (cleared on authored edit or last constraint deletion; solver-free undo/redo/replay/load); separate `gesture_preview` & `live_solve_preview` maps (strict `gesture_in_progress()`); zero-alloc `NodeId::expanded_parts()`; recorded-read `TemplateCache` | `Owners::solved`, `Owners::edited`, `Owners::held_wanted`, `Owners::wanted_slots`, `StoreCore::keep_solved`, `apply_recorded`, `release`, `solve::writes`, `scope_stamp` on templates (`Document::scopes`/`scope_stamp`/`touch`, `Tree::scope_stamp`) | **Net negative LOC.** All constraint, drag, undo/redo/replay, `IRON_OWNER_CHECK`, and smoke tests pass | **Next** |
-| **EN-13** | 2 · Lean Core | **Lean Lexical Virtual Views + minimal `ItemTable`:** virtual `Tree` over shared `Arc<Template>` + flat lexical overrides (`outermost instance > inner instance > variant > definition`) + sparse resolved map + keyed `ItemTable` for `repeat`/`when` (`item.value`/`index` as producer signals) | `Docs::copies`, `apart`, `with_copies_in_document`, bulk of `expand.rs`, static `Owners::made`/`affected` | **Big net negative LOC.** All instance, override, variant, repeat, `when`, spatial, and smoke tests pass with `Docs::copies` completely gone | Open |
+| **EN-13** | 2 · Lean Core | **Lean Lexical Virtual Views + minimal `ItemTable`:** virtual `Tree` over shared `Arc<Template>` + flat lexical overrides (`outermost instance > inner instance > variant > definition`) + sparse resolved map + keyed `ItemTable` for `repeat`/`when` (`item.value`/`index` as producer signals) | `Docs::copies`, `apart`, `with_copies_in_document`, bulk of `expand.rs`, static `Owners::made`/`affected` | **Big net negative LOC.** All instance, override, variant, repeat, `when`, spatial, and smoke tests pass with `Docs::copies` completely gone | **Next** |
 | **EN-7** | 2 · Lean Core | **Delete `regraph` & remaining wiring/repeats on virtual `Tree`:** per-node binding makers, `@name` scope & boundary checks, theme token cells, blocked retries via `Wiring` keys, selection/state publish, repeat count/input makers over `ItemTable`, per-root expansion budget | `Rescope`, `regraph` (completely deleted), `after_transaction` classifier, `tokens_shaped`, `retokens`, `token_leaves`, `theme_at`, `REPEAT_INPUTS`, `update_drawn`, `ensure_drawn` | **Net negative LOC.** `regraph` deleted; full suite + per-family checks + canaries + smoke pass | Open |
 | **EN-8** | 3 · Scaling | **Need counts, scoped pulls & incremental heights:** `leaf_need` + separate demand vs scheduling edges (`retarget`), eager makers, permanent Stage 4 writer holds, un-rooted per-composition `LayoutNative`s, pre-effect `pull()`/`current()`, local needed-DAG height maintenance | `Store::necessity`, `Reactive::necessity`, `relaxed`, `pinned`, `relax`, stale set, `exact()` (incl. `run` & `engine_api`), `compute_heights` (non-test) | Exact need-count oracle under `observe_all(false)`; constant/structural edit & layout necessity counters flat | Open |
 | **EN-9** | 3 · Scaling | **Visibility gate & retiring `ROOTED`:** cached node owners, cross-owner read counts, delta clock gating; retire `ROOTED`; captures observe what they draw | `Store::paused` scans, `Clocks::gated`, `Reactive::reader_nodes`, `Docs::reshaped`, `Reactive::wired`, `op::reshapes`, `ROOTED` | All gate & capture tests pass; §8.8 consistency with paused pages passes; playing & gate counters flat | Open |
@@ -67,22 +67,7 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 
 ---
 
-## 4. Immediate Next Steps (`EN-12` and `EN-13`)
-
-### EN-12: Flat solver poses, split previews & Stage-1 carryovers
-1. **Flat `Document::solved` (`Op::Solve`):**
-   - Add `solved: BTreeMap<Leaf, Slot>` to `Document` (journaled, saved in `serial.rs`, schema bump) and `Op::Solve { leaf, slot: Option<Slot> }`.
-   - Route Stage 4 `Transaction` constraint solver writes on expanded copies into `Op::Solve`.
-   - When an authored edit modifies a leaf present in `Document::solved`, clear its solve entry as a derived op first (so the authored edit acts as a driver).
-   - When constraint deletion leaves a copy unheld by any cluster, clear its `Document::solved` entries as derived ops (snapping back cleanly to its authored override/template value).
-   - Make undo, redo, replay, and `Store::load` 100% solver-free and delete `Owners::solved`, `Owners::edited`, `Owners::held_wanted`, `Owners::wanted_slots`, `keep_solved`, `apply_recorded`, `release`, and `solve::writes`.
-2. **Split ephemeral previews:**
-   - Separate `gesture_preview: BTreeMap<Leaf, Value>` (owned by `ActiveGesture`) from `live_solve_preview: BTreeMap<Leaf, Value>` (owned by `resolve_clusters_live`).
-   - Tie `gesture_in_progress()` strictly to `gesture_preview`; clear `gesture_preview` cleanly before `cluster_problems()` on `commit_gesture`; handle missing optional facets (e.g. `corners`) cleanly on unpreview.
-3. **Zero-alloc `NodeId::expanded_parts()` & recorded-read `TemplateCache`:**
-   - Cherry-pick zero-alloc `NodeId::expanded_parts()` / `expanded_root()` from `archive/universal-patch-experiment` (`14e4534`).
-   - Move `TemplateCache` onto recorded reads (`Tree::recording` → `Key` reverse index, cleared on rollback) and delete `Document::scopes`, `scope_stamp`, `touch`, and `Tree::scope_stamp`.
-4. **Verify:** Plain + `IRON_OWNER_CHECK=1 --features structure-oracle` + `iron_spatial` + `iron_svg` + `bun test` + `webgl2` smoke. Confirm **net negative LOC**.
+## 4. Immediate Next Step (`EN-13`)
 
 ### EN-13: Lean Lexical Virtual Views + `ItemTable` (delete `Docs::copies`)
 1. Build lean virtual views directly over shared `Arc<Template>` + flat lexical overrides (`outermost instance > inner instance > variant > definition`) + sparse resolved map for overridden/rewritten virtual nodes.

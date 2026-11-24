@@ -366,6 +366,7 @@ fn remap_op(op: Op, map: &BTreeMap<NodeId, NodeId>) -> Op {
         Op::RemoveFacet { id, kind } => Op::RemoveFacet { id: m(id), kind },
         Op::Link { rel } => Op::Link { rel: Relation { from: m(rel.from), to: m(rel.to), ..rel } },
         Op::Unlink { id } => Op::Unlink { id },
+        Op::Solve { leaf, slot } => Op::Solve { leaf: Leaf { node: m(leaf.node), path: leaf.path }, slot },
     }
 }
 

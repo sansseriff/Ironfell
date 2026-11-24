@@ -164,42 +164,17 @@ pub struct Document {
     /// rollback refreshes the ids it puts back (`refresh_rooted`).
     by_root: BTreeMap<NodeId, BTreeSet<RelationId>>,
 
+    /// Persisted solver poses on derived copies (`Op::Solve`, EN-12):
+    /// saved, journaled, cleared on authored edit or when no constraint
+    /// cluster holds the copy; undo, redo, replay, and load never re-solve.
+    solved: BTreeMap<Leaf, Slot>,
+
     /// The open transaction's undo records (reactive-engine handoff §4.3,
     /// task 2). Outside equality and cloning: a clone has none open.
     journal: JournalCell,
-    /// Each definition's and repeat's (or conditional's) last write under
-    /// it ([`Document::scope_stamp`]). Not content.
-    scopes: Scopes,
     /// The structural keys written since the store last took them
     /// (structure-in-the-graph.md §3.3). Not content.
     touched: crate::structure::Touched,
-}
-
-/// When each scope was last written under: a stamp from one counter for
-/// the process, so no stamp is ever given twice, whether by a rollback, a
-/// clone going its own way, or another document. A scope never written is
-/// at the document's `base`. Equal to any other.
-#[derive(Clone, Debug)]
-struct Scopes {
-    base: u64,
-    last: std::collections::HashMap<NodeId, u64>,
-}
-
-fn next_stamp() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-impl Default for Scopes {
-    fn default() -> Scopes {
-        Scopes { base: next_stamp(), last: Default::default() }
-    }
-}
-
-impl PartialEq for Scopes {
-    fn eq(&self, _: &Self) -> bool {
-        true
-    }
 }
 
 /// One write, as what puts it back. Recorded in the order of the writes and
@@ -212,6 +187,7 @@ enum Rec {
     FacetTable(FacetKind),
     Facet(FacetKind, NodeId, Option<Facet>),
     Relation(RelationId, Option<Relation>),
+    Solve(Leaf, Option<Slot>),
     NextId(u32, Option<u64>),
     NextRel(u32, Option<u64>),
     SessionId(u64),
@@ -556,34 +532,35 @@ impl Document {
         false
     }
 
-    /// When anything under definition, repeat or conditional `id` was last
-    /// written: what is compiled from its content (`engine::template`) is
-    /// current while this is unchanged. Written means a node in it made,
-    /// removed, moved, reordered, its facets changed, or a relation from it
-    /// linked or unlinked; a rollback writes again what it puts back.
-    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
-        self.scopes.last.get(&id).copied().unwrap_or(self.scopes.base)
+    /// Persisted solver poses on derived copies (`Op::Solve`, EN-12).
+    pub fn solved(&self) -> &BTreeMap<Leaf, Slot> {
+        &self.solved
     }
 
-    /// A write at `id`: a new stamp for every definition, repeat and
-    /// conditional it is in, itself included. Derived nodes are in no
-    /// template. A session node is copied by none, but a compiler can
-    /// still see it (a picture's classes, a body's inputs), so it stamps.
-    fn touch(&mut self, id: NodeId) {
-        if id.is_expanded() {
-            return;
+    /// Persisted solver pose on `leaf`, if any.
+    pub fn solve_leaf(&self, leaf: Leaf) -> Option<&Slot> {
+        self.solved.get(&leaf)
+    }
+
+    /// Set or clear a persisted solver pose on `leaf`: journaled and emits
+    /// `Key::Leaf(leaf)` through the single write channel.
+    pub(crate) fn set_solve(&mut self, leaf: Leaf, slot: Option<Slot>) -> Option<Slot> {
+        let on = self.touched.on;
+        self.touched.on &= !crate::structure::silenced("set_solve");
+        let old = match slot {
+            Some(s) => self.solved.insert(leaf, s),
+            None => self.solved.remove(&leaf),
+        };
+        if self.recording() {
+            self.rec(Rec::Solve(leaf, old.clone()));
         }
-        let mut stamp = None;
-        let mut at = Some(id);
-        while let Some(n) = at {
-            let Some(node) = self.nodes.get(&n) else { break };
-            let scope = node.ty.name() == "definition" || [FacetKind::Repeat, FacetKind::When].iter().any(|k| self.facets.get(k).is_some_and(|m| m.contains_key(&n)));
-            if scope {
-                let s = *stamp.get_or_insert_with(next_stamp);
-                self.scopes.last.insert(n, s);
-            }
-            at = node.parent;
-        }
+        self.touched.note(crate::structure::Key::Leaf(leaf));
+        self.touched.on = on;
+        old
+    }
+
+    pub(crate) fn set_solved(&mut self, solved: BTreeMap<Leaf, Slot>) {
+        self.solved = solved;
     }
 
     pub fn relation(&self, id: RelationId) -> Option<&Relation> {
@@ -637,6 +614,10 @@ impl Document {
         std::mem::take(&mut self.touched.keys)
     }
 
+    pub(crate) fn touched_slice(&self) -> &[crate::structure::Key] {
+        &self.touched.keys
+    }
+
     pub(crate) fn touched_empty(&self) -> bool {
         self.touched.keys.is_empty()
     }
@@ -654,29 +635,8 @@ impl Document {
         // store puts its own state back (structure-in-the-graph.md §3.3).
         self.touched.keys.clear();
         let journal = self.journal.0.take().expect("no journal to roll back");
-        // What is put back is written again: the scopes it is in now, and
-        // those it is back in after.
-        let mut touched = BTreeSet::new();
-        for r in &journal.recs {
-            match r {
-                Rec::Node(id, _) | Rec::Facet(_, id, _) => {
-                    touched.insert(*id);
-                }
-                Rec::Relation(id, before) => {
-                    touched.extend(self.relations.get(id).map(|x| x.from));
-                    touched.extend(before.as_ref().map(|x| x.from));
-                }
-                _ => {}
-            }
-        }
-        for &id in &touched {
-            self.touch(id);
-        }
         for r in journal.recs.into_iter().rev() {
             self.undo(r);
-        }
-        for &id in &touched {
-            self.touch(id);
         }
         // Invariants are checked over both documents together, by
         // `Docs::rollback`: a copy's parent is in the other one.
@@ -730,6 +690,7 @@ impl Document {
                 put(&mut self.relations, id, r);
                 self.refresh_rooted(id);
             }
+            Rec::Solve(leaf, s) => put(&mut self.solved, leaf, s),
             Rec::NextId(client, n) => put(&mut self.next_ids, client, n),
             Rec::NextRel(client, n) => put(&mut self.next_rels, client, n),
             Rec::SessionId(n) => self.next_session_id = n,
@@ -901,7 +862,6 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
-        self.touch(id);
         self.touched.on = on;
     }
 
@@ -917,8 +877,6 @@ impl Document {
     ) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("restore_node");
-        // Where the tombstone was, and (below) where it comes back.
-        self.touch(id);
         for kind in FacetKind::ALL {
             if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
                 self.touched.note(crate::structure::Key::FacetSet(id));
@@ -939,7 +897,6 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
-        self.touch(id);
         self.touched.on = on;
     }
 
@@ -948,7 +905,6 @@ impl Document {
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("tombstone");
-        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.tombstoned = Some(at));
         let ty = self.nodes[&id].ty;
@@ -977,7 +933,6 @@ impl Document {
     pub(crate) fn remove_node(&mut self, id: NodeId) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("remove_node");
-        self.touch(id);
         debug_assert!(self.is_live(id), "only a live node is removed");
         self.unplace(id);
         let ty = self.nodes[&id].ty;
@@ -1001,21 +956,18 @@ impl Document {
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("set_parent");
-        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| {
             n.parent = parent;
             n.order = order;
         });
         self.place(id);
-        self.touch(id);
         self.touched.on = on;
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("set_order");
-        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.order = order);
         self.place(id);
@@ -1025,7 +977,6 @@ impl Document {
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("insert_facet");
-        self.touch(id);
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
         self.note_facet_leaves(id, &c);
@@ -1054,7 +1005,6 @@ impl Document {
     ) -> Option<Facet> {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("remove_facet");
-        self.touch(id);
         let Some(c) = self.facets.get_mut(&kind).and_then(|m| m.remove(&id)) else {
             self.touched.on = on;
             return None;
@@ -1102,7 +1052,6 @@ impl Document {
         if let Some(before) = before {
             self.rec(Rec::Facet(path.facet, id, Some(before)));
         }
-        self.touch(id);
         self.touched.note(crate::structure::Key::Facet(id, path.facet));
         self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
         self.touched.on = on;
@@ -1117,7 +1066,6 @@ impl Document {
         id: NodeId,
         kind: FacetKind,
     ) -> Option<&mut Facet> {
-        self.touch(id);
         self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
             let before = self.facets.get(&kind)?.get(&id)?.clone();
@@ -1129,7 +1077,6 @@ impl Document {
     pub(crate) fn insert_relation(&mut self, r: Relation) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("insert_relation");
-        self.touch(r.from);
         let (id, from, to) = (r.id, r.from, r.to);
         self.touched.note(crate::structure::Key::Relation(id));
         self.touched.note(crate::structure::Key::Relations(from));
@@ -1187,7 +1134,6 @@ impl Document {
         self.touched.note(crate::structure::Key::Relations(r.from));
         self.touched.note(crate::structure::Key::Relations(r.to));
         self.refresh_rooted(id);
-        self.touch(r.from);
         if self.recording() {
             self.rec(Rec::Relation(id, Some(r.clone())));
         }

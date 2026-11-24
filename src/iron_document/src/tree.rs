@@ -169,6 +169,9 @@ pub(crate) struct Docs {
     pub(crate) scoped: ScopedIndexes,
     scoped_journal: Option<Vec<ScopedRec>>,
     scoped_touched: crate::structure::Touched,
+    /// Offsets into `(authored.touched, copies.touched, scoped_touched)` already
+    /// observed by `TemplateCache::note_touched` since the last `take_touched`.
+    template_cursor: (usize, usize, usize),
     /// Each node deleted since the changes were last taken, as it was when
     /// it went: a copy leaves no tombstone to read it from afterwards
     /// (`Changes::note`, `Store::regraph`).
@@ -197,6 +200,7 @@ impl Docs {
             scoped,
             scoped_journal: None,
             scoped_touched: Default::default(),
+            template_cursor: (0, 0, 0),
             gone: Default::default(),
             gone_journal: None,
             reshaped: crate::stamp(),
@@ -353,6 +357,10 @@ impl Docs {
         self.of_node(id).set_leaf(id, path, slot)
     }
 
+    pub(crate) fn set_solve(&mut self, leaf: Leaf, slot: Option<Slot>) -> Option<Slot> {
+        self.authored.set_solve(leaf, slot)
+    }
+
     pub(crate) fn insert_relation(&mut self, rel: Relation) {
         self.of_relation(rel.id).insert_relation(rel);
     }
@@ -378,11 +386,35 @@ impl Docs {
         self.copies.set_touched(true);
         self.scoped_touched.on = true;
         self.scoped_touched.keys.clear();
+        self.template_cursor = (0, 0, 0);
+    }
+
+    /// Keys touched since the last `drain_template_touched`, `take_touched`,
+    /// or `rollback` (for recorded-read template invalidation without removing
+    /// keys from the main `take_touched` log, EN-12).
+    pub(crate) fn drain_template_touched(&mut self) -> Vec<crate::structure::Key> {
+        let a = self.authored.touched_slice();
+        let c = self.copies.touched_slice();
+        let s = &self.scoped_touched.keys;
+        let (ia, ic, is) = self.template_cursor;
+        let mut out = Vec::new();
+        if ia < a.len() {
+            out.extend_from_slice(&a[ia..]);
+        }
+        if ic < c.len() {
+            out.extend_from_slice(&c[ic..]);
+        }
+        if is < s.len() {
+            out.extend_from_slice(&s[is..]);
+        }
+        self.template_cursor = (a.len(), c.len(), s.len());
+        out
     }
 
     /// The keys both documents' writes and scoped index updates touched since
     /// they were last taken.
     pub(crate) fn take_touched(&mut self) -> Vec<crate::structure::Key> {
+        self.template_cursor = (0, 0, 0);
         let mut keys = self.authored.take_touched();
         keys.append(&mut self.copies.take_touched());
         keys.append(&mut self.scoped_touched.keys);
@@ -416,6 +448,7 @@ impl Docs {
         self.authored.rollback();
         self.copies.rollback();
         self.scoped_touched.keys.clear();
+        self.template_cursor = (0, 0, 0);
         if let Some(recs) = self.scoped_journal.take() {
             self.scoped.undo(recs);
         }
@@ -469,11 +502,16 @@ impl<'a> Tree<'a> {
         debug_assert!(self.rec.is_none(), "a recording tree has no key for `{what}` (engine.md §3.2)");
     }
 
-    /// When anything under definition or repeat `id` was last written
-    /// (`Document::scope_stamp`).
-    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
-        self.unkeyed("scope_stamp");
-        self.doc.scope_stamp(id)
+    /// Persisted solver pose on `leaf` (`Document::solved`, EN-12).
+    pub fn solve_leaf(&self, leaf: Leaf) -> Option<&'a Slot> {
+        self.note(crate::structure::Key::Leaf(leaf));
+        self.doc.solve_leaf(leaf)
+    }
+
+    /// Effective stored slot for `leaf`: persisted solver pose if present, else
+    /// the node's own facet slot.
+    pub fn stored_leaf(&self, leaf: Leaf) -> Option<&'a Slot> {
+        self.solve_leaf(leaf).or_else(|| self.leaf(leaf.node, leaf.path))
     }
 
     /// The tree over a document that holds no copies apart from it: a
@@ -970,22 +1008,14 @@ mod tests {
         assert!(store.tree().nodes_with_in(a, FacetKind::Layout).is_empty());
     }
 
-    /// Recording tree enforces keys: reading `version()` or `scope_stamp()`
-    /// under a recording tree fails a debug assertion (EN-1).
+    /// Recording tree enforces keys: reading `version()` under a recording
+    /// tree fails a debug assertion (EN-1).
     #[test]
     #[should_panic(expected = "a recording tree has no key for `version`")]
     fn recording_tree_rejects_unkeyed_version() {
         let doc = Document::new();
         let rec = crate::structure::Recorder::default();
         let _ = Tree::authored_only(&doc).recording(&rec).version();
-    }
-
-    #[test]
-    #[should_panic(expected = "a recording tree has no key for `scope_stamp`")]
-    fn recording_tree_rejects_unkeyed_scope_stamp() {
-        let doc = Document::new();
-        let rec = crate::structure::Recorder::default();
-        let _ = Tree::authored_only(&doc).recording(&rec).scope_stamp(NodeId::authored(0, 1));
     }
 
     /// Choke-point canary sweep (EN-1): every mutation choke point emits keys
@@ -1037,6 +1067,12 @@ mod tests {
         });
         assert!(e.contains(&Key::Leaf(Leaf { node: r, path: "transform2d.x".parse().unwrap() })), "{e:?}");
         assert!(s.is_empty(), "set_leaf silenced: {s:?}");
+
+        let (e, s) = run(&docs, "set_solve", |d| {
+            let _ = d.set_solve(Leaf { node: copy, path: "transform2d.x".parse().unwrap() }, Some(Slot::Const(Value::Number(17.0))));
+        });
+        assert!(e.contains(&Key::Leaf(Leaf { node: copy, path: "transform2d.x".parse().unwrap() })), "{e:?}");
+        assert!(s.is_empty(), "set_solve silenced: {s:?}");
 
         let (e, s) = run(&docs, "set_order", |d| {
             d.set_order(r, OrderKey::after(&OrderKey::after(&OrderKey::first())));

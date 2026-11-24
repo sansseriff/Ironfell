@@ -5,18 +5,21 @@
 //! separate from location (plans/specs/document-spine.md §7). The layout is chosen
 //! so that a git diff of a saved file reads as an op log.
 
-use crate::facet::{Facet, FacetKind};
+use crate::expr::Leaf;
+use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::document::{Counters, Document, Node, Relation};
 use crate::id::{NodeId, RelationId, ScopeId, Version};
 use crate::order::OrderKey;
 use crate::registry::TypeId;
+use crate::value::{Slot, Value};
 use serde_json::{Map, Value as J, json};
 use std::collections::BTreeMap;
 use std::fmt;
 
 /// The format's version. Only this one loads: there are no saved files
 /// from earlier versions to keep (decided 2026-11-02), so a format change
-/// bumps it and drops the old reader rather than migrating. Schema 15 added
+/// bumps it and drops the old reader rather than migrating. Schema 16 added
+/// flat persisted solver poses (`solved`, `Op::Solve`, EN-12); 15 added
 /// `layout.contain`; 14 permits a context on component templates; 13 added
 /// themed slider colours; 12 made
 /// ids `client_counter` and the header's counters one per client; 11 added
@@ -24,7 +27,7 @@ use std::fmt;
 /// (background, grid); 9 named
 /// the scope in the header (scopes.md §3); 8 packed paths' outlines into
 /// `path.d`; history before that is in git.
-pub const SCHEMA: u64 = 15;
+pub const SCHEMA: u64 = 16;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadError(pub String);
@@ -106,7 +109,19 @@ pub fn save(doc: &Document) -> String {
             n_compact(&serde_json::to_value(r).expect("relation serialises"))
         ));
     }
-    out.push_str("\n ]}\n");
+    if doc.solved().is_empty() {
+        out.push_str("\n ]}\n");
+    } else {
+        out.push_str("\n ],\n \"solved\": {");
+        let mut first = true;
+        for (leaf, slot) in doc.solved() {
+            let Some(v) = slot.constant() else { continue };
+            out.push_str(if first { "\n" } else { ",\n" });
+            first = false;
+            out.push_str(&format!("  \"{leaf}\": {}", n_compact(&v.to_json())));
+        }
+        out.push_str("\n }}\n");
+    }
     out
 }
 
@@ -330,7 +345,37 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
         }
     }
 
+    let mut solved: BTreeMap<Leaf, Slot> = BTreeMap::new();
+    if let Some(raw_solved) = obj.get("solved") {
+        let map = raw_solved
+            .as_object()
+            .ok_or_else(|| LoadError("solved must be an object".into()))?;
+        for (k, v) in map {
+            let (id_str, path_str) = k
+                .split_once('.')
+                .ok_or_else(|| LoadError(format!("solved key {k:?} is not a leaf")))?;
+            let node: NodeId = id_str
+                .parse()
+                .map_err(|e: crate::id::IdParseError| LoadError(format!("solved {k:?}: {e}")))?;
+            if !node.is_expanded() {
+                return Err(LoadError(format!("solved key {k:?} must target a derived copy")));
+            }
+            if !node.expanded_root().is_some_and(|root| nodes.contains_key(&root)) {
+                return Err(LoadError(format!("solved key {k:?} references an unknown owner")));
+            }
+            let path: LeafPath = path_str
+                .parse()
+                .map_err(|e| LoadError(format!("solved {k:?}: {e}")))?;
+            let val = Value::from_json(v).map_err(|e| LoadError(format!("solved {k:?}: {e}")))?;
+            if !path.kind().matches(&val) {
+                return Err(LoadError(format!("solved {k:?}: value does not match field kind")));
+            }
+            solved.insert(Leaf { node, path }, Slot::Const(val));
+        }
+    }
+
     let mut doc = Document::from_parts(nodes, facets, relations, next, version);
+    doc.set_solved(solved);
     doc.set_scope(scope);
     doc.check_invariants().map_err(LoadError)?;
     if let Some(why) = doc.derived_content() {

@@ -194,7 +194,7 @@ fn a_solved_copy_transform_has_history_and_undo() {
         .apply(tx("tie", built.ops.into_iter().chain([constrain(rels[0], n["fix"], n["p"], "a"), constrain(rels[1], n["d"], n["p"], "a"), constrain(rels[2], n["d"], copy, "b")]).collect()))
         .unwrap_or_else(|e| panic!("{e:?}"));
     let last = store.history().past().last().unwrap();
-    assert!(last.derived_ops.iter().any(|op| matches!(op, Op::Set { id, .. } if *id == copy)), "the solver wrote the copy: {:?}", last.derived_ops);
+    assert!(last.derived_ops.iter().any(|op| matches!(op, Op::Solve { leaf, slot: Some(_) } if leaf.node == copy)), "the solver wrote the copy: {:?}", last.derived_ops);
     let moved = store.resolved(copy, x).and_then(|v| v.as_f64()).unwrap();
     assert!((moved - was).abs() > 1.0, "the copy moved: {was} → {moved}");
 
@@ -482,10 +482,12 @@ fn a_driven_solved_copy_is_not_let_go() {
     store.publish(live, BTreeMap::from([(Leaf { node: copy, path: x }, Value::Number(-40.0))]));
     let rename = |name: &str| tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str(name.into())) }]);
     store.apply(rename("new")).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+    assert_eq!(store.tree().solve_leaf(Leaf { node: copy, path: x }), Some(&num(-40.0)));
+    assert_eq!(store.tree().stored_leaf(Leaf { node: copy, path: x }), Some(&num(-40.0)));
     store.undo(0).unwrap().unwrap();
     store.apply(rename("newer")).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+    assert_eq!(store.tree().solve_leaf(Leaf { node: copy, path: x }), Some(&num(-40.0)));
+    assert_eq!(store.tree().stored_leaf(Leaf { node: copy, path: x }), Some(&num(-40.0)));
 }
 
 /// A solved copy a publish removed, outside history, has no solved value
@@ -731,4 +733,160 @@ fn a_failed_expansion_does_not_record_what_it_wanted() {
     }
     store.apply(tx("put it back", vec![Op::Create { id: k, ty: ty("let"), parent, order, facets }])).unwrap_or_else(|e| panic!("{e:?}"));
     assert!(store.tree().leaf(copy, x).and_then(Slot::expr).is_some(), "{:?}", store.tree().leaf(copy, x));
+}
+
+/// EN-12: persisted solver poses on derived copies live in flat
+/// `Document::solved`, round-trip through `save`/`load` without re-solving,
+/// release cleanly via `Op::Solve { slot: None }` when constraints go away,
+/// and restore on undo without invoking the solver.
+#[test]
+fn solved_copy_roundtrips_through_save_and_load_and_releases_on_unlink() {
+    let (mut store, comp) = sheet();
+    let (_, copy) = row_copy(&mut store, comp, 1, "0");
+    let x = path("transform2d.x");
+    let y = path("transform2d.y");
+    let p = pin(&mut store, comp, copy, [-40.0, 15.0]);
+    let lx = Leaf { node: copy, path: x };
+    let ly = Leaf { node: copy, path: y };
+    assert_eq!(store.tree().solve_leaf(lx), Some(&num(-40.0)));
+    assert_eq!(store.tree().solve_leaf(ly), Some(&num(15.0)));
+    assert_eq!(store.tree().leaf(copy, x), Some(&num(0.0)), "template copy leaf stays untouched");
+
+    // Save/load preserves `Document::solved` verbatim.
+    let saved = store.save();
+    assert!(saved.contains("\"solved\""), "saved JSON carries solved table: {saved}");
+    let loaded = Store::load(&saved).unwrap();
+    assert_eq!(loaded.tree().solve_leaf(lx), Some(&num(-40.0)));
+    assert_eq!(loaded.tree().solve_leaf(ly), Some(&num(15.0)));
+    assert_eq!(x_of(&loaded, copy), -40.0);
+    assert_eq!(loaded.save(), saved);
+
+    // Deleting the pin releases the copy's solved pose via Op::Solve(None).
+    store.apply(tx("unpin", vec![Op::Delete { id: p }])).unwrap_or_else(|e| panic!("{e:?}"));
+    let last = store.history().past().last().unwrap();
+    assert!(
+        last.derived_ops.iter().any(|op| matches!(op, Op::Solve { leaf, slot: None } if *leaf == lx)),
+        "P17 release emitted Op::Solve(None): {:?}",
+        last.derived_ops
+    );
+    assert_eq!(store.tree().solve_leaf(lx), None);
+    assert_eq!(x_of(&store, copy), 0.0, "snaps back to template x");
+
+    // Undo restores the solved pose directly from Op::Solve's inverse.
+    store.undo(0).unwrap().unwrap();
+    assert_eq!(store.tree().solve_leaf(lx), Some(&num(-40.0)));
+    assert_eq!(x_of(&store, copy), -40.0);
+}
+
+/// EN-12: `resolve_clusters_live` writes only `live_solve_preview`, so live
+/// solves outside a gesture never make `gesture_in_progress()` true.
+#[test]
+fn live_solve_outside_gesture_is_not_a_gesture() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<ellipse id="$a" x="0" y="0" rx="5" ry="5"/><ellipse id="$b" x="40" y="0" rx="5" ry="5"/>"#);
+    let built = markup::ops(r#"<constraint id="$fix" kind="fix" value="0"/><constraint id="$d" kind="distance" value="40"/>"#, Some(comp), OrderKey::after(&OrderKey::first()), store.authored().next_id()).unwrap();
+    let c = built.named;
+    let rels = store.authored().next_relation_ids(3);
+    store
+        .apply(tx("tie", built.ops.into_iter().chain([constrains(rels[0], c["fix"], n["a"], "a"), constrains(rels[1], c["d"], n["a"], "a"), constrains(rels[2], c["d"], n["b"], "b")]).collect()))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+
+    let x = path("transform2d.x");
+    let live = store.register_producer("live");
+    store.publish(live, BTreeMap::from([(Leaf { node: n["a"], path: x }, Value::Number(100.0))]));
+    let bx = store.resolved(n["b"], x).and_then(|v| v.as_f64()).unwrap();
+    assert!((bx - 60.0).abs() < 1e-3 || (bx - 140.0).abs() < 1e-3, "live solve moved b: {bx}");
+    assert!(!store.gesture_in_progress(), "live solve outside a gesture must not report gesture_in_progress");
+
+    // A user gesture preview DOES report gesture_in_progress, and cancelling clears it.
+    store.preview(n["b"], path("transform2d.y"), Value::Number(25.0));
+    assert!(store.gesture_in_progress());
+    store.cancel_gesture();
+    assert!(!store.gesture_in_progress());
+}
+
+/// EN-12: unpreviewing or cancelling a preview on a missing optional facet
+/// (such as `corners.tl` on a plain rect) notifies cleanly and does not panic.
+#[test]
+fn unpreview_on_missing_optional_facet_clears_cleanly() {
+    let (mut store, comp) = sheet();
+    let n = draw(&mut store, comp, r#"<rect id="$r" x="0" y="0" w="40" h="20"/>"#);
+    let r = n["r"];
+    let cr = path("corners.tl");
+    assert!(store.tree().facet(r, FacetKind::Corners).is_none());
+
+    store.preview(r, cr, Value::Number(10.0));
+    assert!(store.gesture_in_progress());
+    assert_eq!(store.resolved(r, cr), Some(Value::Number(10.0)));
+    store.take_changes();
+
+    store.unpreview(r, cr);
+    assert!(!store.gesture_in_progress());
+    assert_eq!(store.resolved(r, cr), None);
+    let changes = store.take_changes();
+    assert!(changes.values.contains(&Leaf { node: r, path: cr }), "unpreview notified missing optional facet: {:?}", changes.values);
+
+    // Same via cancel_gesture.
+    store.preview(r, cr, Value::Number(8.0));
+    store.take_changes();
+    store.cancel_gesture();
+    assert!(!store.gesture_in_progress());
+    assert_eq!(store.resolved(r, cr), None);
+    let changes = store.take_changes();
+    assert!(changes.values.contains(&Leaf { node: r, path: cr }), "cancel_gesture notified missing optional facet: {:?}", changes.values);
+}
+
+/// EN-12: recorded-read TemplateCache updates on definition edits and stays
+/// consistent after unrelated edits and rolled-back transactions.
+#[test]
+fn recorded_read_template_cache_handles_definition_edit_and_rollback() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit>
+          <model id="$m" name="model"/>
+          <composition id="$c" name="scene" dims="2d">
+            <rect id="$other" x="0" y="100" w="10" h="10"/>
+          </composition>
+          <library name="library">
+            <definition id="$def" name="Badge">
+              <template notation="free"><rect id="$part" name="box" x="0" y="0" w="20" h="10"/></template>
+            </definition>
+          </library>
+        </edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("setup", plan.ops)).unwrap();
+    let (def, part, comp, other) = (plan.aliases["$def"], plan.aliases["$part"], plan.aliases["$c"], plan.aliases["$other"]);
+    let placed = edit::plan(&store, &format!(r#"<edit><place def="{def}" in="{comp}" id="$p" x="50" y="0"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("place", placed.ops)).unwrap();
+    let inst = *store.tree().children(comp).iter().find(|&&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use")).unwrap();
+    let copy_box = store.tree().descendants(inst).into_iter().find(|&id| id.is_expanded() && store.tree().live(id).is_some_and(|m| m.ty == ty("rect"))).unwrap();
+    let w = path("size.w");
+    assert_eq!(store.resolved(copy_box, w), Some(Value::Number(20.0)));
+
+    // Unrelated edit does not perturb the instance.
+    store.apply(tx("unrelated", vec![Op::Set { id: other, path: path("transform2d.x"), slot: num(99.0) }])).unwrap();
+    assert_eq!(store.resolved(copy_box, w), Some(Value::Number(20.0)));
+
+    // Editing the definition updates the cached template and instance copy.
+    store.apply(tx("widen def", vec![Op::Set { id: part, path: w, slot: num(45.0) }])).unwrap();
+    assert_eq!(store.resolved(copy_box, w), Some(Value::Number(45.0)));
+
+    // A failing transaction that mutates the definition before failing rolls
+    // back cleanly and leaves the template cache consistent.
+    let err = store.apply(tx(
+        "bad",
+        vec![
+            Op::Set { id: part, path: w, slot: num(999.0) },
+            Op::Delete { id: "#zzzzz".parse().unwrap() },
+        ],
+    ));
+    assert!(err.is_err());
+    assert_eq!(store.resolved(copy_box, w), Some(Value::Number(45.0)));
+
+    // Subsequent definition edit still invalidates and applies cleanly.
+    store.apply(tx("narrow def", vec![Op::Set { id: part, path: w, slot: num(30.0) }])).unwrap();
+    assert_eq!(store.resolved(copy_box, w), Some(Value::Number(30.0)));
 }

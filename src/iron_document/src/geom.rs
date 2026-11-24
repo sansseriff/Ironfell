@@ -417,6 +417,9 @@ impl Revisions {
                 Op::Set { id, path, .. } => {
                     self.pending_leaves.insert(Leaf { node: *id, path: *path });
                 }
+                Op::Solve { leaf, .. } => {
+                    self.pending_leaves.insert(*leaf);
+                }
                 Op::Create { id, parent, .. } | Op::Reparent { id, parent, .. } => {
                     self.pending_structure = true;
                     self.pending_shaped.insert(Some(*id));

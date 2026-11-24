@@ -188,6 +188,9 @@ impl Changes {
                 Op::Set { id, path, .. } => {
                     self.slots.insert(Leaf { node: *id, path: *path });
                 }
+                Op::Solve { leaf, .. } => {
+                    self.slots.insert(*leaf);
+                }
                 Op::AddFacet { id, facet } => self.slots.extend(leaves(*id, facet)),
                 Op::RemoveFacet { id, kind } => {
                     let removed = inverse.iter().find_map(|i| match i {

@@ -77,7 +77,7 @@ fn the_scope_is_saved_in_the_header_and_is_not_an_op() {
     assert_eq!(store.history().past().len(), undoable);
 
     let text = store.save();
-    assert!(text.starts_with(&format!("{{\"schema\": 15, \"scope\": \"{ID}\",")), "{text}");
+    assert!(text.starts_with(&format!("{{\"schema\": 16, \"scope\": \"{ID}\",")), "{text}");
     let loaded = Store::load(&text).unwrap();
     assert_eq!(loaded.scope(), store.scope());
     assert_eq!(loaded.save(), text);
@@ -89,12 +89,12 @@ fn only_the_current_schema_loads() {
     ellipse(&mut store);
     let text = store.save();
     // A document need not name a scope (an unsaved demo does not).
-    assert!(text.starts_with("{\"schema\": 15, \"next_ids\""));
+    assert!(text.starts_with("{\"schema\": 16, \"next_ids\""));
     assert_eq!(Store::load(&text).unwrap().scope(), None);
     // No migrations: an older schema is refused, as is a bad scope.
-    let old = text.replacen("\"schema\": 15", "\"schema\": 14", 1);
-    assert!(Store::load(&old).err().is_some_and(|e| e.to_string().contains("reads only 15")));
-    let bad = text.replacen("\"schema\": 15,", "\"schema\": 15, \"scope\": \"nope\",", 1);
+    let old = text.replacen("\"schema\": 16", "\"schema\": 15", 1);
+    assert!(Store::load(&old).err().is_some_and(|e| e.to_string().contains("reads only 16")));
+    let bad = text.replacen("\"schema\": 16,", "\"schema\": 16, \"scope\": \"nope\",", 1);
     assert!(Store::load(&bad).is_err());
 }
 

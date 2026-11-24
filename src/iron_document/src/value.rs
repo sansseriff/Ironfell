@@ -157,6 +157,10 @@ impl ValueKind {
             ValueKind::Any => "any",
         }
     }
+
+    pub fn matches(self, v: &Value) -> bool {
+        self == ValueKind::Any || v.kind() == self
+    }
 }
 
 impl Value {

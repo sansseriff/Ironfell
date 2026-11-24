@@ -291,7 +291,7 @@ impl Cx<'_> {
             if self.graph.runtime.get(&leaf).is_some_and(|s| s.producer == producer) {
                 return beneath(self.doc, leaf);
             }
-            return read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf);
+            return read_with(&self.graph.gesture_preview, &self.graph.live_solve_preview, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf);
         }
         self.reads.borrow_mut().insert(leaf);
         if let Some(c) = self.graph.cell_of(leaf)
@@ -299,7 +299,7 @@ impl Cx<'_> {
         {
             self.reached.borrow_mut().insert(c);
         }
-        read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf)
+        read_with(&self.graph.gesture_preview, &self.graph.live_solve_preview, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf)
     }
 
     /// A leaf's authored constant, or its facet's default, beneath every
@@ -525,6 +525,9 @@ impl Iterator for Readers<'_> {
 /// facet's default when the node lacks it.
 fn beneath(doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
     doc.live(leaf.node)?;
+    if let Some(slot) = doc.solve_leaf(leaf) {
+        return slot.constant().cloned();
+    }
     match doc.leaf(leaf.node, leaf.path) {
         Some(slot) => slot.constant().cloned(),
         None => leaf.path.facet.default_facet().get(leaf.path.field).and_then(|s| s.constant().cloned()),
@@ -561,7 +564,12 @@ pub struct Reactive {
     /// Any leaf -> the cells that read it.
     dependents: Counted<BTreeMap<Leaf, BTreeSet<CellId>>, GRAPH_DEPENDENTS>,
     resolved: Counted<BTreeMap<Leaf, Value>, GRAPH_RESOLVED>,
-    overlay: BTreeMap<Leaf, Value>,
+    /// Ephemeral previews owned strictly by an active user gesture (`EN-12`).
+    gesture_preview: BTreeMap<Leaf, Value>,
+    /// Ephemeral previews written by `resolve_clusters_live` (`EN-12`), kept
+    /// strictly separate from `gesture_preview` so live solves never masquerade
+    /// as a user gesture.
+    live_solve_preview: BTreeMap<Leaf, Value>,
     /// The runtime layer (vision 10 §4): named signals published by
     /// producers, read beneath bindings and above authored constants, never
     /// serialised. Clips (`time.rs`) and the across/through network
@@ -723,7 +731,7 @@ impl Reactive {
             let old = self.behind(c);
             *self.escaped.read.lock().expect("escaped lock").entry(leaf).or_default() |= old;
         }
-        read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
+        read_with(&self.gesture_preview, &self.live_solve_preview, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
 
     /// Whether evaluation stopped at `leaf`: its inputs changed while
@@ -1137,8 +1145,8 @@ impl Reactive {
             return;
         }
         for &l in &changed {
-            // Only visible when no gesture is previewing this leaf.
-            if !self.overlay.contains_key(&l)
+            // Only visible when no preview shadows this leaf.
+            if !self.is_previewed(&l)
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -1172,7 +1180,7 @@ impl Reactive {
             return;
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if !self.is_previewed(&l)
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -1227,8 +1235,16 @@ impl Reactive {
         self.nodes.get(&leaf).map(|n| n.height)
     }
 
-    pub fn overlay(&self) -> &BTreeMap<Leaf, Value> {
-        &self.overlay
+    pub fn gesture_preview(&self) -> &BTreeMap<Leaf, Value> {
+        &self.gesture_preview
+    }
+
+    pub fn live_solve_preview(&self) -> &BTreeMap<Leaf, Value> {
+        &self.live_solve_preview
+    }
+
+    fn is_previewed(&self, leaf: &Leaf) -> bool {
+        self.gesture_preview.contains_key(leaf) || self.live_solve_preview.contains_key(leaf)
     }
 
     /// Seed the initial derived bindings before `rebuild` (EN-2c).
@@ -1723,35 +1739,96 @@ impl Reactive {
         self.evaluate(doc, &dirty, &primed);
     }
 
-    /// Preview a value without writing the document.
+    /// Preview a value for an active user gesture without writing the document.
     pub fn preview(&mut self, doc: Tree<'_>, leaf: Leaf, value: Value) {
         let before = self.read(doc, leaf);
-        self.overlay.insert(leaf, value.clone());
+        self.gesture_preview.insert(leaf, value.clone());
         if before.as_ref() != Some(&value) {
             self.note(leaf, value);
             self.invalidate(doc, [leaf]);
         }
     }
 
-    /// Drop one leaf's preview; it falls back to the document.
+    /// Drop one leaf's user-gesture preview; it falls back to live solve / document.
     pub fn unpreview(&mut self, doc: Tree<'_>, leaf: Leaf) {
-        if self.overlay.remove(&leaf).is_some() {
-            if let Some(v) = self.read(doc, leaf) {
+        if self.gesture_preview.remove(&leaf).is_some() {
+            let v = self.read(doc, leaf).or_else(|| {
+                doc.live(leaf.node)
+                    .and_then(|_| leaf.path.facet.default_facet().get(leaf.path.field)?.constant().cloned())
+            });
+            if let Some(v) = v {
                 self.note(leaf, v);
             }
             self.invalidate(doc, [leaf]);
         }
     }
 
-    /// Drop every preview; values fall back to the document.
-    pub fn clear_overlay(&mut self, doc: Tree<'_>) {
-        let leaves: Vec<Leaf> = self.overlay.keys().copied().collect();
-        self.overlay.clear();
+    /// Drop every user-gesture preview without touching `live_solve_preview`.
+    pub fn clear_gesture_preview(&mut self, doc: Tree<'_>) {
+        if self.gesture_preview.is_empty() {
+            return;
+        }
+        let leaves: Vec<Leaf> = self.gesture_preview.keys().copied().collect();
+        self.gesture_preview.clear();
+        for &l in &leaves {
+            let v = self.read(doc, l).or_else(|| {
+                doc.live(l.node)
+                    .and_then(|_| l.path.facet.default_facet().get(l.path.field)?.constant().cloned())
+            });
+            if let Some(v) = v {
+                self.note(l, v);
+            }
+        }
+        self.invalidate(doc, leaves);
+    }
+
+    /// Preview a live constraint-solve pose (`resolve_clusters_live`, EN-12).
+    pub fn preview_live_solve(&mut self, doc: Tree<'_>, leaf: Leaf, value: Value) {
+        let before = self.read(doc, leaf);
+        self.live_solve_preview.insert(leaf, value);
+        let after = self.read(doc, leaf);
+        if before != after {
+            if let Some(v) = after {
+                self.note(leaf, v);
+            }
+            self.invalidate(doc, [leaf]);
+        }
+    }
+
+    /// Drop every live-solve preview without touching `gesture_preview`.
+    pub fn clear_live_solve(&mut self, doc: Tree<'_>) {
+        if self.live_solve_preview.is_empty() {
+            return;
+        }
+        let leaves: Vec<Leaf> = self.live_solve_preview.keys().copied().collect();
+        self.live_solve_preview.clear();
+        for &l in &leaves {
+            if !self.gesture_preview.contains_key(&l)
+                && let Some(v) = self.read(doc, l)
+            {
+                self.note(l, v);
+            }
+        }
+        self.invalidate(doc, leaves);
+    }
+
+    /// Drop both gesture and live-solve previews; values fall back to the document.
+    pub fn clear_previews(&mut self, doc: Tree<'_>) {
+        if self.gesture_preview.is_empty() && self.live_solve_preview.is_empty() {
+            return;
+        }
+        let mut leaves: BTreeSet<Leaf> = self.gesture_preview.keys().copied().collect();
+        leaves.extend(self.live_solve_preview.keys().copied());
+        self.gesture_preview.clear();
+        self.live_solve_preview.clear();
         for &l in &leaves {
             // A leaf of a facet the node lacks (a gesture that would have
-            // added it) reads nothing now: report its default, so whatever
-            // drew the preview redraws without it.
-            let v = self.read(doc, l).or_else(|| l.path.facet.default_facet().get(l.path.field).and_then(|s| s.constant()).cloned());
+            // added it) reads nothing now: report its default if still live,
+            // so whatever drew the preview redraws without it.
+            let v = self.read(doc, l).or_else(|| {
+                doc.live(l.node)
+                    .and_then(|_| l.path.facet.default_facet().get(l.path.field)?.constant().cloned())
+            });
             if let Some(v) = v {
                 self.note(l, v);
             }
@@ -1972,7 +2049,8 @@ impl Reactive {
             let reached: std::cell::RefCell<BTreeSet<CellId>> = Default::default();
             let result = {
                 let unneeded = &self.unneeded;
-                let overlay = &self.overlay;
+                let gesture_preview = &self.gesture_preview;
+                let live_solve_preview = &self.live_solve_preview;
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
@@ -1988,13 +2066,13 @@ impl Reactive {
                     {
                         reached.borrow_mut().insert(c);
                     }
-                    if errors.contains_key(&l) && !overlay.contains_key(&l) {
+                    if errors.contains_key(&l) && !gesture_preview.contains_key(&l) && !live_solve_preview.contains_key(&l) {
                         if upstream.get().is_none() {
                             upstream.set(Some(l));
                         }
                         return None;
                     }
-                    read_with(overlay, runtime, resolved, nodes, doc, l)
+                    read_with(gesture_preview, live_solve_preview, runtime, resolved, nodes, doc, l)
                 };
                 let out = expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| {
                     if leaf.path.is_structural() {
@@ -2454,7 +2532,7 @@ impl Reactive {
             self.claims.insert(k, now);
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if !self.is_previewed(&l)
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -2576,7 +2654,7 @@ impl Reactive {
             }
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if !self.is_previewed(&l)
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -3006,7 +3084,7 @@ impl Reactive {
         }
         // Released leaves read as they would without a native: say so.
         for l in released {
-            if !self.overlay.contains_key(&l)
+            if !self.is_previewed(&l)
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -3051,14 +3129,18 @@ fn tracks_reads(doc: Tree<'_>, leaf: Leaf, expr: &Expr) -> bool {
 }
 
 fn read_with(
-    overlay: &BTreeMap<Leaf, Value>,
+    gesture_preview: &BTreeMap<Leaf, Value>,
+    live_solve_preview: &BTreeMap<Leaf, Value>,
     runtime: &BTreeMap<Leaf, Signal>,
     resolved: &BTreeMap<Leaf, Value>,
     nodes: &BTreeMap<Leaf, BoundNode>,
     doc: Tree<'_>,
     leaf: Leaf,
 ) -> Option<Value> {
-    if let Some(v) = overlay.get(&leaf) {
+    if let Some(v) = gesture_preview.get(&leaf) {
+        return Some(v.clone());
+    }
+    if let Some(v) = live_solve_preview.get(&leaf) {
         return Some(v.clone());
     }
     if nodes.contains_key(&leaf) {
@@ -3070,7 +3152,11 @@ fn read_with(
     // A node that went has no stored value: a tombstone's facets are kept
     // for undo, and a copy removed outright has none (handoff §4.6).
     doc.live(leaf.node)?;
-    doc.leaf(leaf.node, leaf.path)?.constant().cloned()
+    let base = doc.leaf(leaf.node, leaf.path)?;
+    if let Some(s) = doc.solve_leaf(leaf) {
+        return s.constant().cloned();
+    }
+    base.constant().cloned()
 }
 
 /// A bound value as its leaf holds it: SVG path data on a geometry leaf

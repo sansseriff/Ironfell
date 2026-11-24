@@ -1183,7 +1183,7 @@ impl LeafPath {
     /// read as its constant until EN-5 makes a binding on it take effect, and a
     /// binding on it is reported, not ignored (engine.md E3).
     pub fn is_structural(&self) -> bool {
-        matches!((self.facet, self.field), (FacetKind::Use, "notation"))
+        matches!((self.facet, self.field), (FacetKind::Use, "notation") | (FacetKind::Embed, "source"))
     }
 
     /// A path into a declared field, or into any argument of a dynamic

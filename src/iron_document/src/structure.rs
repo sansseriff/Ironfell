@@ -34,6 +34,9 @@ pub(crate) enum Key {
     Relation(RelationId),
     /// The document's top-level roots list.
     Roots,
+    /// Direct `let` children of `parent` (`None`: top-level root `let`s), so
+    /// `@name` lookups only subscribe to their own ancestor scopes (`O(depth)`).
+    LetsIn(Option<NodeId>),
     /// Graph wiring on `leaf`: whether it is bound, whether a producer drives
     /// it, or its binding/tracked dependency edges.
     Wiring(Leaf),

@@ -22,7 +22,6 @@ use std::collections::BTreeSet;
 pub(crate) struct Went {
     pub parent: Option<NodeId>,
     pub depth: usize,
-    pub ty: crate::registry::TypeId,
 }
 
 /// Every node deleted since the changes were last taken.
@@ -227,6 +226,34 @@ impl Changes {
             self.removed.push((id, parent));
             self.depths.insert(id, gone.get(&id).map_or_else(|| doc.depth(id), |w| w.depth));
             self.structure.insert(parent);
+        }
+    }
+
+    /// Record virtual view mutations produced by `VirtualViews::reconcile_top_owner`
+    /// (`EN-13`), without synthesizing `Op::Create`/`Op::Set` ops.
+    pub(crate) fn note_views(&mut self, delta: &crate::engine::views::ViewDelta) {
+        for &(id, parent, depth, _) in &delta.created {
+            self.created.push(id);
+            self.depths.insert(id, depth);
+            self.structure.insert(Some(parent));
+        }
+        for &(id, parent, depth, _) in &delta.removed {
+            if self.removed_ids.insert(id) {
+                self.removed.push((id, Some(parent)));
+                self.depths.insert(id, depth);
+                self.structure.insert(Some(parent));
+            }
+        }
+        for &(id, old_parent, new_parent) in &delta.moved {
+            self.moved.push((id, Some(old_parent)));
+            self.structure.insert(Some(old_parent));
+            self.structure.insert(Some(new_parent));
+        }
+        for &leaf in &delta.slots {
+            self.slots.insert(leaf);
+        }
+        for r in delta.rels_removed.iter().chain(&delta.rels_added) {
+            self.relations.push((r.from, r.to));
         }
     }
 }

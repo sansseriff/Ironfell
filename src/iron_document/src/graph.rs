@@ -26,7 +26,7 @@ use crate::expr::{Expr, Leaf};
 use crate::facet::FacetKind;
 use crate::value::Slot;
 use crate::value::Value;
-use crate::work::{Counted, GRAPH_BASE_READERS, GRAPH_CANDIDATES, GRAPH_CLAIMS, GRAPH_DEPENDENTS, GRAPH_DERIVED, GRAPH_HELD, GRAPH_NATIVES, GRAPH_NODES, GRAPH_OWNED, GRAPH_RESOLVED, GRAPH_RUNTIME, GRAPH_STALE, GRAPH_TOKEN_READERS, GRAPH_UNNEEDED};
+use crate::work::{Counted, GRAPH_BASE_READERS, GRAPH_CANDIDATES, GRAPH_CLAIMS, GRAPH_DEPENDENTS, GRAPH_DERIVED, GRAPH_HELD, GRAPH_NATIVES, GRAPH_NODES, GRAPH_OWNED, GRAPH_RESOLVED, GRAPH_RUNTIME, GRAPH_STALE, GRAPH_UNNEEDED};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Who publishes a runtime signal. Three producers are built in; a host
@@ -548,16 +548,6 @@ struct BoundNode {
     height: u32,
 }
 
-/// Which token readers a structural change looks at again: those whose
-/// provider (`@name`) may have moved.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Rescope {
-    No,
-    /// The readers of these names, and those under these nodes (moved).
-    Some { names: BTreeSet<String>, under: Vec<NodeId> },
-    All,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Reactive {
     nodes: Counted<BTreeMap<Leaf, BoundNode>, GRAPH_NODES>,
@@ -619,15 +609,16 @@ pub struct Reactive {
     /// The signals connections and anchors derive, maintained incrementally
     /// by Stage 2 `DerivedBindingMakers` (EN-2c).
     derived: Counted<BTreeMap<Leaf, Expr>, GRAPH_DERIVED>,
-    /// Bound leaves whose expression reads context (`@name`).
-    token_readers: Counted<BTreeSet<Leaf>, GRAPH_TOKEN_READERS>,
-    /// The token readers by the names they read: what a rescope of some
-    /// names visits (DS-3b), not every reader.
+    /// Theme token readers indexed by `@name`, woken only when `ThemeMaker`
+    /// reports that token name changed (EN-7).
     token_readers_by: BTreeMap<String, BTreeSet<Leaf>>,
-    /// Bindings that failed on a tracked-read cycle or did not settle.
-    /// Nothing tells them when that ends (the read that closed the cycle
-    /// was never made an edge), so `restructure` runs them again (the
-    /// spec's §6.3; the rebuild ran everything).
+    /// Recorded structural keys read while resolving a binding cell's `@name`
+    /// providers (`palette::provided`) and boundary type (`types::declared`),
+    /// with reverse index `cells_by_key` (EN-7; replaces `regraph`/`Rescope`).
+    cell_keys: std::collections::HashMap<Leaf, std::collections::HashSet<crate::structure::Key>>,
+    cells_by_key: std::collections::HashMap<crate::structure::Key, BTreeSet<Leaf>>,
+    /// Bindings that failed on a tracked-read cycle or did not settle,
+    /// retried when an edge is removed (`self.edge_gone`).
     blocked: BTreeSet<CellId>,
     /// Cells nothing observed needs (reactive-engine.md §8.2, §8.3): when
     /// what they read changes they are not evaluated but marked `stale`.
@@ -1351,32 +1342,24 @@ impl Reactive {
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
-        self.token_readers.clear();
         self.token_readers_by.clear();
+        self.cell_keys.clear();
+        self.cells_by_key.clear();
         // Stored bindings, then the derived bindings seeded by Stage 2
         // `DerivedBindingMakers` (derived takes precedence over stored).
         let derived: Vec<(Leaf, Expr)> = self.derived.iter().map(|(l, e)| (*l, e.clone())).collect();
         let tokens = crate::palette::leaves(doc);
         for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
             let mut deps = expr.deps();
-            // `@name` reads the nearest provider above this node, a colour
-            // token at the root (palette.rs).
-            let names = expr.tokens();
-            if !names.is_empty() {
-                self.token_readers.insert(leaf);
-                for n in &names {
-                    self.token_readers_by.entry(n.clone()).or_default().insert(leaf);
-                }
+            for n in expr.tokens() {
+                self.token_readers_by.entry(n).or_default().insert(leaf);
             }
-            let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
+            let (ctx, tracks, _, rec_keys) = resolve_cell_structure(doc, leaf, expr, &tokens);
             deps.extend(ctx.values().copied());
             for d in &deps {
                 self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
             }
-            // A boundary's type check reads the instance's arguments
-            // (`like(…)`) while it evaluates: those reads are tracked, so an
-            // argument that changes checks it again.
-            let tracks = tracks_reads(doc, leaf, expr);
+            self.index_cell_keys(leaf, rec_keys);
             self.nodes.insert(
                 leaf,
                 BoundNode {
@@ -1425,20 +1408,64 @@ impl Reactive {
         self.evaluate(doc, &all, &all);
     }
 
-    /// Bring the graph up to date after structure changed at `nodes` (made,
-    /// removed, rebound, given or stripped of facets), without the rebuild
-    /// (reactive-engine handoff §4.4, stage 3a): only those nodes' bindings
-    /// are read again, heights are raised where an edge needs it, and what
-    /// changed and what reads it are evaluated. Derived bindings from
-    /// connections and anchors are already synced into `self.derived` /
-    /// `self.pending` by Stage 2 `DerivedBindingMakers` (EN-2c). With
-    /// `rescope` (a provider may have moved), every `@name` reader is
-    /// resolved again.
-    pub(crate) fn restructure(&mut self, doc: Tree<'_>, nodes: &BTreeSet<NodeId>, rescope: Rescope, tokens: &BTreeMap<String, Leaf>, touched_leaves: &[Leaf]) {
+    /// Single recorded-read graph update driven directly by touched
+    /// `structure::Key`s and changed theme token names (engine.md §3.2, §3.6;
+    /// EN-7, replacing `regraph`/`Rescope`/`restructure` and `prime_touched`).
+    ///
+    /// Reconciles bound slots on touched nodes/facets/leaves, re-resolves
+    /// `@name` providers and boundary `types::declared` checks for any binding
+    /// cell whose recorded structural keys were touched, primes keyed natives
+    /// and value readers, retries blocked cells when edges drop, and evaluates.
+    /// Returns the deduplicated `Key::Leaf` entries touched (for session mark).
+    pub(crate) fn sync_from_keys(
+        &mut self,
+        doc: Tree<'_>,
+        keys: &[crate::structure::Key],
+        tokens: &BTreeMap<String, Leaf>,
+        changed_tokens: &[String],
+    ) -> Vec<Leaf> {
         let start = first_leaf;
-        // The leaves to look at again: every binding the nodes had or have.
+        let mut touched_leaves: Vec<Leaf> = Vec::new();
+        let mut touched_nodes: BTreeSet<NodeId> = BTreeSet::new();
+        let mut touched_facets: BTreeSet<(NodeId, crate::facet::FacetKind)> = BTreeSet::new();
+        let mut recheck_cells: BTreeSet<Leaf> = BTreeSet::new();
+
+        for &key in keys {
+            match key {
+                crate::structure::Key::Leaf(l) => touched_leaves.push(l),
+                crate::structure::Key::Node(n) | crate::structure::Key::FacetSet(n) => {
+                    touched_nodes.insert(n);
+                }
+                crate::structure::Key::Facet(n, kind) => {
+                    touched_facets.insert((n, kind));
+                }
+                _ => {}
+            }
+            if let Some(ks) = self.key_readers.get(&key) {
+                self.pending.extend(ks.iter().map(|k| CellId::Native(*k)));
+            }
+            if let Some(cs) = self.cells_by_key.get(&key) {
+                recheck_cells.extend(cs.iter().copied());
+            }
+        }
+        for name in changed_tokens {
+            if let Some(cs) = self.token_readers_by.get(name) {
+                recheck_cells.extend(cs.iter().copied());
+            }
+        }
+        touched_leaves.sort_unstable();
+        touched_leaves.dedup();
+
+        // Candidate leaves that may have gained, changed, or lost a binding.
         let mut look: BTreeSet<Leaf> = BTreeSet::new();
-        for &n in nodes {
+        for &l in &touched_leaves {
+            if self.nodes.contains_key(&l)
+                || (doc.is_live(l.node) && doc.leaf(l.node, l.path).and_then(Slot::expr).is_some())
+            {
+                look.insert(l);
+            }
+        }
+        for &n in &touched_nodes {
             look.extend(self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n));
             if doc.is_live(n) {
                 for f in doc.facets_of(n) {
@@ -1450,82 +1477,83 @@ impl Reactive {
                 }
             }
         }
+        for &(n, kind) in &touched_facets {
+            if touched_nodes.contains(&n) {
+                continue;
+            }
+            look.extend(self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).filter(|l| l.path.facet == kind));
+            if doc.is_live(n)
+                && let Some(f) = doc.facet(n, kind)
+            {
+                for field in f.field_names() {
+                    if f.get(field).and_then(Slot::expr).is_some() {
+                        look.insert(Leaf { node: n, path: crate::facet::LeafPath::new(kind, field).expect("declared field") });
+                    }
+                }
+            }
+        }
+
         let mut primed: BTreeSet<CellId> = BTreeSet::new();
         let mut made: Vec<CellId> = Vec::new();
+        let mut rebuilt: BTreeSet<Leaf> = BTreeSet::new();
+
         for leaf in look {
-            // A derived signal takes precedence over a stored binding, as the
-            // rebuild's later insert does.
-            let want: Option<Expr> = self.derived.get(&leaf).cloned().or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
+            let want: Option<Expr> = self
+                .derived
+                .get(&leaf)
+                .cloned()
+                .or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
             match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
                 (Some(old), Some(e)) if **old == e => {}
                 (_, Some(e)) => {
-                    self.set_cell(doc, leaf, e, &tokens);
+                    self.set_cell(doc, leaf, e, tokens);
                     made.push(CellId::Leaf(leaf));
                     primed.insert(CellId::Leaf(leaf));
+                    rebuilt.insert(leaf);
                 }
                 (Some(_), None) => {
                     self.drop_cell(leaf);
-                    // It reads as its constant again; say so, and its readers
-                    // read that.
                     self.resolved.remove(&leaf);
                     self.errors.remove(&leaf);
                     if let Some(v) = self.read(doc, leaf) {
                         self.note(leaf, v);
                     }
                     primed.extend(self.dependents.get(&leaf).into_iter().flatten().copied());
+                    rebuilt.insert(leaf);
                 }
                 (None, None) => {}
             }
         }
-        let readers: Vec<Leaf> = match rescope {
-            Rescope::No => Vec::new(),
-            Rescope::All => self.token_readers.iter().copied().collect(),
-            // The readers of the names whose providers moved, and those
-            // under a moved node, whose ancestors changed (DS-3b).
-            Rescope::Some { names, under } => {
-                let mut out: BTreeSet<Leaf> = names.iter().filter_map(|n| self.token_readers_by.get(n)).flatten().copied().collect();
-                for &u in &under {
-                    for n in std::iter::once(u).chain(doc.descendants(u)) {
-                        out.extend(self.token_readers.range(start(n)..).take_while(|l| l.node == n).copied());
-                    }
-                }
-                out.into_iter().collect()
+
+        // Re-check bindings whose recorded `@name` provider keys, theme token,
+        // or boundary `types::declared` keys were touched.
+        for leaf in recheck_cells {
+            if rebuilt.contains(&leaf) {
+                continue;
             }
-        };
-        {
-            for leaf in readers {
-                let Some(node) = self.nodes.get(&leaf) else { continue };
-                let ctx: BTreeMap<String, Leaf> = node.expr.tokens().into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, &tokens).map(|l| (n, l))).collect();
-                if ctx != node.ctx {
-                    let expr = (*node.expr).clone();
-                    self.set_cell(doc, leaf, expr, &tokens);
-                    made.push(CellId::Leaf(leaf));
+            let Some((expr, old_ctx)) = self.nodes.get(&leaf).map(|n| (n.expr.clone(), n.ctx.clone())) else {
+                continue;
+            };
+            let (ctx, tracks, has_declared, rec_keys) = resolve_cell_structure(doc, leaf, &expr, tokens);
+            if ctx != old_ctx {
+                self.set_cell(doc, leaf, (*expr).clone(), tokens);
+                made.push(CellId::Leaf(leaf));
+                primed.insert(CellId::Leaf(leaf));
+            } else {
+                let mut tracks_changed = false;
+                if let Some(b) = self.nodes.get_mut(&leaf) {
+                    tracks_changed = b.tracks != tracks;
+                    b.tracks = tracks;
+                }
+                self.index_cell_keys(leaf, rec_keys);
+                if tracks_changed || has_declared {
                     primed.insert(CellId::Leaf(leaf));
                 }
             }
         }
-        // Every leaf of a touched node: a constant set, a node made or gone.
-        // Its own bindings run again (what they check, a port's `datatype`,
-        // may have changed with no change of expression), and its readers
-        // read again.
-        for &n in nodes {
-            let own: Vec<Leaf> = self.nodes.range(start(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).collect();
-            // What a binding tracks follows its node (a datatype set makes
-            // its check read arguments), not only its expression.
-            for l in &own {
-                let tracks = self.nodes.get(l).is_some_and(|b| tracks_reads(doc, *l, &b.expr));
-                if let Some(b) = self.nodes.get_mut(l) {
-                    b.tracks = tracks;
-                }
-            }
-            primed.extend(own.into_iter().map(CellId::Leaf));
-            let readers: Vec<CellId> = self.dependents.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, r)| r.iter().copied()).collect();
-            primed.extend(readers);
-            // Natives that read one of its leaves beneath their own claim.
-            let beneath: Vec<CellId> = self.base_readers.range(start(n)..).take_while(|(l, _)| l.node == n).flat_map(|(_, ks)| ks.iter().map(|k| CellId::Native(*k))).collect();
-            primed.extend(beneath);
-        }
-        for &l in touched_leaves {
+
+        // Prime value readers of every touched leaf.
+        for &l in &touched_leaves {
             self.wake(l);
             if let Some(ds) = self.dependents.get(&l) {
                 primed.extend(ds.iter().copied());
@@ -1539,16 +1567,18 @@ impl Reactive {
                 primed.insert(CellId::Native(*k));
             }
         }
-        primed.extend(self.blocked.iter().copied());
+
+        primed.extend(std::mem::take(&mut self.pending));
         primed.retain(|c| self.exists(*c));
-        // A cell that tracks its reads starts again from none, as the
-        // rebuild starts every cell: what it reads is found afresh, and a
-        // read that now closes a cycle is caught (it would not be if the
-        // read were already known).
+
+        // Primed tracking cells drop stale tracked reads BEFORE checking
+        // `edge_gone` so an authored `Op::Set` that retargets a `deref`
+        // immediately signals edge removal and retries blocked cycle cells.
         for c in &primed {
             let CellId::Leaf(l) = c else { continue };
             let old: Vec<Leaf> = self.nodes.get_mut(l).map(|n| std::mem::take(&mut n.tracked).into_iter().collect()).unwrap_or_default();
             if !old.is_empty() {
+                self.edge_gone = true;
                 self.wired = crate::stamp();
                 self.prime_key(crate::structure::Key::Wiring(*l));
             }
@@ -1561,21 +1591,67 @@ impl Reactive {
                 }
             }
         }
-        if self.raise(&made).is_none() {
+        if !self.pending.is_empty() {
+            primed.extend(std::mem::take(&mut self.pending).into_iter().filter(|c| self.exists(*c)));
+        }
+        // Retry blocked cells whenever any edge was dropped (via drop_cell,
+        // set_cell replacement, tracked-read clear, set_natives, or sync_derived).
+        if self.edge_gone {
+            self.edge_gone = false;
+            primed.extend(self.blocked.iter().copied().filter(|c| self.exists(*c)));
+        }
+
+        if !made.is_empty() && self.raise(&made).is_none() {
             self.compute_heights();
         }
-        let dirty = self.readers(&primed);
-        // New cells may read unneeded ones: what the cells about to run
-        // read, transitively, is needed again, the stale ones brought up to
-        // date first. Only that: a tick label made in a shown plot reaches
-        // what that plot reads, not the document (until 2026-11-21 every
-        // cell was needed again here, and necessity then decided over the
-        // whole document, ~1.5 ms a structural change on the demo). A cell
-        // only a removed one needed stays needed until necessity next
-        // decides (`Store::necessity`, after a transaction or an observer
-        // change): a little extra work, never a stale read.
-        self.need_what_reads_reach(doc, &dirty);
-        self.evaluate(doc, &dirty, &primed);
+        if !primed.is_empty() {
+            let dirty = self.readers(&primed);
+            self.need_what_reads_reach(doc, &dirty);
+            self.evaluate(doc, &dirty, &primed);
+        }
+        touched_leaves
+    }
+
+    fn index_cell_keys(&mut self, leaf: Leaf, raw: Vec<crate::structure::Key>) {
+        if raw.is_empty() {
+            self.unindex_cell_keys(leaf);
+            return;
+        }
+        let next: std::collections::HashSet<crate::structure::Key> = raw.into_iter().collect();
+        if let Some(old) = self.cell_keys.get(&leaf) {
+            if *old == next {
+                return;
+            }
+            for k in old.difference(&next) {
+                if let Some(set) = self.cells_by_key.get_mut(k) {
+                    set.remove(&leaf);
+                    if set.is_empty() {
+                        self.cells_by_key.remove(k);
+                    }
+                }
+            }
+            for &k in next.difference(old) {
+                self.cells_by_key.entry(k).or_default().insert(leaf);
+            }
+        } else {
+            for &k in &next {
+                self.cells_by_key.entry(k).or_default().insert(leaf);
+            }
+        }
+        self.cell_keys.insert(leaf, next);
+    }
+
+    fn unindex_cell_keys(&mut self, leaf: Leaf) {
+        if let Some(old) = self.cell_keys.remove(&leaf) {
+            for k in old {
+                if let Some(set) = self.cells_by_key.get_mut(&k) {
+                    set.remove(&leaf);
+                    if set.is_empty() {
+                        self.cells_by_key.remove(&k);
+                    }
+                }
+            }
+        }
     }
 
     /// Make needed every unneeded cell the needed ones of `cells` read,
@@ -1606,19 +1682,15 @@ impl Reactive {
         self.structure += 1;
         self.wired = crate::stamp();
         let mut deps = expr.deps();
-        let names = expr.tokens();
-        if !names.is_empty() {
-            self.token_readers.insert(leaf);
-            for n in &names {
-                self.token_readers_by.entry(n.clone()).or_default().insert(leaf);
-            }
+        for n in expr.tokens() {
+            self.token_readers_by.entry(n).or_default().insert(leaf);
         }
-        let ctx: BTreeMap<String, Leaf> = names.into_iter().filter_map(|n| crate::palette::provided(doc, leaf.node, &n, tokens).map(|l| (n, l))).collect();
+        let (ctx, tracks, _, rec_keys) = resolve_cell_structure(doc, leaf, &expr, tokens);
         deps.extend(ctx.values().copied());
         for d in &deps {
             self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
         }
-        let tracks = tracks_reads(doc, leaf, &expr);
+        self.index_cell_keys(leaf, rec_keys);
         let height = 1 + deps.iter().filter_map(|d| self.cell_of(*d)).map(|c| self.height_of(c)).max().unwrap_or(0);
         self.nodes.insert(leaf, BoundNode { expr: std::sync::Arc::new(expr), deps, ctx, tracks, tracked: BTreeSet::new(), height });
         self.prime_key(crate::structure::Key::Wiring(leaf));
@@ -1634,6 +1706,8 @@ impl Reactive {
     /// Remove `leaf`'s cell and its edges.
     fn drop_cell(&mut self, leaf: Leaf) {
         let Some(old) = self.nodes.remove(&leaf) else { return };
+        self.edge_gone = true;
+        self.unindex_cell_keys(leaf);
         self.prime_key(crate::structure::Key::Wiring(leaf));
         // A request the binding held off drives it now (DS-10a).
         if self.promote(leaf) {
@@ -1650,13 +1724,11 @@ impl Reactive {
                 }
             }
         }
-        if self.token_readers.remove(&leaf) {
-            for n in old.expr.tokens() {
-                if let Some(set) = self.token_readers_by.get_mut(&n) {
-                    set.remove(&leaf);
-                    if set.is_empty() {
-                        self.token_readers_by.remove(&n);
-                    }
+        for n in old.expr.tokens() {
+            if let Some(set) = self.token_readers_by.get_mut(&n) {
+                set.remove(&leaf);
+                if set.is_empty() {
+                    self.token_readers_by.remove(&n);
                 }
             }
         }
@@ -2723,26 +2795,6 @@ impl Reactive {
         }
     }
 
-    /// Consume keys from the write channel (`Docs::take_touched`): marks
-    /// keyed natives that read any touched key, and returns the `Key::Leaf`
-    /// entries whose value readers should be invalidated (engine.md §3.2).
-    pub(crate) fn prime_touched(&mut self, touched: impl IntoIterator<Item = crate::structure::Key>) -> Vec<Leaf> {
-        let mut cells: Vec<CellId> = Vec::new();
-        let mut leaves: Vec<Leaf> = Vec::new();
-        for key in touched {
-            if let crate::structure::Key::Leaf(l) = key {
-                leaves.push(l);
-            }
-            if let Some(ks) = self.key_readers.get(&key) {
-                cells.extend(ks.iter().map(|k| CellId::Native(*k)));
-            }
-        }
-        self.pending.extend(cells);
-        leaves.sort_unstable();
-        leaves.dedup();
-        leaves
-    }
-
     /// Whether native `k` is up to date: needed, not stale, not waiting to
     /// run. What the structure oracle compares (§3.5).
     #[cfg(feature = "structure-oracle")]
@@ -3119,13 +3171,28 @@ fn first_leaf(node: NodeId) -> Leaf {
     Leaf { node, path: crate::facet::LeafPath { facet: first, field: "" } }
 }
 
-/// Whether a binding's evaluation records what it reads: it holds a
-/// `deref`, or it is a boundary whose type check reads the instance's
-/// arguments (`types::declared`).
-fn tracks_reads(doc: Tree<'_>, leaf: Leaf, expr: &Expr) -> bool {
-    let mut tracks = false;
-    expr.walk(&mut |e| tracks |= matches!(e, Expr::Call(name, _) if name == "deref"));
-    tracks || crate::types::declared(doc, leaf).is_some()
+/// Resolve a binding cell's `@name` context providers and boundary type
+/// requirement through a recording `Tree`, returning `(ctx, tracks, keys)` so
+/// any future touch on a recorded key re-checks this cell automatically (EN-7).
+fn resolve_cell_structure(
+    doc: Tree<'_>,
+    leaf: Leaf,
+    expr: &Expr,
+    tokens: &BTreeMap<String, Leaf>,
+) -> (BTreeMap<String, Leaf>, bool, bool, Vec<crate::structure::Key>) {
+    let rec = crate::structure::Recorder::default();
+    let rdoc = doc.recording(&rec);
+    let ctx: BTreeMap<String, Leaf> = expr
+        .tokens()
+        .into_iter()
+        .filter_map(|n| crate::palette::provided(rdoc, leaf.node, &n, tokens).map(|l| (n, l)))
+        .collect();
+    let mut has_deref = false;
+    expr.walk(&mut |e| has_deref |= matches!(e, Expr::Call(name, _) if name == "deref"));
+    // Always call `types::declared(rdoc, leaf)` unconditionally so `args.*` and
+    // `port.signal` cells record their boundary type keys even when `has_deref`.
+    let has_declared = crate::types::declared(rdoc, leaf).is_some();
+    (ctx, has_deref || has_declared, has_declared, rec.into_inner())
 }
 
 fn read_with(

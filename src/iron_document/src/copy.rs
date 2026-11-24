@@ -246,7 +246,7 @@ fn key_after(doc: Tree<'_>, parent: Option<NodeId>, after: &OrderKey) -> OrderKe
         Some(p) => doc.children(p),
         None => std::borrow::Cow::Borrowed(doc.roots()),
     };
-    let next = siblings.iter().filter_map(|&s| doc.live(s)).map(|s| &s.order).find(|k| *k > after);
+    let next = siblings.iter().filter_map(|&s| doc.is_live(s).then(|| doc.order_of(s)).flatten()).find(|k| *k > after);
     OrderKey::between(Some(after), next).unwrap_or_else(|_| OrderKey::after(after))
 }
 

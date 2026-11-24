@@ -216,9 +216,6 @@ pub(crate) fn apply_op(
     if reshapes(op) {
         docs.reshaped = crate::stamp();
     }
-    if retokens(docs, op) {
-        docs.tokens_shaped = crate::stamp();
-    }
     match op {
         Op::Create {
             id,
@@ -284,43 +281,14 @@ fn reshapes(op: &Op) -> bool {
     }
 }
 
-/// Whether `op`, about to apply, touches a node of one of `types` or one
-/// carrying one of `kinds`: what it makes, deletes or moves (its subtree,
-/// for a delete or a move), a facet it adds or removes, or an end of a
-/// relation it links or unlinks. Costs what the op touches.
-fn touches(docs: &Docs, op: &Op, types: &[&str], kinds: &[FacetKind]) -> bool {
-    let doc = Tree::of(docs);
-    let is = |n: NodeId| doc.node(n).is_some_and(|x| types.contains(&x.ty.name())) || kinds.iter().any(|&k| doc.facet(n, k).is_some());
-    let subtree = |n: NodeId| std::iter::once(n).chain(doc.descendants(n)).any(is);
-    match op {
-        Op::Create { ty, facets, .. } => types.contains(&ty.name()) || facets.iter().any(|f| kinds.contains(&f.kind())),
-        Op::Delete { id } | Op::Reparent { id, .. } => subtree(*id),
-        Op::AddFacet { id, facet } => kinds.contains(&facet.kind()) || is(*id),
-        Op::RemoveFacet { id, kind } => kinds.contains(kind) || is(*id),
-        Op::Link { rel } => is(rel.from) || is(rel.to),
-        Op::Unlink { id } => doc.relation(*id).is_none_or(|r| is(r.from) || is(r.to)),
-        Op::Reorder { .. } | Op::Set { .. } | Op::Solve { .. } => false,
-    }
-}
-
-/// Whether `op` can change the theme's tokens: a token made, deleted or
-/// moved, or a token's leaf or name set.
-fn retokens(docs: &Docs, op: &Op) -> bool {
-    match op {
-        Op::Set { id, path, .. } => path.facet == FacetKind::Token || (path.facet == FacetKind::Name && Tree::of(docs).node(*id).is_some_and(|n| n.ty.name() == "token")),
-        Op::Solve { .. } => false,
-        _ => touches(docs, op, &["token"], &[FacetKind::Token]),
-    }
-}
-
 pub(crate) fn apply_op_to(doc: &mut crate::Document, index: usize, op: &Op, stamp: Version) -> Result<Vec<Op>, ApplyError> {
-    let mut docs = Docs::new(std::mem::replace(doc, crate::Document::new()), false);
+    let mut docs = Docs::new(std::mem::replace(doc, crate::Document::new()));
     let out = apply_op(&mut docs, index, op, stamp);
     *doc = docs.authored;
     out
 }
 
-fn live<'d>(doc: Tree<'d>, cx: &Ctx, id: NodeId) -> Result<&'d Node, ApplyError> {
+fn live<'d>(doc: Tree<'d>, cx: &Ctx, id: NodeId) -> Result<std::borrow::Cow<'d, Node>, ApplyError> {
     match doc.node(id) {
         Some(n) if n.is_live() => Ok(n),
         Some(n) => Err(cx.err(
@@ -431,7 +399,7 @@ fn create(
             },
             comps.to_vec(),
         );
-        docs.of_node(id).advance_next_id(id);
+        docs.authored.advance_next_id(id);
     }
     // Bindings and entity rules are checked once the whole transaction has
     // applied (`check_created`): a restored subtree's nodes may read each
@@ -578,14 +546,13 @@ fn check_embeds(doc: Tree<'_>, cx: &Ctx, id: NodeId) -> Result<(), ApplyError> {
 fn delete(docs: &mut Docs, cx: &Ctx, id: NodeId) -> Result<Vec<Op>, ApplyError> {
     live(Tree::of(docs), cx, id)?;
     let mut order = vec![id];
-    order.extend(Tree::of(docs).descendants(id));
+    order.extend(docs.authored.descendants(id));
     // Inverses are pushed bottom-up so that the reversed list restores parents
     // before children.
     let mut inverse = Vec::with_capacity(order.len());
     for &n in order.iter().rev() {
-        let doc = Tree::of(docs);
-        let node = doc.node(n).expect("descendant exists").clone();
-        let comps: Vec<Facet> = doc.facets_of(n).cloned().collect();
+        let node = docs.authored.node(n).expect("descendant exists").clone();
+        let comps: Vec<Facet> = docs.authored.facets_of(n).cloned().collect();
         inverse.push(Op::Create {
             id: n,
             ty: node.ty,
@@ -865,6 +832,6 @@ fn link(docs: &mut Docs, cx: &Ctx, rel: &Relation) -> Result<Vec<Op>, ApplyError
         ));
     }
     docs.insert_relation(rel.clone());
-    docs.of_relation(rel.id).advance_next_relation_id(rel.id);
+    docs.authored.advance_next_relation_id(rel.id);
     Ok(vec![Op::Unlink { id: rel.id }])
 }

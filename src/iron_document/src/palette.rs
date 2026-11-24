@@ -62,15 +62,19 @@ fn name_of(doc: Tree<'_>, id: NodeId) -> Option<String> {
     doc.get::<Name>(id)?.text.constant()?.as_str().map(str::to_owned)
 }
 
-/// The document's tokens, by name (the first of a name wins).
+/// The document's tokens, by name (first in document root order, then id order,
+/// matching `tokens_and_publish`).
 pub fn tokens(doc: Tree<'_>) -> BTreeMap<String, NodeId> {
+    let token_ty = ty("token");
     let mut out = BTreeMap::new();
-    for t in doc.nodes_of_type(ty("token")) {
-        if doc.is_live(t)
-            && !t.is_expanded()
-            && let Some(n) = name_of(doc, t)
-        {
-            out.entry(n).or_insert(t);
+    for &root in doc.roots() {
+        for t in doc.nodes_of_type_in(root, token_ty) {
+            if doc.is_live(t)
+                && !t.is_expanded()
+                && let Some(n) = name_of(doc, t)
+            {
+                out.entry(n).or_insert(t);
+            }
         }
     }
     out
@@ -86,37 +90,89 @@ pub fn leaves(doc: Tree<'_>) -> BTreeMap<String, Leaf> {
     tokens(doc).into_iter().map(|(n, t)| (n, color_leaf(t))).collect()
 }
 
+/// Every token's leaf and both light & dark theme color tables, collected
+/// through keyed per-root reads so `ThemeMaker` records exact structural
+/// dependencies and switches themes in O(|tokens|) without rescanning roots.
+pub fn tokens_and_themes(doc: Tree<'_>) -> (BTreeMap<String, Leaf>, BTreeMap<Leaf, Value>, BTreeMap<Leaf, Value>) {
+    let token_ty = ty("token");
+    let mut leaves = BTreeMap::new();
+    let mut light = BTreeMap::new();
+    let mut dark = BTreeMap::new();
+    for &root in doc.roots() {
+        for t in doc.nodes_of_type_in(root, token_ty) {
+            if !doc.is_live(t) {
+                continue;
+            }
+            if !t.is_expanded()
+                && let Some(n) = name_of(doc, t)
+            {
+                leaves.entry(n).or_insert_with(|| color_leaf(t));
+            }
+            if let Some(tok) = doc.get::<Token>(t) {
+                if let Some(v) = tok.light.constant() {
+                    light.insert(color_leaf(t), v.clone());
+                }
+                if let Some(v) = tok.dark.constant() {
+                    dark.insert(color_leaf(t), v.clone());
+                }
+            }
+        }
+    }
+    (leaves, light, dark)
+}
+
 /// The leaf `@name` reads from `reader` (reactivity.md §6): the nearest
 /// `let` of that name with `let.provide="yes"` among the children of the
 /// reader's ancestors, then the document's colour token, then the nearest
 /// `provide="default"` let. A let never reads itself, so a provider may
 /// refine the value it shadows.
+///
+/// Queries only direct `let` children of `reader`'s ancestors via
+/// `doc.lets_in(parent)` (`Key::LetsIn(parent)`), touching neither non-`let`
+/// siblings nor `let` nodes in independent sibling groups (`O(depth)`).
 pub fn provided(doc: Tree<'_>, reader: NodeId, name: &str, tokens: &BTreeMap<String, Leaf>) -> Option<Leaf> {
     let value = |n: NodeId| Leaf { node: n, path: LeafPath { facet: FacetKind::Let, field: "value" } };
-    let mut fallback = None;
-    let mut at = doc.node(reader).and_then(|n| n.parent);
+    let mut fallback: Option<NodeId> = None;
+    let mut at = doc.parent_of(reader);
     loop {
-        let siblings = match at {
-            Some(p) => doc.children(p),
-            None => std::borrow::Cow::Borrowed(doc.roots()),
-        };
-        for &c in siblings.iter() {
+        let mut best_yes: Option<(crate::order::OrderKey, NodeId)> = None;
+        let mut best_default: Option<(crate::order::OrderKey, NodeId)> = None;
+        for c in doc.lets_in(at) {
             if c == reader || !doc.is_live(c) || name_of(doc, c).as_deref() != Some(name) {
                 continue;
             }
             let Some(l) = doc.get::<crate::facet::Let>(c) else { continue };
+            let Some(order) = doc.order_of(c).cloned() else { continue };
             match l.provide.constant().and_then(Value::as_str) {
-                Some("yes") => return Some(value(c)),
-                Some("default") if fallback.is_none() => fallback = Some(value(c)),
+                Some("yes") => {
+                    let cand = (order, c);
+                    if best_yes.as_ref().is_none_or(|b| cand < *b) {
+                        best_yes = Some(cand);
+                    }
+                }
+                Some("default") if fallback.is_none() => {
+                    let cand = (order, c);
+                    if best_default.as_ref().is_none_or(|b| cand < *b) {
+                        best_default = Some(cand);
+                    }
+                }
                 _ => {}
             }
         }
+        if let Some((_, c)) = best_yes {
+            return Some(value(c));
+        }
+        if fallback.is_none()
+            && let Some((_, c)) = best_default
+        {
+            fallback = Some(c);
+        }
         match at {
-            Some(p) => at = doc.node(p).and_then(|n| n.parent),
+            Some(p) => at = doc.parent_of(p),
             None => break,
         }
     }
-    tokens.get(name).copied().or(fallback)
+    tokens.get(name).copied().or_else(|| fallback.map(value))
 }
 
 /// Whether `name` is served to `reader` from inside `within` (a
@@ -147,20 +203,6 @@ pub fn declared(doc: Tree<'_>, reader: NodeId, name: &str, within: NodeId) -> bo
 /// Tokens are the theme, read anywhere without a declaration.
 pub fn is_token(doc: Tree<'_>, name: &str) -> bool {
     BUILT_IN.iter().any(|(n, _, _)| *n == name) || tokens(doc).contains_key(name)
-}
-
-/// `token.color` for each token in the theme (`dark` or light): what the
-/// store publishes.
-pub fn publish(doc: Tree<'_>, dark: bool) -> BTreeMap<Leaf, Value> {
-    let mut out = BTreeMap::new();
-    for t in doc.nodes_of_type(ty("token")).filter(|&t| doc.is_live(t)) {
-        let Some(tok) = doc.get::<Token>(t) else { continue };
-        let pick = if dark { &tok.dark } else { &tok.light };
-        if let Some(v) = pick.constant() {
-            out.insert(color_leaf(t), v.clone());
-        }
-    }
-    out
 }
 
 /// Token names `ops` use in their formulas.

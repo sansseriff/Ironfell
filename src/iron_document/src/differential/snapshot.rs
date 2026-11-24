@@ -118,9 +118,8 @@ pub const NOT_COMPARED: &[(&str, &str)] = &[
 
 pub fn snapshot(s: &StoreCore) -> Snapshot {
     let doc = s.tree();
-    // Derived tombstones are not compared: 2b's layout keeps them, copies
-    // kept apart leave none (handoff §4.6).
-    let mut nodes: Vec<(Node, Vec<Facet>)> = doc.nodes().filter(|n| n.is_live() || !n.id.is_expanded()).map(|n| (n.clone(), doc.facets_of(n.id).cloned().collect())).collect();
+    // Virtual derived nodes leave no tombstones (`EN-13`).
+    let mut nodes: Vec<(Node, Vec<Facet>)> = doc.nodes().filter(|n| n.is_live() || !n.id.is_expanded()).map(|n| { let id = n.id; (n.into_owned(), doc.facets_of(id).cloned().collect()) }).collect();
     nodes.sort_by_key(|(n, _)| n.id);
     let relations: Vec<Relation> = doc.relations().cloned().collect();
 

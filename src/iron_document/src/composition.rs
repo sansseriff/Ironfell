@@ -121,7 +121,7 @@ pub fn reach(doc: Tree<'_>, roots: &[NodeId], sources: &std::collections::BTreeS
             out.running.insert(c);
         }
         out.live |= mode == RunMode::Always;
-        stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
+        stack.extend(embeds_in_unsorted(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
     }
     out
 }
@@ -134,7 +134,7 @@ pub fn shown(doc: Tree<'_>, roots: &[NodeId]) -> std::collections::BTreeSet<Node
     let mut stack: Vec<NodeId> = roots.to_vec();
     while let Some(c) = stack.pop() {
         if seen.insert(c) {
-            stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
+            stack.extend(embeds_in_unsorted(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
         }
     }
     seen
@@ -378,12 +378,384 @@ fn new_entity_ops(doc: Tree<'_>, a: NodeId, b: NodeId) -> Vec<Op> {
 // ---------------------------------------------------------------------------
 // Embeds (ECM §7.4): one composition shown inside another.
 
-/// The composition an embed shows, if it names a live one.
-pub fn embedded(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
+/// The declared target `NodeId` an embed's `embed.source` names, even if that
+/// target composition is currently tombstoned/deleted (so `EmbedTopology` keeps
+/// reverse subscriptions intact across delete + undo).
+fn declared_embed_target(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
     match doc.get::<crate::facet::Embed>(embed)?.source.constant()? {
-        crate::value::Value::Ref(c) if composition_of(doc, *c) == Some(*c) => Some(*c),
+        crate::value::Value::Ref(c) => Some(*c),
         _ => None,
     }
+}
+
+/// The raw target composition an embed names, without cycle filtering.
+pub(crate) fn raw_embedded(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
+    let c = declared_embed_target(doc, embed)?;
+    (composition_of(doc, c) == Some(c)).then_some(c)
+}
+
+/// Canonical post-commit embed topology across BOTH 2D and 3D compositions:
+/// tracks every live composition's `dims`, declared embed targets (even when
+/// temporarily deleted, so delete+edit+undo still wakes callers), reverse raw
+/// edges, last cycle-filtered resolved targets, and cached virtual embed
+/// validation problems so `Store::problems()` never rescans every embed.
+#[derive(Clone, Debug, Default)]
+pub struct EmbedTopology {
+    /// `home_comp -> { embed_id -> (declared_target, resolved_target) }`
+    edges: BTreeMap<NodeId, BTreeMap<NodeId, (Option<NodeId>, Option<NodeId>)>>,
+    /// Deduplicated unique declared target compositions per `home_comp`, so
+    /// N repeated embeds to the same target do not multiply graph traversals.
+    comp_targets: BTreeMap<NodeId, std::collections::BTreeSet<NodeId>>,
+    /// Reverse declared edges: `target_comp -> { home_comp }`
+    reverse_raw: BTreeMap<NodeId, std::collections::BTreeSet<NodeId>>,
+    /// Last known `dims` per live composition (so 2D↔3D flips also notify incoming embedders).
+    dims: BTreeMap<NodeId, Dims>,
+    /// Live embeds currently blocked by a repeat-induced embed cycle (empty in
+    /// every acyclic document; mirrored onto `Docs::cyclic_embeds` for O(1) `embedded()`).
+    cyclic_embeds: std::collections::BTreeSet<NodeId>,
+    /// Cached `validate_embed` problems on live virtual embeds, per home composition.
+    problems_by_comp: BTreeMap<NodeId, Vec<crate::expand::Problem>>,
+    /// Flattened sorted virtual embed problems returned by `Store::problems()`.
+    virtual_problems: Vec<crate::expand::Problem>,
+}
+
+impl EmbedTopology {
+    pub fn virtual_problems(&self) -> &[crate::expand::Problem] {
+        &self.virtual_problems
+    }
+
+    pub fn cyclic_embeds(&self) -> &std::collections::BTreeSet<NodeId> {
+        &self.cyclic_embeds
+    }
+
+    fn edge_reaches(&self, start: NodeId, goal: NodeId, cache: &mut std::collections::HashMap<(NodeId, NodeId), bool>) -> bool {
+        if let Some(&ans) = cache.get(&(start, goal)) {
+            return ans;
+        }
+        let mut stack = vec![start];
+        let mut seen = std::collections::BTreeSet::new();
+        let mut hit = false;
+        while let Some(c) = stack.pop() {
+            if c == goal {
+                hit = true;
+                break;
+            }
+            if seen.insert(c)
+                && let Some(targets) = self.comp_targets.get(&c)
+            {
+                for &t in targets {
+                    if self.dims.contains_key(&t) {
+                        stack.push(t);
+                    }
+                }
+            }
+        }
+        cache.insert((start, goal), hit);
+        hit
+    }
+
+    /// Validate virtual embeds inside `comps` using the already-resolved
+    /// cycle status in `self.edges` (no per-embed `reaches_composition` Tree DFS).
+    fn refresh_virtual_problems(&mut self, doc: Tree<'_>, comps: &std::collections::BTreeSet<NodeId>) {
+        let mut any_changed = false;
+        for &c in comps {
+            let mut ps = Vec::new();
+            if let Some(map) = self.edges.get(&c) {
+                for (&e, &(decl, res)) in map {
+                    if !e.is_expanded() || !doc.is_live(e) {
+                        continue;
+                    }
+                    let err = match decl {
+                        None => Some(format!("embed {e}: embed.source must name a composition")),
+                        Some(of) if !self.dims.contains_key(&of) => Some(format!("embed {e}: {of} is not a live composition")),
+                        Some(of) if res.is_none() => Some(format!("embed {e}: {of} already shows {c}, directly or through its embeds; embedding it in {c} would loop")),
+                        Some(of) => {
+                            if let Some(cam) = doc.get::<crate::facet::EmbedCamera>(e).and_then(|x| x.camera.constant()) {
+                                let ok = matches!(cam, crate::value::Value::Ref(cam_id) if doc.live(*cam_id).is_some_and(|n| n.ty.name() == "camera") && composition_of(doc, *cam_id) == Some(of));
+                                (!ok).then(|| format!("embed {e}: embed_camera.camera must name a camera inside {of}"))
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    if let Some(message) = err {
+                        ps.push(crate::expand::Problem { node: e, kind: "expansion", message });
+                    }
+                }
+            }
+            let prev = if ps.is_empty() {
+                self.problems_by_comp.remove(&c)
+            } else {
+                self.problems_by_comp.insert(c, ps.clone())
+            };
+            if prev.unwrap_or_default() != ps {
+                any_changed = true;
+            }
+        }
+        if any_changed {
+            self.virtual_problems = self.problems_by_comp.values().flatten().cloned().collect();
+            crate::expand::sort_problems(&mut self.virtual_problems);
+        }
+    }
+
+    pub fn rebuild(&mut self, doc: Tree<'_>) {
+        self.edges.clear();
+        self.comp_targets.clear();
+        self.reverse_raw.clear();
+        self.dims.clear();
+        self.cyclic_embeds.clear();
+        self.problems_by_comp.clear();
+        self.virtual_problems.clear();
+        let all_comps: std::collections::BTreeSet<NodeId> = compositions(doc).into_iter().collect();
+        for &c in &all_comps {
+            if let Some(d) = dims(doc, c) {
+                self.dims.insert(c, d);
+            }
+            let mut map = BTreeMap::new();
+            let mut targets = std::collections::BTreeSet::new();
+            for e in embeds_in_unsorted(doc, c) {
+                let declared = declared_embed_target(doc, e);
+                if let Some(t) = declared {
+                    targets.insert(t);
+                    self.reverse_raw.entry(t).or_default().insert(c);
+                }
+                map.insert(e, (declared, None));
+            }
+            if !map.is_empty() {
+                self.edges.insert(c, map);
+            }
+            if !targets.is_empty() {
+                self.comp_targets.insert(c, targets);
+            }
+        }
+        let mut cache = std::collections::HashMap::new();
+        let comp_keys: Vec<NodeId> = self.edges.keys().copied().collect();
+        for c in comp_keys {
+            let updates: Vec<(NodeId, Option<NodeId>, bool)> = self.edges[&c]
+                .iter()
+                .map(|(&e, &(declared, _))| {
+                    let cyclic = declared.is_some_and(|t| self.dims.contains_key(&t) && self.edge_reaches(t, c, &mut cache));
+                    let res = declared.filter(|&t| self.dims.contains_key(&t) && !cyclic);
+                    (e, res, cyclic)
+                })
+                .collect();
+            if let Some(map) = self.edges.get_mut(&c) {
+                for (e, res, cyclic) in updates {
+                    if let Some(entry) = map.get_mut(&e) {
+                        entry.1 = res;
+                    }
+                    if cyclic {
+                        self.cyclic_embeds.insert(e);
+                    }
+                }
+            }
+        }
+        self.refresh_virtual_problems(doc, &all_comps);
+    }
+
+    /// Update tracked topology for `dirty_comps` (compositions whose embeds,
+    /// `embed.source`, `embed_camera`, `camera`, `Repeat`/`When`, or
+    /// `composition.dims` changed, or that were added/deleted), returning every
+    /// composition whose resolved embed targets, target `dims`, or target
+    /// cameras changed so `GeometryRevisions` marks them shaped.
+    pub fn sync_from_comps(
+        &mut self,
+        doc: Tree<'_>,
+        dirty_comps: &std::collections::BTreeSet<NodeId>,
+        camera_comps: &std::collections::BTreeSet<NodeId>,
+    ) -> Vec<NodeId> {
+        if dirty_comps.is_empty() && camera_comps.is_empty() {
+            return Vec::new();
+        }
+        let mut seeds: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
+        let mut dims_changed: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
+        let mut reverse_seeds: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
+
+        for &c in dirty_comps {
+            let live_comp = doc.is_live(c) && composition_of(doc, c) == Some(c);
+            let old_dims = self.dims.get(&c).copied();
+            let new_dims = live_comp.then(|| dims(doc, c)).flatten();
+            if old_dims != new_dims {
+                match new_dims {
+                    Some(d) => {
+                        self.dims.insert(c, d);
+                    }
+                    None => {
+                        self.dims.remove(&c);
+                    }
+                }
+                dims_changed.insert(c);
+                seeds.insert(c);
+                reverse_seeds.insert(c);
+            }
+            let old_edges = self.edges.remove(&c).unwrap_or_default();
+            self.comp_targets.remove(&c);
+            let old_declared: BTreeMap<NodeId, Option<NodeId>> = old_edges.iter().map(|(&e, &(decl, _))| (e, decl)).collect();
+            for (_, &(decl, _)) in &old_edges {
+                if let Some(t) = decl
+                    && let Some(set) = self.reverse_raw.get_mut(&t)
+                {
+                    set.remove(&c);
+                    if set.is_empty() {
+                        self.reverse_raw.remove(&t);
+                    }
+                }
+            }
+            let mut new_edges = BTreeMap::new();
+            let mut new_declared = BTreeMap::new();
+            let mut new_targets = std::collections::BTreeSet::new();
+            if live_comp {
+                for e in embeds_in_unsorted(doc, c) {
+                    let decl = declared_embed_target(doc, e);
+                    let prev_resolved = old_edges.get(&e).and_then(|&(_, res)| res);
+                    if let Some(t) = decl {
+                        new_targets.insert(t);
+                        self.reverse_raw.entry(t).or_default().insert(c);
+                    }
+                    new_declared.insert(e, decl);
+                    new_edges.insert(e, (decl, prev_resolved));
+                }
+            }
+            // Only remove `cyclic_embeds` entries for embeds that actually went away;
+            // surviving unchanged edges preserve their cached cycle status if `seeds` stays empty.
+            for &e in old_edges.keys() {
+                if !new_edges.contains_key(&e) {
+                    self.cyclic_embeds.remove(&e);
+                }
+            }
+            if old_declared != new_declared {
+                seeds.insert(c);
+                reverse_seeds.insert(c);
+                for t in old_declared.values().flatten().chain(new_declared.values().flatten()) {
+                    reverse_seeds.insert(*t);
+                }
+            }
+            if !new_edges.is_empty() {
+                self.edges.insert(c, new_edges);
+            }
+            if !new_targets.is_empty() {
+                self.comp_targets.insert(c, new_targets);
+            }
+        }
+
+        // Direct callers of any composition whose cameras changed need both
+        // virtual-problem refresh and Scene rebuild (e.g. deleted camera aspect).
+        let mut camera_callers: std::collections::BTreeSet<NodeId> = std::collections::BTreeSet::new();
+        for &c in camera_comps {
+            if let Some(callers) = self.reverse_raw.get(&c) {
+                camera_callers.extend(callers.iter().copied());
+            }
+        }
+
+        if seeds.is_empty() {
+            let mut problem_comps = dirty_comps.clone();
+            problem_comps.extend(camera_callers.iter().copied());
+            for &c in dirty_comps {
+                if let Some(callers) = self.reverse_raw.get(&c) {
+                    problem_comps.extend(callers.iter().copied());
+                }
+            }
+            self.refresh_virtual_problems(doc, &problem_comps);
+            return camera_callers.into_iter().collect();
+        }
+
+        // BFS backward along `reverse_raw` to reach every composition that can
+        // transitively reach any changed composition (covering indirect cycles
+        // across both 2D and 3D compositions and deleted-then-restored targets).
+        let mut affected: std::collections::BTreeSet<NodeId> = seeds.clone();
+        let mut queue: std::collections::VecDeque<NodeId> = reverse_seeds.into_iter().collect();
+        while let Some(target) = queue.pop_front() {
+            if let Some(callers) = self.reverse_raw.get(&target) {
+                for &caller in callers {
+                    if affected.insert(caller) {
+                        queue.push_back(caller);
+                    }
+                }
+            }
+        }
+
+        let mut cache = std::collections::HashMap::new();
+        let mut changed_comps: std::collections::BTreeSet<NodeId> = camera_callers.clone();
+        for &c in &affected {
+            let live_comp = self.dims.contains_key(&c);
+            if !live_comp {
+                if dims_changed.contains(&c) {
+                    changed_comps.insert(c);
+                }
+                continue;
+            }
+            let mut comp_changed = dims_changed.contains(&c);
+            if let Some(map) = self.edges.get(&c) {
+                let resolved_list: Vec<(NodeId, Option<NodeId>, Option<NodeId>, bool)> = map
+                    .iter()
+                    .map(|(&e, &(decl, _))| {
+                        let cyclic = decl.is_some_and(|t| self.dims.contains_key(&t) && self.edge_reaches(t, c, &mut cache));
+                        let now = decl.filter(|&t| self.dims.contains_key(&t) && !cyclic);
+                        (e, decl, now, cyclic)
+                    })
+                    .collect();
+                if let Some(map) = self.edges.get_mut(&c) {
+                    for (e, decl, now, cyclic) in resolved_list {
+                        if cyclic {
+                            self.cyclic_embeds.insert(e);
+                        } else {
+                            self.cyclic_embeds.remove(&e);
+                        }
+                        if let Some((_, resolved)) = map.get_mut(&e) {
+                            if *resolved != now {
+                                *resolved = now;
+                                comp_changed = true;
+                            }
+                        }
+                        if let Some(t) = decl.or(now)
+                            && dims_changed.contains(&t)
+                        {
+                            comp_changed = true;
+                        }
+                    }
+                }
+            }
+            if comp_changed {
+                changed_comps.insert(c);
+            }
+        }
+        let mut problem_comps = affected;
+        problem_comps.extend(dirty_comps.iter().copied());
+        problem_comps.extend(camera_callers);
+        self.refresh_virtual_problems(doc, &problem_comps);
+        changed_comps.into_iter().collect()
+    }
+}
+
+/// Whether following drawn embeds from `target` reaches `home` (direct or indirect cycle).
+fn reaches_composition(doc: Tree<'_>, target: NodeId, home: NodeId) -> bool {
+    let mut stack = vec![target];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(c) = stack.pop() {
+        if c == home {
+            return true;
+        }
+        if seen.insert(c) {
+            stack.extend(embeds_in_unsorted(doc, c).into_iter().filter_map(|e| raw_embedded(doc, e)));
+        }
+    }
+    false
+}
+
+/// The composition an embed shows, if it names a live composition without
+/// closing a direct or indirect embed cycle (same invariant as `validate_embed`).
+/// O(1) on committed non-recording `Tree`s via `Docs::cyclic_embeds`; walks and
+/// records `Key::In`/`Key::Facet` on recording `Tree`s (`LayoutNative`).
+pub fn embedded(doc: Tree<'_>, embed: NodeId) -> Option<NodeId> {
+    if crate::expand::in_repeat_template(doc, embed) {
+        return None;
+    }
+    let of = raw_embedded(doc, embed)?;
+    if let Some(is_cyclic) = doc.is_cyclic_embed(embed) {
+        return (!is_cyclic).then_some(of);
+    }
+    let home = composition_of(doc, embed)?;
+    (!reaches_composition(doc, of, home)).then_some(of)
 }
 
 /// The camera an embed looks through, if it names one.
@@ -424,11 +796,23 @@ pub fn embed_3d_extent(store: &dyn crate::reads::Reads, embed: NodeId) -> Option
     Some((source, camera, w, h))
 }
 
-/// Every live embed inside `composition`, in preorder. From the type index,
-/// not a walk of the content: views ask every frame.
-pub fn embeds_in(doc: Tree<'_>, composition: NodeId) -> Vec<NodeId> {
+/// Every live drawn embed inside `composition` (excluding undrawn repeat/when
+/// prototypes), in unspecified order without allocating `order_path` sort keys.
+/// Uses the per-root scoped type index (`Key::In`) so callers on a recording
+/// `Tree` (such as `LayoutNative`) record embed topology dependencies
+/// automatically without scanning the whole document.
+fn embeds_in_unsorted(doc: Tree<'_>, composition: NodeId) -> Vec<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
-    let mut out: Vec<NodeId> = doc.nodes_of_type(embed).filter(|&e| composition_of(doc, e) == Some(composition) && e != composition).collect();
+    let root = doc.top_root(composition).unwrap_or(composition);
+    doc.nodes_of_type_in(root, embed)
+        .into_iter()
+        .filter(|&e| composition_of(doc, e) == Some(composition) && e != composition && !crate::expand::in_repeat_template(doc, e))
+        .collect()
+}
+
+/// Every live drawn embed inside `composition`, in preorder.
+pub fn embeds_in(doc: Tree<'_>, composition: NodeId) -> Vec<NodeId> {
+    let mut out = embeds_in_unsorted(doc, composition);
     out.sort_by_cached_key(|&e| doc.order_path(e).into_iter().cloned().collect::<Vec<_>>());
     out
 }
@@ -447,15 +831,8 @@ pub fn validate_embed(doc: Tree<'_>, embed: NodeId) -> Result<(), String> {
         return Err(format!("embed {embed}: {of} is not a live composition"));
     }
     // Walk what `of` shows, transitively; reaching `home` is a loop.
-    let mut stack = vec![of];
-    let mut seen = std::collections::BTreeSet::new();
-    while let Some(c) = stack.pop() {
-        if c == home {
-            return Err(format!("embed {embed}: {of} already shows {home}, directly or through its embeds; embedding it in {home} would loop"));
-        }
-        if seen.insert(c) {
-            stack.extend(embeds_in(doc, c).into_iter().filter_map(|e| embedded(doc, e)));
-        }
+    if reaches_composition(doc, of, home) {
+        return Err(format!("embed {embed}: {of} already shows {home}, directly or through its embeds; embedding it in {home} would loop"));
     }
     if let Some(cam) = doc.get::<crate::facet::EmbedCamera>(embed).and_then(|e| e.camera.constant()) {
         let ok = matches!(cam, crate::value::Value::Ref(c) if doc.live(*c).is_some_and(|n| n.ty.name() == "camera") && composition_of(doc, *c) == Some(of));

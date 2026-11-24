@@ -177,15 +177,15 @@ impl Store {
     }
 
     pub fn new() -> Store {
-        Store::pair(StoreCore::new(), StoreCore::with_copies_in_document(Document::new()), "new")
+        Store::pair(StoreCore::new(), StoreCore::with_full_views(Document::new()), "new")
     }
 
     pub fn with_document(doc: Document) -> Store {
-        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_copies_in_document(doc), "with_document")
+        Store::pair(StoreCore::with_document(doc.clone()), StoreCore::with_full_views(doc), "with_document")
     }
 
     pub fn load(text: &str) -> Result<Store, LoadError> {
-        match (StoreCore::load(text), serial::load(text).map(StoreCore::with_copies_in_document)) {
+        match (StoreCore::load(text), serial::load(text).map(StoreCore::with_full_views)) {
             (Ok(subject), Ok(reference)) => Ok(Store::pair(subject, reference, "load")),
             (Err(a), Err(b)) => {
                 assert_eq!(a.to_string(), b.to_string(), "differential: `load` failed differently");

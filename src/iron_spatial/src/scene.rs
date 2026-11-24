@@ -64,7 +64,15 @@ const NOT_LOOSE: [&str; 6] = ["composition", "model", "library", "timeline", "se
 fn root_of(doc: Tree<'_>, id: NodeId) -> Option<Option<NodeId>> {
     let mut at = id;
     loop {
-        let node = doc.node(at)?;
+        let node = match doc.node(at) {
+            Some(n) => n,
+            None => {
+                // Vanished virtual node (EN-13): fall back to its authored root.
+                let root = at.expanded_root()?;
+                at = root;
+                doc.node(at)?
+            }
+        };
         let ty = node.ty.name();
         if ty == "composition" || ty == "template" {
             return Some(Some(at));
@@ -153,6 +161,10 @@ pub struct Scene {
     embeds: Vec<NodeId>,
     /// 2D embeds by the composition they show, for region updates.
     shown_by: BTreeMap<NodeId, Vec<NodeId>>,
+    /// Indexed root (`Some(comp/tmpl)` or `None` loose) of every embed/ref
+    /// recorded in `shown_by` (including currently-empty unframed embeds so
+    /// `rebuild_root` cleans them up and `settle` restores them when content arrives).
+    shown_roots: BTreeMap<NodeId, Option<NodeId>>,
     /// 3D embeds by the camera they look through, for aspect changes.
     camera_embeds: BTreeMap<NodeId, Vec<NodeId>>,
     built: bool,
@@ -429,12 +441,14 @@ impl Scene {
     /// Commit every dirty scope, deepest first, and carry changed unions up
     /// through group entries and across to the embeds that show them.
     fn settle(&mut self, store: &Store, mut dirty: BTreeSet<Option<NodeId>>) {
+        let mut rebuild_roots: BTreeSet<Option<NodeId>> = BTreeSet::new();
         while let Some(&scope) = dirty.iter().max_by_key(|s| self.scopes.get(s).map_or(0, |x| x.depth)) {
             dirty.remove(&scope);
             let Some(s) = self.scopes.get_mut(&scope) else { continue };
             s.index.commit();
+            let prev_union = s.union;
             let union = s.index.records().map(|(_, r)| r.bounds).reduce(Bounds::union);
-            let changed = s.union != union;
+            let changed = prev_union != union;
             s.union = union;
             // Damage in composition space: the scope's own damage, placed.
             let placement = self.placement(scope);
@@ -446,11 +460,30 @@ impl Scene {
             let Some(g) = scope else { continue };
             if is_type(store.tree(), g, "composition") || is_type(store.tree(), g, "template") {
                 // Content changed: the embeds (and references) showing it
-                // follow.
+                // follow. When an unframed embed's source transitions between
+                // empty and non-empty (or was absent from `entries`), schedule
+                // its owning root for a clean rebuild so parent groups/chains/
+                // `embeds` stay identical to `Scene::rebuild`.
+                let empty_transition = prev_union.is_none() != union.is_none();
                 for embed in self.shown_by.get(&g).cloned().unwrap_or_default() {
-                    let Some(es) = self.entries.get(&embed).filter(|e| matches!(e.kind, Kind::Embed2d { framed: false, .. })).map(|e| e.scope) else { continue };
-                    self.refresh_embed(store, embed);
-                    dirty.insert(es);
+                    if let Some(e) = self.entries.get(&embed) {
+                        if matches!(e.kind, Kind::Embed2d { framed: false, .. }) {
+                            if union.is_none() {
+                                if let Some(&root) = self.shown_roots.get(&embed) {
+                                    rebuild_roots.insert(root);
+                                }
+                            } else {
+                                let es = e.scope;
+                                self.refresh_embed(store, embed);
+                                dirty.insert(es);
+                            }
+                        }
+                    } else if empty_transition
+                        && union.is_some()
+                        && let Some(&root) = self.shown_roots.get(&embed)
+                    {
+                        rebuild_roots.insert(root);
+                    }
                 }
             } else if let Some((parent, affine)) = self.entries.get(&g).map(|e| (e.scope, e.affine)) {
                 match union {
@@ -479,6 +512,9 @@ impl Scene {
         for s in self.scopes.values_mut() {
             s.index.commit();
         }
+        for root in rebuild_roots {
+            self.rebuild_root(store, root);
+        }
     }
 
     fn upsert(&mut self, id: NodeId, scope: Option<NodeId>, bounds: Bounds, affine: Affine) {
@@ -491,10 +527,14 @@ impl Scene {
     }
 
     fn remove(&mut self, id: NodeId) {
-        if let Some(e) = self.entries.remove(&id)
-            && let Some(s) = self.scopes.get_mut(&e.scope)
-        {
-            s.index.remove(id);
+        if let Some(e) = self.entries.remove(&id) {
+            self.chains.remove(&id);
+            if let Ok(pos) = self.embeds.binary_search(&id) {
+                self.embeds.remove(pos);
+            }
+            if let Some(s) = self.scopes.get_mut(&e.scope) {
+                s.index.remove(id);
+            }
             self.updated += 1;
         }
     }
@@ -513,13 +553,18 @@ impl Scene {
         let Some(e) = self.entries.get(&embed) else { return };
         let (scope, affine) = (e.scope, e.affine);
         let Kind::Embed2d { source, .. } = e.kind else { return };
+        let doc = store.tree();
         // A reference is its template's content placed, geometry and paint
         // alike, as a group's entry is its scope's.
-        if iron_document::expand::reference_template(store.tree(), embed).is_some() {
+        if iron_document::expand::reference_template(doc, embed).is_some() {
             match self.scopes.get(&scope_of(source)).and_then(|s| s.union) {
                 Some(u) => self.upsert(embed, scope, u.mapped(affine), affine),
                 None => self.remove(embed),
             }
+            return;
+        }
+        if composition::embedded(doc, embed) != Some(source) || composition::dims(doc, source) != Some(Dims::Two) {
+            self.remove(embed);
             return;
         }
         match self.embed_region(store, embed, source) {
@@ -613,11 +658,17 @@ impl Scene {
         let gone: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
         let old_damage: Vec<Rect> = gone.iter().filter_map(|id| self.painted(*id)).collect();
         self.damage.extend(old_damage);
-        let gone_set: BTreeSet<NodeId> = gone.iter().copied().collect();
+        let mut gone_set: BTreeSet<NodeId> = gone.iter().copied().collect();
         for id in &gone {
             self.entries.remove(id);
             self.chains.remove(id);
             self.scopes.remove(&scope_of(*id));
+        }
+        // Also clear empty unframed embeds/references that belonged to `root`.
+        let gone_shown: Vec<NodeId> = self.shown_roots.iter().filter(|&(_, &r)| r == root).map(|(&id, _)| id).collect();
+        for id in gone_shown {
+            self.shown_roots.remove(&id);
+            gone_set.insert(id);
         }
         for list in self.shown_by.values_mut().chain(self.camera_embeds.values_mut()) {
             list.retain(|e| !gone_set.contains(e));
@@ -637,13 +688,19 @@ impl Scene {
         if shown {
             self.scopes.insert(root, Scope { union, ..Default::default() });
         }
-        let before: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| *k != root).collect();
         let order = numbering(doc, &kids);
         for k in kids {
             self.build_node(store, k, root, root, 1, &order);
         }
-        let made: BTreeSet<Option<NodeId>> = self.scopes.keys().copied().filter(|k| !before.contains(k)).collect();
         let fresh: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
+        let mut made: BTreeSet<Option<NodeId>> = fresh
+            .iter()
+            .filter(|id| matches!(self.entries[id].kind, Kind::Group))
+            .map(|&id| scope_of(id))
+            .collect();
+        if self.scopes.contains_key(&root) {
+            made.insert(root);
+        }
         self.updated += (gone.len() + fresh.len()) as u32;
         for &id in &fresh {
             if is_type(doc, id, "embed") {
@@ -687,6 +744,7 @@ impl Scene {
         let ty = node.ty.name();
         if let Some(template) = iron_document::expand::reference_template(doc, id) {
             add_sorted(self.shown_by.entry(template).or_default(), id);
+            self.shown_roots.insert(id, root);
             // Its template is indexed and settled already (`rebuild`); one
             // with nothing in it indexes nothing, like an empty group.
             let Some(u) = self.scopes.get(&scope_of(template)).and_then(|s| s.union) else { return false };
@@ -697,6 +755,7 @@ impl Scene {
             let kind = match composition::embedded(doc, id) {
                 Some(source) if composition::dims(doc, source) == Some(Dims::Two) => {
                     add_sorted(self.shown_by.entry(source).or_default(), id);
+                    self.shown_roots.insert(id, root);
                     Some((Kind::Embed2d { source, framed: doc.get::<iron_document::facet::Frame>(id).is_some() }, Bounds::transformed(Rect::ZERO, affine, EMBED_PAD, 0.0)))
                 }
                 _ => store.local_bounds(id).map(|lb| {

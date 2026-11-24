@@ -401,3 +401,177 @@ fn structure_in_one_composition_leaves_another_alone() {
     check_flat(&scene, &f.store, &roots);
     assert_eq!(scene.candidates(&[dot], None, Rect::new(0.0, 0.0, 20.0, 20.0)), vec![dot]);
 }
+
+#[test]
+fn incremental_scene_tracks_2d_3d_2d_repeat_embed_cycles_and_recovery() {
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(8);
+    let [comp_a, comp_b_3d, comp_c, emb_a_to_b, rep_grp, emb_b_to_c, ov, rect_c] = ids.try_into().unwrap();
+    let mut c3d = Composition::default();
+    c3d.dims = Slot::Const(Value::Enum("3d".into()));
+    let mut e_ab = Embed::default();
+    e_ab.source = Slot::Const(Value::Ref(comp_b_3d));
+    let mut e_bc = Embed::default();
+    e_bc.source = Slot::Const(Value::Ref(comp_c));
+    let mut rep = iron_document::facet::Repeat::default();
+    rep.count = n(0.0);
+    let mut ovf = iron_document::facet::Override::default();
+    let target = NodeId::from_path(&[NodeId::item_scope(rep_grp, "0").unwrap().path()[1], emb_b_to_c]).unwrap();
+    ovf.target = Slot::Const(Value::Ref(target));
+    ovf.leaf = Slot::Const(Value::Str("embed.source".into()));
+    ovf.value = Slot::Const(Value::Ref(comp_a));
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    let k2 = OrderKey::after(&k1);
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: comp_a, ty: ty("composition"), parent: None, order: k0.clone(), facets: vec![comp2d(), named("a")] },
+                Op::Create { id: comp_b_3d, ty: ty("composition"), parent: None, order: k1.clone(), facets: vec![c3d.wrap(), named("b3d")] },
+                Op::Create { id: comp_c, ty: ty("composition"), parent: None, order: k2.clone(), facets: vec![comp2d(), named("c")] },
+                Op::Create { id: emb_a_to_b, ty: ty("embed"), parent: Some(comp_a), order: k0.clone(), facets: vec![at(10.0, 10.0, 0.0), e_ab.wrap()] },
+                Op::Create { id: rep_grp, ty: ty("group"), parent: Some(comp_b_3d), order: k0.clone(), facets: vec![at(0.0, 0.0, 0.0), rep.wrap()] },
+                Op::Create { id: emb_b_to_c, ty: ty("embed"), parent: Some(rep_grp), order: k0.clone(), facets: vec![at(0.0, 0.0, 0.0), e_bc.wrap()] },
+                Op::Create { id: ov, ty: ty("override"), parent: Some(rep_grp), order: k1, facets: vec![ovf.wrap()] },
+                Op::Create { id: rect_c, ty: ty("rect"), parent: Some(comp_c), order: k0, facets: vec![at(0.0, 0.0, 0.0), size(40.0, 40.0)] },
+            ],
+        ))
+        .unwrap();
+
+    let assert_matches_rebuild = |scene: &Scene, store: &Store, label: &str| {
+        let mut fresh = Scene::default();
+        fresh.update(store, iron_document::geom::GeometryChanges { structure: true, ..Default::default() });
+        assert_eq!(scene.diff(&fresh), None, "{label}");
+    };
+
+    let mut scene = Scene::default();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_a_to_b).is_some(), "3D embed initially indexed");
+    assert_matches_rebuild(&scene, &store, "initial");
+
+    // Reveal repeat in 3D comp_b -> forms 2D A -> 3D B -> 2D A cycle.
+    // Incremental Scene::update must drop A's now-blocked 3D embed without full rebuild.
+    store.apply(tx("cycle", vec![set(rep_grp, "repeat.count", 1.0)])).unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_a_to_b).is_none(), "cycle must drop 3D embed from Scene");
+    assert_matches_rebuild(&scene, &store, "cycle active");
+
+    // Hide repeat in 3D comp_b -> breaks cycle; incremental Scene::update restores A's 3D embed.
+    store.apply(tx("recover", vec![set(rep_grp, "repeat.count", 0.0)])).unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_a_to_b).is_some(), "breaking cycle must restore 3D embed");
+    assert_matches_rebuild(&scene, &store, "cycle recovered");
+}
+
+#[test]
+fn unframed_embed_recovers_when_source_empties_and_regains_content() {
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(6);
+    let [src, host, grp, emb, r1, r2] = ids.try_into().unwrap();
+    let mut e = Embed::default();
+    e.source = Slot::Const(Value::Ref(src));
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: src, ty: ty("composition"), parent: None, order: k0.clone(), facets: vec![comp2d(), named("src")] },
+                Op::Create { id: host, ty: ty("composition"), parent: None, order: k1, facets: vec![comp2d(), named("host")] },
+                Op::Create { id: grp, ty: ty("group"), parent: Some(host), order: k0.clone(), facets: vec![at(50.0, 25.0, 0.0)] },
+                Op::Create { id: emb, ty: ty("embed"), parent: Some(grp), order: k0.clone(), facets: vec![at(0.0, 0.0, 0.0), e.wrap()] },
+            ],
+        ))
+        .unwrap();
+
+    let assert_matches_rebuild = |scene: &Scene, store: &Store, label: &str| {
+        let mut fresh = Scene::default();
+        fresh.update(store, iron_document::geom::GeometryChanges { structure: true, ..Default::default() });
+        assert_eq!(scene.diff(&fresh), None, "{label}");
+    };
+
+    let mut scene = Scene::default();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb).is_none(), "empty source -> unframed embed absent from entries");
+    assert_matches_rebuild(&scene, &store, "initially empty");
+
+    // Source gains content -> unframed embed and its parent group appear incrementally.
+    store
+        .apply(tx("fill", vec![Op::Create { id: r1, ty: ty("rect"), parent: Some(src), order: k0.clone(), facets: vec![at(0.0, 0.0, 0.0), size(30.0, 20.0)] }]))
+        .unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb).is_some(), "unframed embed must appear once source gains content");
+    assert_matches_rebuild(&scene, &store, "source filled");
+
+    // Source empties -> unframed embed disappears cleanly.
+    store.apply(tx("empty", vec![Op::Delete { id: r1 }])).unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb).is_none(), "unframed embed must clear when source empties");
+    assert_matches_rebuild(&scene, &store, "source emptied");
+
+    // Source regains content -> unframed embed recovers again.
+    store
+        .apply(tx("refill", vec![Op::Create { id: r2, ty: ty("rect"), parent: Some(src), order: k0, facets: vec![at(5.0, 5.0, 0.0), size(60.0, 40.0)] }]))
+        .unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb).is_some(), "unframed embed must recover when source refills");
+    assert_matches_rebuild(&scene, &store, "source refilled");
+}
+
+#[test]
+fn deleting_and_restoring_embedded_composition_after_unrelated_edit_restores_scene() {
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(4);
+    let [comp_a, comp_b, rect_b, emb_ab] = ids.try_into().unwrap();
+    let mut e = Embed::default();
+    e.source = Slot::Const(Value::Ref(comp_b));
+    let k0 = OrderKey::first();
+    let k1 = OrderKey::after(&k0);
+    store
+        .apply(tx(
+            "setup",
+            vec![
+                Op::Create { id: comp_a, ty: ty("composition"), parent: None, order: k0.clone(), facets: vec![comp2d(), named("a")] },
+                Op::Create { id: comp_b, ty: ty("composition"), parent: None, order: k1, facets: vec![comp2d(), named("b")] },
+                Op::Create { id: rect_b, ty: ty("rect"), parent: Some(comp_b), order: k0.clone(), facets: vec![at(0.0, 0.0, 0.0), size(40.0, 30.0)] },
+                Op::Create { id: emb_ab, ty: ty("embed"), parent: Some(comp_a), order: k0, facets: vec![at(10.0, 10.0, 0.0), e.wrap()] },
+            ],
+        ))
+        .unwrap();
+
+    let assert_matches_rebuild = |scene: &Scene, store: &Store, label: &str| {
+        let mut fresh = Scene::default();
+        fresh.update(store, iron_document::geom::GeometryChanges { structure: true, ..Default::default() });
+        assert_eq!(scene.diff(&fresh), None, "{label}");
+    };
+
+    let mut scene = Scene::default();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_ab).is_some());
+    assert_matches_rebuild(&scene, &store, "initial");
+
+    // 1. Delete B while A embeds it.
+    store.apply(tx("del_b", vec![Op::Delete { id: comp_b }])).unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_ab).is_none());
+    assert_matches_rebuild(&scene, &store, "after delete B");
+
+    // 2. Edit A's `composition.run` while B is absent.
+    store
+        .apply(tx(
+            "edit_a_run",
+            vec![Op::Set { id: comp_a, path: "composition.run".parse().unwrap(), slot: Slot::Const(Value::Enum("always".into())) }],
+        ))
+        .unwrap();
+    update(&mut scene, &mut store);
+    assert_matches_rebuild(&scene, &store, "after edit A");
+
+    // 3. Undo both edits -> B comes back and A's embed MUST reappear in Scene!
+    store.undo(0).unwrap().unwrap();
+    update(&mut scene, &mut store);
+    store.undo(0).unwrap().unwrap();
+    update(&mut scene, &mut store);
+    assert!(scene.painted(emb_ab).is_some(), "restoring B must restore A's embed in Scene");
+    assert_matches_rebuild(&scene, &store, "after undo both");
+}

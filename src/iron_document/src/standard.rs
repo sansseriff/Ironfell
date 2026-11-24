@@ -212,7 +212,7 @@ impl crate::StoreCore {
             definition::instantiate(Tree::authored_only(doc), def, NOTATION, &name, &place)?
         } else {
             // A model made in this transaction: instantiate's ids come after it.
-            let mut scratch = crate::tree::Docs::new(doc.clone(), false);
+            let mut scratch = crate::tree::Docs::new(doc.clone());
             let stamp = scratch.authored.version().next();
             crate::op::apply_op(&mut scratch, 0, &ops[0], stamp).map_err(|e| e.message)?;
             definition::instantiate(Tree::authored_only(&scratch.authored), def, NOTATION, &name, &place)?

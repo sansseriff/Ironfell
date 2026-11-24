@@ -220,34 +220,51 @@ fn load_refuses_a_document_holding_a_copy() {
     assert!(err.to_string().contains("derived copy"), "{err}");
 }
 
-/// The node budget (`expand::NODE_BUDGET`, 50,000 derived nodes) cuts per
-/// owner in id order (spec D12): with copies apart the cut is the one the
-/// in-document reference makes, compared after every call under
-/// `differential`. Three repeats each wanting 20,000 nodes (10,000 items, a
-/// repeat's most): the first two keep all of theirs, the third is cut, and
-/// shrinking the first lets the third grow back.
+/// The node budget (`expand::NODE_BUDGET`, 50,000 derived nodes) is an
+/// independent per-top-level-owner safety cap (`EN-13+EN-7`): each owner gets
+/// its own 50,000-node cap so siblings never contend or trigger cross-owner
+/// rebuilds. An owner wanting 60,000 derived nodes (6,000 items × 10 nodes each)
+/// is capped at 50,000 with a `"budget"` problem while a sibling owner keeps all
+/// its nodes; shrinking the capped owner below 50,000 clears the problem and
+/// undo restores the exact cap; editing an unrelated node does not rebuild the
+/// capped owner.
 ///
-/// Ignored by default: 60,000 wanted nodes take 11 s in release (27 s under
-/// `differential`) and minutes in debug. Run it in release, with and without
-/// `differential`, before a stage-1 commit:
+/// Ignored by default: 60,000+ wanted nodes take several seconds in release and
+/// minutes in debug. Run it in release, with and without `differential`:
 ///   cargo test -p iron_document --release --target aarch64-apple-darwin --test suite copies_apart::the_node_budget -- --ignored
 #[test]
 #[ignore]
-fn the_node_budget_cuts_the_later_owner() {
+fn the_node_budget_caps_each_owner() {
     let (mut store, comp) = sheet();
-    let repeat = |name: &str| format!(r#"<group id="${name}" name="{name}" repeat.count="10000" repeat.max="10000"><rect name="x" w="1" h="1"/></group>"#);
-    let n = draw(&mut store, comp, &["a", "b", "c"].map(repeat).concat());
-    let under = |store: &Store| ["a", "b", "c"].map(|k| store.tree().descendants(n[k]).into_iter().filter(|d| d.is_expanded()).count());
+    let nine_rects = "<rect w=\"1\" h=\"1\"/>".repeat(9);
+    let big = format!(r#"<group id="$big" name="big" repeat.count="6000" repeat.max="6000">{nine_rects}</group>"#);
+    let sib = r#"<group id="$sib" name="sib" repeat.count="500" repeat.max="500"><rect name="x" w="1" h="1"/></group>"#;
+    let n = draw(&mut store, comp, &format!("{big}{sib}"));
+    let under = |store: &Store, id: NodeId| store.tree().descendants(id).into_iter().filter(|d| d.is_expanded()).count();
     let budget = |store: &Store| store.problems().iter().any(|p| p.kind == "budget");
-    assert_eq!(under(&store), [20_000, 20_000, 10_000], "the budget is spent in owner order");
     assert_eq!(expand::NODE_BUDGET, 50_000);
+    // 6,000 × (1 item scope + 9 rects) = 60,000 wanted -> capped independently at 50,000.
+    assert_eq!(under(&store, n["big"]), 50_000, "the oversized owner is capped at NODE_BUDGET");
+    // Sibling gets its own independent NODE_BUDGET and keeps all 1,000 derived nodes.
+    assert_eq!(under(&store, n["sib"]), 1_000, "sibling owner is unaffected by big's cap");
     assert!(budget(&store), "{:?}", store.problems());
 
-    store.apply(tx("shrink", vec![Op::Set { id: n["a"], path: path("repeat.count"), slot: num(100.0) }])).unwrap();
-    assert_eq!(under(&store), [200, 20_000, 20_000], "the cut owner grows into the room");
+    // Unrelated edit in the same composition must NOT rebuild the capped owner.
+    let extra = draw(&mut store, comp, r#"<rect id="$u" name="u" w="10" h="10"/>"#);
+    assert!(store.tree().is_live(extra["u"]));
+    assert_eq!(under(&store, n["big"]), 50_000);
+    assert!(budget(&store));
+
+    // Shrinking the capped owner below 50,000 clears its budget problem.
+    store.apply(tx("shrink", vec![Op::Set { id: n["big"], path: path("repeat.count"), slot: num(100.0) }])).unwrap();
+    assert_eq!(under(&store, n["big"]), 1_000);
+    assert_eq!(under(&store, n["sib"]), 1_000);
     assert!(!budget(&store));
+
+    // Undo restores the exact 50,000 cap and budget problem.
     store.undo(0).unwrap().unwrap();
-    assert_eq!(under(&store), [20_000, 20_000, 10_000]);
+    assert_eq!(under(&store, n["big"]), 50_000);
+    assert_eq!(under(&store, n["sib"]), 1_000);
     assert!(budget(&store));
 }
 

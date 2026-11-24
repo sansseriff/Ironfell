@@ -1,19 +1,12 @@
-//! The read interface (reactive-engine.md §12.1; handoff §4.2, §4.6): what
-//! answers for authored and derived nodes alike. Behind it are two
-//! documents (`Docs`): the authored one, and, once copies are kept apart
-//! (phase 2c), the one holding derived copies. A node is answered by the
-//! document its id belongs to; enumerations chain the two, which keeps their
-//! order since every derived id sorts after every other; children merge
-//! where an owner has both. Get one from `Store::tree()`, inside the crate
-//! from `Tree::of(&docs)`, or over a document known to hold no copies with
-//! `Tree::authored_only`.
-//!
-//! The authored document's version and id counters are answered here too,
-//! for code that reads the tree and builds a transaction from it: ids are
-//! minted by the authored document in every phase. Its saved form and its
-//! mutators are not here.
+//! The read interface (plans/specs/engine.md §2.3, §3.2; handoff-engine.md
+//! EN-13): what answers for authored nodes and virtual derived views alike.
+//! Behind [`Tree`] are `Docs::authored` (authored nodes, facets, relations, and
+//! flat `Document::solved`) and `Docs::views` (`VirtualViews` over shared
+//! `Arc<Template>` + sparse resolved facets + keyed `ItemTable`). `Docs::copies`
+//! and `apart` are gone.
 
 use crate::document::{Document, Node, Relation};
+use crate::engine::views::{OwnerPlan, ViewDelta, VirtualViews};
 use crate::expr::{Expr, Leaf};
 use crate::facet::{Facet, FacetKind, LeafPath, LeafStruct};
 use crate::id::{NodeId, RelationId};
@@ -24,30 +17,42 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Per-top-level-root type and facet indexes across both authored nodes and
-/// derived copies (engine.md §3.2). Maintained incrementally by `Docs`'s
-/// mutators and journaled alongside the document journal.
+/// virtual derived nodes (engine.md §3.2). Maintained incrementally by `Docs`
+/// and `VirtualViews` and journaled alongside the document journal.
 #[derive(Clone, Default)]
 pub(crate) struct ScopedIndexes {
-    root_of: BTreeMap<NodeId, NodeId>,
+    pub(crate) root_of: BTreeMap<NodeId, NodeId>,
     by_type: BTreeMap<(NodeId, TypeId), BTreeSet<NodeId>>,
     by_facet: BTreeMap<(NodeId, FacetKind), BTreeSet<NodeId>>,
+    /// Global virtual-only type & facet indexes so `Tree::nodes_of_type` and
+    /// `Tree::nodes_with` never scan `Document::roots()` across hidden pages.
+    virtual_by_type: BTreeMap<TypeId, BTreeSet<NodeId>>,
+    virtual_by_facet: BTreeMap<FacetKind, BTreeSet<NodeId>>,
+    /// Direct `let` children per parent (`None`: root `let`s), keyed by
+    /// `Key::LetsIn(parent)` so `@name` lookups touch only ancestor scopes in O(depth).
+    lets_by_parent: BTreeMap<Option<NodeId>, BTreeSet<NodeId>>,
 }
 
 #[derive(Clone)]
-enum ScopedRec {
+pub(crate) enum ScopedRec {
     Root(NodeId, Option<NodeId>),
     ByType(NodeId, TypeId, NodeId, bool),
     ByFacet(NodeId, FacetKind, NodeId, bool),
+    LetParent(Option<NodeId>, NodeId, bool),
 }
 
 impl ScopedIndexes {
     fn build(authored: &Document) -> ScopedIndexes {
         let mut out = ScopedIndexes::default();
+        let let_ty = TypeId::lookup("let").expect("registered");
         let mut stack: Vec<(NodeId, NodeId)> = authored.roots().iter().map(|&r| (r, r)).collect();
         while let Some((id, root)) = stack.pop() {
             let Some(n) = authored.live(id) else { continue };
             out.root_of.insert(id, root);
             out.by_type.entry((root, n.ty)).or_default().insert(id);
+            if n.ty == let_ty {
+                out.lets_by_parent.entry(n.parent).or_default().insert(id);
+            }
             for f in authored.facets_of(id) {
                 out.by_facet.entry((root, f.kind())).or_default().insert(id);
             }
@@ -58,7 +63,7 @@ impl ScopedIndexes {
         out
     }
 
-    fn set_root(&mut self, id: NodeId, root: Option<NodeId>, journal: &mut Option<Vec<ScopedRec>>) {
+    pub(crate) fn set_root(&mut self, id: NodeId, root: Option<NodeId>, journal: &mut Option<Vec<ScopedRec>>) {
         let prev = match root {
             Some(r) => self.root_of.insert(id, r),
             None => self.root_of.remove(&id),
@@ -70,8 +75,34 @@ impl ScopedIndexes {
         }
     }
 
-    fn insert_type(&mut self, root: NodeId, ty: TypeId, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+    pub(crate) fn insert_let(&mut self, parent: Option<NodeId>, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+        if self.lets_by_parent.entry(parent).or_default().insert(id) {
+            if let Some(j) = journal {
+                j.push(ScopedRec::LetParent(parent, id, true));
+            }
+            touched.note(crate::structure::Key::LetsIn(parent));
+        }
+    }
+
+    pub(crate) fn remove_let(&mut self, parent: Option<NodeId>, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+        if let Some(s) = self.lets_by_parent.get_mut(&parent)
+            && s.remove(&id)
+        {
+            if s.is_empty() {
+                self.lets_by_parent.remove(&parent);
+            }
+            if let Some(j) = journal {
+                j.push(ScopedRec::LetParent(parent, id, false));
+            }
+            touched.note(crate::structure::Key::LetsIn(parent));
+        }
+    }
+
+    pub(crate) fn insert_type(&mut self, root: NodeId, ty: TypeId, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
         if self.by_type.entry((root, ty)).or_default().insert(id) {
+            if id.is_expanded() {
+                self.virtual_by_type.entry(ty).or_default().insert(id);
+            }
             if let Some(j) = journal {
                 j.push(ScopedRec::ByType(root, ty, id, true));
             }
@@ -79,12 +110,20 @@ impl ScopedIndexes {
         }
     }
 
-    fn remove_type(&mut self, root: NodeId, ty: TypeId, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+    pub(crate) fn remove_type(&mut self, root: NodeId, ty: TypeId, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
         if let Some(s) = self.by_type.get_mut(&(root, ty))
             && s.remove(&id)
         {
             if s.is_empty() {
                 self.by_type.remove(&(root, ty));
+            }
+            if id.is_expanded()
+                && let Some(vs) = self.virtual_by_type.get_mut(&ty)
+            {
+                vs.remove(&id);
+                if vs.is_empty() {
+                    self.virtual_by_type.remove(&ty);
+                }
             }
             if let Some(j) = journal {
                 j.push(ScopedRec::ByType(root, ty, id, false));
@@ -93,8 +132,11 @@ impl ScopedIndexes {
         }
     }
 
-    fn insert_facet(&mut self, root: NodeId, kind: FacetKind, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+    pub(crate) fn insert_facet(&mut self, root: NodeId, kind: FacetKind, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
         if self.by_facet.entry((root, kind)).or_default().insert(id) {
+            if id.is_expanded() {
+                self.virtual_by_facet.entry(kind).or_default().insert(id);
+            }
             if let Some(j) = journal {
                 j.push(ScopedRec::ByFacet(root, kind, id, true));
             }
@@ -102,12 +144,20 @@ impl ScopedIndexes {
         }
     }
 
-    fn remove_facet(&mut self, root: NodeId, kind: FacetKind, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
+    pub(crate) fn remove_facet(&mut self, root: NodeId, kind: FacetKind, id: NodeId, journal: &mut Option<Vec<ScopedRec>>, touched: &mut crate::structure::Touched) {
         if let Some(s) = self.by_facet.get_mut(&(root, kind))
             && s.remove(&id)
         {
             if s.is_empty() {
                 self.by_facet.remove(&(root, kind));
+            }
+            if id.is_expanded()
+                && let Some(vs) = self.virtual_by_facet.get_mut(&kind)
+            {
+                vs.remove(&id);
+                if vs.is_empty() {
+                    self.virtual_by_facet.remove(&kind);
+                }
             }
             if let Some(j) = journal {
                 j.push(ScopedRec::ByFacet(root, kind, id, false));
@@ -135,8 +185,31 @@ impl ScopedIndexes {
                                 self.by_type.remove(&(root, ty));
                             }
                         }
+                        if id.is_expanded()
+                            && let Some(vs) = self.virtual_by_type.get_mut(&ty)
+                        {
+                            vs.remove(&id);
+                            if vs.is_empty() {
+                                self.virtual_by_type.remove(&ty);
+                            }
+                        }
                     } else {
                         self.by_type.entry((root, ty)).or_default().insert(id);
+                        if id.is_expanded() {
+                            self.virtual_by_type.entry(ty).or_default().insert(id);
+                        }
+                    }
+                }
+                ScopedRec::LetParent(parent, id, inserted) => {
+                    if inserted {
+                        if let Some(s) = self.lets_by_parent.get_mut(&parent) {
+                            s.remove(&id);
+                            if s.is_empty() {
+                                self.lets_by_parent.remove(&parent);
+                            }
+                        }
+                    } else {
+                        self.lets_by_parent.entry(parent).or_default().insert(id);
                     }
                 }
                 ScopedRec::ByFacet(root, kind, id, inserted) => {
@@ -147,8 +220,19 @@ impl ScopedIndexes {
                                 self.by_facet.remove(&(root, kind));
                             }
                         }
+                        if id.is_expanded()
+                            && let Some(vs) = self.virtual_by_facet.get_mut(&kind)
+                        {
+                            vs.remove(&id);
+                            if vs.is_empty() {
+                                self.virtual_by_facet.remove(&kind);
+                            }
+                        }
                     } else {
                         self.by_facet.entry((root, kind)).or_default().insert(id);
+                        if id.is_expanded() {
+                            self.virtual_by_facet.entry(kind).or_default().insert(id);
+                        }
                     }
                 }
             }
@@ -156,55 +240,46 @@ impl ScopedIndexes {
     }
 }
 
-/// The store's documents (handoff §4.6): the authored one, and the one
-/// holding derived copies when they are kept apart. With `apart` false every
-/// node, copies included, is in `authored` and `copies` stays empty: 2b's
-/// layout, the differential reference for phase 2c.
+/// The store's authored document plus lean lexical virtual views (`EN-13`).
 #[derive(Clone)]
 pub(crate) struct Docs {
     pub(crate) authored: Document,
-    pub(crate) copies: Document,
-    pub(crate) apart: bool,
-    /// Per-top-level-root type and facet indexes across authored and copies.
+    pub(crate) views: VirtualViews,
     pub(crate) scoped: ScopedIndexes,
     scoped_journal: Option<Vec<ScopedRec>>,
     scoped_touched: crate::structure::Touched,
-    /// Offsets into `(authored.touched, copies.touched, scoped_touched)` already
-    /// observed by `TemplateCache::note_touched` since the last `take_touched`.
-    template_cursor: (usize, usize, usize),
-    /// Each node deleted since the changes were last taken, as it was when
-    /// it went: a copy leaves no tombstone to read it from afterwards
-    /// (`Changes::note`, `Store::regraph`).
+    /// Post-commit set of live embeds currently blocked by a repeat-induced
+    /// embed cycle (`None` until synced by `StoreCore::embed_topology`, so
+    /// unsynced `Docs` fall back to walking `reaches_composition`).
+    pub(crate) cyclic_embeds: Option<BTreeSet<NodeId>>,
+    /// Offsets into `(authored.touched, views.touched, scoped_touched)` already
+    /// observed by `Owners::note_touched` since the last `take_touched`.
+    view_cursor: (usize, usize, usize),
+    /// Virtual teardown deltas emitted directly by `delete_node` during a
+    /// transaction before `Owners::sync_dirty` runs.
+    pending_view_delta: ViewDelta,
+    /// Each node deleted since the changes were last taken, as it was when it went.
     pub(crate) gone: crate::changes::Gone,
-    /// While a transaction is open, what each of its deletes replaced in
-    /// `gone`, so a rollback takes them back out.
     gone_journal: Option<Vec<(NodeId, Option<crate::changes::Went>)>>,
-    /// A stamp taken whenever an op that can change what the gate reads is
-    /// applied (`op::reshapes`: structure, facets, relations, a
-    /// composition's `run`, an embed's `source`), and on every rollback;
-    /// unique across stores (`crate::stamp`). The gate's cache key
-    /// (`Store::gate`).
+    /// Gate cache stamp (`op::reshapes`).
     pub(crate) reshaped: u64,
-    /// Likewise for the theme's tokens (`op::retokens`): what the theme's
-    /// published colours are cached against (`Store::resolve_theme`).
-    pub(crate) tokens_shaped: u64,
 }
 
 impl Docs {
-    pub(crate) fn new(authored: Document, apart: bool) -> Docs {
+    pub(crate) fn new(authored: Document) -> Docs {
         let scoped = ScopedIndexes::build(&authored);
         Docs {
             authored,
-            copies: Document::new(),
-            apart,
+            views: VirtualViews::default(),
             scoped,
             scoped_journal: None,
             scoped_touched: Default::default(),
-            template_cursor: (0, 0, 0),
+            cyclic_embeds: None,
+            view_cursor: (0, 0, 0),
+            pending_view_delta: ViewDelta::default(),
             gone: Default::default(),
             gone_journal: None,
             reshaped: crate::stamp(),
-            tokens_shaped: crate::stamp(),
         }
     }
 
@@ -213,7 +288,7 @@ impl Docs {
             Some(p) => self.scoped.root_of.get(&p).copied().unwrap_or_else(|| {
                 let tree = Tree::of(self);
                 let mut cur = p;
-                while let Some(up) = tree.node(cur).and_then(|n| n.parent) {
+                while let Some(up) = tree.parent_of(cur) {
                     cur = up;
                 }
                 cur
@@ -223,14 +298,18 @@ impl Docs {
     }
 
     pub(crate) fn insert_node(&mut self, node: Node, comps: Vec<Facet>) {
+        debug_assert!(!node.id.is_expanded(), "insert_node targets authored nodes only");
         let (id, ty, parent) = (node.id, node.ty, node.parent);
         let root = self.root_for(id, parent);
         let kinds: Vec<FacetKind> = comps.iter().map(Facet::kind).collect();
-        self.of_node(id).insert_node(node, comps);
+        self.authored.insert_node(node, comps);
         let on = self.scoped_touched.on;
         self.scoped_touched.on &= !crate::structure::silenced("insert_node");
         self.scoped.set_root(id, Some(root), &mut self.scoped_journal);
         self.scoped.insert_type(root, ty, id, &mut self.scoped_journal, &mut self.scoped_touched);
+        if ty.name() == "let" {
+            self.scoped.insert_let(parent, id, &mut self.scoped_journal, &mut self.scoped_touched);
+        }
         for k in kinds {
             self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
         }
@@ -238,50 +317,65 @@ impl Docs {
     }
 
     pub(crate) fn restore_node(&mut self, id: NodeId, ty: TypeId, parent: Option<NodeId>, order: OrderKey, comps: Vec<Facet>) {
+        debug_assert!(!id.is_expanded(), "restore_node targets authored nodes only");
         let root = self.root_for(id, parent);
         let kinds: Vec<FacetKind> = comps.iter().map(Facet::kind).collect();
-        self.of_node(id).restore_node(id, ty, parent, order, comps);
+        self.authored.restore_node(id, ty, parent, order, comps);
         let on = self.scoped_touched.on;
         self.scoped_touched.on &= !crate::structure::silenced("restore_node");
         self.scoped.set_root(id, Some(root), &mut self.scoped_journal);
         self.scoped.insert_type(root, ty, id, &mut self.scoped_journal, &mut self.scoped_touched);
+        if ty.name() == "let" {
+            self.scoped.insert_let(parent, id, &mut self.scoped_journal, &mut self.scoped_touched);
+        }
         for k in kinds {
             self.scoped.insert_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
         }
         self.scoped_touched.on = on;
     }
 
-    /// Delete one live node, its children already gone: a copy kept apart
-    /// is removed outright, anything else tombstoned. What it was is kept
-    /// in `gone`.
+    /// Delete one live authored node (its authored children already gone):
+    /// tears down any virtual views owned by `id` immediately so mid-transaction
+    /// invariants hold, records `gone`, and tombstones `id` in `authored`.
     pub(crate) fn delete_node(&mut self, id: NodeId, at: crate::id::Version) {
-        let (went, ty, kinds) = {
+        debug_assert!(!id.is_expanded(), "delete_node targets authored nodes only");
+        let (went, ty, kinds, depth) = {
             let tree = Tree::of(self);
             let node = tree.node(id).expect("a live node is deleted");
+            let depth = tree.depth(id);
             let went = crate::changes::Went {
                 parent: node.parent,
-                depth: tree.depth(id),
-                ty: node.ty,
+                depth,
             };
             let kinds: Vec<FacetKind> = tree.facets_of(id).map(Facet::kind).collect();
-            (went, node.ty, kinds)
+            (went, node.ty, kinds, depth)
         };
+        // Tear down any virtual views owned by this authored node before tombstoning it.
+        let vd = self.views.remove_top_owner(
+            id,
+            depth,
+            &mut self.scoped,
+            &mut self.scoped_journal,
+            &mut self.scoped_touched,
+            &mut self.gone,
+            &mut self.gone_journal,
+        );
+        self.pending_view_delta.extend(vd);
+
+        let del_parent = went.parent;
         let was = self.gone.insert(id, went);
         if let Some(journal) = &mut self.gone_journal {
             journal.push((id, was));
         }
-        let site = if self.apart && id.is_expanded() {
-            self.copies.remove_node(id);
-            "remove_node"
-        } else {
-            self.authored.tombstone(id, at);
-            "tombstone"
-        };
+        self.authored.tombstone(id, at);
         if let Some(root) = self.scoped.root_of.get(&id).copied() {
             let on = self.scoped_touched.on;
-            self.scoped_touched.on &= !crate::structure::silenced(site);
+            self.scoped_touched.on &= !crate::structure::silenced("tombstone");
             self.scoped.set_root(id, None, &mut self.scoped_journal);
             self.scoped.remove_type(root, ty, id, &mut self.scoped_journal, &mut self.scoped_touched);
+            if ty.name() == "let" {
+                self.scoped.remove_let(del_parent, id, &mut self.scoped_journal, &mut self.scoped_touched);
+            }
             for k in kinds {
                 self.scoped.remove_facet(root, k, id, &mut self.scoped_journal, &mut self.scoped_touched);
             }
@@ -291,19 +385,33 @@ impl Docs {
 
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         let old_root = self.scoped.root_of.get(&id).copied();
+        let old_parent_and_let = self.authored.live(id).filter(|n| n.ty.name() == "let").map(|n| n.parent);
         let new_root = self.root_for(id, parent);
-        self.of_node(id).set_parent(id, parent, order);
+        self.authored.set_parent(id, parent, order);
+        if let Some(old_parent) = old_parent_and_let
+            && old_parent != parent
+        {
+            let on = self.scoped_touched.on;
+            self.scoped_touched.on &= !crate::structure::silenced("set_parent");
+            self.scoped.remove_let(old_parent, id, &mut self.scoped_journal, &mut self.scoped_touched);
+            self.scoped.insert_let(parent, id, &mut self.scoped_journal, &mut self.scoped_touched);
+            self.scoped_touched.on = on;
+        }
         if old_root == Some(new_root) {
             return;
         }
+        // Move `id` and every descendant (authored AND virtual!) in `ScopedIndexes`.
         let moved: Vec<(NodeId, TypeId, Vec<FacetKind>)> = {
             let tree = Tree::of(self);
             std::iter::once(id)
                 .chain(tree.descendants(id))
                 .filter_map(|n| {
-                    let node = tree.live(n)?;
+                    let ty = tree.ty_of(n)?;
+                    if !tree.is_live(n) {
+                        return None;
+                    }
                     let kinds = tree.facets_of(n).map(Facet::kind).collect();
-                    Some((n, node.ty, kinds))
+                    Some((n, ty, kinds))
                 })
                 .collect()
         };
@@ -326,13 +434,13 @@ impl Docs {
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
-        self.of_node(id).set_order(id, order);
+        self.authored.set_order(id, order);
     }
 
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let kind = c.kind();
         let root = self.scoped.root_of.get(&id).copied();
-        self.of_node(id).insert_facet(id, c);
+        self.authored.insert_facet(id, c);
         if let Some(root) = root {
             let on = self.scoped_touched.on;
             self.scoped_touched.on &= !crate::structure::silenced("insert_facet");
@@ -343,7 +451,7 @@ impl Docs {
 
     pub(crate) fn remove_facet(&mut self, id: NodeId, kind: FacetKind) -> Option<Facet> {
         let root = self.scoped.root_of.get(&id).copied();
-        let removed = self.of_node(id).remove_facet(id, kind)?;
+        let removed = self.authored.remove_facet(id, kind)?;
         if let Some(root) = root {
             let on = self.scoped_touched.on;
             self.scoped_touched.on &= !crate::structure::silenced("remove_facet");
@@ -354,7 +462,7 @@ impl Docs {
     }
 
     pub(crate) fn set_leaf(&mut self, id: NodeId, path: LeafPath, slot: Slot) -> Option<Result<Slot, crate::facet::LeafError>> {
-        self.of_node(id).set_leaf(id, path, slot)
+        self.authored.set_leaf(id, path, slot)
     }
 
     pub(crate) fn set_solve(&mut self, leaf: Leaf, slot: Option<Slot>) -> Option<Slot> {
@@ -362,93 +470,115 @@ impl Docs {
     }
 
     pub(crate) fn insert_relation(&mut self, rel: Relation) {
-        self.of_relation(rel.id).insert_relation(rel);
+        self.authored.insert_relation(rel);
     }
 
     pub(crate) fn remove_relation(&mut self, id: RelationId) -> Option<Relation> {
-        self.of_relation(id).remove_relation(id)
+        self.authored.remove_relation(id)
     }
 
-    /// The document a write to node `id` goes to.
-    pub(crate) fn of_node(&mut self, id: NodeId) -> &mut Document {
-        if self.apart && id.is_expanded() { &mut self.copies } else { &mut self.authored }
+    /// Reconcile one top-level authored owner's virtual views, updating
+    /// `VirtualViews`, `ScopedIndexes`, `Docs::gone`, and touched keys.
+    pub(crate) fn reconcile_owner(&mut self, top_owner: NodeId, plan: OwnerPlan) -> ViewDelta {
+        let doc_root = self.scoped.root_of.get(&top_owner).copied();
+        let owner_depth = if self.authored.node(top_owner).is_some() {
+            Tree::of(self).depth(top_owner)
+        } else {
+            self.gone.get(&top_owner).map_or(0, |w| w.depth)
+        };
+        let delta = self.views.reconcile_top_owner(
+            top_owner,
+            doc_root,
+            owner_depth,
+            plan,
+            &mut self.scoped,
+            &mut self.scoped_journal,
+            &mut self.scoped_touched,
+            &mut self.gone,
+            &mut self.gone_journal,
+        );
+        if !delta.created.is_empty()
+            || !delta.removed.is_empty()
+            || !delta.moved.is_empty()
+            || !delta.rels_added.is_empty()
+            || !delta.rels_removed.is_empty()
+            || delta.slots.iter().any(|l| matches!(l.path.facet, FacetKind::Embed | FacetKind::EmbedCamera | FacetKind::Use | FacetKind::Instance))
+        {
+            self.reshaped = crate::stamp();
+        }
+        delta
     }
 
-    /// The document a write to relation `id` goes to.
-    pub(crate) fn of_relation(&mut self, id: RelationId) -> &mut Document {
-        if self.apart && id.is_expanded() { &mut self.copies } else { &mut self.authored }
+    pub(crate) fn take_pending_view_delta(&mut self) -> ViewDelta {
+        std::mem::take(&mut self.pending_view_delta)
     }
 
-    /// Collect what writes touch, in both documents and scoped indexes
-    /// (engine.md §3.2). Starts empty.
+    /// Collect what writes touch, across authored, virtual views, and scoped indexes.
     pub(crate) fn log_touched(&mut self) {
         self.authored.set_touched(true);
-        self.copies.set_touched(true);
+        self.views.set_touched(true);
         self.scoped_touched.on = true;
         self.scoped_touched.keys.clear();
-        self.template_cursor = (0, 0, 0);
+        self.view_cursor = (0, 0, 0);
     }
 
-    /// Keys touched since the last `drain_template_touched`, `take_touched`,
-    /// or `rollback` (for recorded-read template invalidation without removing
-    /// keys from the main `take_touched` log, EN-12).
-    pub(crate) fn drain_template_touched(&mut self) -> Vec<crate::structure::Key> {
+    /// Keys touched since the last `drain_view_touched`, `take_touched`, or
+    /// `rollback`: `(authored_keys, view_and_scoped_keys)`. Templates depend
+    /// strictly on authored keys, whereas owners may also depend on virtual
+    /// views or scoped indexes.
+    pub(crate) fn drain_view_touched(&mut self) -> (Vec<crate::structure::Key>, Vec<crate::structure::Key>) {
         let a = self.authored.touched_slice();
-        let c = self.copies.touched_slice();
+        let v = self.views.touched_slice();
         let s = &self.scoped_touched.keys;
-        let (ia, ic, is) = self.template_cursor;
-        let mut out = Vec::new();
-        if ia < a.len() {
-            out.extend_from_slice(&a[ia..]);
-        }
-        if ic < c.len() {
-            out.extend_from_slice(&c[ic..]);
+        let (ia, iv, is) = self.view_cursor;
+        let authored = if ia < a.len() { a[ia..].to_vec() } else { Vec::new() };
+        let mut derived = Vec::new();
+        if iv < v.len() {
+            derived.extend_from_slice(&v[iv..]);
         }
         if is < s.len() {
-            out.extend_from_slice(&s[is..]);
+            derived.extend_from_slice(&s[is..]);
         }
-        self.template_cursor = (a.len(), c.len(), s.len());
-        out
+        self.view_cursor = (a.len(), v.len(), s.len());
+        (authored, derived)
     }
 
-    /// The keys both documents' writes and scoped index updates touched since
-    /// they were last taken.
+    /// The keys all writes touched since they were last taken.
     pub(crate) fn take_touched(&mut self) -> Vec<crate::structure::Key> {
-        self.template_cursor = (0, 0, 0);
+        self.view_cursor = (0, 0, 0);
         let mut keys = self.authored.take_touched();
-        keys.append(&mut self.copies.take_touched());
+        keys.append(&mut self.views.take_touched());
         keys.append(&mut self.scoped_touched.keys);
         keys
     }
 
     pub(crate) fn touched_empty(&self) -> bool {
-        self.authored.touched_empty() && self.copies.touched_empty() && self.scoped_touched.keys.is_empty()
+        self.authored.touched_empty() && self.views.touched_empty() && self.scoped_touched.keys.is_empty()
     }
 
-    /// Open both documents' journals. What earlier writes touched has been
-    /// handed to the graph: a rollback clears what this transaction's do.
     pub(crate) fn begin(&mut self) {
         debug_assert!(self.touched_empty(), "a transaction begins with touched keys not handed to the graph");
         self.authored.begin();
-        self.copies.begin();
+        self.views.begin();
         self.gone_journal = Some(Vec::new());
         self.scoped_journal = Some(Vec::new());
+        self.pending_view_delta = ViewDelta::default();
     }
 
     pub(crate) fn commit(&mut self) {
         self.authored.commit();
-        self.copies.commit();
+        self.views.commit();
         self.gone_journal = None;
         self.scoped_journal = None;
     }
 
     pub(crate) fn rollback(&mut self) {
         self.reshaped = crate::stamp();
-        self.tokens_shaped = crate::stamp();
         self.authored.rollback();
-        self.copies.rollback();
+        self.views.rollback();
         self.scoped_touched.keys.clear();
-        self.template_cursor = (0, 0, 0);
+        self.view_cursor = (0, 0, 0);
+        self.pending_view_delta = ViewDelta::default();
         if let Some(recs) = self.scoped_journal.take() {
             self.scoped.undo(recs);
         }
@@ -463,31 +593,43 @@ impl Docs {
             panic!("journal rollback broke an invariant: {e}");
         }
     }
-
 }
 
-/// A read view of the nodes, authored and derived.
+/// A read view of the document, authored nodes and virtual derived views alike.
 #[derive(Clone, Copy)]
 pub struct Tree<'a> {
     doc: &'a Document,
-    /// The copies, when they are kept apart from `doc`.
-    copies: Option<&'a Document>,
-    /// Per-root indexes when backed by `Docs`.
+    views: Option<&'a VirtualViews>,
     scoped: Option<&'a ScopedIndexes>,
-    /// Where a cell's reads are noted, when it reads through a recording
-    /// tree (engine.md §3.2).
+    cyclic_embeds: Option<&'a BTreeSet<NodeId>>,
     rec: Option<&'a crate::structure::Recorder>,
 }
 
 impl<'a> Tree<'a> {
-    /// The tree over a store's documents.
     pub(crate) fn of(docs: &'a Docs) -> Tree<'a> {
-        Tree { doc: &docs.authored, copies: docs.apart.then_some(&docs.copies), scoped: Some(&docs.scoped), rec: None }
+        Tree {
+            doc: &docs.authored,
+            views: Some(&docs.views),
+            scoped: Some(&docs.scoped),
+            cyclic_embeds: docs.cyclic_embeds.as_ref(),
+            rec: None,
+        }
     }
 
-    /// This tree, noting what is read through it in `rec`.
     pub(crate) fn recording(self, rec: &'a crate::structure::Recorder) -> Tree<'a> {
         Tree { rec: Some(rec), ..self }
+    }
+
+    /// O(1) post-commit cycle status for an embed on non-recording `Tree`s.
+    /// Returns `None` on recording `Tree`s (so `LayoutNative` walks & records
+    /// `Key::In`/`Key::Facet` dependencies) and unsynced/standalone `Document`s.
+    #[inline]
+    pub(crate) fn is_cyclic_embed(self, id: NodeId) -> Option<bool> {
+        if self.rec.is_some() {
+            return None;
+        }
+        let set = self.cyclic_embeds?;
+        Some(set.contains(&id))
     }
 
     fn note(self, k: crate::structure::Key) {
@@ -496,8 +638,6 @@ impl<'a> Tree<'a> {
         }
     }
 
-    /// A read a recording tree has no key for: caught where debug assertions
-    /// run, so it is never missed (engine.md §3.2).
     fn unkeyed(self, what: &str) {
         debug_assert!(self.rec.is_none(), "a recording tree has no key for `{what}` (engine.md §3.2)");
     }
@@ -514,27 +654,37 @@ impl<'a> Tree<'a> {
         self.solve_leaf(leaf).or_else(|| self.leaf(leaf.node, leaf.path))
     }
 
-    /// The tree over a document that holds no copies apart from it: a
-    /// scratch document cloned for planning, a fragment, a document being
-    /// loaded. A derived node it does not hold is not there.
+    /// The tree over an authored document with no virtual views attached.
     pub fn authored_only(doc: &'a Document) -> Tree<'a> {
-        Tree { doc, copies: None, scoped: None, rec: None }
+        Tree { doc, views: None, scoped: None, cyclic_embeds: None, rec: None }
     }
 
-    /// Each document's invariants, with parents answered across both (a
-    /// copy's owner is authored), and that each node is in the document its
-    /// id says. A live node's parent is live, so no live copy is under a
-    /// dead authored ancestor.
     pub fn check_invariants(self) -> Result<(), String> {
         self.doc.check_invariants_over(&|p| self.is_live(p))?;
-        if let Some(copies) = self.copies {
-            if let Some(n) = self.doc.nodes().find(|n| n.id.is_expanded()) {
-                return Err(format!("derived {} is in the authored document", n.id));
+        if let Some(why) = self.doc.derived_content() {
+            return Err(format!("authored document holds derived content: {why}"));
+        }
+        if let Some(views) = self.views {
+            for (&owner, v) in &views.views {
+                if !self.is_live(owner) {
+                    return Err(format!("virtual view owner {owner} is not live (top_owner {})", v.top_owner));
+                }
             }
-            if let Some(n) = copies.nodes().find(|n| !n.id.is_expanded()) {
-                return Err(format!("{} is in the copies document", n.id));
+            for (&repeat, recs) in &views.items {
+                if !self.is_live(repeat) {
+                    return Err(format!("item table repeat {repeat} is not live"));
+                }
+                for rec in recs.iter() {
+                    if !views.item_scopes.contains_key(&rec.scope) {
+                        return Err(format!("item scope {} missing reverse index", rec.scope));
+                    }
+                }
             }
-            copies.check_invariants_over(&|p| self.is_live(p))?;
+            for rel in views.relations.values() {
+                if !self.is_live(rel.from) {
+                    return Err(format!("derived relation {} from dead {}", rel.id, rel.from));
+                }
+            }
         }
         if let Some(scoped) = self.scoped {
             let mut expected_root: BTreeMap<NodeId, NodeId> = BTreeMap::new();
@@ -542,9 +692,12 @@ impl<'a> Tree<'a> {
             let mut expected_facet: BTreeMap<(NodeId, FacetKind), BTreeSet<NodeId>> = BTreeMap::new();
             let mut stack: Vec<(NodeId, NodeId)> = self.doc.roots().iter().map(|&r| (r, r)).collect();
             while let Some((id, root)) = stack.pop() {
-                let Some(n) = self.live(id) else { continue };
+                let Some(ty) = self.ty_of(id) else { continue };
+                if !self.is_live(id) {
+                    continue;
+                }
                 expected_root.insert(id, root);
-                expected_type.entry((root, n.ty)).or_default().insert(id);
+                expected_type.entry((root, ty)).or_default().insert(id);
                 for f in self.facets_of(id) {
                     expected_facet.entry((root, f.kind())).or_default().insert(id);
                 }
@@ -563,19 +716,6 @@ impl<'a> Tree<'a> {
             }
         }
         Ok(())
-    }
-
-    /// The document that holds node `id`.
-    fn at(self, id: NodeId) -> &'a Document {
-        match self.copies {
-            Some(c) if id.is_expanded() => c,
-            _ => self.doc,
-        }
-    }
-
-    /// Both documents, authored first.
-    fn both(self) -> impl Iterator<Item = &'a Document> + 'a {
-        std::iter::once(self.doc).chain(self.copies)
     }
 
     // The authored document's version and counters.
@@ -613,30 +753,76 @@ impl<'a> Tree<'a> {
         self.doc.next_session_relation_ids(n)
     }
 
-    /// Any node, live or tombstoned.
-    pub fn node(self, id: NodeId) -> Option<&'a Node> {
+    // ---- Zero-alloc metadata helpers ----
+
+    #[inline]
+    pub fn parent_of(self, id: NodeId) -> Option<NodeId> {
         self.note(crate::structure::Key::Node(id));
-        self.at(id).node(id)
+        if id.is_expanded() {
+            self.views.and_then(|v| v.parent_of(id))
+        } else {
+            self.doc.node(id).and_then(|n| n.parent)
+        }
     }
 
-    pub fn live(self, id: NodeId) -> Option<&'a Node> {
+    #[inline]
+    pub fn ty_of(self, id: NodeId) -> Option<TypeId> {
         self.note(crate::structure::Key::Node(id));
-        self.at(id).live(id)
+        if id.is_expanded() {
+            self.views.and_then(|v| v.ty_of(id))
+        } else {
+            self.doc.node(id).map(|n| n.ty)
+        }
+    }
+
+    #[inline]
+    pub fn order_of(self, id: NodeId) -> Option<&'a OrderKey> {
+        self.note(crate::structure::Key::Node(id));
+        if id.is_expanded() {
+            self.views.and_then(|v| v.order_of(id))
+        } else {
+            self.doc.node(id).map(|n| &n.order)
+        }
+    }
+
+    /// Any node, live or tombstoned.
+    pub fn node(self, id: NodeId) -> Option<Cow<'a, Node>> {
+        self.note(crate::structure::Key::Node(id));
+        if id.is_expanded() {
+            self.views.and_then(|v| v.node(id)).map(Cow::Owned)
+        } else {
+            self.doc.node(id).map(Cow::Borrowed)
+        }
+    }
+
+    pub fn live(self, id: NodeId) -> Option<Cow<'a, Node>> {
+        self.note(crate::structure::Key::Node(id));
+        if id.is_expanded() {
+            self.views.and_then(|v| v.node(id)).map(Cow::Owned)
+        } else {
+            self.doc.live(id).map(Cow::Borrowed)
+        }
     }
 
     pub fn is_live(self, id: NodeId) -> bool {
         self.note(crate::structure::Key::Node(id));
-        self.at(id).is_live(id)
+        if id.is_expanded() {
+            self.views.is_some_and(|v| v.is_live(id))
+        } else {
+            self.doc.is_live(id)
+        }
     }
 
-    pub fn nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
+    pub fn nodes(self) -> impl Iterator<Item = Cow<'a, Node>> + 'a {
         self.unkeyed("nodes");
-        self.both().flat_map(Document::nodes)
+        let virtuals: Vec<Node> = self.expanded_ids_inner().filter_map(|id| self.views?.node(id)).collect();
+        self.doc.nodes().map(Cow::Borrowed).chain(virtuals.into_iter().map(Cow::Owned))
     }
 
-    pub fn live_nodes(self) -> impl Iterator<Item = &'a Node> + 'a {
+    pub fn live_nodes(self) -> impl Iterator<Item = Cow<'a, Node>> + 'a {
         self.unkeyed("live_nodes");
-        self.both().flat_map(Document::live_nodes)
+        let virtuals: Vec<Node> = self.expanded_ids_inner().filter_map(|id| self.views?.node(id)).collect();
+        self.doc.live_nodes().map(Cow::Borrowed).chain(virtuals.into_iter().map(Cow::Owned))
     }
 
     pub fn roots(self) -> &'a [NodeId] {
@@ -644,27 +830,42 @@ impl<'a> Tree<'a> {
         self.doc.roots()
     }
 
-    /// The last root in root order, without visiting the others.
     pub fn last_root(self) -> Option<NodeId> {
         self.unkeyed("last_root");
         self.doc.last_root()
     }
 
-    /// Live children in sibling order. Merged by (order, id), the
-    /// documents' own tie-break, where both hold children of `id`: only at
-    /// an owner, the authored parent of its copies.
+    /// Authored live children of `id` only (skips virtual item scopes / derived
+    /// children while still recording `Key::Children(id)`).
+    pub(crate) fn authored_children(self, id: NodeId) -> &'a [NodeId] {
+        self.note(crate::structure::Key::Children(id));
+        if id.is_expanded() { &[] } else { self.doc.children(id) }
+    }
+
+    /// Live children in sibling `(order, id)` order.
     pub fn children(self, id: NodeId) -> Cow<'a, [NodeId]> {
         self.note(crate::structure::Key::Children(id));
-        let mine = self.at(id).children(id);
-        let Some(copies) = self.copies.filter(|_| !id.is_expanded()) else { return Cow::Borrowed(mine) };
-        let derived = copies.children(id);
+        if id.is_expanded() {
+            let derived = self.views.map(|v| v.derived_children(id)).unwrap_or_default();
+            return Cow::Owned(derived);
+        }
+        let mine = self.doc.children(id);
+        let Some(views) = self.views else { return Cow::Borrowed(mine) };
+        let derived = views.derived_children(id);
         if derived.is_empty() {
             return Cow::Borrowed(mine);
         }
         if mine.is_empty() {
-            return Cow::Borrowed(derived);
+            return Cow::Owned(derived);
         }
-        let key = |n: &NodeId| (&self.at(*n).node(*n).expect("a child is held").order, *n);
+        let key = |n: &NodeId| {
+            let ord = if n.is_expanded() {
+                views.order_of(*n).expect("derived child exists")
+            } else {
+                &self.doc.node(*n).expect("authored child exists").order
+            };
+            (ord, *n)
+        };
         let mut out = Vec::with_capacity(mine.len() + derived.len());
         let (mut a, mut b) = (mine.iter().peekable(), derived.iter().peekable());
         while let (Some(x), Some(y)) = (a.peek(), b.peek()) {
@@ -693,9 +894,6 @@ impl<'a> Tree<'a> {
         out
     }
 
-    /// The preorder of `id` and its descendants, up to `limit` nodes: `None`
-    /// once there are more. What a caller that only wants a small subtree
-    /// uses instead of [`Tree::descendants`], which walks all of it.
     pub fn descendants_within(self, id: NodeId, limit: usize) -> Option<Vec<NodeId>> {
         let mut out = Vec::new();
         let mut stack: Vec<NodeId> = self.children(id).iter().rev().copied().collect();
@@ -710,144 +908,208 @@ impl<'a> Tree<'a> {
         Some(out)
     }
 
-    /// Sibling order from the top of `id`'s tree down to `id`: sorting
-    /// nodes by it puts them in preorder (painter order), whatever set they
-    /// come from, with no walk of the content around them.
+    /// Sibling order from the top of `id`'s tree down to `id` (zero-alloc `&'a OrderKey`).
     pub fn order_path(self, id: NodeId) -> Vec<&'a OrderKey> {
         let mut out = Vec::new();
-        let mut at = self.live(id);
-        while let Some(n) = at {
-            out.push(&n.order);
-            at = n.parent.and_then(|p| self.live(p));
+        let mut cur = Some(id);
+        while let Some(n) = cur {
+            if !self.is_live(n) {
+                break;
+            }
+            let Some(ord) = self.order_of(n) else { break };
+            out.push(ord);
+            cur = self.parent_of(n);
         }
         out.reverse();
         out
     }
 
-    /// Every expanded node's id, live or tombstoned (component-model.md §6).
-    /// Expanded ids sort after every other id, so this is a range read.
-    pub fn expanded_ids(self) -> impl Iterator<Item = NodeId> + 'a {
-        self.unkeyed("expanded_ids");
-        self.both().flat_map(Document::expanded_ids)
+    fn expanded_ids_inner(self) -> impl Iterator<Item = NodeId> + 'a {
+        let mut ids: Vec<NodeId> = Vec::new();
+        if let Some(scoped) = self.scoped {
+            ids.extend(scoped.root_of.keys().copied().filter(|id| id.is_expanded()));
+        } else if let Some(views) = self.views {
+            for v in views.views.values() {
+                for idx in 0..v.limit {
+                    ids.push(v.node_id(idx));
+                }
+            }
+            for &scope in views.item_scopes.keys() {
+                ids.push(scope);
+            }
+            ids.sort();
+        }
+        ids.into_iter()
     }
 
-    /// How many ancestors a node has.
+    /// Every live expanded node's id, in sorted `NodeId` order.
+    pub fn expanded_ids(self) -> impl Iterator<Item = NodeId> + 'a {
+        self.unkeyed("expanded_ids");
+        self.expanded_ids_inner()
+    }
+
     pub fn depth(self, id: NodeId) -> usize {
         let mut d = 0;
-        let mut cur = self.node(id).and_then(|n| n.parent);
+        let mut cur = self.parent_of(id);
         while let Some(p) = cur {
             d += 1;
-            cur = self.node(p).and_then(|n| n.parent);
+            cur = self.parent_of(p);
         }
         d
     }
 
-    /// Whether `a` is a strict ancestor of `of`.
     pub fn is_ancestor(self, a: NodeId, of: NodeId) -> bool {
-        let mut cur = self.node(of).and_then(|n| n.parent);
+        let mut cur = self.parent_of(of);
         while let Some(p) = cur {
             if p == a {
                 return true;
             }
-            cur = self.node(p).and_then(|n| n.parent);
+            cur = self.parent_of(p);
         }
         false
     }
 
     pub fn nodes_of_type(self, ty: TypeId) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_of_type");
-        self.both().flat_map(move |d| d.nodes_of_type(ty))
+        let virtuals = self.scoped.and_then(|s| s.virtual_by_type.get(&ty)).into_iter().flatten().copied();
+        self.doc.nodes_of_type(ty).chain(virtuals)
     }
 
     pub fn nodes_with(self, kind: FacetKind) -> impl Iterator<Item = NodeId> + 'a {
         self.unkeyed("nodes_with");
-        self.both().flat_map(move |d| d.nodes_with(kind))
+        let virtuals = self.scoped.and_then(|s| s.virtual_by_facet.get(&kind)).into_iter().flatten().copied();
+        self.doc.nodes_with(kind).chain(virtuals)
     }
 
-    /// Live nodes of `ty` under top-level `root` (engine.md §3.2): O(matches
-    /// in root) and keyed by `Key::In(root, ty)`.
+    /// Live nodes of `ty` under top-level `root` (engine.md §3.2).
     pub fn nodes_of_type_in(self, root: NodeId, ty: TypeId) -> Vec<NodeId> {
         self.note(crate::structure::Key::In(root, ty));
         if let Some(scoped) = self.scoped {
             return scoped.by_type.get(&(root, ty)).into_iter().flatten().copied().collect();
         }
-        self.both()
-            .flat_map(move |d| d.nodes_of_type(ty))
+        self.doc
+            .nodes_of_type(ty)
             .filter(|&id| self.top_root(id) == Some(root))
             .collect()
     }
 
-    /// Live nodes carrying `kind` under top-level `root` (engine.md §3.2):
-    /// O(matches in root) and keyed by `Key::With(root, kind)`.
+    /// Direct live `let` children of `parent` (`None`: top-level root `let`s),
+    /// keyed by `Key::LetsIn(parent)` so `@name` lookups touch only ancestor scopes.
+    pub fn lets_in(self, parent: Option<NodeId>) -> Vec<NodeId> {
+        self.note(crate::structure::Key::LetsIn(parent));
+        if let Some(scoped) = self.scoped {
+            return scoped.lets_by_parent.get(&parent).into_iter().flatten().copied().collect();
+        }
+        let let_ty = TypeId::lookup("let").expect("registered");
+        let list = match parent {
+            Some(p) => self.doc.children(p),
+            None => self.doc.roots(),
+        };
+        list.iter()
+            .copied()
+            .filter(|&id| self.doc.live(id).is_some_and(|n| n.ty == let_ty))
+            .collect()
+    }
+
+    /// Live nodes carrying `kind` under top-level `root` (engine.md §3.2).
     pub fn nodes_with_in(self, root: NodeId, kind: FacetKind) -> Vec<NodeId> {
         self.note(crate::structure::Key::With(root, kind));
         if let Some(scoped) = self.scoped {
             return scoped.by_facet.get(&(root, kind)).into_iter().flatten().copied().collect();
         }
-        self.both()
-            .flat_map(move |d| d.nodes_with(kind))
+        self.doc
+            .nodes_with(kind)
             .filter(|&id| self.top_root(id) == Some(root))
             .collect()
     }
 
-    /// Top-level root of live node `id`, if live.
     pub fn top_root(self, id: NodeId) -> Option<NodeId> {
         if let Some(scoped) = self.scoped {
             return scoped.root_of.get(&id).copied();
         }
-        let mut cur = self.live(id)?;
-        while let Some(p) = cur.parent {
-            cur = self.live(p)?;
+        if !self.is_live(id) {
+            return None;
         }
-        Some(cur.id)
+        let mut cur = id;
+        while let Some(p) = self.parent_of(cur) {
+            if !self.is_live(p) {
+                return None;
+            }
+            cur = p;
+        }
+        Some(cur)
     }
 
-    /// A facet, what it holds included: a recording tree notes the whole
-    /// facet, so any write to it reaches the reader (§3.1).
+    /// A facet, zero-alloc borrowed from `Document`, `View::sparse_facets`, or
+    /// shared `Arc<Template>`.
     pub fn facet(self, id: NodeId, kind: FacetKind) -> Option<&'a Facet> {
         self.note(crate::structure::Key::Facet(id, kind));
-        self.at(id).facet(id, kind)
+        if id.is_expanded() {
+            self.views.and_then(|v| v.facet(id, kind))
+        } else {
+            self.doc.facet(id, kind)
+        }
     }
 
-    /// Whether `id` carries `kind`, and nothing of what it holds: a reader
-    /// that asks only this is not reached by a write to the facet's fields.
+    /// Whether `id` carries `kind`, keyed by `Key::FacetSet`.
     pub fn has(self, id: NodeId, kind: FacetKind) -> bool {
         self.note(crate::structure::Key::FacetSet(id));
-        self.at(id).facet(id, kind).is_some()
+        if id.is_expanded() {
+            self.views.is_some_and(|v| v.has(id, kind))
+        } else {
+            self.doc.facet(id, kind).is_some()
+        }
     }
 
     pub fn get<T: LeafStruct>(self, id: NodeId) -> Option<&'a T> {
         self.note(crate::structure::Key::Facet(id, T::KIND));
-        self.at(id).get::<T>(id)
+        let f = if id.is_expanded() {
+            self.views.and_then(|v| v.facet(id, T::KIND))?
+        } else {
+            return self.doc.get::<T>(id);
+        };
+        T::unwrap_ref(f)
     }
 
-    /// All facets of a node, in kind order.
+    /// All facets of a node, in `FacetKind` order.
     pub fn facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        let out: Vec<&'a Facet> = if id.is_expanded() {
+            self.views.map(|v| v.facets_of(id)).unwrap_or_default()
+        } else {
+            self.doc.facets_of(id).collect()
+        };
         if self.rec.is_some() {
             self.note(crate::structure::Key::FacetSet(id));
-            for f in self.at(id).facets_of(id) {
+            for f in &out {
                 self.note(crate::structure::Key::Facet(id, f.kind()));
             }
         }
-        self.at(id).facets_of(id)
+        out.into_iter()
     }
 
     pub fn leaf(self, id: NodeId, path: LeafPath) -> Option<&'a Slot> {
         self.note(crate::structure::Key::Facet(id, path.facet));
-        self.at(id).leaf(id, path)
+        if id.is_expanded() {
+            self.views.and_then(|v| v.leaf(id, path))
+        } else {
+            self.doc.leaf(id, path)
+        }
     }
 
-    /// Every bound slot on a live node, with its expression: facet kind by
-    /// kind, and by id within a kind, as one document gives them.
+    /// Every bound slot on a live node, facet kind by kind, and by `NodeId`
+    /// within each kind.
     pub fn bound_slots(self) -> impl Iterator<Item = (Leaf, &'a Expr)> + 'a {
         self.unkeyed("bound_slots");
-        let kinds: BTreeSet<FacetKind> = self.both().flat_map(|d| d.raw_facets().keys().copied()).collect();
-        kinds.into_iter().flat_map(move |kind| self.both().flat_map(move |d| d.bound_slots_of(kind)))
+        let mut kinds: BTreeSet<FacetKind> = self.doc.raw_facets().keys().copied().collect();
+        if let Some(views) = self.views {
+            views.bound_facet_kinds(&mut kinds);
+        }
+        kinds.into_iter().flat_map(move |kind| {
+            let v: Vec<(Leaf, &'a Expr)> = self.views.map(|vw| vw.bound_slots_of(kind)).unwrap_or_default();
+            self.doc.bound_slots_of(kind).chain(v)
+        })
     }
 
-    /// Whether binding `target` to `expr` would let a value depend on itself,
-    /// following existing bindings. Checked at apply time so the graph is
-    /// always a DAG.
     pub fn binding_cycles(self, target: Leaf, expr: &Expr) -> bool {
         let mut stack: Vec<Leaf> = expr.deps().into_iter().collect();
         let mut seen = BTreeSet::new();
@@ -865,9 +1127,6 @@ impl<'a> Tree<'a> {
         false
     }
 
-    /// Whether `expr` reads interaction state (hover, pressed, selected),
-    /// directly or through other bindings: its value is then presentation,
-    /// not content (reactivity.md §4.2).
     pub fn reads_interaction(self, expr: &Expr) -> bool {
         let mut stack: Vec<Leaf> = expr.deps().into_iter().collect();
         let mut seen = BTreeSet::new();
@@ -887,34 +1146,26 @@ impl<'a> Tree<'a> {
 
     pub fn relation(self, id: RelationId) -> Option<&'a Relation> {
         self.note(crate::structure::Key::Relation(id));
-        match self.copies {
-            Some(c) if id.is_expanded() => c.relation(id),
-            _ => self.doc.relation(id),
+        if id.is_expanded() {
+            self.views.and_then(|v| v.relation(id))
+        } else {
+            self.doc.relation(id)
         }
-    }
-
-    /// The derived relations whose id names `owner`, from either document.
-    pub(crate) fn rooted(self, owner: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
-        self.unkeyed("rooted");
-        self.both().flat_map(move |d| d.rooted(owner))
     }
 
     pub fn relations(self) -> impl Iterator<Item = &'a Relation> + 'a {
         self.unkeyed("relations");
-        self.both().flat_map(Document::relations)
+        self.doc.relations().chain(self.views.into_iter().flat_map(|v| v.relations()))
     }
 
-    /// Edges leaving `id`, from either document: an authored relation can
-    /// end at a copy and a derived one start at an authored node.
     pub fn relations_from(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        self.both().flat_map(move |d| d.relations_from(id))
+        self.doc.relations_from(id).chain(self.views.into_iter().flat_map(move |v| v.relations_from(id)))
     }
 
-    /// Edges arriving at `id`: "what drives this node" (doc 05 §3.1).
     pub fn relations_to(self, id: NodeId) -> impl Iterator<Item = &'a Relation> + 'a {
         self.note(crate::structure::Key::Relations(id));
-        self.both().flat_map(move |d| d.relations_to(id))
+        self.doc.relations_to(id).chain(self.views.into_iter().flat_map(move |v| v.relations_to(id)))
     }
 }
 
@@ -923,29 +1174,30 @@ mod tests {
     use crate::facet::{Composition, Name};
     use crate::*;
 
-    /// `with_document` takes authored documents only: one holding copies (as
-    /// a store that keeps them in the document has) is refused.
+    /// `with_document` takes authored documents only: one holding a derived copy
+    /// is refused.
     #[test]
     #[should_panic(expected = "with_document takes an authored document")]
     fn with_document_refuses_a_document_holding_a_copy() {
-        let mut store = StoreCore::build(Document::new(), false);
-        let comp = store.authored().next_id();
-        let mut c = Composition::default();
-        c.dims = Slot::Const(Value::Enum("2d".into()));
-        let mut name = Name::default();
-        name.text = Slot::Const(Value::Str("sheet".into()));
-        let ops = vec![Op::Create { id: comp, ty: TypeId::lookup("composition").unwrap(), parent: None, order: OrderKey::first(), facets: vec![name.wrap(), c.wrap()] }];
-        store.apply(TransactionInput { label: "sheet".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops, exact: false }).unwrap();
-        store.place_standard("meter", comp, [0.0, 0.0], Actor::Human).unwrap();
-        let doc = store.authored().clone();
+        let mut doc = Document::new();
+        let comp = doc.next_id();
+        let r = comp.offset(1);
+        let copy = NodeId::from_path(&[comp, r]).unwrap();
+        doc.insert_node(
+            Node { id: comp, ty: TypeId::lookup("composition").unwrap(), parent: None, order: OrderKey::first(), tombstoned: None },
+            vec![Name::default().wrap(), Composition::default().wrap()],
+        );
+        doc.insert_node(
+            Node { id: copy, ty: TypeId::lookup("rect").unwrap(), parent: Some(comp), order: OrderKey::first(), tombstoned: None },
+            vec![],
+        );
         assert!(doc.derived_content().is_some_and(|why| why.contains("derived copy")));
         StoreCore::with_document(doc);
     }
 
     /// Scoped per-root indexes (`nodes_of_type_in`, `nodes_with_in`) partition
-    /// authored nodes and derived copies by top-level root, follow reparents
-    /// across roots (emitting keys for both old and new roots), and roll back
-    /// cleanly (EN-1).
+    /// authored nodes and virtual derived nodes by top-level root, follow
+    /// reparents across roots, and roll back cleanly.
     #[test]
     fn scoped_indexes_follow_moves_and_rollback() {
         let mut store = StoreCore::new();
@@ -969,11 +1221,9 @@ mod tests {
         assert!(in_b.contains(&rb) && !in_b.contains(&r), "B holds rb only: {in_b:?}");
         assert_eq!(store.tree().nodes_with_in(a, FacetKind::Layout), vec![g]);
         assert!(store.tree().nodes_with_in(b, FacetKind::Layout).is_empty());
-        // Meter's derived copies under g are indexed under A.
         let derived_in_a: Vec<NodeId> = store.tree().nodes_with_in(a, FacetKind::Transform2d).into_iter().filter(|id| id.is_expanded()).collect();
-        assert!(!derived_in_a.is_empty(), "derived copies under g belong to root A");
+        assert!(!derived_in_a.is_empty(), "virtual copies under g belong to root A");
 
-        // Reparent g from A to B: authored children AND derived copies move to B.
         store.apply(TransactionInput {
             label: "move g".into(),
             actor: Actor::Human,
@@ -988,9 +1238,8 @@ mod tests {
         assert!(!store.tree().nodes_of_type_in(a, rect_ty).contains(&r));
         assert!(store.tree().nodes_of_type_in(b, rect_ty).contains(&r));
         let derived_in_b: Vec<NodeId> = store.tree().nodes_with_in(b, FacetKind::Transform2d).into_iter().filter(|id| id.is_expanded()).collect();
-        assert!(!derived_in_b.is_empty(), "derived copies under g moved to root B");
+        assert!(!derived_in_b.is_empty(), "virtual copies under g moved to root B");
 
-        // Refused transaction rolling back after reparent leaves scoped indexes intact.
         let bad = store.apply(TransactionInput {
             label: "bad".into(),
             actor: Actor::Human,
@@ -1008,8 +1257,6 @@ mod tests {
         assert!(store.tree().nodes_with_in(a, FacetKind::Layout).is_empty());
     }
 
-    /// Recording tree enforces keys: reading `version()` under a recording
-    /// tree fails a debug assertion (EN-1).
     #[test]
     #[should_panic(expected = "a recording tree has no key for `version`")]
     fn recording_tree_rejects_unkeyed_version() {
@@ -1018,13 +1265,11 @@ mod tests {
         let _ = Tree::authored_only(&doc).recording(&rec).version();
     }
 
-    /// Choke-point canary sweep (EN-1): every mutation choke point emits keys
-    /// when active and emits none when silenced via `silence_for_canary`.
     #[test]
     fn every_choke_point_canary_silences_its_keys() {
         use super::Docs;
         use crate::structure::{Key, silence_for_canary};
-        let mut docs = Docs::new(Document::new(), true);
+        let mut docs = Docs::new(Document::new());
         docs.log_touched();
         let comp_ty = TypeId::lookup("composition").unwrap();
         let rect_ty = TypeId::lookup("rect").unwrap();
@@ -1055,11 +1300,9 @@ mod tests {
         assert!(!e.is_empty() && e.contains(&Key::Roots) && e.contains(&Key::In(a, comp_ty)), "{e:?}");
         assert!(s.is_empty(), "insert_node silenced: {s:?}");
 
-        // Populate base nodes for remaining choke points.
         docs.insert_node(Node { id: a, ty: comp_ty, parent: None, order: OrderKey::first(), tombstoned: None }, vec![facet::Name::default().wrap()]);
         docs.insert_node(Node { id: b, ty: comp_ty, parent: None, order: OrderKey::after(&OrderKey::first()), tombstoned: None }, vec![facet::Name::default().wrap()]);
         docs.insert_node(Node { id: r, ty: rect_ty, parent: Some(a), order: OrderKey::first(), tombstoned: None }, vec![facet::Transform2d::default().wrap()]);
-        docs.insert_node(Node { id: copy, ty: rect_ty, parent: Some(a), order: OrderKey::after(&OrderKey::first()), tombstoned: None }, vec![facet::Transform2d::default().wrap()]);
         let _ = docs.take_touched();
 
         let (e, s) = run(&docs, "set_leaf", |d| {
@@ -1103,12 +1346,6 @@ mod tests {
         });
         assert!(e.contains(&Key::Node(r)) && e.contains(&Key::In(a, rect_ty)), "{e:?}");
         assert!(s.is_empty(), "tombstone silenced: {s:?}");
-
-        let (e, s) = run(&docs, "remove_node", |d| {
-            d.delete_node(copy, Version(2));
-        });
-        assert!(e.contains(&Key::Node(copy)) && e.contains(&Key::In(a, rect_ty)), "{e:?}");
-        assert!(s.is_empty(), "remove_node silenced: {s:?}");
 
         let (e, s) = run(&docs, "insert_relation", |d| {
             d.insert_relation(Relation { id: rel_id, from: r, to: b, rel: crate::document::RelKind::References, data: BTreeMap::new() });

@@ -376,6 +376,30 @@ impl ContextMaker {
     }
 }
 
+/// Stage 2 maker for theme `token` nodes (engine.md §3.6, EN-7; replaces
+/// `Docs::tokens_shaped`, `op::retokens`, `theme_at`, and `token_leaves`).
+#[derive(Clone, Debug, Default)]
+struct ThemeMaker {
+    init: bool,
+    dirty: bool,
+    keys: BTreeSet<structure::Key>,
+    tokens: BTreeMap<String, Leaf>,
+    light: BTreeMap<Leaf, Value>,
+    dark_colors: BTreeMap<Leaf, Value>,
+    dark: Option<bool>,
+}
+
+impl ThemeMaker {
+    fn note_touched(&mut self, keys: &[structure::Key]) {
+        if !self.init || self.dirty {
+            return;
+        }
+        if keys.iter().any(|k| self.keys.contains(k)) {
+            self.dirty = true;
+        }
+    }
+}
+
 /// How many times one pass solves a cluster whose inputs another
 /// cluster's write changed (through a binding or a layout): enough for a
 /// chain, bounded for a loop.
@@ -485,12 +509,12 @@ pub struct Advanced {
 /// What `run` returns on success.
 struct Run {
     tx: Transaction,
-    /// What expansion wrote for it: derived, never history.
-    expanded: Vec<Op>,
-    /// The whole inverse, derived nodes included, for `Changes`.
+    /// What virtual view reconciliation changed for it: derived, never history.
+    expanded: engine::views::ViewDelta,
+    /// The whole inverse, for `Changes`.
     full_inverse: Vec<Op>,
-    /// What expansion found, when `run` expanded; `None` leaves the store's
-    /// as they were.
+    /// What owner derivation found, when `run` synced owners; `None` leaves
+    /// the store's as they were.
     problems: Option<engine::owners::Delta>,
     /// Whether it edited parts a pinned machine state shares, to count once
     /// the transaction is accepted.
@@ -503,10 +527,15 @@ struct Run {
 }
 
 pub struct StoreCore {
-    /// The authored document, and the copies when kept apart (handoff §4.6).
+    /// The authored document plus lean lexical virtual views (`EN-13`).
     docs: tree::Docs,
-    /// Who derives what (reactive-engine handoff §4.4, stage 2).
+    /// Recorded-read owners and shared template cache (`EN-13`).
     owners: engine::owners::Owners,
+    /// Under `--features differential`, the reference store runs full
+    /// from-scratch owner derivation on every update to verify incremental
+    /// recorded-read `Owners` + `VirtualViews`.
+    #[cfg(feature = "differential")]
+    full_views: bool,
     history: History,
     recent_keys: VecDeque<(String, Version)>,
     reactive: graph::Reactive,
@@ -562,9 +591,8 @@ pub struct StoreCore {
     animated: BTreeSet<NodeId>,
     /// Where the last clip ends, kept until the clips or keys change.
     clips_end: Option<f64>,
-    /// The tokens' stamp and the scheme the theme was last published for.
-    theme_at: Option<(u64, bool)>,
-    token_leaves: Option<(u64, std::sync::Arc<BTreeMap<String, Leaf>>)>,
+    /// Stage 2 recorded-read maker for theme `token` nodes (EN-7).
+    theme_maker: ThemeMaker,
     /// Queries to Models (query.rs): presentation state.
     queries: query::Queries,
     /// Items entering and leaving, by owner (a repeat or a conditional):
@@ -603,27 +631,20 @@ pub struct StoreCore {
     /// to last, and from what: a cache, a pure function of its key.
     item_memo: work::Counted<BTreeMap<NodeId, (ItemsKey, ItemsOf)>, { work::STORE_ITEM_MEMO }>,
     /// Per-root Stage 2 makers for layouts/pins, across/through network
-    /// islands, and derived connection/anchor bindings (engine.md §3.3, EN-2a..2c),
+    /// islands, derived connection/anchor bindings, and drawn repeats (EN-2a..2c, EN-7),
     /// plus the x-placed nodes of each layout root (for glide specs).
     layout_makers: PerRootMakers<Vec<graph::NativeKey>>,
     network_makers: PerRootMakers<port::RootNetwork>,
     derived_makers: PerRootMakers<BTreeMap<Leaf, Expr>>,
+    repeat_makers: PerRootMakers<BTreeSet<NodeId>>,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
-    /// The count of document writes the repeat natives were made for.
-    /// The drawn repeats and conditionals, and each one's `each`, `count`,
-    /// `key` and `when.is` as last settled: what `settle_repeats` compares
-    /// before doing any work. `None` after structure changed, until the
-    /// next settle.
+    /// Each drawn repeat/conditional's settled inputs (`each`, `count`, `key`,
+    /// `when.is`, `max`, `enter_ms`, `exit_ms`), compared before doing work.
     repeat_inputs: BTreeMap<NodeId, [Option<Value>; 7]>,
-    /// The drawn repeats and conditionals (`None` until first found), the
-    /// ones to read at the next settle, each one's problems and the item
-    /// leaves it published, and the repeat natives to make and drop
-    /// (DS-3b: kept as structure changes, not found by a pass).
-    drawn: Option<BTreeSet<NodeId>>,
+    /// Repeats queued to re-settle, per-repeat problems, and published item leaves.
     repeat_dirty: BTreeSet<NodeId>,
     repeat_problems: BTreeMap<NodeId, Vec<expand::Problem>>,
     item_shown: BTreeMap<NodeId, Vec<Leaf>>,
-    repeat_natives: (BTreeSet<NodeId>, BTreeSet<NodeId>),
     /// Session state cells (`let.keep = session`) that differ from their
     /// initial value (reactivity.md §5.1): published over the constant,
     /// never saved, dropped with their node.
@@ -657,6 +678,8 @@ pub struct StoreCore {
     next_gesture: u64,
     /// What moved, for spatial consumers (`geom::Revisions`).
     geometry: geom::Revisions,
+    /// Canonical post-commit embed topology across 2D and 3D compositions (`EN-13+EN-7`).
+    embed_topology: composition::EmbedTopology,
     /// Host producers of runtime signals, by id (vision 10 §4). The two
     /// built-in producers (clips, the network) are not listed.
     producers: std::collections::BTreeMap<ProducerId, String>,
@@ -701,6 +724,8 @@ impl StoreCore {
         let mut scratch = StoreCore {
             docs,
             owners: self.owners.clone(),
+            #[cfg(feature = "differential")]
+            full_views: self.full_views,
             history: History { horizon: DEFAULT_HORIZON, ..Default::default() },
             recent_keys: VecDeque::new(),
             reactive,
@@ -728,8 +753,7 @@ impl StoreCore {
             running_clips: self.running_clips.clone(),
             animated: self.animated.clone(),
             clips_end: None,
-            theme_at: None,
-            token_leaves: None,
+            theme_maker: self.theme_maker.clone(),
             queries: self.queries.clone(),
             presence: self.presence.clone(),
             presence_moving: self.presence_moving.clone(),
@@ -748,13 +772,12 @@ impl StoreCore {
             layout_makers: self.layout_makers.clone(),
             network_makers: self.network_makers.clone(),
             derived_makers: self.derived_makers.clone(),
+            repeat_makers: self.repeat_makers.clone(),
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
-            drawn: self.drawn.clone(),
             repeat_dirty: self.repeat_dirty.clone(),
             repeat_problems: self.repeat_problems.clone(),
             item_shown: self.item_shown.clone(),
-            repeat_natives: self.repeat_natives.clone(),
             session_state: self.session_state.clone(),
             emitted: Vec::new(),
             truncated: self.truncated.clone(),
@@ -767,6 +790,7 @@ impl StoreCore {
             ended: None,
             next_gesture: self.next_gesture,
             geometry: self.geometry.clone(),
+            embed_topology: self.embed_topology.clone(),
             producers: self.producers.clone(),
             text_generation: self.text_generation,
         };
@@ -793,151 +817,13 @@ impl StoreCore {
         scratch
     }
 
-    /// Bring the graph up to date after structure changed through `ops`:
-    /// update what the ops touched (reactive-engine handoff §4.4, stage 3a).
-    fn regraph<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        let ops: Vec<&Op> = ops.collect();
-        self.update_drawn(ops.iter().copied());
-        let ops = ops.into_iter();
-        let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
-        // Which `@name` readers to look at again: the names whose providers
-        // a let or token made, removed, renamed or reflagged may move, and
-        // the readers under a moved node; all of them only when a name
-        // cannot be told (DS-3b: not every reader on every change).
-        let mut names: BTreeSet<String> = BTreeSet::new();
-        let mut under: Vec<NodeId> = Vec::new();
-        let mut rescope_all = false;
-        let doc = Tree::of(&self.docs);
-        let name_of = |n: NodeId| doc.get::<facet::Name>(n).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned);
-        let provides_any = |n: NodeId| matches!(doc.node(n).map(|x| x.ty.name()), Some("let" | "token"));
-        // A deleted node is read as it was when it went (`Docs::gone`).
-        let gone = &self.docs.gone;
-        for op in ops {
-            match op {
-                Op::Create { id, .. } | Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } | Op::Reorder { id, .. } => {
-                    nodes.insert(*id);
-                }
-                Op::Reparent { id, .. } => {
-                    nodes.insert(*id);
-                    under.push(*id);
-                    // A let moved provides to its new siblings' readers.
-                    for n in std::iter::once(*id).chain(doc.descendants(*id)) {
-                        if provides_any(n) {
-                            match name_of(n) {
-                                Some(x) => {
-                                    names.insert(x);
-                                }
-                                None => rescope_all = true,
-                            }
-                        }
-                    }
-                }
-                Op::Link { rel } => {
-                    nodes.insert(rel.from);
-                    nodes.insert(rel.to);
-                }
-                Op::Unlink { .. } | Op::Solve { .. } => {}
-            }
-            // What can move a provider (`@name`): a let or a token made,
-            // removed or renamed, a provide flag set.
-            let touches = match op {
-                Op::Reorder { id, .. } => provides(doc, *id).then_some(*id),
-                Op::Create { id, ty, .. } => matches!(ty.name(), "let" | "token").then_some(*id),
-                Op::Delete { id } => gone.get(id).map(|w| w.ty).or_else(|| doc.node(*id).map(|n| n.ty)).is_some_and(|ty| matches!(ty.name(), "let" | "token")).then_some(*id),
-                Op::Set { id, path, slot } => {
-                    // A rename: the new name here, the old one in the
-                    // inverse op, which comes through as well.
-                    if path.facet == FacetKind::Name
-                        && let Some(n) = slot.constant().and_then(|v| v.as_str())
-                    {
-                        names.insert(n.to_owned());
-                    }
-                    names_context(path).then_some(*id)
-                }
-                Op::AddFacet { id, facet } => matches!(facet.kind(), FacetKind::Let | FacetKind::Name).then_some(*id),
-                Op::RemoveFacet { id, kind } => matches!(kind, FacetKind::Let | FacetKind::Name).then_some(*id),
-                _ => None,
-            };
-            if let Some(n) = touches {
-                // The name it has now; a node gone may have none to read.
-                match name_of(n) {
-                    Some(x) => {
-                        names.insert(x);
-                    }
-                    None => {
-                        if !matches!(op, Op::Set { path, .. } if path.facet == FacetKind::Name) {
-                            rescope_all = true;
-                        }
-                    }
-                }
-            }
-        }
-        // A boundary check on an instance's argument reads its definition's
-        // port_specs (`types::declared`): an edit inside a definition
-        // reaches the arguments of every entity naming it.
-        let defs: BTreeSet<NodeId> = nodes.iter().filter(|n| !n.is_expanded()).filter_map(|&n| expand::definition_of(doc, n)).collect();
-        if !defs.is_empty() {
-            let entity = TypeId::lookup("entity").expect("registered");
-            let naming: Vec<NodeId> = doc
-                .nodes_of_type(entity)
-                .filter(|&e| doc.is_live(e) && doc.get::<facet::Instance>(e).and_then(|i| i.def.constant()).and_then(|v| v.as_ref()).is_some_and(|d| defs.contains(&d)))
-                .collect();
-            nodes.extend(naming);
-        }
-        // Stage 2 -> Stage 3: consume touched keys from Docs, reconcile dirty
-        // contexts, layout, constraint, network, and derived-binding makers
-        // before priming keyed cells (engine.md §3.2, §3.3).
-        let keys = self.docs.take_touched();
-        if !keys.is_empty() {
-            self.owners.note_touched(&keys);
-            self.context_maker.note_touched(&keys);
-            self.layout_makers.note_touched(&keys);
-            self.constraint_makers.note_touched(&keys);
-            self.network_makers.note_touched(&keys);
-            self.derived_makers.note_touched(&keys);
-        }
-        self.sync_contexts(false);
-        self.sync_layout_makers(false);
-        self.sync_constraint_makers(false);
-        self.sync_network_makers(false);
-        self.sync_derived_makers(false);
-        self.sync_repeats(false);
-        let touched_leaves = self.reactive.prime_touched(keys);
-        // What waited on the leaves of every node gone, subtrees included,
-        // goes with them: nothing is promoted onto a deleted leaf (review
-        // of DS-10a, Sol). A lookup in the waiting requests, which are few.
-        self.reactive.forget_waiting(self.docs.gone.keys().copied());
-        let rescope = if rescope_all {
-            graph::Rescope::All
-        } else if names.is_empty() && under.is_empty() {
-            graph::Rescope::No
-        } else {
-            graph::Rescope::Some { names, under }
-        };
-        let tokens = self.token_leaves();
-        self.reactive.restructure(Tree::of(&self.docs), &nodes, rescope, &tokens, &touched_leaves);
-    }
-
-    /// The theme's tokens by name, as cells read them: kept until a token
-    /// changes (`Docs::tokens_shaped`), not gathered on every restructure.
-    fn token_leaves(&mut self) -> std::sync::Arc<BTreeMap<String, Leaf>> {
-        match &self.token_leaves {
-            Some((at, t)) if *at == self.docs.tokens_shaped => t.clone(),
-            _ => {
-                let t = std::sync::Arc::new(palette::leaves(Tree::of(&self.docs)));
-                self.token_leaves = Some((self.docs.tokens_shaped, t.clone()));
-                t
-            }
-        }
-    }
-
-    /// Store what an accepted expansion found.
-    /// Record what `ops` changed, with `inverse`, in the pending changes,
-    /// with the deleted nodes' places as they were when they went
-    /// (`Docs::gone`, kept until the changes are taken: a later delete of
-    /// the same id replaces its entry).
-    fn note_changes<'a>(&mut self, ops: impl IntoIterator<Item = &'a Op>, inverse: &[Op]) {
+    /// Record what `ops`, `inverse`, and virtual view `views` changed in the
+    /// pending changes.
+    fn note_changes<'a>(&mut self, ops: impl IntoIterator<Item = &'a Op>, inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
         self.pending.note(Tree::of(&self.docs), &self.docs.gone, ops, inverse);
+        if let Some(vd) = views {
+            self.pending.note_views(vd);
+        }
     }
 
     fn store_found(&mut self, delta: engine::owners::Delta) {
@@ -945,22 +831,17 @@ impl StoreCore {
         self.expansion_problems = self.owners.problems();
     }
 
-    /// Under the differential harness with `IRON_OWNER_CHECK=1`: the owners'
-    /// copies equal what the whole-document expansion would make, checked
-    /// after each owner update (handoff §4.4, stage 2).
+    /// Under the differential harness with `IRON_OWNER_CHECK=1`: verify virtual
+    /// views in `Tree` match the legacy whole-document expansion oracle.
     #[cfg(feature = "differential")]
     fn check_owners(&self, after: &str) {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) {
             return;
         }
-        if let Err(e) = expand::parity(Tree::of(&self.docs), &mut self.owners.templates().clone(), &self.repeats) {
-            panic!("templates and the old expansion differ after {after}: {e}");
+        if let Err(e) = expand::verify_tree(Tree::of(&self.docs), &self.repeats, &self.expansion_problems) {
+            panic!("virtual views and legacy expansion oracle differ after {after}: {e}");
         }
-        let mut whole = self.docs.clone();
-        let stamp = whole.authored.version();
-        let (ops, _) = expand::expand(&mut whole, stamp, &self.repeats);
-        assert!(ops.is_empty(), "owners missed what the whole expansion makes after {after}: {ops:?}");
     }
 
     #[cfg(not(feature = "differential"))]
@@ -969,6 +850,7 @@ impl StoreCore {
     /// Keep what `run` applied.
     fn commit(&mut self, r: Rollback) {
         r.take();
+        self.owners.commit_tx();
         self.docs.commit();
     }
 
@@ -976,29 +858,32 @@ impl StoreCore {
         StoreCore::with_document(Document::new())
     }
 
-    /// A store over an authored document: it derives every copy itself.
+    /// A store over an authored document: it derives virtual views itself.
     /// Panics on a document holding derived content (`derived_content`);
     /// `load` reports the same as an error.
     pub fn with_document(doc: Document) -> StoreCore {
         if let Some(why) = doc.derived_content() {
             panic!("with_document takes an authored document: {why}");
         }
-        StoreCore::build(doc, true)
-    }
-
-    /// A store over `doc` with copies kept in it, as phase 2b kept them:
-    /// the differential reference for 2c (handoff §4.6).
-    #[cfg(feature = "differential")]
-    pub(crate) fn with_copies_in_document(doc: Document) -> StoreCore {
         StoreCore::build(doc, false)
     }
 
-    /// A store over `doc`, keeping copies apart from it or not (handoff
-    /// §4.6).
-    pub(crate) fn build(doc: Document, apart: bool) -> StoreCore {
+    /// Differential reference store: rebuilds all virtual views from scratch
+    /// on every update (verifying incremental recorded-read `Owners`).
+    #[cfg(feature = "differential")]
+    pub(crate) fn with_full_views(doc: Document) -> StoreCore {
+        if let Some(why) = doc.derived_content() {
+            panic!("with_full_views takes an authored document: {why}");
+        }
+        StoreCore::build(doc, true)
+    }
+
+    pub(crate) fn build(doc: Document, #[allow(unused_variables)] full_views: bool) -> StoreCore {
         let mut store = StoreCore {
-            docs: tree::Docs::new(doc, apart),
+            docs: tree::Docs::new(doc),
             owners: Default::default(),
+            #[cfg(feature = "differential")]
+            full_views,
             history: History {
                 horizon: DEFAULT_HORIZON,
                 ..Default::default()
@@ -1027,8 +912,7 @@ impl StoreCore {
             running_clips: Vec::new(),
             animated: BTreeSet::new(),
             clips_end: None,
-            theme_at: None,
-            token_leaves: None,
+            theme_maker: ThemeMaker::default(),
             queries: query::Queries::default(),
             presence: Default::default(),
             presence_moving: BTreeSet::new(),
@@ -1044,15 +928,14 @@ impl StoreCore {
             expansion_problems: Vec::new(),
             repeats: Default::default(),
             repeat_inputs: BTreeMap::new(),
-            drawn: None,
             repeat_dirty: BTreeSet::new(),
             repeat_problems: BTreeMap::new(),
             item_shown: BTreeMap::new(),
-            repeat_natives: Default::default(),
             item_memo: Default::default(),
             layout_makers: PerRootMakers::default(),
             network_makers: PerRootMakers::default(),
             derived_makers: PerRootMakers::default(),
+            repeat_makers: PerRootMakers::default(),
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -1066,17 +949,20 @@ impl StoreCore {
             ended: None,
             next_gesture: 1,
             geometry: geom::Revisions::default(),
+            embed_topology: composition::EmbedTopology::default(),
             producers: Default::default(),
             text_generation: iron_text::engine().generation(),
         };
         // What writes touch is handed to the graph from here on (§3.3 of
         // structure-in-the-graph.md): a load is a clean baseline.
         store.docs.log_touched();
-        // A loaded document holds only authored nodes: derive its instances.
-        let stamp = store.docs.authored.version();
-        let (_, delta) = store.owners.expand(&mut store.docs, stamp, &BTreeMap::new(), engine::owners::Which::All);
-        store.store_found(delta);
+        // A loaded document holds only authored nodes: derive its virtual views.
+        let (_, delta) = store.owners.sync_all(&mut store.docs, &BTreeMap::new());
+        if let Some(delta) = delta {
+            store.store_found(delta);
+        }
         store.geometry.note_structure();
+        store.sync_theme_maker();
         store.init_derived_makers();
         store.reactive.rebuild(Tree::of(&store.docs));
         store.resample();
@@ -1086,8 +972,11 @@ impl StoreCore {
         store.sync_contexts(false);
         store.sync_constraint_makers(false);
         store.sync_network_makers(false);
+        store.sync_repeat_makers(false);
         store.sync_clusters();
         store.resolve_physics();
+        store.embed_topology.rebuild(Tree::of(&store.docs));
+        store.docs.cyclic_embeds = Some(store.embed_topology.cyclic_embeds().clone());
         // Initial load already ran rebuild and resolve_physics from scratch;
         // leave the touched log empty before the first transaction.
         let _ = store.docs.take_touched();
@@ -1649,18 +1538,6 @@ impl StoreCore {
         }
     }
 
-    /// Whether `ops` change a clip, a key, a timing or a track: what every
-    /// clip's sample reads. A playhead move does not.
-    fn touches_clips<'a>(ops: impl IntoIterator<Item = &'a Op>) -> bool {
-        let kinds = [FacetKind::Clip, FacetKind::Key, FacetKind::Timing, FacetKind::Track];
-        ops.into_iter().any(|op| match op {
-            Op::Set { path, .. } => kinds.contains(&path.facet),
-            Op::AddFacet { facet, .. } => kinds.contains(&facet.kind()),
-            Op::RemoveFacet { kind, .. } => kinds.contains(kind),
-            _ => false,
-        })
-    }
-
     /// Name a host producer of runtime signals (a simulation, a Model) and
     /// get the id its publishes carry. Names are for reporting only.
     pub fn register_producer(&mut self, name: &str) -> ProducerId {
@@ -2167,7 +2044,6 @@ impl StoreCore {
         }
         let stamp = self.docs.authored.version();
         let mut undo: Vec<Op> = Vec::new();
-        let mut structural = false;
         // A failure part-way puts the document back exactly, through the
         // journal (reactive-engine handoff §4.4, stage 1).
         self.docs.begin();
@@ -2188,15 +2064,9 @@ impl StoreCore {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
                     self.docs.rollback();
-                    self.owners.clear_templates();
                     return Err(e);
                 }
             }
-            structural |= match op {
-                Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Reparent { .. } => true,
-                Op::Set { id, path, slot } => slot.expr().is_some() || self.reactive.is_bound(Leaf { node: *id, path: *path }) || names_context(path),
-                _ => false,
-            };
         }
         // Session ops never need expansion: a derived id cannot sit under a
         // session-tier id (`NodeId::from_path`), so no session node derives
@@ -2205,15 +2075,12 @@ impl StoreCore {
         // The spatial scene learns of session nodes as of any other: a
         // session composition built after the last transaction (the Latency
         // view's) is otherwise never indexed, so presses miss it.
-        self.note_changes(ops.iter(), &undo);
+        self.note_changes(ops.iter(), &undo, None);
         self.geometry.note_ops(ops.iter());
-        if structural {
-            self.regraph(ops.iter().chain(&undo));
-        } else {
-            // Session constant writes also mark their leaves so the host sees
-            // moved session nodes even with no readers (e.g. Latency view).
-            self.sync_touched(true);
-        }
+        self.sync_embed_topology(&ops, &undo, None);
+        // Single recorded-read sync handles both structural and constant
+        // session edits and marks moved session leaves for the host.
+        self.sync_touched(true);
         self.session_version += 1;
         if self.sync_clock() {
             self.settle(SettleMode::Live { clusters: true });
@@ -2232,37 +2099,37 @@ impl StoreCore {
     /// transaction, a publish, a preview, the clock. Where the items
     /// changed it re-expands and rebuilds the graph; a repeat inside new
     /// items settles in the next round. Returns the structural ops applied.
-    fn settle_repeats(&mut self) -> Vec<Op> {
+    fn settle_repeats(&mut self) -> engine::views::ViewDelta {
         if self.settling {
-            return Vec::new();
+            return engine::views::ViewDelta::default();
         }
         self.settling = true;
-        // The drawn repeats are kept as structure changes (`update_drawn`);
-        // a repeat is read again when its native ran (an input changed) or
-        // it was just drawn or undrawn. Nothing else is visited (DS-3b: no
-        // pass over every repeat, nor every group).
-        self.ensure_drawn();
-        self.sync_repeats(true);
+        self.sync_repeat_makers(true);
         let ran = self.reactive.take_ran_repeats();
         self.repeat_dirty.extend(ran);
         if self.repeat_dirty.is_empty() {
             self.settling = false;
-            return Vec::new();
+            return engine::views::ViewDelta::default();
         }
         SETTLE_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut applied = Vec::new();
+        let own_net = self.docs.views.begin_net();
         let path = |f: &str| LeafPath::new(facet::FacetKind::Repeat, f).expect("declared leaf");
         let item = |f: &str| LeafPath::new(facet::FacetKind::Item, f).expect("declared leaf");
         let when = LeafPath::new(facet::FacetKind::When, "is").expect("declared leaf");
         // A round per level of nesting, and one more to see nothing change.
         for round in 0..=expand::DEPTH_MAX + 1 {
-            let mut round_start = applied.len();
             let visit: Vec<NodeId> = std::mem::take(&mut self.repeat_dirty).into_iter().collect();
             if visit.is_empty() {
                 break;
             }
-            let drawn = self.drawn.as_ref().expect("ensured");
-            let (here, gone): (Vec<NodeId>, Vec<NodeId>) = visit.into_iter().partition(|r| drawn.contains(r));
+            let (here, gone): (Vec<NodeId>, Vec<NodeId>) = visit.into_iter().partition(|r| {
+                self.docs
+                    .scoped
+                    .root_of
+                    .get(r)
+                    .and_then(|root| self.repeat_makers.per_root.get(root))
+                    .is_some_and(|s| s.contains(r))
+            });
             // A repeat no longer drawn: what it gave goes.
             let mut changed_repeats: BTreeSet<NodeId> = BTreeSet::new();
             let mut unset: Vec<Leaf> = Vec::new();
@@ -2279,7 +2146,7 @@ impl StoreCore {
             }
             let inputs: Vec<(NodeId, [Option<Value>; 7])> = here
                 .iter()
-                .map(|&r| (r, REPEAT_INPUTS.map(|(k, f)| self.reactive.read(Tree::of(&self.docs), Leaf { node: r, path: LeafPath::new(k, f).expect("declared leaf") }))))
+                .map(|&r| (r, repeat_inputs_of(Tree::of(&self.docs), &self.reactive, r)))
                 .collect();
             // `Value`'s `==` holds NaN equal to NaN ("no series").
             let inputs: Vec<(NodeId, [Option<Value>; 7])> = inputs.into_iter().filter(|(r, v)| self.repeat_inputs.get(r) != Some(v) || !self.repeats.contains_key(r)).collect();
@@ -2405,8 +2272,6 @@ impl StoreCore {
             self.truncated = truncated;
             let structural = !changed_repeats.is_empty();
             if structural {
-                // The owners of the repeats whose items changed.
-                let changed: BTreeSet<NodeId> = changed_repeats.iter().filter_map(|r| r.path().first().copied()).collect();
                 for &r in &changed_repeats {
                     let n = self.repeat_changes.entry(r).or_default();
                     *n += 1;
@@ -2418,33 +2283,29 @@ impl StoreCore {
                         }
                     }
                 }
-                let stamp = self.docs.authored.version();
-                // Only the items that changed, where that matches a whole
-                // expansion of their owners; else the owners.
-                let items = self.owners.expand_items(&mut self.docs, stamp, &self.repeats, &changed_repeats);
-                let (ops, delta) = match items {
-                    Some(done) => done,
-                    None => self.owners.expand(&mut self.docs, stamp, &self.repeats, engine::owners::Which::Some(changed)),
+                let (vd, delta) = {
+                    #[cfg(feature = "differential")]
+                    let full = self.full_views;
+                    #[cfg(not(feature = "differential"))]
+                    let full = false;
+                    if full {
+                        self.owners.clear_templates();
+                        let (vd, d) = self.owners.sync_all(&mut self.docs, &self.repeats);
+                        (vd, d.expect("sync_all returns delta"))
+                    } else {
+                        self.owners.sync_items(&mut self.docs, &self.repeats, &changed_repeats)
+                    }
                 };
                 self.store_found(delta);
                 self.check_owners("settling repeats");
-                if round == expand::DEPTH_MAX + 1 && !ops.is_empty() {
+                if round == expand::DEPTH_MAX + 1 && !vd.is_empty() {
                     let first = *changed_repeats.iter().next().expect("structural");
                     self.expansion_problems.push(expand::Problem { node: first, kind: "depth_blocked", message: "repeats did not settle: their counts keep changing each other".into() });
                     expand::sort_problems(&mut self.expansion_problems);
                 }
-                self.geometry.note_ops(ops.iter());
-                round_start = applied.len();
-                applied.extend(ops);
             }
             if structural {
-                // The new structure into the graph before anything this
-                // round publishes evaluates: a layout over the new items
-                // has them reserved first (council review of DS-9). New
-                // items may hold repeats: `regraph` draws them, and they are
-                // read in the next round.
-                let these: Vec<Op> = applied[round_start..].to_vec();
-                self.regraph(these.iter());
+                self.sync_touched(false);
             }
             unset.retain(|l| !set.contains_key(l));
             if !set.is_empty() || !unset.is_empty() {
@@ -2461,76 +2322,18 @@ impl StoreCore {
             self.repeat_dirty.extend(ran);
         }
         self.settling = false;
-        applied
+        if own_net {
+            let net = self.docs.views.finish_net();
+            self.geometry.note_views(&net);
+            self.sync_embed_topology(&[], &[], Some(&net));
+            return net;
+        }
+        // An enclosing transaction (`settle_tx`) owns the open net window and
+        // will collect the single net before-vs-after `ViewDelta` once all
+        // settling and solver writes complete.
+        engine::views::ViewDelta::default()
     }
 
-    /// Every drawn repeat, found once (a load, or before the first
-    /// settle); afterwards kept by `update_drawn`.
-    fn ensure_drawn(&mut self) {
-        if self.drawn.is_some() {
-            return;
-        }
-        let all: BTreeSet<NodeId> = expand::drawn_repeats(Tree::of(&self.docs)).into_iter().collect();
-        self.repeat_dirty.extend(all.iter().copied());
-        self.repeat_natives.0.extend(all.iter().copied());
-        self.drawn = Some(all);
-    }
-
-    /// Keep the drawn repeats as `ops` change the structure: a node made,
-    /// moved, given or stripped of a repeat or conditional is looked at,
-    /// with its subtree where its ancestors changed; a node gone leaves.
-    /// What becomes drawn or stops is read again at the next settle.
-    fn update_drawn<'a>(&mut self, ops: impl Iterator<Item = &'a Op>) {
-        let Some(drawn) = self.drawn.as_mut() else { return };
-        let doc = Tree::of(&self.docs);
-        let is_drawn = |n: NodeId| {
-            doc.is_live(n)
-                && doc.node(n).is_some_and(|x| x.ty.name() == "group")
-                && expand::is_item_owner(doc, n)
-                && !n.path().first().is_some_and(|&root| expand::in_library(doc, root))
-                && !expand::in_repeat_template(doc, n)
-        };
-        let mut look: BTreeSet<NodeId> = BTreeSet::new();
-        for op in ops {
-            match op {
-                Op::Create { id, .. } => {
-                    look.insert(*id);
-                }
-                Op::Reparent { id, .. } => {
-                    look.insert(*id);
-                    look.extend(doc.descendants(*id));
-                }
-                Op::AddFacet { id, facet } if expand::owns_items(facet.kind()) => {
-                    look.insert(*id);
-                    look.extend(doc.descendants(*id));
-                }
-                Op::RemoveFacet { id, kind } if expand::owns_items(*kind) => {
-                    look.insert(*id);
-                    look.extend(doc.descendants(*id));
-                }
-                Op::Delete { id } => {
-                    look.insert(*id);
-                }
-                _ => {}
-            }
-        }
-        // Everything deleted since the changes were last taken, subtrees
-        // included.
-        look.extend(self.docs.gone.keys());
-        for n in look {
-            let now = is_drawn(n);
-            if now != drawn.contains(&n) {
-                if now {
-                    drawn.insert(n);
-                    self.repeat_natives.0.insert(n);
-                } else {
-                    drawn.remove(&n);
-                    self.repeat_natives.1.insert(n);
-                }
-                self.repeat_dirty.insert(n);
-            }
-        }
-    }
 
     /// Publish where each entering or leaving item has got to.
     fn publish_presence(&mut self) {
@@ -2920,6 +2723,7 @@ impl StoreCore {
 
     pub fn problems(&self) -> Vec<expand::Problem> {
         let mut out = self.expansion_problems.clone();
+        out.extend(self.embed_topology.virtual_problems().iter().cloned());
         out.extend(self.truncated.iter().cloned());
         out.extend(self.feedback.iter().cloned());
         out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
@@ -2960,7 +2764,7 @@ impl StoreCore {
             if round > 0 && derived.is_empty() {
                 break;
             }
-            self.note_changes(derived.iter(), &[]);
+            self.note_changes(std::iter::empty(), &[], Some(&derived));
             self.publish_state();
             self.resolve_theme();
             self.sync_contexts(true);
@@ -3546,22 +3350,20 @@ impl StoreCore {
         &mut self,
         mode: SettleMode,
         tx: &mut Transaction,
-        expanded: &mut Vec<Op>,
+        expanded: &mut engine::views::ViewDelta,
         full_inverse: &mut Vec<Op>,
         edited_copy_leaves: BTreeSet<Leaf>,
         copy_drivers: &[solve::Driver],
     ) -> Option<SolverSummary> {
-        match mode {
+        let summary = match mode {
             SettleMode::Transaction => {
                 // Authored edits targeting a copy (directly or via override/
                 // template expansion) clear its `Document::solved` entry first
                 // so the new value is visible to repeats and acts as a driver.
                 let mut to_clear: BTreeSet<Leaf> = edited_copy_leaves;
-                for op in expanded.iter() {
-                    if let Op::Set { id, path, .. } = op
-                        && id.is_expanded()
-                    {
-                        to_clear.insert(Leaf { node: *id, path: *path });
+                for &leaf in &expanded.slots {
+                    if leaf.node.is_expanded() {
+                        to_clear.insert(leaf);
                     }
                 }
                 let last = tx.ops.len().saturating_sub(1);
@@ -3583,7 +3385,16 @@ impl StoreCore {
                 None
             }
             _ => unreachable!("settle_tx takes Transaction, Undo, or Replay"),
-        }
+        };
+        // Close the single transaction-wide net `ViewDelta` window AFTER both
+        // `after_transaction` and `post_apply` settle so transient repeat items
+        // (e.g. grown on authored values and shrunk by persisted solves) cancel
+        // cleanly before reaching `GeometryRevisions`, `EmbedTopology`, and `Changes`.
+        let net = self.docs.views.finish_net();
+        *expanded = net;
+        self.geometry.note_views(expanded);
+        self.sync_embed_topology(&tx.ops, full_inverse, Some(expanded));
+        summary
     }
 
     /// Run `f` recording what it reads of cells nothing needed, for
@@ -3937,20 +3748,52 @@ impl StoreCore {
         self.dark
     }
 
-    /// Publish each token's colour for the theme (`ProducerId::THEME`).
+    /// Stage 2 recorded-read theme maker (EN-7): recomputes theme token leaves
+    /// and light/dark tables only when token keys are touched; pure `set_theme`
+    /// toggles publish the cached table in O(|tokens|) without scanning roots.
+    fn sync_theme_maker(&mut self) -> Vec<String> {
+        if !self.theme_maker.init {
+            self.theme_maker.init = true;
+            self.theme_maker.dirty = true;
+        }
+        if !self.theme_maker.dirty && self.theme_maker.dark == Some(self.dark) {
+            return Vec::new();
+        }
+        let mut changed = BTreeSet::new();
+        if self.theme_maker.dirty {
+            self.theme_maker.dirty = false;
+            let rec = structure::Recorder::default();
+            let (next_tokens, light, dark_colors) = palette::tokens_and_themes(Tree::of(&self.docs).recording(&rec));
+            self.theme_maker.keys = rec.into_inner().into_iter().collect();
+            for (name, leaf) in &self.theme_maker.tokens {
+                if next_tokens.get(name) != Some(leaf) {
+                    changed.insert(name.clone());
+                }
+            }
+            for (name, leaf) in &next_tokens {
+                if self.theme_maker.tokens.get(name) != Some(leaf) {
+                    changed.insert(name.clone());
+                }
+            }
+            self.theme_maker.tokens = next_tokens;
+            self.theme_maker.light = light;
+            self.theme_maker.dark_colors = dark_colors;
+        }
+        self.theme_maker.dark = Some(self.dark);
+        let colors = if self.dark {
+            &self.theme_maker.dark_colors
+        } else {
+            &self.theme_maker.light
+        };
+        if *colors != self.reactive.published_by(ProducerId::THEME) {
+            let colors = colors.clone();
+            self.reactive.publish(Tree::of(&self.docs), ProducerId::THEME, colors);
+        }
+        changed.into_iter().collect()
+    }
+
     fn resolve_theme(&mut self) {
-        // The tokens and the scheme as last published: nothing to do (no
-        // pass over the tokens on every pipeline, DS-3a).
-        let key = (self.docs.tokens_shaped, self.dark);
-        if self.theme_at == Some(key) {
-            return;
-        }
-        self.theme_at = Some(key);
-        let values = palette::publish(Tree::of(&self.docs), self.dark);
-        if values == self.reactive.published_by(ProducerId::THEME) {
-            return;
-        }
-        self.reactive.publish(Tree::of(&self.docs), ProducerId::THEME, values);
+        let _ = self.sync_theme_maker();
     }
 
     /// Lay a container out in a previewed order, or stop (`None`): the
@@ -4176,8 +4019,7 @@ impl StoreCore {
                 (leaf, want)
             })
             .collect();
-        let tokens = self.token_leaves();
-        self.reactive.sync_derived(Tree::of(&self.docs), diff, &tokens, run);
+        self.reactive.sync_derived(Tree::of(&self.docs), diff, &self.theme_maker.tokens, run);
     }
 
     /// How many times top-level `root`'s layout maker has run (for locality
@@ -4276,13 +4118,92 @@ impl StoreCore {
         self.glide_specs_of(&rebuilt);
     }
 
-    /// Make a repeat native for each drawn repeat and conditional, and drop
-    /// the rest, when the document's structure changed.
-    fn sync_repeats(&mut self, run: bool) {
-        // The natives of the repeats drawn and undrawn since the last sync
-        // (`update_drawn`, `ensure_drawn`), not of every group.
-        self.ensure_drawn();
-        let (add, remove) = std::mem::take(&mut self.repeat_natives);
+    /// Discover drawn repeats and conditionals under top-level `root` through
+    /// `MakerCx` (Stage 2, EN-7; replaces `update_drawn`/`ensure_drawn`).
+    fn make_repeats_root(cx: &MakerCx<'_>, root: NodeId) -> BTreeSet<NodeId> {
+        let doc = cx.tree();
+        if doc.ty_of(root).is_some_and(|t| t.name() == "library") {
+            return BTreeSet::new();
+        }
+        let mut out = BTreeSet::new();
+        for kind in [FacetKind::Repeat, FacetKind::When] {
+            for g in doc.nodes_with_in(root, kind) {
+                if doc.is_live(g)
+                    && doc.ty_of(g).is_some_and(|t| t.name() == "group")
+                    && !expand::in_repeat_template(doc, g)
+                {
+                    out.insert(g);
+                }
+            }
+        }
+        out
+    }
+
+    /// Reconcile per-root drawn repeat/conditional `RepeatNative` cells
+    /// (Stage 2, engine.md §3.6, EN-7).
+    fn sync_repeat_makers(&mut self, run: bool) {
+        if !self.repeat_makers.init {
+            self.repeat_makers.init = true;
+            self.repeat_makers.roots_dirty = true;
+        }
+        if !self.repeat_makers.roots_dirty && self.repeat_makers.dirty.is_empty() {
+            return;
+        }
+        let mut add: BTreeSet<NodeId> = BTreeSet::new();
+        let mut remove: BTreeSet<NodeId> = BTreeSet::new();
+        if self.repeat_makers.roots_dirty {
+            self.repeat_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let gone: Vec<NodeId> = self.repeat_makers.per_root.keys().copied().filter(|r| !current.contains(r)).collect();
+            for r in gone {
+                self.repeat_makers.unindex(r);
+                self.repeat_makers.dirty.remove(&r);
+                if let Some(old) = self.repeat_makers.per_root.remove(&r) {
+                    remove.extend(old);
+                }
+            }
+            for &r in &current {
+                if !self.repeat_makers.per_root.contains_key(&r) {
+                    self.repeat_makers.dirty.insert(r);
+                }
+            }
+        }
+        let dirty = std::mem::take(&mut self.repeat_makers.dirty);
+        for root in dirty {
+            if !Tree::of(&self.docs).is_live(root) || Tree::of(&self.docs).parent_of(root).is_some() {
+                self.repeat_makers.unindex(root);
+                if let Some(old) = self.repeat_makers.per_root.remove(&root) {
+                    remove.extend(old);
+                }
+                continue;
+            }
+            *self.repeat_makers.runs_of.entry(root).or_insert(0) += 1;
+            let rec = structure::Recorder::default();
+            let next = {
+                let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
+                Self::make_repeats_root(&cx, root)
+            };
+            self.repeat_makers.set_keys(root, rec.into_inner());
+            if let Some(old) = self.repeat_makers.per_root.get(&root) {
+                for &r in old {
+                    if !next.contains(&r) {
+                        remove.insert(r);
+                    }
+                }
+                for &r in &next {
+                    if !old.contains(&r) {
+                        add.insert(r);
+                    }
+                }
+            } else {
+                add.extend(next.iter().copied());
+            }
+            self.repeat_makers.per_root.insert(root, next);
+        }
+        // A repeat that moved from one root to another stays live.
+        remove.retain(|r| !add.contains(r));
+        self.repeat_dirty.extend(add.iter().copied());
+        self.repeat_dirty.extend(remove.iter().copied());
         if add.is_empty() && remove.is_empty() {
             return;
         }
@@ -4505,44 +4426,52 @@ impl StoreCore {
         Ok(())
     }
 
-    /// Consume every key written to `Docs` since the last sync through the
-    /// single write channel (engine.md §3.2): reconciles dirty Stage 2
-    /// contexts, layout, constraint, network, and derived-binding makers,
-    /// marks keyed natives, optionally marks session leaves for the host, and
-    /// evaluates invalidated cells and pending natives.
-    fn sync_touched(&mut self, mark_session: bool) {
+    /// Single Stage 2 -> Stage 3 recorded-read sync (engine.md §3.2, §3.3, EN-7):
+    /// consumes touched `structure::Key`s from `Docs`, reconciles all Stage 2
+    /// makers (theme, contexts, layout, constraints, network, derived bindings,
+    /// repeats), forgets waiting producer requests on deleted nodes, and runs
+    /// `Reactive::sync_from_keys` to update bindings, `@name` providers,
+    /// boundary checks, keyed natives, and value readers in one pass.
+    /// Returns whether any structural or clip key was touched (for `resample`).
+    fn sync_touched(&mut self, mark_session: bool) -> bool {
+        let (unconsumed_ak, unconsumed_dk) = self.docs.drain_view_touched();
+        if !unconsumed_ak.is_empty() || !unconsumed_dk.is_empty() {
+            self.owners.note_touched(&unconsumed_ak, &unconsumed_dk);
+        }
         let keys = self.docs.take_touched();
+        let clip_or_structure = keys.iter().any(|k| match k {
+            structure::Key::Leaf(l) => matches!(l.path.facet, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
+            structure::Key::Facet(_, f) => matches!(f, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
+            structure::Key::Node(_) | structure::Key::Children(_) | structure::Key::FacetSet(_) | structure::Key::Relation(_) | structure::Key::Relations(_) | structure::Key::Roots | structure::Key::LetsIn(_) | structure::Key::In(_, _) | structure::Key::With(_, _) => true,
+            structure::Key::Wiring(_) => false,
+        });
         if !keys.is_empty() {
-            self.owners.note_touched(&keys);
+            self.theme_maker.note_touched(&keys);
             self.context_maker.note_touched(&keys);
             self.layout_makers.note_touched(&keys);
             self.constraint_makers.note_touched(&keys);
             self.network_makers.note_touched(&keys);
             self.derived_makers.note_touched(&keys);
-            self.sync_contexts(false);
-            self.sync_layout_makers(false);
-            self.sync_constraint_makers(false);
-            self.sync_network_makers(false);
-            self.sync_derived_makers(false);
+            self.repeat_makers.note_touched(&keys);
         }
-        let leaves = if keys.is_empty() {
-            Vec::new()
-        } else {
-            self.reactive.prime_touched(keys)
-        };
-        let doc = Tree::of(&self.docs);
+        let changed_tokens = self.sync_theme_maker();
+        self.sync_contexts(false);
+        self.sync_layout_makers(false);
+        self.sync_constraint_makers(false);
+        self.sync_network_makers(false);
+        self.sync_derived_makers(false);
+        self.sync_repeat_makers(false);
+        self.reactive.forget_waiting(self.docs.gone.keys().copied());
+        let leaves = self.reactive.sync_from_keys(Tree::of(&self.docs), &keys, &self.theme_maker.tokens, &changed_tokens);
         if mark_session {
+            let doc = Tree::of(&self.docs);
             for &leaf in &leaves {
                 if let Some(v) = self.reactive.read(doc, leaf) {
                     self.reactive.mark(leaf, v);
                 }
             }
         }
-        if !leaves.is_empty() {
-            self.reactive.invalidate(doc, leaves);
-        } else {
-            self.reactive.flush(doc);
-        }
+        clip_or_structure
     }
 
     /// Why the across/through network kept its last solution, if it did.
@@ -4589,12 +4518,11 @@ impl StoreCore {
         self.session_version
     }
 
-    /// The first live node of a type, from the type index: the clock, the
-    /// session root, the selection (each of which there is one of).
+    /// The first live authored/session node of a singleton type: the clock,
+    /// the session root, the selection (each of which is never a derived copy).
     fn live_of_type(&self, name: &str) -> Option<NodeId> {
         let ty = TypeId::lookup(name)?;
-        let doc = Tree::of(&self.docs);
-        doc.nodes_of_type(ty).find(|&n| doc.is_live(n))
+        self.docs.authored.nodes_of_type(ty).find(|&n| self.docs.authored.is_live(n))
     }
 
     /// The selected nodes, in pick order, with how each was reached
@@ -4640,59 +4568,199 @@ impl StoreCore {
         Ok(())
     }
 
+    /// Update post-commit `EmbedTopology` for any compositions whose embeds,
+    /// `embed.source`, or `composition.dims` changed in `ops`/`inverse`/`views`,
+    /// marking every reverse-reachable composition whose effective `embedded()`
+    /// target flipped as structurally shaped on `self.geometry`.
+    fn sync_embed_topology(&mut self, ops: &[Op], inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
+        let doc = Tree::of(&self.docs);
+        let embed_ty = TypeId::lookup("embed").expect("registered");
+        let comp_ty = TypeId::lookup("composition").expect("registered");
+        let camera_ty = TypeId::lookup("camera").expect("registered");
+        let mut dirty_comps: BTreeSet<NodeId> = BTreeSet::new();
+        let mut camera_comps: BTreeSet<NodeId> = BTreeSet::new();
+
+        let comp_for = |id: NodeId| -> Option<NodeId> {
+            if let Some(c) = composition::composition_of(doc, id) {
+                return Some(c);
+            }
+            // Deleted node: walk `gone` / authored tombstones to its former composition.
+            let mut cur = Some(id);
+            while let Some(n) = cur {
+                if doc.node(n).is_some_and(|x| x.ty == comp_ty) {
+                    return Some(n);
+                }
+                cur = self
+                    .docs
+                    .gone
+                    .get(&n)
+                    .and_then(|w| w.parent)
+                    .or_else(|| doc.node(n).and_then(|x| x.parent))
+                    .or_else(|| n.expanded_root().filter(|&r| r != n));
+            }
+            None
+        };
+
+        for op in ops.iter().chain(inverse.iter()) {
+            match op {
+                Op::Create { id, ty, parent, .. } if *ty == comp_ty => {
+                    dirty_comps.insert(*id);
+                    if let Some(p) = parent
+                        && let Some(c) = comp_for(*p)
+                    {
+                        dirty_comps.insert(c);
+                    }
+                }
+                Op::Create { id, ty, parent, .. } if *ty == embed_ty || *ty == camera_ty => {
+                    if let Some(c) = comp_for(*id).or_else(|| parent.and_then(comp_for)) {
+                        dirty_comps.insert(c);
+                        if *ty == camera_ty {
+                            camera_comps.insert(c);
+                        }
+                    }
+                }
+                Op::Delete { id } | Op::Reparent { id, .. } => {
+                    if let Some(node) = doc.node(*id) {
+                        if (node.ty == comp_ty || node.ty == embed_ty || node.ty == camera_ty)
+                            && let Some(c) = comp_for(*id)
+                        {
+                            dirty_comps.insert(c);
+                            if node.ty == camera_ty {
+                                camera_comps.insert(c);
+                            }
+                        }
+                        if let Op::Reparent { parent: Some(p), .. } = op
+                            && let Some(c) = comp_for(*p)
+                        {
+                            dirty_comps.insert(c);
+                            if node.ty == camera_ty {
+                                camera_comps.insert(c);
+                            }
+                        }
+                    }
+                }
+                Op::Set { id, path, .. }
+                    if matches!(
+                        path.facet,
+                        facet::FacetKind::Embed | facet::FacetKind::EmbedCamera | facet::FacetKind::Composition
+                    ) =>
+                {
+                    if let Some(c) = comp_for(*id) {
+                        dirty_comps.insert(c);
+                    }
+                }
+                Op::AddFacet { id, facet }
+                    if matches!(
+                        facet.kind(),
+                        facet::FacetKind::Embed
+                            | facet::FacetKind::EmbedCamera
+                            | facet::FacetKind::Composition
+                            | facet::FacetKind::Repeat
+                            | facet::FacetKind::When
+                    ) =>
+                {
+                    if let Some(c) = comp_for(*id) {
+                        dirty_comps.insert(c);
+                    }
+                }
+                Op::RemoveFacet { id, kind }
+                    if matches!(
+                        kind,
+                        facet::FacetKind::Embed
+                            | facet::FacetKind::EmbedCamera
+                            | facet::FacetKind::Composition
+                            | facet::FacetKind::Repeat
+                            | facet::FacetKind::When
+                    ) =>
+                {
+                    if let Some(c) = comp_for(*id) {
+                        dirty_comps.insert(c);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(vd) = views {
+            for &(id, parent, _, ty) in vd.created.iter().chain(&vd.removed) {
+                if (ty == embed_ty || ty == comp_ty || ty == camera_ty)
+                    && let Some(c) = comp_for(id).or_else(|| comp_for(parent))
+                {
+                    dirty_comps.insert(c);
+                    if ty == camera_ty {
+                        camera_comps.insert(c);
+                    }
+                }
+            }
+            for &(id, old_p, new_p) in &vd.moved {
+                if let Some(ty) = doc.ty_of(id).filter(|&ty| ty == embed_ty || ty == comp_ty || ty == camera_ty) {
+                    if let Some(c) = comp_for(old_p) {
+                        dirty_comps.insert(c);
+                        if ty == camera_ty {
+                            camera_comps.insert(c);
+                        }
+                    }
+                    if let Some(c) = comp_for(new_p) {
+                        dirty_comps.insert(c);
+                        if ty == camera_ty {
+                            camera_comps.insert(c);
+                        }
+                    }
+                }
+            }
+            for &id in &vd.facet_shaped {
+                if (doc.ty_of(id).is_some_and(|ty| ty == embed_ty || ty == comp_ty || ty == camera_ty)
+                    || doc.has(id, facet::FacetKind::Repeat)
+                    || doc.has(id, facet::FacetKind::When))
+                    && let Some(c) = comp_for(id)
+                {
+                    dirty_comps.insert(c);
+                }
+            }
+            for &leaf in &vd.slots {
+                if matches!(
+                    leaf.path.facet,
+                    facet::FacetKind::Embed | facet::FacetKind::EmbedCamera | facet::FacetKind::Composition
+                ) && let Some(c) = comp_for(leaf.node)
+                {
+                    dirty_comps.insert(c);
+                }
+            }
+        }
+
+        if dirty_comps.is_empty() && camera_comps.is_empty() {
+            return;
+        }
+        let changed = self.embed_topology.sync_from_comps(Tree::of(&self.docs), &dirty_comps, &camera_comps);
+        self.docs.cyclic_embeds = Some(self.embed_topology.cyclic_embeds().clone());
+        for c in changed {
+            self.geometry.note_shaped(c);
+        }
+    }
+
     /// Keep the graph in step with a transaction that just applied.
     /// `full_inverse` is everything the transaction took or replaced,
     /// derived nodes included (a deleted entity's ports); `expanded` is what
-    /// expansion wrote for it, to which settling adds the repeats' copies.
+    /// expansion wrote for it, replaced by the single net before-vs-after
+    /// `ViewDelta` once multi-wave expansion and `settle_repeats` finish.
     /// Derived ops are never history: undo, redo and replay re-derive.
-    fn after_transaction(&mut self, tx: &Transaction, expanded: &mut Vec<Op>, full_inverse: &[Op], resolve_live: bool) {
-        // A repeat held as feedback tries again (`restless`).
+    fn after_transaction(&mut self, tx: &Transaction, _expanded: &mut engine::views::ViewDelta, _full_inverse: &[Op], resolve_live: bool) {
         self.feedback.clear();
         self.restless.clear();
-        // Outside a gesture (and outside a gesture's own commit, where
-        // `drivers`/`fingers` stay populated until `apply` returns so
-        // `post_apply` keeps the live-solve warm start), drop any stale
-        // live-solve preview so it cannot shadow what this transaction wrote.
         let had_live_solve = self.gesture.is_none() && self.drivers.is_empty() && self.fingers.is_empty() && !self.reactive.live_solve_preview().is_empty();
         if had_live_solve {
             self.reactive.clear_live_solve(Tree::of(&self.docs));
         }
-        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()).chain(expanded.iter()));
-        let structural = tx.ops.iter().chain(tx.inverse.iter()).chain(expanded.iter()).any(|op| match op {
-            // A link can be a connection's end, which derives a signal.
-            Op::Create { .. } | Op::Delete { .. } | Op::AddFacet { .. } | Op::RemoveFacet { .. } | Op::Link { .. } | Op::Unlink { .. } | Op::Reparent { .. } => true,
-            Op::Set { slot, path, .. } => slot.expr().is_some() || names_context(path) || rederives(path),
-            // The first provider among siblings answers `@name`.
-            Op::Reorder { id, .. } => provides(Tree::of(&self.docs), *id),
-            Op::Solve { .. } => false,
-        });
-        // The clips' end reads clips, keys, relations and the transitions a
-        // keyed state runs on: any edit may move it, so it is read again
-        // after every transaction (lazily, and only while playing with no
-        // loop range); a playhead move does not. Likewise the clocked
-        // machine instances.
+        self.geometry.note_ops(tx.ops.iter().chain(tx.derived_ops.iter()).chain(tx.inverse.iter()));
         self.clips_end = None;
         self.machines.reclock();
-        let clips = Self::touches_clips(tx.ops.iter().chain(expanded.iter()));
-        if structural {
-            self.regraph(tx.ops.iter().chain(full_inverse).chain(expanded.iter()));
+        let resample_all = self.sync_touched(false);
+        if resample_all {
             self.resample();
         } else {
-            self.sync_touched(false);
-            // A clip's own leaves set (its `prop`, a key): every clip is
-            // sampled, so what one stops driving is withdrawn; otherwise
-            // the running ones (a constant one reads may have changed).
-            if clips {
-                self.resample();
-            } else {
-                self.resample_running();
-            }
+            self.resample_running();
         }
-        // Repeats whose count this changed get their copies, as part of
-        // this transaction's derived structure: those whose natives ran, or
-        // that the transaction drew or undrew.
-        let copies = self.settle_repeats();
-        expanded.extend(copies);
+        let _ = self.settle_repeats();
         self.sync_clusters();
         self.settle(SettleMode::Live { clusters: resolve_live && had_live_solve });
     }
@@ -4825,7 +4893,7 @@ impl StoreCore {
             self.machines.shared += 1;
         }
         tx.solver = solver.clone();
-        self.note_changes(tx.ops.iter().chain(&tx.derived_ops).chain(&expanded), &full_inverse);
+        self.note_changes(tx.ops.iter().chain(&tx.derived_ops), &full_inverse, Some(&expanded));
         let version = tx.version;
         if let Some(k) = &tx.idempotency_key {
             self.recent_keys.push_back((k.clone(), version));
@@ -4868,7 +4936,7 @@ impl StoreCore {
         }
         self.check_owners("a transaction");
         let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
-        self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+        self.note_changes(applied.ops.iter().chain(&applied.derived_ops), &full_inverse, Some(&expanded));
         let version = applied.version;
         self.history.future.clear();
         self.history.past.push(applied.clone());
@@ -4906,7 +4974,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 let _ = self.settle_tx(SettleMode::Undo, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
-                self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.note_changes(applied.ops.iter().chain(&applied.derived_ops), &full_inverse, Some(&expanded));
                 let version = applied.version;
                 self.history.record(applied);
                 self.history.future.push(tx);
@@ -4950,7 +5018,7 @@ impl StoreCore {
                 }
                 self.check_owners("a transaction");
                 let _ = self.settle_tx(SettleMode::Replay, &mut applied, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
-                self.note_changes(applied.ops.iter().chain(&applied.derived_ops).chain(&expanded), &full_inverse);
+                self.note_changes(applied.ops.iter().chain(&applied.derived_ops), &full_inverse, Some(&expanded));
                 let version = applied.version;
                 self.history.past.push(applied.clone());
                 self.history.record(applied);
@@ -4983,7 +5051,7 @@ impl StoreCore {
         &mut self,
         tx: &mut Transaction,
         copy_drivers: &[solve::Driver],
-        expanded: &mut Vec<Op>,
+        expanded: &mut engine::views::ViewDelta,
         full_inverse: &mut Vec<Op>,
     ) -> Option<SolverSummary> {
         let last = tx.ops.len().saturating_sub(1);
@@ -5149,6 +5217,8 @@ impl StoreCore {
         // before.
         let attached: Vec<NodeId> = Tree::of(&self.docs).nodes_with(FacetKind::Attachment).filter(|p| !p.is_expanded()).collect();
         self.docs.begin();
+        self.docs.views.begin_net();
+        self.owners.begin_tx();
         let docs = &mut self.docs;
         let stamp = docs.authored.version().next();
         let mut inverse = Vec::new();
@@ -5163,17 +5233,23 @@ impl StoreCore {
                 Err(e) => errors.push(e),
             }
         }
-        // Instances re-derive what their definitions say, before the checks
-        // that read them (a connection to an expanded port).
-        let mut expanded = Vec::new();
+        // Reconcile dirty virtual views before post-apply checks read them
+        // (e.g. a connection to an expanded port).
+        let mut expanded = docs.take_pending_view_delta();
         let mut problems = None;
         if errors.is_empty() {
-            // Only the owners these ops can change (stage 2).
-            if let Some(which) = self.owners.affected(Tree::of(docs), &input.ops, &inverse) {
-                let (ops, delta) = self.owners.expand(docs, stamp, &self.repeats, which);
-                expanded = ops;
-                problems = Some(delta);
-            }
+            #[cfg(feature = "differential")]
+            let full = self.full_views;
+            #[cfg(not(feature = "differential"))]
+            let full = false;
+            let (vd, delta) = if full {
+                self.owners.clear_templates();
+                self.owners.sync_all(docs, &self.repeats)
+            } else {
+                self.owners.sync_dirty(docs, &self.repeats)
+            };
+            expanded.extend(vd);
+            problems = delta;
         }
         if errors.is_empty() {
             // A connection is reported once, however many of its links the
@@ -5215,13 +5291,20 @@ impl StoreCore {
             }
         }
         if errors.is_empty() {
+            // Preserve embed cycle/target invariants on final live virtual
+            // embeds created, moved, or overridden by this transaction.
+            for (_, message) in validate_virtual_embeds(Tree::of(docs), &expanded) {
+                errors.push(ApplyError { op: 0, kind: ErrorKind::Cycle, message });
+            }
+        }
+        if errors.is_empty() {
             if let Err(message) = attachment::validate(&attached, Tree::of(docs)) {
                 errors.push(ApplyError { op: 0, kind: ErrorKind::BadParent, message });
             }
         }
         if !errors.is_empty() {
             self.docs.rollback();
-            self.owners.clear_templates();
+            self.owners.rollback_tx();
             return Err(errors);
         }
         docs.authored.set_version(stamp);
@@ -5369,34 +5452,66 @@ struct Present {
 /// dropped), and one wanted again while leaving turns back from where it
 /// is. Answers the keys to expand, the wanted ones first, with each one's
 /// element.
-/// What a repeat or conditional settles from (`settle_repeats`): its items'
-/// source, whether it shows, how many at most, and its enter and exit
-/// timings. Its native reads them all, so a change of any settles it again
-/// (council review of DS-3b: `max` and the timings were left out).
-const REPEAT_INPUTS: [(facet::FacetKind, &str); 7] = [
-    (facet::FacetKind::Repeat, "each"),
-    (facet::FacetKind::Repeat, "count"),
-    (facet::FacetKind::Repeat, "key"),
-    (facet::FacetKind::When, "is"),
-    (facet::FacetKind::Repeat, "max"),
-    (facet::FacetKind::Repeat, "enter_ms"),
-    (facet::FacetKind::Repeat, "exit_ms"),
-];
+/// Validate the final live virtual `embed` nodes touched by `vd` (ignoring any
+/// transient intermediate-wave embed removed before reconciliation settled).
+fn validate_virtual_embeds(doc: Tree<'_>, vd: &engine::views::ViewDelta) -> Vec<(NodeId, String)> {
+    let mut embeds: BTreeSet<NodeId> = BTreeSet::new();
+    for &(id, _, _, ty) in &vd.created {
+        if ty.name() == "embed" && doc.is_live(id) {
+            embeds.insert(id);
+        }
+    }
+    for &(id, ..) in &vd.moved {
+        if doc.is_live(id) && doc.ty_of(id).is_some_and(|t| t.name() == "embed") {
+            embeds.insert(id);
+        }
+    }
+    for leaf in &vd.slots {
+        if matches!(leaf.path.facet, FacetKind::Embed | FacetKind::EmbedCamera)
+            && doc.is_live(leaf.node)
+            && doc.ty_of(leaf.node).is_some_and(|t| t.name() == "embed")
+        {
+            embeds.insert(leaf.node);
+        }
+    }
+    let mut out = Vec::new();
+    for id in embeds {
+        if let Err(message) = composition::validate_embed(doc, id) {
+            out.push((id, message));
+        }
+    }
+    out
+}
 
-/// A drawn repeat or conditional as a native cell (reactive-engine handoff
-/// §4.10, RE-5.4): it reads what `settle_repeats` compares
-/// (`REPEAT_INPUTS`) and writes nothing. That it ran says its inputs
-/// changed, so a settle with none run looks at no repeat.
+/// Read a repeat or conditional's 7 settling inputs (`each`, `count`, `key`,
+/// `when.is`, `max`, `enter_ms`, `exit_ms`), picking `enter_ms`/`exit_ms` from
+/// `Repeat` when present and `When` otherwise (EN-7; replaces `REPEAT_INPUTS`).
+fn repeat_inputs_of(doc: Tree<'_>, reactive: &graph::Reactive, r: NodeId) -> [Option<Value>; 7] {
+    let timing_kind = if doc.has(r, FacetKind::Repeat) { FacetKind::Repeat } else { FacetKind::When };
+    let get = |k: FacetKind, f: &'static str| reactive.read(doc, Leaf { node: r, path: LeafPath::new(k, f).expect("declared leaf") });
+    [
+        get(FacetKind::Repeat, "each"),
+        get(FacetKind::Repeat, "count"),
+        get(FacetKind::Repeat, "key"),
+        get(FacetKind::When, "is"),
+        get(FacetKind::Repeat, "max"),
+        get(timing_kind, "enter_ms"),
+        get(timing_kind, "exit_ms"),
+    ]
+}
+
+/// A drawn repeat or conditional as a native cell (engine.md §3.6, EN-7):
+/// reads whichever `Repeat` / `When` inputs exist on `repeat` through `Cx`
+/// (recording both structural and value dependencies) and writes nothing.
 #[derive(Debug)]
 struct RepeatNative {
-    leaves: [Leaf; 7],
+    repeat: NodeId,
     outputs: BTreeSet<Leaf>,
 }
 
 impl RepeatNative {
-    fn new(r: NodeId) -> RepeatNative {
-        let leaves = REPEAT_INPUTS.map(|(k, f)| Leaf { node: r, path: LeafPath::new(k, f).expect("declared leaf") });
-        RepeatNative { leaves, outputs: BTreeSet::new() }
+    fn new(repeat: NodeId) -> RepeatNative {
+        RepeatNative { repeat, outputs: BTreeSet::new() }
     }
 }
 
@@ -5407,12 +5522,25 @@ impl graph::Native for RepeatNative {
     fn outputs(&self) -> &BTreeSet<Leaf> {
         &self.outputs
     }
+    fn keyed(&self) -> bool {
+        true
+    }
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
     fn compute(&self, cx: &mut graph::Cx<'_>) -> Result<BTreeMap<Leaf, Value>, graph::Failure> {
-        for l in self.leaves {
-            let _ = cx.read(l);
+        let doc = cx.tree();
+        let has_repeat = doc.has(self.repeat, FacetKind::Repeat);
+        let has_when = doc.has(self.repeat, FacetKind::When);
+        if has_repeat {
+            for f in ["each", "count", "key", "max", "enter_ms", "exit_ms"] {
+                let _ = cx.read(Leaf { node: self.repeat, path: LeafPath::new(FacetKind::Repeat, f).expect("declared leaf") });
+            }
+        }
+        if has_when {
+            for f in ["is", "enter_ms", "exit_ms"] {
+                let _ = cx.read(Leaf { node: self.repeat, path: LeafPath::new(FacetKind::When, f).expect("declared leaf") });
+            }
         }
         Ok(BTreeMap::new())
     }
@@ -5470,23 +5598,8 @@ fn settle_presence(all: &mut BTreeMap<NodeId, Presence>, moving: &mut BTreeSet<N
     out
 }
 
-/// Whether a set of this leaf changes what `@name` resolves to: a rename,
-/// or a let starting or ceasing to provide (palette.rs `provided`).
-/// Whether a set on this leaf changes a boundary's declared type (`datatype`),
-/// which changes tracked read-checking on bindings in `restructure` (until
-/// EN-7 moves boundary type checks to cells). Port `kind`/`dir` and anchor
-/// `follow`/`port` are now handled by Stage 2 keyed makers via `sync_touched`.
-fn rederives(path: &LeafPath) -> bool {
-    matches!((path.facet, path.field), (FacetKind::Port, "datatype"))
-}
-
-/// Whether `id` may answer an `@name`: a let (it provides when its flag
-/// says so) or a colour token. Their order among siblings decides which
-/// answers (palette.rs `provided`).
-fn provides(doc: Tree<'_>, id: NodeId) -> bool {
-    doc.node(id).is_some_and(|n| matches!(n.ty.name(), "let" | "token"))
-}
-
+/// Whether a set of this leaf changes a context provider's name or `provide`
+/// flag (used by `run()`'s pre-commit `expand::check_context`).
 fn names_context(path: &LeafPath) -> bool {
     path.facet == FacetKind::Name || (path.facet == FacetKind::Let && path.field == "provide")
 }

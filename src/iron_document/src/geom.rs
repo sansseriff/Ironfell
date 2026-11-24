@@ -284,6 +284,9 @@ pub enum GeometryEffect {
     Placement(NodeId),
     /// The node's own local geometry or paint outset moved.
     Local(NodeId),
+    /// A structural geometry change (e.g. `embed.source`, `embed_camera`, or
+    /// `composition.dims`) requiring the enclosing root to be rebuilt.
+    Structural(NodeId),
     /// Nothing an index cares about (a colour, a 3D transform, a name).
     None,
 }
@@ -309,9 +312,11 @@ pub fn effect_of(doc: Tree<'_>, leaf: Leaf) -> GeometryEffect {
         FacetKind::Transform2d if matches!(ty, "point" | "contour") => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
         FacetKind::Transform2d => GeometryEffect::Placement(leaf.node),
         FacetKind::Handles | FacetKind::Contour => enclosing_path(doc, leaf.node).map_or(GeometryEffect::None, GeometryEffect::Local),
-        FacetKind::Size | FacetKind::PathShape | FacetKind::Trim | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame | FacetKind::Embed | FacetKind::EmbedCamera => {
+        FacetKind::Size | FacetKind::PathShape | FacetKind::Trim | FacetKind::Text | FacetKind::Font | FacetKind::Radius | FacetKind::Arc | FacetKind::Stroke | FacetKind::Shadow | FacetKind::Frame => {
             GeometryEffect::Local(leaf.node)
         }
+        FacetKind::Embed | FacetKind::EmbedCamera => GeometryEffect::Structural(leaf.node),
+        FacetKind::Composition if leaf.path.field == "dims" => GeometryEffect::Structural(leaf.node),
         // A camera's aspect shapes every embed that looks through it; rare,
         // and structure-free, so the embeds are found by the scene on demand.
         FacetKind::Camera => GeometryEffect::Local(leaf.node),
@@ -434,6 +439,33 @@ impl Revisions {
         }
     }
 
+    /// Record virtual view changes (`EN-13`) into geometry revisions.
+    pub(crate) fn note_views(&mut self, delta: &crate::engine::views::ViewDelta) {
+        for &(id, parent, ..) in &delta.created {
+            self.pending_structure = true;
+            self.pending_shaped.insert(Some(id));
+            self.pending_shaped.insert(Some(parent));
+        }
+        for &(id, parent, ..) in &delta.removed {
+            self.pending_structure = true;
+            self.pending_shaped.insert(Some(id));
+            self.pending_shaped.insert(Some(parent));
+        }
+        for &(id, old_parent, new_parent) in &delta.moved {
+            self.pending_structure = true;
+            self.pending_shaped.insert(Some(id));
+            self.pending_shaped.insert(Some(old_parent));
+            self.pending_shaped.insert(Some(new_parent));
+        }
+        for &id in &delta.facet_shaped {
+            self.pending_structure = true;
+            self.pending_shaped.insert(Some(id));
+        }
+        for &leaf in &delta.slots {
+            self.pending_leaves.insert(leaf);
+        }
+    }
+
     /// Whether a take would find anything pending from ops.
     pub(crate) fn has_pending(&self) -> bool {
         self.pending_structure || !self.pending_leaves.is_empty()
@@ -442,6 +474,11 @@ impl Revisions {
     pub(crate) fn note_structure(&mut self) {
         self.pending_structure = true;
         self.pending_everything = true;
+    }
+
+    pub(crate) fn note_shaped(&mut self, id: NodeId) {
+        self.pending_structure = true;
+        self.pending_shaped.insert(Some(id));
     }
 
     /// Classify everything pending plus `touched` from the reactive graph,
@@ -475,6 +512,12 @@ impl Revisions {
                 }
                 GeometryEffect::Local(n) => {
                     out.local.insert(n);
+                }
+                GeometryEffect::Structural(n) => {
+                    out.structure = true;
+                    if !self.pending_everything {
+                        out.shaped.insert(Some(n));
+                    }
                 }
                 GeometryEffect::None => {}
             }

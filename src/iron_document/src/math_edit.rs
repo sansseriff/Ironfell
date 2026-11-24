@@ -108,8 +108,7 @@ impl Builder<'_> {
             self.doc
                 .children(parent)
                 .iter()
-                .filter_map(|&id| self.doc.live(id))
-                .map(|node| &node.order)
+                .filter_map(|&id| self.doc.is_live(id).then(|| self.doc.order_of(id)).flatten())
                 .max()
                 .map_or_else(OrderKey::first, OrderKey::after)
         });

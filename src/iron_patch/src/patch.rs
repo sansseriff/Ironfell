@@ -1,13 +1,12 @@
 //! Patches, the base they apply over, and strength (laws 4 and 5).
 
-use crate::axis::{AxisId, Kind, ScopeId, Space, ValueId};
+use crate::axis::{AxisId, Kind, Space};
 use crate::region::{Bound, Product, Sel};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 pub type Node = u32;
 pub type Field = u16;
-pub type FacetId = u16;
 
 /// Whether a node exists at a point: a field like any other, resolved
 /// before the rest (structure in patches, note §11.1). A node exists where
@@ -17,22 +16,6 @@ pub const PRESENT: Field = 0;
 /// its parent is shown. A stronger patch can set it back to `0`, but cannot
 /// show what a hidden ancestor hides.
 pub const HIDDEN: Field = 1;
-/// Base field id for optional facet-presence entries (patches.md §5.2, P21).
-pub const FACET_PRESENT_BASE: Field = 0x8000;
-
-/// The structural field controlling whether optional facet `facet` is present
-/// on a node at a point (P21).
-pub const fn facet_present(facet: FacetId) -> Field {
-    FACET_PRESENT_BASE | facet
-}
-
-/// Whether `field` is an optional facet-presence field (P21).
-pub const fn is_facet_present(field: Field) -> bool {
-    field >= FACET_PRESENT_BASE
-}
-
-/// Outermost layer: session patches (scratch and live gesture previews; P8).
-pub const SESSION_LAYER: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Key {
@@ -63,10 +46,6 @@ pub struct Patch {
     /// A recorded move's patch, or an imported definition's: never written
     /// in place (note §2.4, §11.2).
     pub writable: bool,
-    /// Scope where this patch's path pattern is anchored (`None`: document
-    /// root, unanchored; `Some(def)`: matches strictly inside placements of
-    /// `def`, patches.md §4, P18).
-    pub anchor: Option<ScopeId>,
 }
 
 /// The base: a fixed tree of nodes (a patch adds a node by making it
@@ -75,14 +54,6 @@ pub struct Patch {
 pub struct Doc {
     pub parent: BTreeMap<Node, Option<Node>>,
     pub base: BTreeMap<Key, i64>,
-    /// Optional facet ownership for fields that live on optional facets (P21):
-    /// a field mapped to `facet` applies only where `facet_present(facet)` is 1.
-    pub field_facet: BTreeMap<Field, FacetId>,
-    /// Nested placement relationship (P18): `(path_axis, placed_view_val)` is
-    /// placed by `(use_node, enclosing_view_val)`. `use_node`'s presence is
-    /// evaluated at `enclosing_view_val`, never `placed_view_val` (no
-    /// self-reference), and if absent the entire placed view is absent.
-    pub enclosing_use: BTreeMap<(AxisId, ValueId), (Node, ValueId)>,
 }
 
 /// How strength is decided where two patches set one field at one point.

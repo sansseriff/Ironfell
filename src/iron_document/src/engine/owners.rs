@@ -1,25 +1,26 @@
-//! Owners (engine.md §3.1, §5; EN-5b): each authored entity, `use`, and drawn
-//! repeat or conditional owns the derived nodes whose path starts with it.
+//! Owners (reactive-engine.md §5.3, §7.2; handoff §4.4, stage 2): each
+//! authored entity, `use` and drawn repeat or conditional owns the derived
+//! nodes whose path starts with it. An op expands again only the owners it
+//! can change, where the old engine re-expanded the whole document.
 //!
-//! Static `Owners::made` and the hand-written op classifier `Owners::affected`
-//! are gone (`EN-5b`): each owner's expansion records its structural and patch
-//! [`Key`] reads (including its compiled templates' recorded reads), and writes
-//! wake only the owners whose recorded reads were touched (plus newly created
-//! owners in touched roots).
+//! What an owner holds is read from the document (its derived
+//! descendants), so a refused transaction, rolled back by the journal,
+//! leaves nothing here to undo but what `Delta` would have applied. The
+//! index from definitions to owners only grows: an owner it names that no
+//! longer reads the definition is expanded again for nothing.
 
-use crate::engine::template::TemplateCache;
+use crate::engine::template::{Env, Pieces, Template, TemplateCache};
+use std::sync::Arc;
 use crate::expand::{self, Items, Problem};
 use crate::facet::FacetKind;
 use crate::op::Op;
-use crate::registry::TypeId;
-use crate::structure::Key;
 use crate::tree::Docs;
-use crate::{NodeId, Tree, Version};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use crate::{NodeId, RelKind, Tree, Version};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Which owners to expand again.
 pub(crate) enum Which {
-    /// Every owner: on load, or when budget cuts require whole-document order.
+    /// Every owner: on load, and on what this layer does not map (a reparent, a definition made or removed).
     All,
     Some(BTreeSet<NodeId>),
 }
@@ -30,27 +31,36 @@ pub(crate) struct Owners {
     problems: BTreeMap<NodeId, Vec<Problem>>,
     /// How many derived nodes each owner wanted: the budget's share.
     counts: crate::work::Counted<BTreeMap<NodeId, usize>, { crate::work::OWNERS_COUNTS }>,
-    /// The sum of `counts`, kept as they change.
+    /// The sum of `counts`, kept as they change (DS-3b: no sum over every
+    /// owner per expansion).
     held: usize,
-    /// Owner -> owners whose pictures figure its derived entities.
+    /// Definition -> owners whose expansion read it. Only grows.
+    by_def: crate::work::Counted<BTreeMap<NodeId, BTreeSet<NodeId>>, { crate::work::OWNERS_BY_DEF }>,
+    /// Owner -> owners whose pictures figure its derived entities. Only
+    /// grows.
     readers: BTreeMap<NodeId, BTreeSet<NodeId>>,
-    /// Compiled templates invalidated by recorded reads (`EN-5a`).
+    /// The templates compiled so far. Each knows whether it is current, so
+    /// a refused transaction leaves none to put back.
     templates: TemplateCache,
-    /// Recorded structural & patch reads per top-level owner (`EN-5b`).
-    owner_deps: HashMap<NodeId, Vec<Key>>,
-    /// Reverse index: `Key` -> top-level owners that read it (`EN-5b`).
-    /// `HashSet` avoids O(N²) linear removal when re-expanding many instances.
-    owner_by_key: HashMap<Key, HashSet<NodeId>>,
-    /// Top-level owners currently tracked by `owner_deps`.
-    known_owners: BTreeSet<NodeId>,
-    /// Top-level roots already scanned for owners.
-    known_roots: BTreeSet<NodeId>,
-    /// Owners dirtied by `note_touched` since last `take_dirty`.
-    dirty_owners: BTreeSet<NodeId>,
-    /// Roots whose owner set (`In(_, entity|use)`, `With(_, Repeat|When)`) changed.
-    dirty_roots: BTreeSet<NodeId>,
-    /// Whether `Key::Roots` was touched (new top-level root may hold owners).
-    roots_dirty: bool,
+    /// The copies a constraint cluster holds: expansion leaves the leaves
+    /// the solver writes on them as they are (`solve::writes`).
+    solved: BTreeSet<NodeId>,
+    /// The solver leaves of copies the current transaction's own ops set:
+    /// always written, whatever was wanted before (`Owners::edit`).
+    edited: BTreeSet<crate::Leaf>,
+    /// What each piece's last accepted expansion copied: a copy it records
+    /// as current is kept as it is (2c stage 3, step 2). An entry outlives
+    /// its owner; a copy is kept only when it is there.
+    made: Made,
+}
+
+#[derive(Clone, Default)]
+struct Made(Pieces);
+
+impl std::fmt::Debug for Made {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Made({} pieces)", self.0.len())
+    }
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -59,30 +69,28 @@ pub(crate) struct Delta {
     all: bool,
     problems: BTreeMap<NodeId, Vec<Problem>>,
     counts: BTreeMap<NodeId, usize>,
+    defs: Vec<(NodeId, NodeId)>,
     reads: Vec<(NodeId, NodeId)>,
-    deps: BTreeMap<NodeId, Vec<Key>>,
-    extra_deps: BTreeMap<NodeId, Vec<Key>>,
-    roots: Vec<NodeId>,
+    pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
 }
 
 impl Delta {
     fn add(&mut self, d: expand::OwnersExpanded) {
         self.problems.extend(d.problems);
         self.counts.extend(d.counts);
+        self.defs.extend(d.defs);
         self.reads.extend(d.reads);
-        self.deps.extend(d.deps);
+        self.pieces.extend(d.pieces);
     }
 
+    /// Fold in a later delta: its owners' entries replace these.
     fn add_delta(&mut self, d: Delta) {
         self.all |= d.all;
         self.problems.extend(d.problems);
         self.counts.extend(d.counts);
+        self.defs.extend(d.defs);
         self.reads.extend(d.reads);
-        self.deps.extend(d.deps);
-        for (o, ks) in d.extra_deps {
-            self.extra_deps.entry(o).or_default().extend(ks);
-        }
-        self.roots.extend(d.roots);
+        self.pieces.extend(d.pieces);
     }
 
     fn has_budget_problem(&self) -> bool {
@@ -90,158 +98,36 @@ impl Delta {
     }
 }
 
-/// Saved pre-transaction dirty queue so a rollback drops only uncommitted dirty
-/// keys while preserving previously committed dirty work (`EN-5b`).
-#[derive(Clone, Debug, Default)]
-pub(crate) struct DirtySnapshot {
-    dirty_owners: BTreeSet<NodeId>,
-    dirty_roots: BTreeSet<NodeId>,
-    roots_dirty: bool,
-}
-
 impl Owners {
-    pub(crate) fn snapshot_dirty(&self) -> DirtySnapshot {
-        DirtySnapshot {
-            dirty_owners: self.dirty_owners.clone(),
-            dirty_roots: self.dirty_roots.clone(),
-            roots_dirty: self.roots_dirty,
-        }
-    }
-
-    /// Notify both `TemplateCache` and recorded-read owner index of touched
-    /// structural/patch keys (`EN-5a`, `EN-5b`).
-    pub(crate) fn note_touched(&mut self, keys: &[Key]) {
-        if keys.is_empty() {
-            return;
-        }
-        self.templates.note_touched(keys);
-        let entity_ty = TypeId::lookup("entity");
-        let use_ty = TypeId::lookup("use");
-        for k in keys {
-            if let Some(owners) = self.owner_by_key.get(k) {
-                self.dirty_owners.extend(owners.iter().copied());
-            }
-            match *k {
-                Key::Roots => {
-                    self.roots_dirty = true;
-                }
-                Key::In(root, ty) if Some(ty) == entity_ty || Some(ty) == use_ty => {
-                    self.dirty_roots.insert(root);
-                }
-                Key::With(root, FacetKind::Repeat | FacetKind::When) => {
-                    self.dirty_roots.insert(root);
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Restore pre-transaction dirty state and clear templates after a rollback
-    /// (`EN-5a`, `EN-5b`). Committed `owner_deps`/`known_owners` stay intact.
-    pub(crate) fn restore_on_rollback(&mut self, snap: DirtySnapshot) {
-        self.templates.clear();
-        self.dirty_owners = snap.dirty_owners;
-        self.dirty_roots = snap.dirty_roots;
-        self.roots_dirty = snap.roots_dirty;
-    }
-
-    /// Drain touched keys from `docs` and return the dirty owners that must
-    /// re-expand (`EN-5b`: replaces hand-written `Owners::affected`).
-    pub(crate) fn take_dirty(&mut self, docs: &mut Docs) -> Option<Which> {
-        let tkeys = docs.drain_template_touched();
-        self.note_touched(&tkeys);
-        let mut todo = std::mem::take(&mut self.dirty_owners);
-        let doc = Tree::of(docs);
-        if self.roots_dirty {
-            self.roots_dirty = false;
-            for &r in doc.roots().iter() {
-                if !self.known_roots.contains(&r) {
-                    self.dirty_roots.insert(r);
-                }
-            }
-        }
-        if !self.dirty_roots.is_empty() {
-            let entity_ty = TypeId::lookup("entity").expect("registered");
-            let use_ty = TypeId::lookup("use").expect("registered");
-            for root in std::mem::take(&mut self.dirty_roots) {
-                for id in doc
-                    .nodes_of_type_in(root, entity_ty)
-                    .into_iter()
-                    .chain(doc.nodes_of_type_in(root, use_ty))
-                    .chain(doc.nodes_with_in(root, FacetKind::Repeat))
-                    .chain(doc.nodes_with_in(root, FacetKind::When))
-                {
-                    if !id.is_expanded() && !id.is_session() && !self.known_owners.contains(&id) {
-                        todo.insert(id);
-                    }
-                }
-            }
-        }
-        for (o, ps) in &self.problems {
-            if ps.iter().any(|p| matches!(p.kind, "expansion" | "budget")) {
-                todo.insert(*o);
-            }
-        }
-        todo.retain(|&o| !o.is_expanded() && !o.is_session());
-        (!todo.is_empty()).then_some(Which::Some(todo))
-    }
-
-    /// Expand `which` again in `docs`: the ops applied, and what to record.
+    /// Expand `which` again in `doc`: the ops applied, and what to record.
     pub(crate) fn expand(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, which: Which) -> (Vec<Op>, Delta) {
-        let tkeys = docs.drain_template_touched();
-        self.note_touched(&tkeys);
         let Which::Some(mut todo) = which else { return self.expand_all(docs, stamp, counts) };
+        // Owners whose last expansion failed in part are tried again: what
+        // failed may depend on something outside them that has changed.
         todo.extend(self.problems.iter().filter(|(_, ps)| ps.iter().any(|p| matches!(p.kind, "expansion" | "budget"))).map(|(o, _)| *o));
-        let mut delta = Delta {
-            all: false,
-            problems: BTreeMap::new(),
-            counts: BTreeMap::new(),
-            reads: Vec::new(),
-            deps: BTreeMap::new(),
-            extra_deps: BTreeMap::new(),
-            roots: Tree::of(docs).roots().to_vec(),
-        };
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         let mut ops = Vec::new();
         let mut done: BTreeSet<NodeId> = BTreeSet::new();
-        // Expand `entity` owners before `use`/repeat owners in the same wave so
-        // a picture figuring a derived entity updated in the same transaction
-        // always reads the freshly derived inner entity (Sol #3).
-        let mut pending_non_entities: BTreeSet<NodeId> = BTreeSet::new();
-        let entity_ty = TypeId::lookup("entity");
-        {
-            let doc = Tree::of(docs);
-            let mut entities = BTreeSet::new();
-            for &o in &todo {
-                if doc.live(o).is_some_and(|n| Some(n.ty) == entity_ty) {
-                    entities.insert(o);
-                } else {
-                    pending_non_entities.insert(o);
-                }
-            }
-            if !entities.is_empty() && !pending_non_entities.is_empty() {
-                todo = entities;
-            } else {
-                pending_non_entities.clear();
-            }
-        }
+        // Each wave expands the owners whose pictures read what the last one
+        // changed.
         while !todo.is_empty() {
+            // What the owners not in this wave hold, as this call has
+            // left them so far.
             let mut held = self.held - todo.iter().filter_map(|o| self.counts.get(o)).sum::<usize>();
             for (o, &n) in delta.counts.iter().filter(|(o, _)| !todo.contains(o)) {
                 held = (held + n).saturating_sub(self.counts.get(o).copied().unwrap_or(0));
             }
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
-            // Advance `template_cursor` past expansion's own derived `copies` writes
-            // so they do not feed back into `dirty_owners` on the next transaction (M2).
-            let _ = docs.drain_template_touched();
+            let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.made.0, &troubled);
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
             let reading = |o: &NodeId| self.readers.get(o).into_iter().flatten().copied().chain(delta.reads.iter().filter(move |(r, _)| r == o).map(|(_, w)| *w)).collect::<Vec<_>>();
-            let mut next: BTreeSet<NodeId> = done.iter().flat_map(reading).filter(|o| !done.contains(o)).collect();
-            next.extend(std::mem::take(&mut pending_non_entities).into_iter().filter(|o| !done.contains(o)));
-            todo = next;
+            todo = done.iter().flat_map(reading).filter(|o| !done.contains(o)).collect();
         }
+        // Past the budget the cut must not depend on edit history: expand
+        // everything, in id order.
         if delta.has_budget_problem() || self.problems.values().flatten().any(|p| p.kind == "budget") {
             let (more, all) = self.expand_all(docs, stamp, counts);
             ops.extend(more);
@@ -250,13 +136,21 @@ impl Owners {
         (ops, delta)
     }
 
-    /// Reconcile only the items of `repeats` for settle rounds.
+    /// Reconcile only the items of `repeats`, the repeats a settle round
+    /// found with other items (reactive-engine handoff §4.4, stage 3b), or
+    /// `None`, with nothing applied, when that cannot be done alone and
+    /// the caller expands their owners whole: an owner with problems
+    /// recorded, an owner another owner's pictures read, or what the items
+    /// want meets the budget or a nesting limit. An op that fails to apply
+    /// is repaired by expanding its owner whole, in the same call.
     pub(crate) fn expand_items(&mut self, docs: &mut Docs, stamp: Version, counts: &Items, repeats: &BTreeSet<NodeId>) -> Option<(Vec<Op>, Delta)> {
-        let tkeys = docs.drain_template_touched();
-        self.note_touched(&tkeys);
+        // The whole-document rules (`expand`): any owner's failed or cut
+        // expansion is tried again on every update, and past the budget
+        // everything expands in id order. Neither is this path's.
         if self.problems.values().flatten().any(|p| matches!(p.kind, "expansion" | "budget")) {
             return None;
         }
+        // A repeat inside another one that changed is expanded with it.
         let outer: BTreeSet<NodeId> = repeats.iter().copied().filter(|&r| !repeats.iter().any(|&o| o != r && r.item_of(o).is_some())).collect();
         let mut by_owner: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
         for &r in &outer {
@@ -265,37 +159,36 @@ impl Owners {
         if by_owner.keys().any(|o| self.problems.contains_key(o) || self.readers.get(o).is_some_and(|rs| !rs.is_empty())) {
             return None;
         }
+        // Each owner's whole count must be known, to keep the budget's share.
         if by_owner.keys().any(|o| !self.counts.contains_key(o)) {
             return None;
         }
+        // What every owner holds, kept as each one's items change, so two
+        // owners never spend the same room.
         let mut held: usize = self.held;
-        let mut delta = Delta {
-            all: false,
-            problems: BTreeMap::new(),
-            counts: BTreeMap::new(),
-            reads: Vec::new(),
-            deps: BTreeMap::new(),
-            extra_deps: BTreeMap::new(),
-            roots: Vec::new(),
-        };
+        let mut delta = Delta { all: false, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         let mut ops = Vec::new();
         let mut repair: BTreeSet<NodeId> = BTreeSet::new();
         for (owner, rs) in &by_owner {
-            let room = expand::NODE_BUDGET.saturating_sub(held) + self.held_under(Tree::of(docs), rs);
-            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room) else {
+            let room = expand::NODE_BUDGET.saturating_sub(held);
+            // Wanting is tried before anything applies, so a `None` from
+            // the first owner leaves the document as it was. A later
+            // owner's `None` is repaired by expanding it whole.
+            let room = room + self.held_under(Tree::of(docs), rs);
+            let Some((mut done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, (&self.solved, &self.edited), &self.made.0) else {
                 if ops.is_empty() {
                     return None;
                 }
                 repair.insert(*owner);
                 continue;
             };
-            let _ = docs.drain_template_touched();
             ops.extend(done.ops);
             let whole = (self.counts[owner] + done.wanted).saturating_sub(done.held);
             held = (held + whole).saturating_sub(self.counts[owner]);
             delta.counts.insert(*owner, whole);
+            delta.defs.extend(done.defs.iter().map(|&d| (d, *owner)));
             delta.reads.extend(done.reads.iter().map(|&r| (r, *owner)));
-            delta.extra_deps.entry(*owner).or_default().extend(done.extra_deps);
+            delta.pieces.append(&mut done.pieces);
             if !problems.is_empty() {
                 repair.insert(*owner);
             }
@@ -308,72 +201,20 @@ impl Owners {
         Some((ops, delta))
     }
 
+    /// How many derived nodes the items of `repeats` hold now.
     fn held_under(&self, tree: Tree<'_>, repeats: &BTreeSet<NodeId>) -> usize {
         repeats.iter().map(|&r| tree.descendants(r).into_iter().filter(|d| d.item_of(r).is_some()).count()).sum()
     }
 
+    /// Every owner, in id order.
     fn expand_all(&mut self, docs: &mut Docs, stamp: Version, counts: &Items) -> (Vec<Op>, Delta) {
-        let tree = Tree::of(docs);
-        let owners = expand::top_owners(tree);
-        let roots = tree.roots().to_vec();
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET);
-        let _ = docs.drain_template_touched();
+        let owners = expand::top_owners(Tree::of(docs));
+        let troubled: BTreeSet<NodeId> = self.problems.keys().copied().collect();
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, (&self.solved, &self.edited), &self.made.0, &troubled);
         let ops = std::mem::take(&mut done.ops);
-        let mut delta = Delta {
-            all: true,
-            problems: BTreeMap::new(),
-            counts: BTreeMap::new(),
-            reads: Vec::new(),
-            deps: BTreeMap::new(),
-            extra_deps: BTreeMap::new(),
-            roots,
-        };
+        let mut delta = Delta { all: true, problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
         delta.add(done);
         (ops, delta)
-    }
-
-    fn set_owner_deps(&mut self, owner: NodeId, raw: Vec<Key>) {
-        if let Some(old) = self.owner_deps.remove(&owner) {
-            for k in old {
-                if let Some(set) = self.owner_by_key.get_mut(&k) {
-                    set.remove(&owner);
-                    if set.is_empty() {
-                        self.owner_by_key.remove(&k);
-                    }
-                }
-            }
-        }
-        if raw.is_empty() {
-            self.known_owners.remove(&owner);
-            return;
-        }
-        let mut seen = HashSet::with_capacity(raw.len());
-        let mut uniq = Vec::with_capacity(raw.len());
-        for k in raw {
-            if seen.insert(k) {
-                uniq.push(k);
-            }
-        }
-        for &k in &uniq {
-            self.owner_by_key.entry(k).or_default().insert(owner);
-        }
-        self.owner_deps.insert(owner, uniq);
-        self.known_owners.insert(owner);
-    }
-
-    fn append_owner_deps(&mut self, owner: NodeId, extra: Vec<Key>) {
-        if extra.is_empty() {
-            return;
-        }
-        let list = self.owner_deps.entry(owner).or_default();
-        let mut seen: HashSet<Key> = list.iter().copied().collect();
-        for k in extra {
-            if seen.insert(k) {
-                list.push(k);
-                self.owner_by_key.entry(k).or_default().insert(owner);
-            }
-        }
-        self.known_owners.insert(owner);
     }
 
     /// Record what an accepted expansion found.
@@ -382,23 +223,6 @@ impl Owners {
             self.problems.clear();
             self.counts.clear();
             self.held = 0;
-            self.readers.clear();
-            self.owner_deps.clear();
-            self.owner_by_key.clear();
-            self.known_owners.clear();
-            self.known_roots.clear();
-        } else if !d.deps.is_empty() {
-            // Replace cross-owner read edges for every re-expanded owner so stale
-            // edges never leak after a `use` stops figuring another owner's entity.
-            self.readers.retain(|_, ws| {
-                ws.retain(|w| !d.deps.contains_key(w));
-                !ws.is_empty()
-            });
-        }
-        if d.all {
-            self.known_roots.extend(d.roots);
-        } else if !d.roots.is_empty() {
-            self.known_roots = d.roots.into_iter().collect();
         }
         for (o, p) in d.problems {
             if p.is_empty() {
@@ -413,24 +237,181 @@ impl Owners {
         }
         #[cfg(feature = "differential")]
         assert_eq!(self.held, self.counts.values().sum::<usize>());
+        for (def, o) in d.defs {
+            self.by_def.entry(def).or_default().insert(o);
+        }
         for (read, o) in d.reads {
             self.readers.entry(read).or_default().insert(o);
         }
-        for (o, raw) in d.deps {
-            self.set_owner_deps(o, raw);
-        }
-        for (o, extra) in d.extra_deps {
-            self.append_owner_deps(o, extra);
+        // A piece of an owner left with problems is not recorded: what it
+        // wanted may not be what its copies hold (a failed op).
+        for (piece, t, env) in d.pieces {
+            if piece.path().first().is_some_and(|o| self.problems.contains_key(o)) {
+                continue;
+            }
+            self.made.0.insert(piece, (t, env));
         }
     }
 
+    /// The templates compiled so far.
+    #[cfg(feature = "differential")]
     pub(crate) fn templates(&self) -> &TemplateCache {
         &self.templates
     }
 
+    /// What each of `leaves`, leaves of copies, is as its owner's expansion
+    /// wants it now (`expand::wanted_slots`).
+    pub(crate) fn wanted_slots(&mut self, doc: Tree<'_>, counts: &Items, leaves: &[crate::Leaf]) -> Vec<(crate::Leaf, crate::Slot)> {
+        expand::wanted_slots(doc, &mut self.templates, counts, leaves)
+    }
+
+    /// The copies a constraint cluster holds now (`solve::Clusters::copies`).
+    pub(crate) fn hold(&mut self, solved: BTreeSet<NodeId>) {
+        self.solved = solved;
+    }
+
+    /// The solver leaves of copies the transaction being applied sets
+    /// itself: an edit of a held copy reaches it even when what is wanted
+    /// for the leaf comes out as before (its template's value, or the
+    /// override it already had).
+    pub(crate) fn edit(&mut self, leaves: BTreeSet<crate::Leaf>) {
+        self.edited = leaves;
+    }
+
+    /// The copies a constraint cluster held when last told.
+    pub(crate) fn held(&self) -> &BTreeSet<NodeId> {
+        &self.solved
+    }
+
+    /// Every owner's problems, in the order `expand::sort_problems` gives.
     pub(crate) fn problems(&self) -> Vec<Problem> {
         let mut out: Vec<Problem> = self.problems.values().flatten().cloned().collect();
         expand::sort_problems(&mut out);
         out
+    }
+
+    /// Which owners a transaction's applied `ops` can change (the spec's
+    /// §7.2, and what `expand::wanted` covers that the table does not), or
+    /// `None` when none. `inverse` is everything the ops took or replaced,
+    /// derived nodes included.
+    pub(crate) fn affected(&self, doc: Tree<'_>, ops: &[Op], inverse: &[Op]) -> Option<Which> {
+        let mut out: BTreeSet<NodeId> = BTreeSet::new();
+        let owner_kind = |id: NodeId| -> bool {
+            doc.node(id).is_some_and(|n| matches!(n.ty.name(), "entity" | "use") || (n.ty.name() == "group" && expand::is_item_owner(doc, id)))
+        };
+        // The node itself and every enclosing owner (an override's, a
+        // repeat template child's), and the owners of the definition it is in.
+        let touch = |id: NodeId, out: &mut BTreeSet<NodeId>| -> bool {
+            if id.is_expanded() || id.is_session() {
+                return false;
+            }
+            let mut at = Some(id);
+            while let Some(n) = at {
+                if owner_kind(n) || n == id {
+                    out.insert(n);
+                }
+                at = doc.node(n).and_then(|x| x.parent);
+            }
+            // A definition anywhere, in a library or at the root.
+            match expand::definition_of(doc, id) {
+                Some(def) => out.extend(self.by_def.get(&def).into_iter().flatten().copied()),
+                // The library itself, or something in it outside any
+                // definition.
+                None if expand::in_library(doc, id) => return true,
+                None => {}
+            }
+            false
+        };
+        // An entity's pictures follow it: each picture, and the owners
+        // around it (a picture in a repeat's template is copied into its
+        // items). A derived picture is its top owner's.
+        let pictures = |entity: NodeId, out: &mut BTreeSet<NodeId>| -> bool {
+            let mut all = false;
+            for u in doc.relations_to(entity).filter(|r| r.rel == RelKind::Figures).map(|r| r.from).collect::<Vec<_>>() {
+                if u.is_expanded() {
+                    out.extend(u.path().first().copied());
+                } else {
+                    all |= touch(u, out);
+                }
+            }
+            all
+        };
+        let is_structure_type = |id: NodeId| doc.node(id).is_some_and(|n| matches!(n.ty.name(), "definition" | "library"));
+        let mut all = false;
+        for op in ops {
+            match op {
+                Op::Create { id, .. } | Op::Delete { id } => {
+                    all |= is_structure_type(*id);
+                    all |= touch(*id, &mut out);
+                    all |= pictures(*id, &mut out);
+                }
+                Op::AddFacet { id, facet } => {
+                    all |= expand::owns_items(facet.kind()) || is_structure_type(*id);
+                    all |= touch(*id, &mut out);
+                    all |= pictures(*id, &mut out);
+                }
+                Op::RemoveFacet { id, kind } => {
+                    all |= expand::owns_items(*kind) || is_structure_type(*id);
+                    all |= touch(*id, &mut out);
+                    all |= pictures(*id, &mut out);
+                }
+                Op::Set { id, path, .. } => {
+                    let shapes = matches!(path.facet, FacetKind::Instance | FacetKind::Use | FacetKind::Override) || expand::in_library(doc, *id) || expand::in_repeat_template(doc, *id);
+                    if shapes {
+                        all |= touch(*id, &mut out);
+                        if path.facet == FacetKind::Instance {
+                            all |= pictures(*id, &mut out);
+                        }
+                    }
+                }
+                Op::Reorder { id, .. } => {
+                    all |= touch(*id, &mut out);
+                }
+                // Where a subtree moves can change which owners are in a
+                // repeat's template, a definition or the library: the owners
+                // around its new place (here) and its old one (the inverse
+                // move, below), and every owner and picture inside it, which
+                // may now be nested or top-level (DS-3b: not every owner).
+                Op::Reparent { id, .. } => {
+                    for n in std::iter::once(*id).chain(doc.descendants(*id)) {
+                        all |= is_structure_type(n);
+                        if owner_kind(n) && !n.is_expanded() {
+                            out.insert(n);
+                        }
+                        all |= pictures(n, &mut out);
+                    }
+                    all |= touch(*id, &mut out);
+                }
+                Op::Link { rel } => {
+                    all |= touch(rel.from, &mut out);
+                }
+                Op::Unlink { .. } => {}
+            }
+        }
+        // What the ops took with them: a deleted subtree's nodes (each an
+        // owner, maybe), and the relations that went (an unlinked picture).
+        for op in inverse {
+            match op {
+                Op::Create { id, .. } if !id.is_expanded() => {
+                    all |= touch(*id, &mut out);
+                    all |= pictures(*id, &mut out);
+                }
+                Op::Link { rel } if !rel.id.is_expanded() => {
+                    all |= touch(rel.from, &mut out);
+                }
+                // A derived relation unlinked: its owner derives it again.
+                Op::Link { rel } => out.extend(rel.id.root()),
+                // A move's old place.
+                Op::Reparent { parent: Some(p), .. } => {
+                    all |= touch(*p, &mut out);
+                }
+                _ => {}
+            }
+        }
+        if all {
+            return Some(Which::All);
+        }
+        out.retain(|&o| !o.is_expanded() && !o.is_session());
+        (!out.is_empty()).then_some(Which::Some(out))
     }
 }

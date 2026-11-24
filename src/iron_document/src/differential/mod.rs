@@ -470,22 +470,6 @@ impl Store {
     pub fn place_standard(&mut self, key: &str, composition: NodeId, at: [f64; 2], actor: crate::Actor) -> Result<NodeId, String> {
         self.call("place_standard", |s| s.place_standard(key, composition, at, actor))
     }
-
-    pub fn set_point(&mut self, point: crate::patch::Point) {
-        self.call("set_point", |s| s.set_point(point.clone()))
-    }
-
-    pub fn set_session_patch(&mut self, patch: crate::patch::Patch) -> Result<(), String> {
-        self.call("set_session_patch", |s| s.set_session_patch(patch.clone()))
-    }
-
-    pub fn remove_session_patch(&mut self, id: crate::patch::PatchId) {
-        self.call("remove_session_patch", |s| s.remove_session_patch(id))
-    }
-
-    pub fn clear_session_patches(&mut self) {
-        self.call("clear_session_patches", |s| s.clear_session_patches())
-    }
 }
 
 /// Layout and the bounds it measures read the subject, as every `&self` call

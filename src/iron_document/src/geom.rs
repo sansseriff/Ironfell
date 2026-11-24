@@ -426,46 +426,6 @@ impl Revisions {
                     self.pending_structure = true;
                     self.pending_shaped.insert(Some(*id));
                 }
-                Op::Solve { leaf, .. } => {
-                    self.pending_leaves.insert(*leaf);
-                }
-                Op::Patch(p) => {
-                    use crate::patch::{PatchKey, PatchOp};
-                    match p {
-                        PatchOp::SetEntry { target, .. } => match target.key {
-                            PatchKey::Leaf(path) => {
-                                self.pending_leaves.insert(Leaf { node: target.node, path });
-                            }
-                            PatchKey::Present | PatchKey::Hidden | PatchKey::FacetPresent(_) => {
-                                self.pending_structure = true;
-                                self.pending_shaped.insert(Some(target.node));
-                            }
-                            PatchKey::Notation => {}
-                        },
-                        PatchOp::Add { patch } => {
-                            for t in patch.entries.keys() {
-                                match t.key {
-                                    PatchKey::Leaf(path) => {
-                                        self.pending_leaves.insert(Leaf { node: t.node, path });
-                                    }
-                                    PatchKey::Present | PatchKey::Hidden | PatchKey::FacetPresent(_) => {
-                                        self.pending_structure = true;
-                                        self.pending_shaped.insert(Some(t.node));
-                                    }
-                                    PatchKey::Notation => {}
-                                }
-                            }
-                        }
-                        _ => {
-                            self.pending_structure = true;
-                            self.pending_everything = true;
-                        }
-                    }
-                }
-                Op::Axis(_) => {
-                    self.pending_structure = true;
-                    self.pending_everything = true;
-                }
                 _ => {}
             }
         }

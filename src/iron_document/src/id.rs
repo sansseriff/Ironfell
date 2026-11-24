@@ -50,9 +50,6 @@ mod paths {
     #[derive(Default)]
     struct Registry {
         paths: Vec<Vec<u64>>,
-        /// Parallel to `paths`: `(owner_raw, local_raw, root_raw)` so
-        /// `expanded_parts` and `expanded_root` do zero heap allocations.
-        meta: Vec<(u64, u64, u64)>,
         slots: HashMap<Vec<u64>, u64>,
     }
 
@@ -61,36 +58,19 @@ mod paths {
         R.get_or_init(Default::default)
     }
 
-    fn intern_locked(r: &mut Registry, path: &[u64]) -> u64 {
-        if let Some(&slot) = r.slots.get(path) {
-            return slot;
-        }
-        let meta = match path.split_last() {
-            Some((&local, rest)) if !rest.is_empty() => {
-                let owner = if rest.len() == 1 {
-                    rest[0]
-                } else {
-                    super::EXPANDED | intern_locked(r, rest)
-                };
-                (owner, local, rest[0])
-            }
-            Some((&only, _)) => (0, only, only),
-            None => (0, 0, 0),
-        };
-        let slot = r.paths.len() as u64;
-        r.paths.push(path.to_vec());
-        r.meta.push(meta);
-        r.slots.insert(path.to_vec(), slot);
-        slot
-    }
-
     /// The slot for `path`, giving it one the first time it is seen.
     pub fn intern(path: &[u64]) -> u64 {
         if let Some(&slot) = registry().read().expect("path registry").slots.get(path) {
             return slot;
         }
         let mut r = registry().write().expect("path registry");
-        intern_locked(&mut r, path)
+        if let Some(&slot) = r.slots.get(path) {
+            return slot;
+        }
+        let slot = r.paths.len() as u64;
+        r.paths.push(path.to_vec());
+        r.slots.insert(path.to_vec(), slot);
+        slot
     }
 
     /// How many paths are interned, and their steps in total.
@@ -102,13 +82,6 @@ mod paths {
     /// The path a slot holds.
     pub fn path(slot: u64) -> Option<Vec<u64>> {
         registry().read().expect("path registry").paths.get(slot as usize).cloned()
-    }
-
-    /// Zero-allocation lookup of `(owner_raw, local_raw, root_raw)` for `slot`.
-    pub fn parts(slot: u64) -> Option<(u64, u64, u64)> {
-        let r = registry().read().expect("path registry");
-        let &(owner, local, root) = r.meta.get(slot as usize)?;
-        (owner != 0).then_some((owner, local, root))
     }
 }
 
@@ -346,7 +319,7 @@ macro_rules! id_type {
                         let parts: Vec<String> = path.iter().map(|&n| step(n)).collect();
                         write!(f, "{}{}", $prefix, parts.join("/"))
                     }
-                    None => write!(f, "{}{}", $prefix, step(self.0)),
+                    None => write!(f, "{}{}", $prefix, render(self.0)),
                 }
             }
         }
@@ -368,7 +341,7 @@ macro_rules! id_type {
                         .filter(|p| p.len() >= 2 && p.iter().all(|&n| n & EXPANDED == 0 && n < SESSION_BASE))
                         .map(|p| expanded_raw(&p))
                 } else {
-                    parse_step(body)
+                    parse_plain(body)
                 };
                 raw.map(Self).ok_or_else(|| IdParseError(s.to_owned()))
             }
@@ -413,28 +386,18 @@ impl NodeId {
         self.0 & EXPANDED != 0
     }
 
-    /// Whether this standalone id is a repeat item-key step (`~key`).
-    pub fn is_item_step(self) -> bool {
-        is_item_step(self.0)
-    }
-
     /// An expanded node's instance (the authored one, or the derived inner
     /// instance it belongs to) and the definition node it copies.
     pub fn expanded_parts(self) -> Option<(NodeId, NodeId)> {
-        if self.0 & EXPANDED == 0 {
-            return None;
-        }
-        let (owner, local, _) = paths::parts(self.0 & !EXPANDED)?;
-        Some((NodeId(owner), NodeId(local)))
+        let path = expanded_path(self.0)?;
+        let (&local, rest) = path.split_last()?;
+        let owner = if rest.len() == 1 { NodeId(rest[0]) } else { NodeId(expanded_raw(rest)) };
+        Some((owner, NodeId(local)))
     }
 
     /// The authored instance an expanded node ultimately belongs to.
     pub fn expanded_root(self) -> Option<NodeId> {
-        if self.0 & EXPANDED == 0 {
-            return None;
-        }
-        let (_, _, root) = paths::parts(self.0 & !EXPANDED)?;
-        Some(NodeId(root))
+        expanded_path(self.0).and_then(|p| p.first().copied()).map(NodeId)
     }
 
     /// The item of repeat `repeat` with key `key` (letters, digits, `_`,
@@ -601,14 +564,6 @@ mod tests {
         let r = RelationId::from_raw(7);
         assert_eq!(r.to_string(), "r7");
         assert_eq!("r7".parse::<RelationId>().unwrap(), r);
-        // Standalone item step ids render and parse canonically as `#~key` (EN-5b).
-        for k in ["0", "row-1", "item_abc"] {
-            let scope = NodeId::item_scope(NodeId::from_raw(5), k).unwrap();
-            let step_id = *scope.path().last().unwrap();
-            assert!(step_id.is_item_step());
-            assert_eq!(step_id.to_string(), format!("#~{k}"));
-            assert_eq!(format!("#~{k}").parse::<NodeId>().unwrap(), step_id);
-        }
     }
 }
 

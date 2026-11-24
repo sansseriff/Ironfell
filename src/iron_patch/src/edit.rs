@@ -2,7 +2,7 @@
 //! ops that each have an inverse, as `iron_document`'s transactions do.
 
 use crate::axis::Point;
-use crate::patch::{Key, Patch, PatchId, SESSION_LAYER};
+use crate::patch::{Key, Patch, PatchId};
 use crate::region::Product;
 use crate::world::World;
 use std::cmp::Ordering;
@@ -28,13 +28,6 @@ pub enum Op {
     Rank {
         patch: PatchId,
         rank: f64,
-    },
-    /// Set (`Some`) or clear (`None`) an entry in the dedicated system-owned
-    /// solve layer (patches.md P17). Reversible for solver-free undo/redo.
-    Solve {
-        point: Point,
-        key: Key,
-        value: Option<i64>,
     },
 }
 
@@ -85,17 +78,6 @@ impl World {
                 },
                 None => op.clone(),
             },
-            Op::Solve { point, key, value } => {
-                let old = match value {
-                    Some(v) => self.solve.insert((point.clone(), *key), *v),
-                    None => self.solve.remove(&(point.clone(), *key)),
-                };
-                Op::Solve {
-                    point: point.clone(),
-                    key: *key,
-                    value: old,
-                }
-            }
         }
     }
 
@@ -293,34 +275,12 @@ pub fn drag(
     if !w.present(point, key.node) {
         return Err("nothing to drag here".into());
     }
-    if let Some(&facet) = w.doc.field_facet.get(&key.field)
-        && !w.facet_present(point, key.node, facet)
-    {
-        return Err("facet is absent here".into());
-    }
     if !edit.contains(&w.space, point) {
         return Err("the point is outside the edit region".into());
     }
-    // P17: an authored edit targeting a leaf with a solve-layer entry clears
-    // that solve entry first (as a derived op) so the authored edit acts as a
-    // driver and shows what it set.
-    let mut prefix: Vec<Op> = Vec::new();
-    let has_solve = layer < SESSION_LAYER && w.solve.contains_key(&(point.clone(), key));
-    if has_solve {
-        prefix.push(Op::Solve {
-            point: point.clone(),
-            key,
-            value: None,
-        });
-    }
     if w.raw(point, key) == Some(value) {
-        return Ok(prefix);
+        return Ok(Vec::new());
     }
-    let finish = |mut tail: Vec<Op>| {
-        let mut out = prefix;
-        out.append(&mut tail);
-        out
-    };
     let entry = |p: PatchId| {
         vec![Op::Entry {
             patch: p,
@@ -344,16 +304,16 @@ pub fn drag(
             .iter()
             .filter(|q| q.layer == layer && q.writable && q.region.same(edit, &w.space))
             .min_by(|a, b| w.cmp(a, b));
-        return Ok(finish(match q {
+        return Ok(match q {
             Some(q) => entry(q.id),
             None => add(edit.clone(), None),
-        }));
+        });
     };
     if win.layer > layer {
         return Err("an outer scope sets it here".into());
     }
     if win.layer == layer && win.writable && win.region.within(edit, &w.space) {
-        return Ok(finish(entry(win.id)));
+        return Ok(entry(win.id));
     }
     let target = edit.intersect(&win.region, &w.space);
     let clear = |q: &Patch| {
@@ -377,31 +337,9 @@ pub fn drag(
                 && clear(q)
         })
         .min_by(|a, b| w.cmp(a, b));
-    Ok(finish(match reuse {
+    Ok(match reuse {
         Some(q) => entry(q.id),
         None if win.layer == layer => add(target, Some(w.rank_above(layer, win.rank))),
         None => add(target, None),
-    }))
-}
-
-/// Write a Stage 4 constraint solve entry into the dedicated solve layer (P17).
-pub fn set_solve(point: Point, key: Key, value: i64) -> Op {
-    Op::Solve {
-        point,
-        key,
-        value: Some(value),
-    }
-}
-
-/// Clear solve-layer entries for `keys` at `point` when constraints release a
-/// held instance part (P17), returning reversible ops for solver-free undo.
-pub fn release_solve(w: &World, point: &Point, keys: &[Key]) -> Vec<Op> {
-    keys.iter()
-        .filter(|k| w.solve.contains_key(&(point.clone(), **k)))
-        .map(|&key| Op::Solve {
-            point: point.clone(),
-            key,
-            value: None,
-        })
-        .collect()
+    })
 }

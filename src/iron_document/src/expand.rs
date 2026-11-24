@@ -30,16 +30,14 @@ use crate::definition;
 use crate::document::{RelKind, Relation};
 use crate::tree::Docs;
 use crate::expr::{Expr, Leaf};
-use crate::facet::{Facet, FacetKind, Instance, LeafPath, Use};
+use crate::facet::{Facet, FacetKind, Instance, LeafPath, LeafStruct, Override, Use};
 use crate::id::{NodeId, RelationId, Version};
 use crate::op::{self, Op};
 use crate::order::OrderKey;
-use crate::patch::{Axis, AxisKind, AxisOp, DiscretePoint, Patch, PatchKey, PatchOp, PatchTarget, PatchValue, Product, Sel, ViewCoord};
 use crate::registry::TypeId;
-use crate::structure::{Key, Recorder};
 use crate::value::{Slot, Value};
-use crate::engine::template::{Env, Item, Template, TemplateCache, Templates};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use crate::engine::template::{Env, Item, Pieces, Template, TemplateCache, Templates};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 #[cfg(feature = "differential")]
@@ -47,6 +45,17 @@ use std::sync::Arc;
 mod oracle;
 #[cfg(feature = "differential")]
 pub(crate) use oracle::expand;
+
+/// The copies a constraint cluster holds, and the solver leaves of them the
+/// transaction's own ops set (`Owners::hold`, `Owners::edit`).
+pub(crate) type Held<'a> = (&'a BTreeSet<NodeId>, &'a BTreeSet<Leaf>);
+
+/// One piece being wanted: which of its template's nodes it may keep, and
+/// what its last accepted expansion copied.
+struct Piece {
+    same: Option<std::rc::Rc<[bool]>>,
+    record: Option<(Arc<Template>, Arc<Env>)>,
+}
 
 /// One node an instance should have.
 #[derive(Debug, PartialEq)]
@@ -129,12 +138,10 @@ pub fn main_definition(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     doc.live(def).filter(|n| n.ty.name() == "definition").map(|_| def)
 }
 
-/// The template a main shows, for its effective notation (`PatchKey::Notation`
-/// first, then `Use::notation`, `EN-5b` Sol #2).
+/// The template a main shows, for its notation.
 pub fn main_template(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     let def = main_definition(doc, u)?;
-    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, u).into_iter().map(|d| (d, 0)).collect();
-    let notation = effective_notation(doc, &[], u, None, &base_scopes, None)?;
+    let notation = doc.get::<Use>(u)?.notation.constant()?.as_str()?.to_owned();
     definition::template_of(doc, def, &notation)
 }
 
@@ -155,16 +162,15 @@ struct Wanted {
     nodes: Vec<Want>,
     /// Where each wanted node is in `nodes`.
     index: BTreeMap<NodeId, usize>,
-    /// Enclosing definition scopes with path start offsets `(scope, start)`
-    /// for each derived node (outermost first), for derived scope-chain layer
-    /// precedence (`EN-5b`).
-    scopes: HashMap<NodeId, Vec<(NodeId, usize)>>,
     rels: Vec<RelWant>,
     problems: Vec<Problem>,
     full: bool,
     /// How many nodes may be wanted: the document's budget, less what other
     /// owners hold when one owner is expanded alone.
     cap: usize,
+    /// Every definition what was wanted reads: an owner is expanded again
+    /// when one of them is edited (`engine::owners`).
+    defs: BTreeSet<NodeId>,
     /// The owner being expanded alone, and the other owners whose derived
     /// entities its pictures figure: it is expanded again after them.
     root: Option<NodeId>,
@@ -173,22 +179,24 @@ struct Wanted {
     /// it and its owner's environment, which its items' template is part
     /// of (`Template::sub`).
     origins: HashMap<NodeId, (Arc<Template>, Arc<Env>)>,
+    /// Whether copies their piece's record says are current may be kept:
+    /// not for an owner with problems (a failed op leaves a copy unlike
+    /// its template), nor for the checks, which want every copy made.
+    keep: bool,
+    /// The wanted copies kept as they are: neither made nor compared.
+    kept: HashSet<NodeId>,
+    /// Each piece wanted: its owner, template and environment, recorded
+    /// once the expansion is accepted (`Owners::apply`).
+    pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
+    /// A held copy made again: its facets as its piece's last accepted
+    /// expansion made them. A leaf the solver writes keeps the solver's
+    /// value unless what is wanted for it changed since (`apply_wanted`).
+    was: HashMap<NodeId, Vec<Facet>>,
 }
 
 impl Wanted {
     fn new(cap: usize) -> Wanted {
-        Wanted {
-            nodes: Vec::new(),
-            index: BTreeMap::new(),
-            scopes: HashMap::new(),
-            rels: Vec::new(),
-            problems: Vec::new(),
-            full: false,
-            cap,
-            root: None,
-            reads: BTreeSet::new(),
-            origins: HashMap::new(),
-        }
+        Wanted { nodes: Vec::new(), index: BTreeMap::new(), rels: Vec::new(), problems: Vec::new(), full: false, cap, defs: BTreeSet::new(), root: None, reads: BTreeSet::new(), origins: HashMap::new(), keep: false, kept: HashSet::new(), pieces: Vec::new(), was: HashMap::new() }
     }
 
     /// Want a node, within the document's budget of derived nodes.
@@ -203,6 +211,31 @@ impl Wanted {
         self.index.insert(w.id, self.nodes.len());
         self.nodes.push(w);
         true
+    }
+
+    /// Piece `owner` copies `t` in `env`: recorded, and which of `t`'s
+    /// nodes it may keep as they are (`Templates::kept`).
+    fn piece(&mut self, cache: &mut Templates<'_>, owner: NodeId, t: &Arc<Template>, env: &Arc<Env>) -> Piece {
+        self.pieces.push((owner, t.clone(), env.clone()));
+        Piece { same: if self.keep { cache.kept(owner, t, env) } else { None }, record: cache.record(owner).cloned() }
+    }
+
+    /// The facets of copy `id` of `t`'s node `i`: kept as it is when `same`
+    /// says it may be and it is there (read from the document only where
+    /// what it derives is needed), made otherwise.
+    #[allow(clippy::too_many_arguments)]
+    fn copy(&mut self, doc: Tree<'_>, cache: &Templates<'_>, piece: &Piece, t: &Template, i: usize, id: NodeId, env: &Env) -> Vec<Facet> {
+        if piece.same.as_ref().is_some_and(|s| s[i]) && doc.is_live(id) {
+            self.kept.insert(id);
+            return if t.derives(i) { doc.facets_of(id).cloned().collect() } else { Vec::new() };
+        }
+        if cache.held(id)
+            && let Some((was_t, was_env)) = &piece.record
+            && let Some(was) = was_t.materialise_local(t.nodes[i].local, was_env)
+        {
+            self.was.insert(id, was);
+        }
+        t.materialise(i, env)
     }
 
     fn get(&self, id: NodeId) -> Option<&Want> {
@@ -278,30 +311,25 @@ pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
 /// in them. `wanted` is these for every owner; each is computed the same
 /// way, so an owner expanded alone gets exactly the copies the whole
 /// document would give it.
-fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &mut Templates<'_>) -> Wanted {
+fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &mut Templates<'_>, keep: bool) -> Wanted {
     let mut out = Wanted::new(cap);
     out.root = Some(owner);
+    out.keep = keep;
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
-    doc.note_key(Key::Patch(owner));
-    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner).into_iter().map(|d| (d, 0)).collect();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = linked_definition(doc, owner) {
-                let mut scopes = base_scopes;
-                scopes.push((def, 1));
-                want_entity(doc, owner, def, &scopes, &mut out, cache);
+                want_entity(doc, owner, def, &mut out, cache);
             }
         }
         "use" => {
-            if let Some(p) = picture_of(doc, owner, &base_scopes) {
-                let mut scopes = base_scopes;
-                scopes.push((p.def, 1));
-                want_use(doc, owner, p.sized, p.entity, p.def, &p.notation, &scopes, &mut out, cache);
+            if let Some(p) = picture_of(doc, owner) {
+                want_use(doc, owner, p.sized, p.entity, p.def, &p.notation, &mut out, cache);
             }
         }
         "group" => {
             if is_item_owner(doc, owner) && draws_repeat(doc, owner, &doc.facets_of(owner).cloned().collect::<Vec<_>>()) && !in_repeat_template(doc, owner) {
-                want_items(doc, owner, &base_scopes, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out, cache);
+                want_items(doc, owner, counts.get(&owner).map_or(&[][..], Vec::as_slice), &mut out, cache);
             }
         }
         _ => {}
@@ -310,58 +338,28 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &
     out
 }
 
-/// Effective notation of `use` node `u` at coordinate `(path, scopes)`
-/// (`PatchKey::Notation` first, then `Use::notation` from `from_facets` or
-/// `doc`, `EN-5b`). Evaluates at the exact same `(path, scopes)` coordinate
-/// that resolved `u`'s `Use` facet so facet display and child expansion agree.
-pub(crate) fn effective_notation(
-    doc: Tree<'_>,
-    path: &[NodeId],
-    u: NodeId,
-    local_u: Option<NodeId>,
-    scopes: &[(NodeId, usize)],
-    from_facets: Option<&[Facet]>,
-) -> Option<String> {
-    if let Some(&root) = u.path().first() {
-        doc.note_key(Key::Patch(root));
+/// The slot each of `leaves`, leaves of copies, has as its owner's
+/// expansion wants it now: what a copy goes back to when the solver lets go
+/// of it. A leaf whose copy is not wanted has none.
+pub(crate) fn wanted_slots(doc: Tree<'_>, templates: &mut TemplateCache, counts: &Items, leaves: &[Leaf]) -> Vec<(Leaf, Slot)> {
+    let mut cache = Templates::new(templates);
+    let mut by_owner: BTreeMap<NodeId, Vec<Leaf>> = BTreeMap::new();
+    for l in leaves {
+        if let Some(&owner) = l.node.path().first() {
+            by_owner.entry(owner).or_default().push(*l);
+        }
     }
-    for &(scope, _) in scopes {
-        doc.note_key(Key::Patch(scope));
-    }
-    if scopes.is_empty()
-        && let Some(l) = local_u
-    {
-        doc.note_key(Key::Patch(l));
-    }
-    let pt = doc.patches();
-    if !pt.patches.is_empty() {
-        let global = doc.point().cloned().unwrap_or_default();
-        let coord = ViewCoord { path: path.to_vec(), scopes: scopes.to_vec(), local: DiscretePoint::default() };
-        let mut best: Option<(&Patch, PatchTarget)> = None;
-        for cand in std::iter::once(u).chain(local_u.filter(|&l| l != u)) {
-            let target = PatchTarget { node: cand, key: PatchKey::Notation };
-            if let Some(p) = pt.winner_authored_at_view(&global, &coord, target)
-                && best.is_none_or(|(b, _)| pt.compare_at_view(p, b, &coord) == std::cmp::Ordering::Greater)
-            {
-                best = Some((p, target));
+    let mut out = Vec::new();
+    for (owner, leaves) in by_owner {
+        let w = wanted_for(doc, owner, counts, NODE_BUDGET, &mut cache, false);
+        for l in leaves {
+            let slot = w.get(l.node).and_then(|n| n.facets.iter().find(|f| f.kind() == l.path.facet)).and_then(|f| f.get(l.path.field));
+            if let Some(slot) = slot {
+                out.push((l, slot.clone()));
             }
         }
-        if let Some((p, target)) = best
-            && let Some(n) = p.entries.get(&target).and_then(|v| v.as_notation())
-        {
-            return Some(n.to_owned());
-        }
     }
-    if let Some(facets) = from_facets {
-        return facets.iter().find_map(|f| match f {
-            Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
-            _ => None,
-        });
-    }
-    doc.get::<Use>(u)
-        .and_then(|x| x.notation.constant())
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
+    out
 }
 
 /// What a `use` the document holds pictures: the entity it figures (`None`
@@ -373,47 +371,40 @@ struct Picture {
     sized: bool,
 }
 
-fn picture_of(doc: Tree<'_>, u: NodeId, base_scopes: &[(NodeId, usize)]) -> Option<Picture> {
+fn picture_of(doc: Tree<'_>, u: NodeId) -> Option<Picture> {
+    let notation = doc.get::<Use>(u).and_then(|x| x.notation.constant()).and_then(|v| v.as_str()).map(str::to_owned)?;
     let sized = doc.facet(u, FacetKind::Size).is_some();
     if let Some(def) = main_definition(doc, u) {
-        let notation = effective_notation(doc, &[], u, None, base_scopes, None)?;
         return Some(Picture { entity: None, def, notation, sized });
     }
     let entity = use_entity(doc, u)?;
     let def = linked_definition(doc, entity)?;
-    let notation = effective_notation(doc, &[], u, None, base_scopes, None)?;
     Some(Picture { entity: Some(entity), def, notation, sized })
 }
 
 /// Derived repeat `r`'s maker, read from the ids and the document alone,
 /// for an item settle, when the pass that wanted `r` is over: the template
-/// that copies it and its owner's environment.
+/// that copies it and its owner's environment. The owner is an item, or an
+/// authored `use`, whose own node is read. `None` for a derived `use`:
+/// which picture it draws depends on how it was expanded (an own inner
+/// picture draws its local entity's definition, one in an item its
+/// entity copy's), so the caller expands the whole owner. Stage 3's read
+/// path answers that from the templates.
 fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<Template>, Arc<Env>)> {
     let path = r.path();
     let owner = NodeId::from_path(&path[..path.len().checked_sub(1)?])?;
     if owner.is_item_scope() {
         let (q, key, _) = owner.repeat_item()?;
         let (t, outer) = collection_of(doc, q, None, cache)?;
-        let scopes = outer
-            .as_ref()
-            .map(|(_, e)| e.scopes.clone())
-            .unwrap_or_else(|| definition_of(doc, q.path()[0]).into_iter().map(|d| (d, 0)).collect());
-        let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
-        let overrides = patch_overrides_for(doc, owner, &scopes, &locals);
-        let env = Env { owner, entity: None, sized: false, item: Some(Item { repeat: q, key, outer }), scopes, overrides };
+        let env = Env { owner, entity: None, sized: false, item: Some(Item { repeat: q, key, outer }), overrides: cache.overrides(doc, owner) };
         return Some((t, Arc::new(env)));
     }
     if owner.is_expanded() {
         return None;
     }
-    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner).into_iter().map(|d| (d, 0)).collect();
-    let p = picture_of(doc, owner, &base_scopes)?;
-    let mut scopes = base_scopes;
-    scopes.push((p.def, 1));
+    let p = picture_of(doc, owner)?;
     let t = cache.picture(doc, p.def, &p.notation)?;
-    let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
-    let overrides = patch_overrides_for(doc, owner, &scopes, &locals);
-    let env = Env { owner, entity: p.entity, sized: p.sized, item: None, scopes, overrides };
+    let env = Env { owner, entity: p.entity, sized: p.sized, item: None, overrides: cache.overrides(doc, owner) };
     Some((t, Arc::new(env)))
 }
 
@@ -451,61 +442,56 @@ pub(crate) fn top_owners(doc: Tree<'_>) -> BTreeSet<NodeId> {
 }
 
 /// What expanding some owners did: the ops applied, and per owner its
-/// problems, how many nodes it derives, its recorded read dependencies, and
-/// which other owners' derived entities it read.
+/// problems, how many nodes it derives, and the definitions it reads.
 pub(crate) struct OwnersExpanded {
     pub ops: Vec<Op>,
     pub problems: BTreeMap<NodeId, Vec<Problem>>,
     pub counts: BTreeMap<NodeId, usize>,
+    pub defs: Vec<(NodeId, NodeId)>,
     /// (owner read, owner reading it).
     pub reads: Vec<(NodeId, NodeId)>,
-    /// Recorded structural/patch reads per expanded top-level owner (`EN-5b`).
-    pub deps: BTreeMap<NodeId, Vec<Key>>,
+    /// What each piece wanted copied (`Wanted::pieces`).
+    pub pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
 }
 
 /// Bring `owners`' derived nodes to what they derive now, and touch
-/// nothing else (`EN-5b`: recorded-read owner invalidation, no `Owners::made`).
-pub(crate) fn expand_owners(
-    docs: &mut Docs,
-    templates: &mut TemplateCache,
-    stamp: Version,
-    counts: &Items,
-    owners: &BTreeSet<NodeId>,
-    mut room: usize,
-) -> OwnersExpanded {
+/// nothing else (reactive-engine handoff §4.4, stage 2). `room` is how many
+/// nodes they may derive together, taken in id order: the budget less what
+/// other owners hold.
+/// A copy whose piece `made` records as current is kept as it is, unless
+/// its owner is `troubled` (has problems).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn expand_owners(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owners: &BTreeSet<NodeId>, mut room: usize, (solved, edited): Held<'_>, made: &Pieces, troubled: &BTreeSet<NodeId>) -> OwnersExpanded {
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
     let mut problems: Vec<Problem> = Vec::new();
-    let mut out = OwnersExpanded {
-        ops: Vec::new(),
-        problems: BTreeMap::new(),
-        counts: BTreeMap::new(),
-        reads: Vec::new(),
-        deps: BTreeMap::new(),
-    };
-    let mut cache = Templates::new(templates);
+    let mut kept: HashSet<NodeId> = HashSet::new();
+    let mut out = OwnersExpanded { ops: Vec::new(), problems: BTreeMap::new(), counts: BTreeMap::new(), defs: Vec::new(), reads: Vec::new(), pieces: Vec::new() };
+    let mut was: HashMap<NodeId, Vec<Facet>> = HashMap::new();
+    let mut cache = Templates::recorded(templates, made, solved);
     for &owner in owners {
-        let rec = Recorder::default();
-        let tree = Tree::of(docs);
-        let alive = tree.is_live(owner) && !owner.is_expanded();
-        let w = wanted_for(tree.recording(&rec), owner, counts, room, &mut cache);
-        // Dead authored owners record empty deps so `Owners::apply` prunes them
-        // instead of leaking dead entries forever (M2 / Sol #10).
-        out.deps.insert(owner, if alive { rec.into_inner() } else { Vec::new() });
+        let mut w = wanted_for(Tree::of(docs), owner, counts, room, &mut cache, !troubled.contains(&owner));
+        kept.extend(std::mem::take(&mut w.kept));
+        was.extend(std::mem::take(&mut w.was));
+        out.pieces.append(&mut w.pieces);
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
+        out.defs.extend(w.defs.iter().map(|&d| (d, owner)));
         out.reads.extend(w.reads.iter().map(|&r| (r, owner)));
         want.extend(w.nodes);
         rels.extend(w.rels);
         problems.extend(w.problems);
     }
-    // What the owners hold now: read from raw storage so an authored owner
-    // made absent by a patch still cleans up its derived copies (Sol #1).
-    let have: Vec<NodeId> = owners.iter().flat_map(|&o| docs.raw_derived_descendants(o)).collect();
+    // What the owners hold now: their live derived nodes and the derived
+    // relations from them.
+    let have: Vec<NodeId> = {
+        let tree = Tree::of(docs);
+        owners.iter().flat_map(|&o| tree.descendants(o).into_iter().filter(move |d| d.is_expanded() && d.path().first() == Some(&o))).collect()
+    };
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
     let have_rels: Vec<Relation> = owners.iter().flat_map(|&o| Tree::of(docs).rooted(o).cloned().collect::<Vec<_>>()).collect();
-    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems);
+    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, (solved, edited), &kept, &was);
     for o in owners {
         out.problems.insert(*o, Vec::new());
     }
@@ -530,7 +516,7 @@ pub(crate) fn parity(doc: Tree<'_>, templates: &mut TemplateCache, counts: &Item
     let (mut nodes, mut rels, mut problems) = (Vec::new(), Vec::new(), Vec::new());
     let mut room = NODE_BUDGET;
     for owner in top_owners(doc) {
-        let w = wanted_for(doc, owner, counts, room, &mut cache);
+        let w = wanted_for(doc, owner, counts, room, &mut cache, false);
         room = room.saturating_sub(w.nodes.len());
         nodes.extend(w.nodes);
         rels.extend(w.rels);
@@ -555,27 +541,28 @@ pub(crate) struct ItemsExpanded {
     /// Derived nodes the items want now, and held before.
     pub wanted: usize,
     pub held: usize,
+    pub defs: Vec<NodeId>,
     pub reads: Vec<NodeId>,
-    pub extra_deps: Vec<Key>,
+    pub pieces: Vec<(NodeId, Arc<Template>, Arc<Env>)>,
 }
 
-/// Bring only `repeats`' items to what `counts` says.
-pub(crate) fn expand_items(
-    docs: &mut Docs,
-    templates: &mut TemplateCache,
-    stamp: Version,
-    counts: &Items,
-    owner: NodeId,
-    repeats: &BTreeSet<NodeId>,
-    room: usize,
-) -> Option<(ItemsExpanded, Vec<Problem>)> {
+/// Bring only `repeats`' items to what `counts` says: each item's scope
+/// and everything copied into it, nested owners included, and nothing else
+/// of `owner`, the top owner holding them (reactive-engine handoff §4.4,
+/// stage 3b). A repeat's template and its siblings are as the owner's last
+/// expansion left them, so the items come out as a whole expansion of
+/// `owner` would make them. `None`, with nothing applied, when wanting them
+/// meets a problem (the budget, nesting): the caller expands `owner` whole.
+/// `Some` with `ops` applied otherwise; an op that fails to apply is
+/// reported as a problem, and the caller expands `owner` whole to repair it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn expand_items(docs: &mut Docs, templates: &mut TemplateCache, stamp: Version, counts: &Items, owner: NodeId, repeats: &BTreeSet<NodeId>, room: usize, (solved, edited): Held<'_>, made: &Pieces) -> Option<(ItemsExpanded, Vec<Problem>)> {
     let mut out = Wanted::new(room);
     out.root = Some(owner);
-    let rec = Recorder::default();
+    out.keep = true;
     {
-        let mut cache = Templates::new(templates);
-        let tree = Tree::of(docs).recording(&rec);
-        let base_scopes: Vec<(NodeId, usize)> = definition_of(tree, owner).into_iter().map(|d| (d, 0)).collect();
+        let mut cache = Templates::recorded(templates, made, solved);
+        let tree = Tree::of(docs);
         for &r in repeats {
             let ok = r.path().first() == Some(&owner)
                 && tree.is_live(r)
@@ -584,7 +571,9 @@ pub(crate) fn expand_items(
             if !ok {
                 return None;
             }
-            if !want_items(tree, r, &base_scopes, counts.get(&r).map_or(&[][..], Vec::as_slice), &mut out, &mut cache) {
+            // A repeat whose maker the ids do not give: the caller
+            // expands the owner whole.
+            if !want_items(tree, r, counts.get(&r).map_or(&[][..], Vec::as_slice), &mut out, &mut cache) {
                 return None;
             }
         }
@@ -597,17 +586,13 @@ pub(crate) fn expand_items(
         let tree = Tree::of(docs);
         repeats.iter().flat_map(|&r| tree.descendants(r).into_iter().filter(move |d| d.item_of(r).is_some())).collect()
     };
+    // The derived relations from the repeats' items: under each repeat's
+    // top owner, the one its items' ids name.
     let tops: BTreeSet<NodeId> = repeats.iter().map(|&r| r.path().first().copied().unwrap_or(r)).collect();
     let have_rels: Vec<Relation> = tops.iter().flat_map(|&o| Tree::of(docs).rooted(o).filter(|rel| repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect::<Vec<_>>()).collect();
-    let done = ItemsExpanded {
-        ops: Vec::new(),
-        wanted: out.nodes.len(),
-        held: have.len(),
-        reads: out.reads.iter().copied().collect(),
-        extra_deps: rec.into_inner(),
-    };
+    let done = ItemsExpanded { ops: Vec::new(), wanted: out.nodes.len(), held: have.len(), defs: out.defs.iter().copied().collect(), reads: out.reads.iter().copied().collect(), pieces: std::mem::take(&mut out.pieces) };
     let mut problems = Vec::new();
-    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
+    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, (solved, edited), &out.kept, &out.was);
     Some((ItemsExpanded { ops, ..done }, problems))
 }
 
@@ -684,18 +669,15 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
             match w.ty.name() {
                 "entity" => {
                     if let Some(def) = linked_def_of(doc, &w.facets) {
-                        let mut scopes = out.scopes.get(&id).cloned().unwrap_or_default();
-                        scopes.push((def, id.path().len()));
-                        want_entity(doc, id, def, &scopes, out, cache);
+                        want_entity(doc, id, def, out, cache);
                     }
                 }
                 "use" => {
                     let sized = w.facets.iter().any(|f| matches!(f, Facet::Size(_)));
-                    let id_path = id.path();
-                    let parent_path = &id_path[..id_path.len().saturating_sub(1)];
-                    let local_u = id_path.last().copied();
-                    let base_scopes = out.scopes.get(&id).cloned().unwrap_or_default();
-                    let facets = w.facets.clone();
+                    let notation = w.facets.iter().find_map(|f| match f {
+                        Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
+                        _ => None,
+                    });
                     // The entity it pictures: one this expansion derives
                     // (its own item's), or an authored one.
                     let entity = out.rels.iter().find(|r| r.rel.from == id && r.rel.rel == RelKind::Figures).map(|r| r.rel.to);
@@ -703,12 +685,8 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
                         Some(copy) => linked_def_of(doc, &copy.facets),
                         None => linked_definition(doc, e),
                     });
-                    if let (Some(entity), Some(def)) = (entity, def)
-                        && let Some(notation) = effective_notation(doc, parent_path, id, local_u, &base_scopes, Some(&facets))
-                    {
-                        let mut scopes = base_scopes;
-                        scopes.push((def, id_path.len()));
-                        want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out, cache);
+                    if let (Some(entity), Some(def), Some(notation)) = (entity, def, notation) {
+                        want_use(doc, id, sized, Some(entity), def, &notation, out, cache);
                     }
                 }
                 _ => {}
@@ -716,15 +694,20 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
         }
         let Some(r) = repeats.pop() else { break };
         if done.insert(r) && !in_template(doc, out, r) {
-            let scopes = out.scopes.get(&r).cloned().unwrap_or_default();
-            let found = want_items(doc, r, &scopes, counts.get(&r).map_or(&[][..], Vec::as_slice), out, cache);
+            let found = want_items(doc, r, counts.get(&r).map_or(&[][..], Vec::as_slice), out, cache);
             debug_assert!(found, "a derived repeat wanted in this pass has its maker");
         }
     }
 }
 
-/// The items of repeat (or conditional) `r`, by key.
-fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) -> bool {
+/// The items of repeat (or conditional) `r`, by key. Each is a scope: a
+/// derived group `#r/~key` with an `item` facet, holding a copy of the
+/// template, with the repeat's overrides of that item applied. In a
+/// copy, references to the template follow to the item's own copies, and
+/// `#r.repeat.item` / `.index` read the item's `item.value` / `.index`,
+/// which the store publishes (`Store::settle_repeats`): so an item
+/// re-evaluates when its own element changes, not when any does.
+fn want_items(doc: Tree<'_>, r: NodeId, keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) -> bool {
     if keys.is_empty() || !out.enter(r) {
         return true;
     }
@@ -732,8 +715,6 @@ fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[Stri
     let l = t.repeat_node().expect("a collection");
     let group = TypeId::lookup("group").expect("registered");
     let mut key = t.after.clone();
-    let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
-    let item_scopes = outer.as_ref().map(|(_, e)| e.scopes.clone()).unwrap_or_else(|| scopes.to_vec());
     for k in keys {
         let k = k.as_str();
         let Some(scope) = NodeId::item_scope(r, k) else { continue };
@@ -741,23 +722,15 @@ fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[Stri
         if !out.push(Want { id: scope, ty: group, parent: r, order: key.clone(), facets: vec![FacetKind::Item.default_facet()], scoped: true }) {
             return true;
         }
-        let overrides = patch_overrides_for(doc, scope, &item_scopes, &locals);
-        let env = Arc::new(Env {
-            owner: scope,
-            entity: None,
-            sized: false,
-            item: Some(Item { repeat: r, key: k.to_owned(), outer: outer.clone() }),
-            scopes: item_scopes.clone(),
-            overrides,
-        });
+        let env = Arc::new(Env { owner: scope, entity: None, sized: false, item: Some(Item { repeat: r, key: k.to_owned(), outer: outer.clone() }), overrides: cache.overrides(doc, scope) });
+        let same = out.piece(cache, scope, &t, &env);
         for (i, n) in t.nodes.iter().enumerate() {
             let (Some(copy), Some(parent_copy)) = (NodeId::item(r, k, n.local), if n.parent == l { Some(scope) } else { NodeId::item(r, k, n.parent) }) else { continue };
-            let facets = t.materialise(i, &env);
+            let facets = out.copy(doc, cache, &same, &t, i, copy, &env);
             let repeats = facets.iter().any(|f| owns_items(f.kind()));
             if !out.push(Want { id: copy, ty: n.ty, parent: parent_copy, order: n.order.clone(), facets, scoped: false }) {
                 return true;
             }
-            out.scopes.insert(copy, item_scopes.clone());
             if repeats {
                 out.origins.insert(copy, (t.clone(), env.clone()));
             }
@@ -774,47 +747,45 @@ fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[Stri
 }
 
 /// What entity `entity` (authored, or derived for an outer instance)
-/// derives from `def`.
-fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[(NodeId, usize)], out: &mut Wanted, cache: &mut Templates<'_>) {
+/// derives from `def`: its ports and equations, and its inner entities and
+/// connections, each inner entity in turn deriving its own; then its
+/// machines' states, transitions and tweens (machines.md §9 Q12), whose
+/// timing may read the instance's inputs and which it may override.
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, out: &mut Wanted, cache: &mut Templates<'_>) {
+    out.defs.insert(def);
     if !out.enter(entity) {
         return;
     }
     let t = cache.body(doc, def);
-    let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
-    let env = Arc::new(Env {
-        owner: entity,
-        entity: Some(entity),
-        sized: false,
-        item: None,
-        scopes: scopes.to_vec(),
-        overrides: patch_overrides_for(doc, entity, scopes, &locals),
-    });
+    let env = Arc::new(Env { owner: entity, entity: Some(entity), sized: false, item: None, overrides: cache.overrides(doc, entity) });
+    let same = out.piece(cache, entity, &t, &env);
     for (i, n) in t.nodes.iter().enumerate() {
         let parent = if n.parent == def { Some(entity) } else { NodeId::expanded(entity, n.parent) };
         let (Some(id), Some(parent)) = (NodeId::expanded(entity, n.local), parent) else { continue };
-        let facets = t.materialise(i, &env);
+        let facets = out.copy(doc, cache, &same, &t, i, id, &env);
         let inner_def = (n.top && n.ty.name() == "entity").then(|| linked_def_of(doc, &facets)).flatten();
         if !out.push(Want { id, ty: n.ty, parent, order: n.order.clone(), facets, scoped: true }) {
             return;
         }
-        out.scopes.insert(id, scopes.to_vec());
         // A connection's ends, a port's `exposes`: re-pointed for this entity.
         for r in &n.rels {
             let to = t.follow_node(&env, r.to);
             out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(entity, r.id), from: id, to, rel: r.rel, data: r.data.clone() } });
         }
         if let Some(inner) = inner_def {
-            let mut inner_scopes = scopes.to_vec();
-            inner_scopes.push((inner, id.path().len()));
-            want_entity(doc, id, inner, &inner_scopes, out, cache);
+            want_entity(doc, id, inner, out, cache);
         }
     }
 }
 
 /// What `use` `u`, figuring `entity` (an instance of `def`), derives: the
-/// definition's template for `notation`, as its children.
+/// definition's template for `notation`, as its children. A `use` inside
+/// the template pictures one of the definition's inner entities, so its
+/// copy figures that entity's copy and derives that entity's picture. A
+/// main has no entity: references to the definition's body stay on it.
 #[allow(clippy::too_many_arguments)]
-fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[(NodeId, usize)], out: &mut Wanted, cache: &mut Templates<'_>) {
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, out: &mut Wanted, cache: &mut Templates<'_>) {
+    out.defs.insert(def);
     // A picture of another owner's derived entity reads that owner's copy.
     if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())
         && out.root.is_some_and(|o| o != r)
@@ -826,149 +797,134 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     }
     let Some(t) = cache.picture(doc, def, notation) else { return };
     let crate::engine::template::Source::Picture(template) = t.source else { return };
-    let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
-    let u_path = u.path();
-    let env = Arc::new(Env {
-        owner: u,
-        entity,
-        sized,
-        item: None,
-        scopes: scopes.to_vec(),
-        overrides: patch_overrides_for(doc, u, scopes, &locals),
-    });
+    // A sized picture (plans/specs/plot.md §3): the template's own `size`,
+    // which its parts read, is this use's (`sized`: the use has a size;
+    // an inner use's copy may not exist yet, so the caller says).
+    let env = Arc::new(Env { owner: u, entity, sized, item: None, overrides: cache.overrides(doc, u) });
+    let same = out.piece(cache, u, &t, &env);
     for (i, n) in t.nodes.iter().enumerate() {
         let parent = if n.parent == template { Some(u) } else { NodeId::expanded(u, n.parent) };
         let (Some(id), Some(parent)) = (NodeId::expanded(u, n.local), parent) else { continue };
-        let facets = t.materialise(i, &env);
+        let facets = out.copy(doc, cache, &same, &t, i, id, &env);
+        // An entity in a template (a repeat's item instance) and a picture
+        // of one are scopes the scope pass expands; a picture of one of
+        // the definition's own inner entities is expanded here.
         let is_use = n.ty.name() == "use";
         let repeats = facets.iter().any(|f| owns_items(f.kind()));
         let scoped = !matches!(n.ty.name(), "entity" | "use") || n.own;
-        let inner = if is_use {
-            n.figures.as_ref().map(|r| {
-                let inner_sized = facets.iter().any(|f| matches!(f, Facet::Size(_)));
-                let inner_def = n.own.then(|| linked_def_of_node(doc, r.to)).flatten();
-                // Evaluate notation at enclosing `u`'s exact `(u_path, scopes)` so it
-                // agrees 100% with the `Use.notation` facet resolved on `id` (Sol #2).
-                let inner_notation = effective_notation(doc, &u_path, id, Some(n.local), scopes, Some(&facets));
-                let mut inner_scopes = scopes.to_vec();
-                if let Some(d) = inner_def {
-                    inner_scopes.push((d, id.path().len()));
-                }
-                (r, inner_sized, inner_def, inner_scopes, inner_notation)
-            })
-        } else {
-            None
-        };
+        let inner = if is_use { n.figures.as_ref().map(|r| (r, facets.iter().any(|f| matches!(f, Facet::Size(_))), facets.iter().find_map(|f| match f {
+            Facet::Use(x) => x.notation.constant().and_then(|v| v.as_str()).map(str::to_owned),
+            _ => None,
+        }))) } else { None };
         if !out.push(Want { id, ty: n.ty, parent, order: n.order.clone(), facets, scoped }) {
             return;
         }
-        out.scopes.insert(id, scopes.to_vec());
         if repeats {
             out.origins.insert(id, (t.clone(), env.clone()));
         }
         // An inner picture: it figures the inner entity's copy, and
         // derives that entity's picture in turn.
-        if let Some((r, inner_sized, inner_def, inner_scopes, inner_notation)) = inner {
+        if let Some((r, inner_sized, inner_notation)) = inner {
             let inner_entity = t.follow_node(&env, r.to);
             out.rels.push(RelWant { rel: Relation { id: RelationId::expanded(u, r.id), from: id, to: inner_entity, rel: RelKind::Figures, data: r.data.clone() } });
             if n.own
-                && let (Some(notation), Some(d)) = (inner_notation, inner_def)
+                && let (Some(notation), Some(d)) = (inner_notation, linked_def_of_node(doc, r.to))
             {
-                want_use(doc, id, inner_sized, Some(inner_entity), d, &notation, &inner_scopes, out, cache);
+                want_use(doc, id, inner_sized, Some(inner_entity), d, &notation, out, cache);
             }
         }
     }
 }
 
-/// Resolve all active authored patch overrides reaching `owner`'s copies of
-/// `locals` at `(doc.point(), ViewCoord { path: owner.path(), scopes })` (`EN-5b`).
-///
-/// Records O(1) placement/scope-aware `Key::Patch` reads (`owner.path()[0]` and
-/// each enclosing scope, plus `local` only for un-scoped repeats outside any
-/// definition), avoiding O(N) sibling wakeups and `NodeId::expanded` interning
-/// when no patches exist (Sol #6 / Gemini M6).
-pub(crate) fn patch_overrides_for(
-    doc: Tree<'_>,
-    owner: NodeId,
-    scopes: &[(NodeId, usize)],
-    locals: &[NodeId],
-) -> Vec<(NodeId, PatchKey, PatchValue)> {
-    let owner_path = owner.path();
-    if let Some(&root) = owner_path.first() {
-        doc.note_key(Key::Patch(root));
-    }
-    for &(scope, _) in scopes {
-        doc.note_key(Key::Patch(scope));
-    }
-    if scopes.is_empty() {
-        for &local in locals {
-            doc.note_key(Key::Patch(local));
-        }
-    }
-    let pt = doc.patches();
-    if pt.patches.is_empty() {
-        return Vec::new();
-    }
-    let global = doc.point().cloned().unwrap_or_default();
-    let coord = ViewCoord { path: owner_path, scopes: scopes.to_vec(), local: DiscretePoint::default() };
+/// An override node, as (node, target, leaf, value).
+pub(crate) type OwnOverride = (NodeId, NodeId, LeafPath, Value);
+
+/// The overrides that reach `owner`'s copies, as (node, target, leaf, value)
+/// with `target` the definition-local node copied, weakest first
+/// (§5.3, "Nested targets"). `owner`'s path runs from an authored node
+/// through the definition-local nodes each enclosing instance copies; each
+/// step's own overrides apply when their target path is the rest of the
+/// way down. So the innermost definition's opinion comes first and the
+/// outermost instance's last, and the last applied wins.
+fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
+    overrides_by(owner, |n| own_overrides(doc, n))
+}
+
+/// `overrides`, with each step's own overrides read by `own` (expansion
+/// reads each once per pass, `Templates::overrides`).
+pub(crate) fn overrides_by<O: std::ops::Deref<Target = [OwnOverride]>>(owner: NodeId, mut own: impl FnMut(NodeId) -> O) -> Vec<OwnOverride> {
+    let path = owner.path();
     let mut out = Vec::new();
-    for &local in locals {
-        let copy = NodeId::expanded(owner, local);
-        let mut keys: BTreeSet<PatchKey> = BTreeSet::new();
-        for cand in std::iter::once(local).chain(copy) {
-            for p in pt.patches_for_target(cand) {
-                if p.layer >= crate::patch::SESSION_LAYER {
-                    continue;
-                }
-                if !p.region.contains_at_view(&pt.axes, &global, &coord, p.anchor) {
-                    continue;
-                }
-                for t in p.entries.keys() {
-                    if t.node == cand && matches!(t.key, PatchKey::FacetPresent(_) | PatchKey::Leaf(_) | PatchKey::Notation) {
-                        keys.insert(t.key);
-                    }
-                }
-            }
-        }
-        for key in keys {
-            let mut best: Option<(&Patch, PatchTarget)> = None;
-            for cand in std::iter::once(local).chain(copy) {
-                let target = PatchTarget { node: cand, key };
-                if let Some(p) = pt.winner_authored_at_view(&global, &coord, target)
-                    && best.is_none_or(|(b, _)| pt.compare_at_view(p, b, &coord) == std::cmp::Ordering::Greater)
-                {
-                    best = Some((p, target));
-                }
-            }
-            if let Some((p, target)) = best
-                && let Some(val) = p.entries.get(&target)
-            {
-                out.push((local, key, val.clone()));
+    for j in (0..path.len()).rev() {
+        let rest = &path[j + 1..];
+        for (o, target, leaf, value) in own(path[j]).iter() {
+            let steps = target.path();
+            if steps.len() == rest.len() + 1 && steps[..rest.len()] == *rest {
+                out.push((*o, steps[rest.len()], *leaf, value.clone()));
             }
         }
     }
     out
 }
 
-/// The constant leaf overrides reaching `owner`'s copies, as `(definition-local
-/// target, leaf, value)`: for render analysis (`analysis.rs`, `EN-5b`).
+/// The overrides reaching `owner`'s copies, as (definition-local target,
+/// leaf, value), weakest first: for render analysis (`analysis.rs`).
 pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
-    if doc.patches().patches.is_empty() {
-        return Vec::new();
-    }
-    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner.path()[0]).into_iter().map(|d| (d, 0)).collect();
-    let Some(p) = picture_of(doc, owner, &base_scopes) else { return Vec::new() };
-    let Some(template) = definition::template_of(doc, p.def, &p.notation) else { return Vec::new() };
-    let mut scopes = base_scopes;
-    scopes.push((p.def, owner.path().len()));
-    let locals: Vec<NodeId> = doc.base_descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-    patch_overrides_for(doc, owner, &scopes, &locals)
-        .into_iter()
-        .filter_map(|(target, key, val)| match (key, val) {
-            (PatchKey::Leaf(lp), PatchValue::Slot { slot }) => Some((target, lp, slot.constant()?.clone())),
-            _ => None,
+    overrides(doc, owner).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
+}
+
+pub(crate) fn own_overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
+    doc.children(owner)
+        .iter()
+        .copied()
+        .filter(|&c| doc.live(c).is_some_and(|n| n.ty.name() == "override"))
+        .filter_map(|c| {
+            let o = doc.get::<Override>(c)?;
+            let target = o.target.constant()?.as_ref()?;
+            let leaf: LeafPath = o.leaf.constant()?.as_str()?.parse().ok()?;
+            Some((c, target, leaf, o.value.constant()?.clone()))
         })
         .collect()
+}
+
+/// Overrides that apply nothing (component-model.md §5.3): their instance
+/// is not linked, their target is gone from the definition, or their leaf
+/// is not one the target can have. Kept, inert, and listed with why.
+pub fn stale_overrides(doc: Tree<'_>) -> Vec<(NodeId, String)> {
+    let ty = TypeId::lookup("override").expect("registered");
+    let mut out = Vec::new();
+    for o in doc.nodes_of_type(ty).filter(|&o| doc.is_live(o)) {
+        let Some(owner) = doc.live(o).and_then(|n| n.parent) else { continue };
+        // A repeat's (or conditional's) override of one item's copy: stale
+        // while that item is not there.
+        if is_item_owner(doc, owner) {
+            let target = doc.get::<Override>(o).and_then(|f| f.target.constant().and_then(|v| v.as_ref()));
+            let derived = target.and_then(|t| NodeId::from_path(&[owner.path(), t.path()].concat()));
+            if !derived.is_some_and(|d| doc.is_live(d)) {
+                out.push((o, format!("{owner} has no such item now")));
+            }
+            continue;
+        }
+        let entity = if doc.live(owner).is_some_and(|n| n.ty.name() == "use") { use_entity(doc, owner) } else { Some(owner) };
+        let Some(def) = entity.and_then(|e| linked_definition(doc, e)) else {
+            out.push((o, format!("{owner} is not a linked instance")));
+            continue;
+        };
+        let Some(facet) = doc.get::<Override>(o) else { continue };
+        let target = facet.target.constant().and_then(|v| v.as_ref());
+        let leaf = facet.leaf.constant().and_then(|v| v.as_str()).and_then(|l| l.parse::<LeafPath>().ok());
+        let (Some(target), Some(leaf)) = (target, leaf) else {
+            out.push((o, "its target or leaf is not well formed".into()));
+            continue;
+        };
+        let derived = NodeId::from_path(&[owner.path(), target.path()].concat()).filter(|&d| doc.is_live(d));
+        match derived {
+            None => out.push((o, format!("{def} has no {target} for {owner} to derive"))),
+            Some(d) if doc.leaf(d, leaf).is_none() => out.push((o, format!("{target} has no {leaf}"))),
+            Some(_) => {}
+        }
+    }
+    out
 }
 
 /// Bring the derived nodes and relations in `have` and `have_rels` to
@@ -979,20 +935,17 @@ pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Valu
 /// solver writes on them stay as the solver left them.
 #[allow(clippy::too_many_arguments)]
 /// A `kept` copy is wanted as it is: nothing about it is compared. A leaf
-/// Reconcile derived nodes/relations against `want` and `want_rels`.
-/// Solver poses on instance parts live in `PatchTable::solve` (Tier 4, P17),
-/// so expansion writes the template/patch wanted slots cleanly (`EN-5c`).
-fn apply_wanted(
-    docs: &mut Docs,
-    stamp: Version,
-    want: Vec<Want>,
-    want_rels: Vec<RelWant>,
-    have: Vec<NodeId>,
-    have_rels: Vec<Relation>,
-    problems: &mut Vec<Problem>,
-) -> Vec<Op> {
+/// the solver writes on a `solved` copy keeps the solver's value unless
+/// what is wanted for it changed since the copy was last made (`was`): a
+/// template or override edit of that leaf still reaches it.
+#[allow(clippy::too_many_arguments)]
+fn apply_wanted(docs: &mut Docs, stamp: Version, want: Vec<Want>, want_rels: Vec<RelWant>, have: Vec<NodeId>, have_rels: Vec<Relation>, problems: &mut Vec<Problem>, (solved, edited): Held<'_>, kept: &HashSet<NodeId>, was: &HashMap<NodeId, Vec<Facet>>) -> Vec<Op> {
     let wanted_ids: std::collections::HashSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
+    // An op can fail on something wanted later in the pass (a copy's
+    // binding reading a port copied after it): failed ops are tried again
+    // once everything else has applied, and only what still fails is a
+    // problem.
     let mut failed: Vec<Op> = Vec::new();
     let mut run = |docs: &mut Docs, op: Op, ops: &mut Vec<Op>| match op::apply_op(docs, 0, &op, stamp) {
         Ok(_) => ops.push(op),
@@ -1008,6 +961,11 @@ fn apply_wanted(
         }
     }
     for w in want {
+        if kept.contains(&w.id) {
+            continue;
+        }
+        // What this node needs, read before any of it applies; its facets
+        // are compared where they are, not cloned.
         let plan: Vec<Op> = {
             let tree = Tree::of(docs);
             match tree.live(w.id) {
@@ -1021,17 +979,33 @@ fn apply_wanted(
                         plan.push(Op::Reorder { id: w.id, order: w.order });
                     }
                     let kept: Vec<FacetKind> = w.facets.iter().map(Facet::kind).collect();
+                    let held = solved.contains(&w.id);
                     for f in w.facets {
                         match tree.facet(w.id, f.kind()) {
                             None => plan.push(Op::AddFacet { id: w.id, facet: f }),
-                            Some(old) if *old != f => {
+                            // A held copy's transform is looked at whatever
+                            // it holds: its solver leaves follow their rule.
+                            Some(old) if *old != f || (held && f.kind() == FacetKind::Transform2d) => {
                                 if f.kind().is_dynamic() {
+                                    // Replaced whole (`op::add_comp`): removing
+                                    // it first fails where it is required.
                                     plan.push(Op::AddFacet { id: w.id, facet: f });
                                 } else {
                                     for field in f.field_names() {
                                         let slot = f.get(field).expect("own field");
-                                        if old.get(field) != Some(slot) {
-                                            let path = LeafPath::new(f.kind(), field).expect("declared field");
+                                        let path = LeafPath::new(f.kind(), field).expect("declared field");
+                                        if held && crate::solve::writes(path) {
+                                            // The solver's value stays unless the
+                                            // transaction edits the leaf or what is
+                                            // wanted for it changed; then it is
+                                            // written, even unchanged, so the
+                                            // transaction records the solved value
+                                            // for undo (`StoreCore::keep_solved`).
+                                            let wanted_before = was.get(&w.id).and_then(|fs| fs.iter().find(|x| x.kind() == f.kind())).and_then(|x| x.get(field));
+                                            if edited.contains(&Leaf { node: w.id, path }) || wanted_before != Some(slot) {
+                                                plan.push(Op::Set { id: w.id, path, slot: slot.clone() });
+                                            }
+                                        } else if old.get(field) != Some(slot) {
                                             plan.push(Op::Set { id: w.id, path, slot: slot.clone() });
                                         }
                                     }
@@ -1098,8 +1072,6 @@ fn op_node(doc: Tree<'_>, op: &Op) -> Option<NodeId> {
         Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
         Op::Link { rel } => Some(rel.from),
         Op::Unlink { id } => doc.relation(*id).map(|r| r.from),
-        Op::Solve { leaf, .. } => Some(leaf.node),
-        Op::Axis(_) | Op::Patch(_) => None,
     }
 }
 
@@ -1108,9 +1080,6 @@ fn op_target(op: &Op) -> String {
         Op::Create { id, .. } | Op::Delete { id } | Op::Reparent { id, .. } | Op::Reorder { id, .. } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => id.to_string(),
         Op::Link { rel } => rel.id.to_string(),
         Op::Unlink { id } => id.to_string(),
-        Op::Solve { leaf, .. } => leaf.node.to_string(),
-        Op::Axis(_) => "axis".into(),
-        Op::Patch(_) => "patch".into(),
     }
 }
 
@@ -1141,7 +1110,7 @@ pub fn refuse(op: &Op) -> Option<String> {
         Op::Reparent { id, parent, .. } => [Some(*id), *parent].into_iter().flatten().find(|n| n.is_expanded()),
         Op::Link { rel } => Some(rel.from).filter(|n| n.is_expanded()),
         Op::Unlink { id } if id.is_expanded() => return Some(format!("{id} is a derived relation: its instance's definition makes it")),
-        Op::Unlink { .. } | Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => None,
+        Op::Unlink { .. } => None,
     }?;
     Some(match target.expanded_parts() {
         Some((owner, _)) => format!("{target} is part of instance {owner}, derived from its definition; edit the definition or detach the instance"),
@@ -1172,154 +1141,61 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             Op::Delete { id } | Op::Reorder { id, .. } | Op::RemoveFacet { id, .. } => Some(*id),
             Op::Set { id, .. } | Op::AddFacet { id, .. } => Some(*id).filter(|n| n.is_item_scope()),
             Op::Link { rel } => Some(rel.from),
-            Op::Unlink { .. } | Op::Axis(_) | Op::Patch(_) | Op::Solve { .. } => None,
+            Op::Unlink { .. } => None,
         };
         if let Some((target, (repeat, k, template))) = target.and_then(|t| t.repeat_item().map(|r| (t, r))) {
             let what = if template == repeat { format!("set {repeat}'s repeat.each, repeat.count or when.is") } else { format!("edit its template, {template}; only a copy's values can differ per item") };
             return Err(ApplyError { op: i, kind: ErrorKind::BadId, message: format!("{target} is item {k} of {repeat}, a copy: {what}") });
         }
     }
-    // Anchor/layer-aware patch planner for overrides on derived copies (`EN-5b`):
-    // tracks in-tx axes, removals, and occupied ranks per `(anchor, layer)` so
-    // multiple new patches never collide on rank and reuse never updates a losing
-    // patch (C2, H3, Sol #4).
-    let mut inst_ax: Option<crate::patch::AxisId> = doc.patches().instance_axis_id().or_else(|| {
-        ops.iter().find_map(|op| match op {
-            Op::Axis(AxisOp::Add { axis }) if axis.kind == AxisKind::Instance => Some(axis.id),
-            _ => None,
-        })
-    });
-    let mut next_patch_raw = doc.patches().next_patch_id().0.max(
+    // Fresh ids for created overrides go past anything the transaction itself
+    // reserved.
+    let mut fresh = doc.next_id().raw().max(
         ops.iter()
             .filter_map(|op| match op {
-                Op::Patch(PatchOp::Add { patch }) => Some(patch.id.0 + 1),
+                // This client's own: another's ids count in their own range.
+                Op::Create { id, .. } if id.client() == Some(doc.client()) => Some(id.raw() + 1),
                 _ => None,
             })
             .max()
             .unwrap_or(0),
     );
-    let mut next_axis_raw = doc.patches().next_axis_id().0.max(
-        ops.iter()
-            .filter_map(|op| match op {
-                Op::Axis(AxisOp::Add { axis }) => Some(axis.id.0 + 1),
-                _ => None,
-            })
-            .max()
-            .unwrap_or(0),
-    );
-    let removed_patches: std::collections::HashSet<crate::patch::PatchId> = ops
-        .iter()
-        .filter_map(|op| match op {
-            Op::Patch(PatchOp::Remove { id }) => Some(*id),
-            _ => None,
-        })
-        .collect();
-    let mut used_ranks: HashMap<(Option<NodeId>, u32), BTreeSet<OrderKey>> = HashMap::new();
-    for p in doc.patches().patches.values() {
-        if !removed_patches.contains(&p.id) {
-            used_ranks.entry((p.anchor, p.layer)).or_default().insert(p.rank.clone());
-        }
-    }
-    for op in &ops {
-        if let Op::Patch(PatchOp::Add { patch }) = op {
-            used_ranks.entry((patch.anchor, patch.layer)).or_default().insert(patch.rank.clone());
-        }
-    }
-    let global_point = doc.point().cloned().unwrap_or_default();
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
-    // Newly created override patches in this transaction: (anchor, tail, patch_id, rank).
-    let mut made_patches: Vec<(Option<NodeId>, Vec<NodeId>, crate::patch::PatchId, OrderKey)> = Vec::new();
-
-    let mut patch_override_entry = |owner: NodeId, local: NodeId, key: PatchKey, val: PatchValue, out: &mut Vec<Op>| -> Result<(), String> {
+    // An override of `path` on `owner`'s copy of `local`: the one already
+    // there (or created earlier in this transaction) updated, else a new one.
+    let mut made: Vec<(NodeId, NodeId, LeafPath, NodeId)> = Vec::new();
+    let mut override_op = |owner: NodeId, local: NodeId, path: LeafPath, value: Value, out: &mut Vec<Op>| -> Result<(), String> {
+        // A part of a nested instance is overridden from the outermost one,
+        // its target the path down to the part (§5.3, "Nested targets").
+        // Inside a main, the outermost is the definition's own node: the
+        // override is the definition's (component-authoring.md §1).
         let mut steps = owner.path();
-        let anchor = if let Some(def) = main_definition(doc, steps[0]) {
+        if main_definition(doc, steps[0]).is_some() {
             steps.remove(0);
-            Some(def)
-        } else {
-            definition_of(doc, steps[0])
-        };
+        }
         if steps.is_empty() {
             return Err(format!("{owner}: nothing to override"));
         }
-        let ax = match inst_ax {
-            Some(a) => a,
+        let owner = steps.remove(0);
+        steps.push(local);
+        let local = NodeId::from_path(&steps).ok_or_else(|| format!("{owner}: no path to {local}"))?;
+        let existing = own_overrides(doc, owner).into_iter().find(|(_, t, l, _)| *t == local && *l == path).map(|(o, ..)| o).or_else(|| made.iter().find(|m| m.0 == owner && m.1 == local && m.2 == path).map(|m| m.3));
+        match existing {
+            Some(o) => out.push(Op::Set { id: o, path: "override.value".parse().expect("declared leaf"), slot: Slot::Const(value) }),
             None => {
-                let a = crate::patch::AxisId(next_axis_raw);
-                next_axis_raw += 1;
-                inst_ax = Some(a);
-                out.push(Op::Axis(AxisOp::Add {
-                    axis: Axis { id: a, name: "instance".into(), kind: AxisKind::Instance, owner: None, values: Vec::new() },
-                }));
-                a
-            }
-        };
-        let target = PatchTarget { node: local, key };
-        // Check whether a higher-ranked patch in the same `(anchor, 0)` scope
-        // currently sets `target` at this placement (PutGet, P12 / H3 / Sol #4).
-        let pt = doc.patches();
-        let same_scope_winner_rank: Option<OrderKey> = {
-            let scopes: Vec<(NodeId, usize)> = anchor.into_iter().map(|d| (d, 0)).collect();
-            let coord = ViewCoord { path: steps.clone(), scopes, local: DiscretePoint::default() };
-            pt.patches_for_target(local)
-                .filter(|p| {
-                    !removed_patches.contains(&p.id)
-                        && p.anchor == anchor
-                        && p.layer == 0
-                        && p.entries.contains_key(&target)
-                        && p.region.contains_at_view(&pt.axes, &global_point, &coord, p.anchor)
-                })
-                .map(|p| &p.rank)
-                .max()
-                .cloned()
-        };
-        let existing_doc = pt
-            .instance_override_patch(ax, anchor, &steps)
-            .filter(|p| !removed_patches.contains(&p.id))
-            .map(|p| (p.id, p.rank.clone()));
-        let existing_made = made_patches
-            .iter()
-            .rev()
-            .find(|(a, t, _, _)| *a == anchor && *t == steps)
-            .map(|(_, _, id, r)| (*id, r.clone()));
-        let best_existing = match (existing_doc, existing_made) {
-            (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
-            (a, b) => a.or(b),
-        };
-        let reusable = best_existing.filter(|(_, r)| same_scope_winner_rank.as_ref().is_none_or(|w| r >= w));
-        match reusable {
-            Some((patch, _)) => {
-                out.push(Op::Patch(PatchOp::SetEntry { patch, target, value: Some(val) }));
-            }
-            None => {
-                let region = Product::default().with(ax, Sel::Suffix { tail: steps.clone(), not: Vec::new() });
-                let used = used_ranks.entry((anchor, 0)).or_default();
-                let mine = pt.keys(&region);
-                let default_floor = pt
-                    .patches
-                    .values()
-                    .filter(|p| !removed_patches.contains(&p.id) && p.anchor == anchor && p.layer == 0 && pt.keys(&p.region) <= mine)
-                    .map(|p| &p.rank)
-                    .max()
-                    .cloned();
-                let floor = match (default_floor, same_scope_winner_rank) {
-                    (Some(a), Some(b)) => Some(a.max(b)),
-                    (a, b) => a.or(b),
-                };
-                let rank = crate::patch::PatchTable::alloc_rank(used, floor.as_ref());
-                used.insert(rank.clone());
-                let pid = crate::patch::PatchId(next_patch_raw);
-                next_patch_raw += 1;
-                let patch = Patch {
-                    id: pid,
-                    layer: 0,
-                    rank: rank.clone(),
-                    region,
-                    anchor,
-                    writable: true,
-                    entries: BTreeMap::from([(target, val)]),
-                };
-                made_patches.push((anchor, steps, pid, rank));
-                out.push(Op::Patch(PatchOp::Add { patch }));
+                let o = NodeId::from_raw(fresh);
+                fresh += 1;
+                let after = doc.children(owner).iter().rev().find(|c| !c.is_expanded()).and_then(|&c| doc.live(c)).map(|n| n.order.clone());
+                let mut order = after.map_or_else(OrderKey::first, |k| OrderKey::after(&k));
+                for _ in made.iter().filter(|m| m.0 == owner) {
+                    order = OrderKey::after(&order);
+                }
+                let mut f = Override::default();
+                f.target = Slot::Const(Value::Ref(local));
+                f.leaf = Slot::Const(Value::Str(path.to_string()));
+                f.value = Slot::Const(value);
+                made.push((owner, local, path, o));
+                out.push(Op::Create { id: o, ty: TypeId::lookup("override").expect("registered"), parent: Some(owner), order, facets: vec![f.wrap()] });
             }
         }
         Ok(())
@@ -1347,28 +1223,14 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             Op::RemoveFacet { id, kind } if in_main(id).is_some() => Op::RemoveFacet { id: in_main(id).unwrap_or(id), kind },
             other => other,
         };
-        // A facet added to what an instance derives (an ellipse gaining an arc,
-        // a rect gaining a stroke) becomes a `FacetPresent(true)` + leaf entries
-        // on the instance's patch (`EN-5b`). Reject bound fields (L1).
+        // A facet added to what an instance derives (an ellipse gaining an
+        // arc) is an override of each of its fields.
         if let Op::AddFacet { id, facet } = &op
             && let Some((owner, local)) = id.expanded_parts()
         {
             for field in facet.field_names() {
-                if facet.get(field).is_some_and(|s| s.expr().is_some()) {
-                    return Err(ApplyError {
-                        op: i,
-                        kind: ErrorKind::BadId,
-                        message: format!("{id} is inside instance {owner}: a binding from outside cannot reach it; give its definition an `in` port and bind that"),
-                    });
-                }
-            }
-            patch_override_entry(owner, local, PatchKey::FacetPresent(facet.kind()), PatchValue::Bool { v: true }, &mut out)
-                .map_err(|m| ApplyError { op: i, kind: ErrorKind::BadId, message: m })?;
-            for field in facet.field_names() {
                 if let Some(v) = facet.get(field).and_then(|s| s.constant()) {
-                    let lp = LeafPath::new(facet.kind(), field).expect("own field");
-                    patch_override_entry(owner, local, PatchKey::Leaf(lp), PatchValue::Slot { slot: Slot::Const(v.clone()) }, &mut out)
-                        .map_err(|m| ApplyError { op: i, kind: ErrorKind::BadId, message: m })?;
+                    override_op(owner, local, LeafPath::new(facet.kind(), field).expect("own field"), v.clone(), &mut out).map_err(|m| ApplyError { op: i, kind: ErrorKind::BadId, message: m })?;
                 }
             }
             continue;
@@ -1406,21 +1268,7 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             }
             crate::handle::Handle::Direct => match in_main(*id) {
                 Some(part) => out.push(Op::Set { id: part, path: *path, slot: Slot::Const(value) }),
-                None => {
-                    if path.facet == FacetKind::Use
-                        && path.field == "notation"
-                        && let Value::Str(notation) = value
-                    {
-                        patch_override_entry(owner, local, PatchKey::Notation, PatchValue::Notation { notation }, &mut out).map_err(err)?;
-                    } else {
-                        // P21 / L2: if setting a leaf on an optional facet effectively
-                        // absent on `id`, enable `FacetPresent(true)` in the same patch.
-                        if !doc.has(*id, path.facet) {
-                            patch_override_entry(owner, local, PatchKey::FacetPresent(path.facet), PatchValue::Bool { v: true }, &mut out).map_err(err)?;
-                        }
-                        patch_override_entry(owner, local, PatchKey::Leaf(*path), PatchValue::Slot { slot: Slot::Const(value) }, &mut out).map_err(err)?;
-                    }
-                }
+                None => override_op(owner, local, *path, value, &mut out).map_err(err)?,
             },
         }
     }

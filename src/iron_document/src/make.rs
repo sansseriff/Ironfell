@@ -176,6 +176,9 @@ pub fn make(doc: Tree<'_>, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: 
             facets.push(f);
         }
         inner_ops.push(Op::Create { id: moved[&e], ty: ty("entity"), parent: Some(def), order: next_body_key(), facets });
+        for (i, &o) in doc.children(e).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "override")).enumerate() {
+            inner_ops.push(Op::Create { id: fresh(), ty: ty("override"), parent: Some(moved[&e]), order: key(i), facets: doc.facets_of(o).cloned().collect() });
+        }
     }
 
     // Connections: inside ones move in; crossing ones get a port.
@@ -258,85 +261,13 @@ pub fn make(doc: Tree<'_>, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: 
     let mut picture_ops = vec![Op::Create { id: template, ty: ty("template"), parent: Some(def), order: next_body_key(), facets: vec![template_facet.wrap()] }];
     let mut ordered = uses.clone();
     ordered.sort_by_key(|&u| doc.live(u).map(|n| n.order.clone()));
-    let mut moved_use: BTreeMap<NodeId, NodeId> = BTreeMap::new();
     for (i, &u) in ordered.iter().enumerate() {
         let copy = fresh();
-        moved_use.insert(u, copy);
         picture_ops.push(Op::Create { id: copy, ty: ty("use"), parent: Some(template), order: key(i), facets: doc.facets_of(u).cloned().collect() });
         let e = crate::expand::use_entity(doc, u).expect("checked");
         picture_ops.push(Op::Link { rel: Relation { id: fresh_rel(), from: copy, to: moved[&e], rel: RelKind::Figures, data: BTreeMap::new() } });
-    }
-    // Move document-level instance override patches targeting the selected
-    // entities or pictures into the new definition (anchored at `def`, `EN-5b`).
-    // Sort by original `(layer, rank, id)` so relative winner strength is preserved,
-    // allocate collision-free ranks per `(Some(def), layer)`, and remap `not`
-    // exclusions, targets, and references through `moved`/`moved_use`.
-    let mut patch_ops: Vec<Op> = Vec::new();
-    if let Some(inst_ax) = doc.patches().instance_axis_id() {
-        let mut next_patch = doc.patches().next_patch_id().0;
-        let mut used_ranks: BTreeMap<u32, BTreeSet<OrderKey>> = BTreeMap::new();
-        let mut migrating: Vec<&crate::patch::Patch> = doc
-            .patches()
-            .patches
-            .values()
-            .filter(|p| {
-                p.anchor.is_none()
-                    && matches!(p.region.sels.get(&inst_ax), Some(crate::patch::Sel::Suffix { tail, .. }) if tail.first().is_some_and(|first| moved.contains_key(first) || moved_use.contains_key(first)))
-            })
-            .collect();
-        migrating.sort_by(|a, b| a.layer.cmp(&b.layer).then_with(|| a.rank.cmp(&b.rank)).then_with(|| a.id.cmp(&b.id)));
-        let remap_step = |n: NodeId| moved.get(&n).or_else(|| moved_use.get(&n)).copied().unwrap_or(n);
-        let remap_node = |n: NodeId| -> NodeId {
-            let path = n.path();
-            if let Some(&first) = path.first()
-                && let Some(&to) = moved.get(&first).or_else(|| moved_use.get(&first))
-            {
-                let mut p = vec![to];
-                p.extend_from_slice(&path[1..]);
-                return NodeId::from_path(&p).unwrap_or(n);
-            }
-            n
-        };
-        for p in migrating {
-            let Some(crate::patch::Sel::Suffix { tail, not }) = p.region.sels.get(&inst_ax) else { continue };
-            let new_tail: Vec<NodeId> = tail.iter().map(|&s| remap_step(s)).collect();
-            let new_not: Vec<Vec<NodeId>> = not
-                .iter()
-                .map(|excl| excl.iter().map(|&s| remap_step(s)).collect())
-                .collect();
-            let new_region = p.region.clone().with(inst_ax, crate::patch::Sel::Suffix { tail: new_tail, not: new_not });
-            let ranks = used_ranks.entry(p.layer).or_default();
-            let floor = ranks.iter().next_back().cloned();
-            let rank = crate::patch::PatchTable::alloc_rank(ranks, floor.as_ref());
-            ranks.insert(rank.clone());
-            let new_id = crate::patch::PatchId(next_patch);
-            next_patch += 1;
-            let new_entries = p
-                .entries
-                .iter()
-                .map(|(t, v)| {
-                    let nt = crate::patch::PatchTarget { node: remap_node(t.node), key: t.key };
-                    let nv = match v {
-                        crate::patch::PatchValue::Slot { slot } => crate::patch::PatchValue::Slot {
-                            slot: match slot {
-                                Slot::Bound(e) => Slot::Bound(e.map_refs(&|l: Leaf| Leaf { node: remap_node(l.node), path: l.path })),
-                                Slot::Const(Value::Ref(r)) => Slot::Const(Value::Ref(remap_node(*r))),
-                                other => other.clone(),
-                            },
-                        },
-                        other => other.clone(),
-                    };
-                    (nt, nv)
-                })
-                .collect();
-            let mut cloned = p.clone();
-            cloned.id = new_id;
-            cloned.anchor = Some(def);
-            cloned.region = new_region;
-            cloned.rank = rank;
-            cloned.entries = new_entries;
-            patch_ops.push(Op::Patch(crate::patch::PatchOp::Remove { id: p.id }));
-            patch_ops.push(Op::Patch(crate::patch::PatchOp::Add { patch: cloned }));
+        for (j, &o) in doc.children(u).iter().filter(|&&c| !c.is_expanded() && doc.live(c).is_some_and(|n| n.ty.name() == "override")).enumerate() {
+            picture_ops.push(Op::Create { id: fresh(), ty: ty("override"), parent: Some(copy), order: key(j), facets: doc.facets_of(o).cloned().collect() });
         }
     }
 
@@ -373,7 +304,6 @@ pub fn make(doc: Tree<'_>, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: 
     all.extend(inner_ops);
     all.extend(wiring);
     all.extend(picture_ops);
-    all.extend(patch_ops);
     all.extend(removal);
     all.extend(replace);
     // Ids were handed out as they were needed, not in the order their nodes
@@ -436,44 +366,6 @@ fn remap_op(op: Op, map: &BTreeMap<NodeId, NodeId>) -> Op {
         Op::RemoveFacet { id, kind } => Op::RemoveFacet { id: m(id), kind },
         Op::Link { rel } => Op::Link { rel: Relation { from: m(rel.from), to: m(rel.to), ..rel } },
         Op::Unlink { id } => Op::Unlink { id },
-        Op::Solve { point, leaf, slot } => Op::Solve { point, leaf: Leaf { node: m(leaf.node), path: leaf.path }, slot },
-        Op::Axis(a) => Op::Axis(a),
-        Op::Patch(p) => Op::Patch(remap_patch_op(p, map)),
-    }
-}
-
-fn remap_patch_op(p: crate::patch::PatchOp, map: &BTreeMap<NodeId, NodeId>) -> crate::patch::PatchOp {
-    use crate::patch::{PatchOp, PatchTarget, PatchValue, Sel};
-    let m = |n: NodeId| remap(n, map);
-    let remap_sel = |sel: Sel| match sel {
-        Sel::Suffix { tail, not } => Sel::Suffix {
-            tail: tail.into_iter().map(m).collect(),
-            not: not.into_iter().map(|t| t.into_iter().map(m).collect()).collect(),
-        },
-        other => other,
-    };
-    let remap_val = |v: PatchValue| match v {
-        PatchValue::Slot { slot } => PatchValue::Slot {
-            slot: match slot {
-                Slot::Bound(e) => Slot::Bound(e.map_refs(&|l: Leaf| Leaf { node: m(l.node), path: l.path })),
-                Slot::Const(Value::Ref(r)) => Slot::Const(Value::Ref(m(r))),
-                other => other,
-            },
-        },
-        other => other,
-    };
-    match p {
-        PatchOp::Add { mut patch } => {
-            patch.anchor = patch.anchor.map(m);
-            patch.region.sels = patch.region.sels.into_iter().map(|(a, s)| (a, remap_sel(s))).collect();
-            patch.entries = patch
-                .entries
-                .into_iter()
-                .map(|(t, v)| (PatchTarget { node: m(t.node), key: t.key }, remap_val(v)))
-                .collect();
-            PatchOp::Add { patch }
-        }
-        other => other,
     }
 }
 

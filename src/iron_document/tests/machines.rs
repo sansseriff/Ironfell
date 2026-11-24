@@ -242,7 +242,7 @@ fn an_instance_times_its_transitions_by_an_input_or_an_override() {
     let appear = named_child(&store, def, "transition", "appear");
     let copy = NodeId::expanded(entity, appear).unwrap();
     store.apply(tx("override", vec![Op::Set { id: copy, path: path("transition.ms"), slot: n(100.0) }])).unwrap();
-    assert!(!store.tree().patches().patches.is_empty(), "an override patch on the instance");
+    assert!(store.tree().nodes_of_type(ty("override")).any(|o| store.tree().is_live(o)), "an override on the instance");
     assert_eq!(store.resolved(appear, path("transition.ms")), Some(Value::Number(1000.0)), "the definition keeps its own");
     set_vis(&mut store, entity, "shown");
     store.advance_machines(6.0);

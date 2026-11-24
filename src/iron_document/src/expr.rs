@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// A leaf address: the unit of dependency.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Leaf {
     pub node: NodeId,
     pub path: LeafPath,

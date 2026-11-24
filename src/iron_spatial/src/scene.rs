@@ -358,7 +358,7 @@ impl Scene {
         // order), rebuilds everything.
         let doc = store.tree();
         let roots: BTreeSet<Option<NodeId>> = changes.shaped.iter().filter_map(|n| match n {
-            Some(n) => root_of(doc, *n).or_else(|| self.entries.get(n).map(|e| e.root)),
+            Some(n) => root_of(doc, *n),
             None => Some(None),
         }).collect();
         if roots.iter().flatten().any(|&r| !doc.is_live(r) || is_type(doc, r, "template")) {

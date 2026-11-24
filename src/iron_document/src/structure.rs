@@ -37,9 +37,6 @@ pub(crate) enum Key {
     /// Graph wiring on `leaf`: whether it is bound, whether a producer drives
     /// it, or its binding/tracked dependency edges.
     Wiring(Leaf),
-    /// Patch stack or solve/session layer affecting `n` (engine.md §3.2, EN-4):
-    /// recorded by patch-structure readers (lints, provenance, drag planner).
-    Patch(NodeId),
 }
 
 /// Where a recording tree notes what it reads.

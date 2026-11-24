@@ -8,7 +8,7 @@
 //! the axes, only one axis's values at a time. The tests check each against
 //! enumeration.
 
-use crate::axis::{Axis, AxisId, Kind, Point, ScopeId, Space, ValueId};
+use crate::axis::{Axis, AxisId, Kind, Point, Space, ValueId};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One end of an interval on an ordered axis.
@@ -80,33 +80,6 @@ impl Sel {
                 let p = axis.path(v);
                 ends_with(p, tail) && !not.iter().any(|n| ends_with(p, n))
             }
-        }
-    }
-
-    /// Containment with optional scope anchoring (patches.md §4, P18): a
-    /// pattern written in `anchor` matches only instances passing through
-    /// `anchor`, with its suffix matched strictly inside the sub-path beneath
-    /// that anchor step.
-    pub fn contains_anchored(&self, axis: &Axis, v: ValueId, anchor: Option<ScopeId>) -> bool {
-        let Some(scope) = anchor else {
-            return self.contains(axis, v);
-        };
-        if axis.kind != Kind::Path {
-            return self.contains(axis, v);
-        }
-        let path = axis.path(v);
-        let scopes = axis.scopes(v);
-        match self {
-            Sel::All => scopes.contains(&scope),
-            Sel::Suffix { tail, not } => scopes
-                .iter()
-                .enumerate()
-                .filter(|&(_, &s)| s == scope)
-                .any(|(k, _)| {
-                    let sub = &path[k..];
-                    ends_with(sub, tail) && !not.iter().any(|n| ends_with(sub, n))
-                }),
-            _ => scopes.contains(&scope) && self.contains(axis, v),
         }
     }
 
@@ -282,34 +255,6 @@ impl Product {
                 (Some(axis), Some(&v)) => s.contains(axis, v),
                 // An axis not in play selects nothing of it.
                 _ => false,
-            })
-    }
-
-    /// Containment with optional scope anchoring (patches.md §4, P18). When
-    /// anchored, any `Kind::Path` axis implicitly enforces that the point lies
-    /// inside `anchor`, even if that axis's selection is `Sel::All`.
-    pub fn contains_anchored(&self, space: &Space, point: &Point, anchor: Option<ScopeId>) -> bool {
-        let Some(scope) = anchor else {
-            return self.contains(space, point);
-        };
-        let explicit_ok = self
-            .sels
-            .iter()
-            .all(|(a, s)| match (space.axes.get(a), point.get(a)) {
-                (Some(axis), Some(&v)) => s.contains_anchored(axis, v, Some(scope)),
-                _ => false,
-            });
-        if !explicit_ok {
-            return false;
-        }
-        space
-            .axes
-            .iter()
-            .filter(|(a, ax)| ax.kind == Kind::Path && !self.sels.contains_key(a))
-            .all(|(a, ax)| {
-                point
-                    .get(a)
-                    .is_some_and(|&v| Sel::All.contains_anchored(ax, v, Some(scope)))
             })
     }
 

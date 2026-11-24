@@ -148,23 +148,24 @@ fn a_definition_instantiates_into_an_entity_and_a_figure() {
     // Editing the definition reaches the instance in the same transaction.
     store.apply(tx("wider", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(80.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
-    // Setting a constant on what the instance derives makes an override patch
-    // on the instance (component-model.md §5.3, §7, EN-5b); it survives later
-    // edits to the definition, and undo removes it.
+    // Setting a constant on what the instance derives makes an override on
+    // the instance (component-model.md §5.3, §7); it survives later edits to
+    // the definition, and undo removes it.
     store.apply(tx("narrow", vec![Op::Set { id: copy, path: path("size.w"), slot: num(5.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
-    assert_eq!(store.tree().patches().patches.len(), 1);
+    let o = store.tree().children(u).iter().copied().find(|c| !c.is_expanded()).unwrap();
+    assert_eq!(store.tree().live(o).unwrap().ty.name(), "override");
     store.apply(tx("wider still", vec![Op::Set { id: template_rect, path: path("size.w"), slot: num(90.0) }])).unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(5.0));
-    // A second edit to the same leaf updates that override patch.
+    // A second edit to the same leaf updates that override.
     store.apply(tx("narrower", vec![Op::Set { id: copy, path: path("size.w"), slot: num(4.0) }])).unwrap();
-    assert_eq!(store.tree().patches().patches.len(), 1);
+    assert_eq!(store.tree().children(u).iter().filter(|c| !c.is_expanded()).count(), 1);
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(4.0));
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
     store.undo(1).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "size.w"), Value::Number(80.0));
-    assert!(store.tree().patches().patches.is_empty());
+    assert!(store.tree().live(o).is_none());
     // A bound leaf inverts onto what it reads: the picture's top is
     // `640 - level · 300`, so setting it sets the argument.
     store.apply(tx("raise", vec![Op::Set { id: copy, path: path("transform2d.y"), slot: num(490.0) }])).unwrap();
@@ -295,14 +296,14 @@ fn an_override_outlives_its_target_as_a_stale_override() {
     let copy = store.tree().children(u)[0];
     let (_, template_rect) = copy.expanded_parts().unwrap();
     store.apply(tx("recolour", vec![Op::Set { id: copy, path: path("fill.color"), slot: Slot::Const(Value::Color([1.0, 0.0, 0.0, 1.0])) }])).unwrap();
-    assert!(store.patch_lints().stale.is_empty());
+    assert!(store.stale_overrides().is_empty());
     store.apply(tx("drop the bar", vec![Op::Delete { id: template_rect }])).unwrap();
     assert!(store.tree().live(copy).is_none());
-    let stale = store.patch_lints().stale;
+    let stale = store.stale_overrides();
     assert_eq!(stale.len(), 1, "{stale:?}");
-    assert_eq!(stale[0].1.node, template_rect, "{stale:?}");
+    assert!(stale[0].1.contains(&format!("no {template_rect}")), "{stale:?}");
     store.undo(1).unwrap().unwrap();
-    assert!(store.patch_lints().stale.is_empty());
+    assert!(store.stale_overrides().is_empty());
     assert_eq!(resolved(&store, copy, "fill.color"), Value::Color([1.0, 0.0, 0.0, 1.0]));
 }
 
@@ -321,10 +322,10 @@ fn adding_a_facet_inside_an_instance_is_an_undoable_override() {
     store.preview(copy, path("stroke.width"), Value::Number(7.0));
     store.commit_gesture("outline", Actor::Human, 1).unwrap().unwrap();
     assert_eq!(resolved(&store, copy, "stroke.width"), Value::Number(7.0));
-    assert!(!store.tree().patches().patches.is_empty());
+    assert!(store.tree().children(u).iter().any(|&c| store.tree().live(c).unwrap().ty.name() == "override"));
     store.undo(1).unwrap().unwrap();
     assert!(store.tree().facet(copy, FacetKind::Stroke).is_none());
-    assert!(store.tree().patches().patches.is_empty());
+    assert!(!store.tree().children(u).iter().any(|&c| store.tree().live(c).unwrap().ty.name() == "override"));
 }
 
 /// An in port created on a definition with a plain `create` (as the model

@@ -208,36 +208,6 @@ impl Changes {
                         self.relations.push((a, b));
                     }
                 }
-                Op::Axis(_) => {}
-                Op::Patch(p) => {
-                    use crate::patch::{PatchKey, PatchOp};
-                    match p {
-                        PatchOp::Add { patch } => {
-                            for t in patch.entries.keys() {
-                                if let PatchKey::Leaf(path) = t.key {
-                                    self.slots.insert(Leaf { node: t.node, path });
-                                }
-                            }
-                        }
-                        PatchOp::SetEntry { target, .. } => {
-                            if let PatchKey::Leaf(path) = target.key {
-                                self.slots.insert(Leaf { node: target.node, path });
-                            }
-                        }
-                        PatchOp::Remove { id } | PatchOp::SetRegion { patch: id, .. } | PatchOp::SetRank { patch: id, .. } => {
-                            if let Some(patch) = doc.patches().patches.get(id) {
-                                for t in patch.entries.keys() {
-                                    if let PatchKey::Leaf(path) = t.key {
-                                        self.slots.insert(Leaf { node: t.node, path });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Op::Solve { leaf, .. } => {
-                    self.slots.insert(*leaf);
-                }
             }
         }
         // A delete's inverse recreates what it took, deepest first: the
@@ -246,20 +216,6 @@ impl Changes {
             if let Op::Create { id, parent, .. } = i {
                 self.remove(doc, gone, *id, *parent);
             }
-        }
-    }
-
-    /// Record effective presence transitions from `Docs::reconcile_resolved`
-    /// so `document_bridge` and `iron_spatial` see nodes revealed or removed
-    /// by patches, axis ops, or `set_point` (engine.md §2.3, EN-4b).
-    pub(crate) fn note_resolved_delta(&mut self, doc: Tree<'_>, gone: &Gone, delta: &crate::tree::ResolvedDelta) {
-        for &(id, parent) in &delta.became_present {
-            self.created.push(id);
-            self.depths.insert(id, doc.depth(id));
-            self.structure.insert(parent);
-        }
-        for &(id, parent) in &delta.became_absent {
-            self.remove(doc, gone, id, parent);
         }
     }
 

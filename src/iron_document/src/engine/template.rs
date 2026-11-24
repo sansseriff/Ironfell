@@ -27,11 +27,13 @@
 //! (definition, notation) here, with sized and main in the environment.
 //!
 //! Templates are kept between passes ([`TemplateCache`], in `Owners`),
-//! indexed by the structural [`Key`]s recorded while compiling each entry
-//! (`Tree::recording`, EN-5a). Writes notify the cache via
-//! [`TemplateCache::note_touched`], evicting only entries whose recorded
-//! reads were touched; a rolled-back transaction clears the cache so
-//! templates compiled from uncommitted state never linger.
+//! each with the stamp its scope had when it was compiled: a body's and a
+//! picture's scope is the definition, an authored repeat's the repeat, a
+//! sub-template's its outer template's. A template is current while its
+//! scope's stamp is unchanged (`Document::scope_stamp`): every write under
+//! a definition or repeat stamps it again, a rollback included, and nothing
+//! a compiler reads is outside its scope. So a refused transaction needs
+//! nothing put back here: what it compiled no longer matches.
 
 use crate::definition;
 use crate::document::{RelKind, Relation};
@@ -40,12 +42,11 @@ use crate::expr::{Expr, Leaf};
 use crate::facet::{Facet, FacetKind, LeafPath};
 use crate::id::NodeId;
 use crate::order::OrderKey;
-use crate::patch::{PatchKey, PatchValue};
 use crate::registry::TypeId;
-use crate::structure::{Key, Recorder};
 use crate::value::{Slot, Value};
 use crate::Tree;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// How a node a template refers to is read from one owner's copy.
@@ -85,13 +86,13 @@ pub(crate) struct TNode {
     /// The copy's type: a port_spec's copy is a port.
     pub(crate) ty: TypeId,
     pub(crate) order: OrderKey,
-    pub(crate) facets: Vec<Facet>,
+    facets: Vec<Facet>,
     /// Whether any facet holds a reference to resolve.
-    pub(crate) rewrite: bool,
+    rewrite: bool,
     /// An `in` port's argument: its signal reads the owner's.
-    pub(crate) arg: Option<LeafPath>,
+    arg: Option<LeafPath>,
     /// What an override of this node's copy names as its target.
-    pub(crate) target: NodeId,
+    target: NodeId,
     /// Relations from this node that each owner derives: a connection's
     /// ends, a port's `exposes`, a template's relations.
     pub(crate) rels: Vec<Relation>,
@@ -118,9 +119,10 @@ pub(crate) struct Template {
     locals: HashSet<NodeId>,
     /// A collection's items are ordered after this key.
     pub(crate) after: OrderKey,
-    /// Cache revision assigned by [`TemplateCache`]; ties sub-templates
-    /// to the exact compiled outer template instance (EN-5a).
-    pub(crate) rev: u64,
+    /// What the template is compiled from (a definition, or an authored
+    /// repeat), and its stamp then.
+    scope: NodeId,
+    stamp: u64,
 }
 
 /// One owner, as its template's references resolve against it. Two equal
@@ -136,12 +138,9 @@ pub(crate) struct Env {
     pub(crate) sized: bool,
     /// A collection item.
     pub(crate) item: Option<Item>,
-    /// Enclosing definition scopes with path start offsets `(scope, start)`
-    /// (outermost first), for derived scope-chain layer precedence (`EN-5b`).
-    pub(crate) scopes: Vec<(NodeId, usize)>,
-    /// The patch overrides reaching the owner's copies: `(target, key, value)`,
-    /// resolved from `PatchTable` at `(global, ViewCoord)` (`EN-5b`).
-    pub(crate) overrides: Vec<(NodeId, PatchKey, PatchValue)>,
+    /// The overrides reaching the owner's copies: (target, leaf, value),
+    /// weakest first.
+    pub(crate) overrides: Vec<(NodeId, LeafPath, Value)>,
 }
 
 /// A collection item's part of its environment.
@@ -222,25 +221,23 @@ impl Template {
             }
         }
         let locals = nodes.iter().map(|n| n.local).collect();
-        Template { source, nodes, rels, refs, locals, after, rev: 0 }
+        Template { source, nodes, rels, refs, locals, after, scope: NodeId::from_raw(0), stamp: 0 }
     }
 
     /// Definition `def`'s body (`expand::want_entity`'s copies).
-    /// Compiled strictly from unpatched base storage so templates are
-    /// point-independent (`EN-5b`).
     pub(crate) fn body(doc: Tree<'_>, def: NodeId) -> Template {
         let inputs = definition::inputs_of(doc, def).unwrap_or_default();
         let port = TypeId::lookup("port").expect("registered");
         let mut nodes = Vec::new();
-        for &child in doc.base_children(def).iter() {
+        for &child in doc.children(def).iter() {
             // A session node gets no copy (`NodeId::expanded`).
-            let Some(node) = doc.base_live(child).filter(|_| !child.is_session()) else { continue };
+            let Some(node) = doc.live(child).filter(|_| !child.is_session()) else { continue };
             let ty = match node.ty.name() {
                 "port_spec" => port,
                 "equation" | "entity" | "connection" | "channel" | "machine" | "let" | "trace" | "accumulate" | "query" => node.ty,
                 _ => continue,
             };
-            let mut t = TNode::new(child, def, ty, node.order.clone(), doc.base_facets_of(child).cloned().collect());
+            let mut t = TNode::new(child, def, ty, node.order.clone(), doc.facets_of(child).cloned().collect());
             t.top = true;
             t.arg = inputs.iter().find(|i| i.spec == child).map(|i| LeafPath::new(FacetKind::Args, i.name).expect("argument path"));
             if matches!(node.ty.name(), "connection" | "port_spec") {
@@ -252,41 +249,53 @@ impl Template {
         // after the ports they read.
         // A session node gets no copy, so nothing under it does either.
         let copied = |n: NodeId| !n.is_expanded() && !n.is_session();
-        for &machine in doc.base_children(def).iter().filter(|&&c| !c.is_session() && doc.base_live(c).is_some_and(|n| n.ty.name() == "machine")) {
-            let mut stack: Vec<NodeId> = doc.base_children(machine).iter().rev().copied().filter(|&c| copied(c)).collect();
+        for &machine in doc.children(def).iter().filter(|&&c| !c.is_session() && doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
+            let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|&c| copied(c)).collect();
             while let Some(local) = stack.pop() {
-                let Some(n) = doc.base_live(local) else { continue };
+                let Some(n) = doc.live(local) else { continue };
                 let Some(parent) = n.parent else { continue };
-                nodes.push(TNode::new(local, parent, n.ty, n.order.clone(), doc.base_facets_of(local).cloned().collect()));
-                stack.extend(doc.base_children(local).iter().rev().copied().filter(|&c| copied(c)));
+                nodes.push(TNode::new(local, parent, n.ty, n.order.clone(), doc.facets_of(local).cloned().collect()));
+                stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
             }
         }
-        Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside))
+        Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside)).in_scope(doc, def)
+    }
+
+    fn in_scope(mut self, doc: Tree<'_>, scope: NodeId) -> Template {
+        self.scope = scope;
+        self.stamp = doc.scope_stamp(scope);
+        self
+    }
+
+    /// Whether the document is as it was when this was compiled.
+    fn current(&self, doc: Tree<'_>) -> bool {
+        doc.scope_stamp(self.scope) == self.stamp
     }
 
     /// Definition `def`'s picture from its template node `template`
     /// (`expand::want_use`'s copies): preorder, each `use` without its
-    /// subtree. Compiled strictly from unpatched base storage so templates are
-    /// point-independent (`EN-5b`).
+    /// subtree. A template's own derived children and its overrides are
+    /// not copied, nor a session node or anything under it (it gets no
+    /// copy, `NodeId::expanded`).
     pub(crate) fn picture(doc: Tree<'_>, def: NodeId, template: NodeId) -> Template {
-        let inside: BTreeSet<NodeId> = doc.base_descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.base_live(n).is_some();
+        let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.live(n).is_some_and(|x| x.ty.name() != "override");
         let mut nodes = Vec::new();
-        let mut stack: Vec<NodeId> = doc.base_children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
+        let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
         while let Some(local) = stack.pop() {
-            let Some(node) = doc.base_live(local) else { continue };
+            let Some(node) = doc.live(local) else { continue };
             let Some(parent) = node.parent else { continue };
-            let mut t = TNode::new(local, parent, node.ty, node.order.clone(), doc.base_facets_of(local).cloned().collect());
+            let mut t = TNode::new(local, parent, node.ty, node.order.clone(), doc.facets_of(local).cloned().collect());
             if node.ty.name() == "use" {
                 if let Some(r) = doc.relations_from(local).find(|r| r.rel == RelKind::Figures) {
                     t.own = !inside.contains(&r.to.path()[0]);
-                    t.figures = Some(r.clone());
+t.figures = Some(r.clone());
                 }
                 nodes.push(t);
                 continue;
             }
             nodes.push(t);
-            stack.extend(doc.base_children(local).iter().rev().copied().filter(|&c| copied(c)));
+            stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
         }
         Template::classify(Source::Picture(template), nodes, Vec::new(), OrderKey::first(), |id| {
             if id == template {
@@ -301,28 +310,48 @@ impl Template {
                 None
             }
         })
+        .in_scope(doc, def)
     }
 
     /// Authored repeat (or conditional) `r`'s template: its children that
     /// are not items, and their subtrees, parents first, with the
-    /// relations from them. Compiled strictly from unpatched base storage (`EN-5b`).
+    /// relations from them. An override is the repeat's own opinion about
+    /// one item's copy, not part of what items copy; a session node gets no
+    /// copy, nor anything under it, and does not order the items.
     pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
         let mut nodes = Vec::new();
         let mut rels = Vec::new();
         let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
-        let mut stack: Vec<NodeId> = doc.base_children(r).iter().rev().copied().filter(copied).collect();
+        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.base_live(n) else { continue };
-            nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.base_facets_of(n).cloned().collect()));
+            let Some(node) = doc.live(n).filter(|x| x.ty.name() != "override") else { continue };
+            nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
-            stack.extend(doc.base_children(n).iter().rev().copied().filter(copied));
+            stack.extend(doc.children(n).iter().rev().copied().filter(copied));
         }
-        Template::collection(r, nodes, rels)
+        Template::collection(r, nodes, rels).in_scope(doc, r)
     }
 
-    /// Whether a copy of node `i` derives its own scope (an instance,
-    /// picture, or repeat).
-    #[allow(dead_code)]
+    /// Which of this template's nodes are, with every reference they hold
+    /// classed alike, as `was` has them: `None` when the two copy different
+    /// sources or class a reference differently. For one environment such a
+    /// node's copy is the copy `was` made.
+    pub(crate) fn same_nodes(&self, was: &Template) -> Option<Vec<bool>> {
+        if self.source != was.source || self.refs != was.refs {
+            return None;
+        }
+        let old: HashMap<NodeId, &TNode> = was.nodes.iter().map(|n| (n.local, n)).collect();
+        Some(self.nodes.iter().map(|n| old.get(&n.local).is_some_and(|o| *o == n)).collect())
+    }
+
+    /// Node `local`'s copy for `env`, if this template has the node.
+    pub(crate) fn materialise_local(&self, local: NodeId, env: &Env) -> Option<Vec<Facet>> {
+        let i = self.nodes.iter().position(|n| n.local == local)?;
+        Some(self.materialise(i, env))
+    }
+
+    /// Whether a kept copy of node `i` must be read for what it derives: an
+    /// instance, a picture, or a repeat (`want_scopes`).
     pub(crate) fn derives(&self, i: usize) -> bool {
         let n = &self.nodes[i];
         matches!(n.ty.name(), "entity" | "use") || n.facets.iter().any(|f| expand::owns_items(f.kind()))
@@ -344,7 +373,7 @@ impl Template {
             nodes.push(TNode::new(n.local, n.parent, n.ty, n.order.clone(), n.facets.clone()));
         }
         rels.extend(outer.rels.iter().filter(|x| x.from != l && under.contains(&x.from)).cloned());
-        Template::collection(l, nodes, rels)
+        Template { scope: outer.scope, stamp: outer.stamp, ..Template::collection(l, nodes, rels) }
     }
 
     fn collection(r: NodeId, nodes: Vec<TNode>, rels: Vec<Relation>) -> Template {
@@ -475,12 +504,13 @@ impl Template {
     }
 }
 
-/// `env`'s patch overrides of node `n`'s copy: an item's outer owner's first.
+/// `env`'s overrides of node `n`'s copy: an item's outer owner's first.
 fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) {
     if let Some(item @ Item { outer: Some((outer_t, outer)), .. }) = &env.item {
         apply_overrides(outer_t, n, outer, facets);
         // An outer override naming a node under this template's, as the
-        // outer owner copies it, names the item's copy (`Template::into_item`).
+        // outer owner copies it, names the item's copy
+        // (`Template::into_item`).
         if outer_sets_a_node(n, outer) {
             for f in facets.iter_mut() {
                 for field in f.field_names() {
@@ -494,186 +524,44 @@ fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) 
             }
         }
     }
-    let mut suppressed: HashSet<FacetKind> = HashSet::new();
-    for (target, key, val) in &env.overrides {
+    for (target, leaf, value) in &env.overrides {
         if *target != n.target {
             continue;
         }
-        if let (PatchKey::FacetPresent(fk), PatchValue::Bool { v }) = (key, val) {
-            if *v {
-                if !facets.iter().any(|f| f.kind() == *fk) && n.ty.spec().allows(*fk) {
-                    facets.push(fk.default_facet());
-                }
-            } else {
-                suppressed.insert(*fk);
-                facets.retain(|f| f.kind() != *fk);
+        if !facets.iter().any(|f| f.kind() == leaf.facet) {
+            if !n.ty.spec().allows(leaf.facet) {
+                continue;
             }
+            facets.push(leaf.facet.default_facet());
+        }
+        if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
+            let _ = f.set(leaf.field, Slot::Const(value.clone()));
         }
     }
-    for (target, key, val) in &env.overrides {
-        if *target != n.target {
-            continue;
-        }
-        match (key, val) {
-            (PatchKey::Leaf(leaf), PatchValue::Slot { slot }) => {
-                // P21: field writes never synthesize missing optional facets implicitly.
-                if suppressed.contains(&leaf.facet) {
-                    continue;
-                }
-                if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
-                    let _ = f.set(leaf.field, slot.clone());
-                }
-            }
-            (PatchKey::Notation, PatchValue::Notation { notation }) => {
-                if let Some(Facet::Use(u)) = facets.iter_mut().find(|f| matches!(f, Facet::Use(_))) {
-                    u.notation = Slot::Const(Value::Str(notation.clone()));
-                }
-            }
-            _ => {}
-        }
-    }
-    // Keep facets in `FacetKind` order (matching `Document::facets_of` / `BTreeMap`).
-    facets.sort_by_key(Facet::kind);
 }
 
 /// Whether an override reaching `env` (or an owner it is an item of) sets
-/// node `n`'s copy to a node reference.
+/// node `n`'s copy to a node.
 fn outer_sets_a_node(n: &TNode, env: &Env) -> bool {
-    env.overrides.iter().any(|(target, _, v)| {
-        *target == n.target && matches!(v, PatchValue::Slot { slot: Slot::Const(Value::Ref(_)) })
-    }) || matches!(&env.item, Some(Item { outer: Some((_, outer)), .. }) if outer_sets_a_node(n, outer))
+    env.overrides.iter().any(|(target, _, v)| *target == n.target && matches!(v, Value::Ref(_)))
+        || matches!(&env.item, Some(Item { outer: Some((_, outer)), .. }) if outer_sets_a_node(n, outer))
 }
 
-/// One cached template entry's lookup key, used by the reverse dependency index.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum CacheKey {
-    Body(NodeId),
-    Picture(NodeId, String),
-    Repeat(NodeId),
-}
-
-/// The templates compiled so far, kept between passes and invalidated by
-/// recorded structural reads (`Tree::recording` -> `Key` reverse index, EN-5a).
+/// The templates compiled so far, kept between passes: each is used while
+/// it is current ([`Template::current`]) and compiled again when not.
 #[derive(Clone, Default)]
 pub(crate) struct TemplateCache {
-    next_rev: u64,
     bodies: HashMap<NodeId, Arc<Template>>,
-    /// A definition without a template for a notation is cached too (`None`),
-    /// with its recorded reads so adding that notation invalidates it.
-    pictures: HashMap<(NodeId, String), Option<Arc<Template>>>,
+    /// A definition without a template for a notation is cached too, with
+    /// the definition's stamp.
+    pictures: HashMap<(NodeId, String), (u64, Option<Arc<Template>>)>,
     /// Each authored repeat's or conditional's.
     repeats: HashMap<NodeId, Arc<Template>>,
-    /// Each sub-template, keyed by its outer template's revision and the
-    /// repeat node inside that outer template.
-    subs: HashMap<(u64, NodeId), Arc<Template>>,
-    /// Sub-template repeat ids owned by each outer revision, for O(subs)
-    /// eviction when an outer template is invalidated.
-    subs_by_rev: HashMap<u64, Vec<NodeId>>,
-    /// Forward recorded-read dependencies per cached entry.
-    deps: HashMap<CacheKey, Vec<Key>>,
-    /// Reverse index from structural `Key` to cached entries that read it.
-    by_key: HashMap<Key, Vec<CacheKey>>,
-}
-
-impl TemplateCache {
-    fn alloc_rev(&mut self) -> u64 {
-        self.next_rev += 1;
-        self.next_rev
-    }
-
-    fn record_deps(&mut self, ck: CacheKey, raw: Vec<Key>) {
-        let mut seen = HashSet::with_capacity(raw.len());
-        let mut uniq = Vec::with_capacity(raw.len());
-        for k in raw {
-            if seen.insert(k) {
-                uniq.push(k);
-            }
-        }
-        for &k in &uniq {
-            self.by_key.entry(k).or_default().push(ck.clone());
-        }
-        self.deps.insert(ck, uniq);
-    }
-
-    fn evict_rev(&mut self, root_rev: u64) {
-        let mut stack = vec![root_rev];
-        while let Some(r) = stack.pop() {
-            if let Some(locals) = self.subs_by_rev.remove(&r) {
-                for l in locals {
-                    if let Some(sub) = self.subs.remove(&(r, l)) {
-                        stack.push(sub.rev);
-                    }
-                }
-            }
-        }
-    }
-
-    fn evict(&mut self, ck: &CacheKey) {
-        let removed_rev = match ck {
-            CacheKey::Body(def) => self.bodies.remove(def).map(|t| t.rev),
-            CacheKey::Picture(def, notation) => self.pictures.remove(&(*def, notation.clone())).flatten().map(|t| t.rev),
-            CacheKey::Repeat(r) => self.repeats.remove(r).map(|t| t.rev),
-        };
-        if let Some(r) = removed_rev {
-            self.evict_rev(r);
-        }
-        if let Some(old_deps) = self.deps.remove(ck) {
-            for k in old_deps {
-                if let Some(list) = self.by_key.get_mut(&k) {
-                    list.retain(|x| x != ck);
-                    if list.is_empty() {
-                        self.by_key.remove(&k);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Evict every cached template whose recorded reads intersect `keys`.
-    pub(crate) fn note_touched(&mut self, keys: &[Key]) {
-        if self.by_key.is_empty() || keys.is_empty() {
-            return;
-        }
-        let mut to_evict: Vec<CacheKey> = Vec::new();
-        for k in keys {
-            if let Some(list) = self.by_key.remove(k) {
-                to_evict.extend(list);
-            }
-        }
-        for ck in to_evict {
-            self.evict(&ck);
-        }
-    }
-
-    /// Drop every cached entry (called on transaction rollback so templates
-    /// compiled from uncommitted state never survive).
-    pub(crate) fn clear(&mut self) {
-        self.bodies.clear();
-        self.pictures.clear();
-        self.repeats.clear();
-        self.subs.clear();
-        self.subs_by_rev.clear();
-        self.deps.clear();
-        self.by_key.clear();
-    }
-
-    /// Revision of a cached body template, if present (for tests).
-    #[allow(dead_code)]
-    pub(crate) fn body_rev(&self, def: NodeId) -> Option<u64> {
-        self.bodies.get(&def).map(|t| t.rev)
-    }
-
-    /// Revision of a cached picture template, if present and `Some` (for tests).
-    #[allow(dead_code)]
-    pub(crate) fn picture_rev(&self, def: NodeId, notation: &str) -> Option<u64> {
-        self.pictures.get(&(def, notation.to_owned())).and_then(|o| o.as_ref()).map(|t| t.rev)
-    }
-
-    /// Whether `(def, notation)` is cached (even as `None`, for tests).
-    #[allow(dead_code)]
-    pub(crate) fn has_picture_entry(&self, def: NodeId, notation: &str) -> bool {
-        self.pictures.contains_key(&(def, notation.to_owned()))
-    }
+    /// Each sub-template, by the template it is part of (its source and
+    /// scope) and its repeat there: a repeat in a definition outside a
+    /// library is drawn in place and copied into pictures, two templates
+    /// whose sub-templates have the same source and differ in scope.
+    subs: HashMap<(Source, NodeId, NodeId), Arc<Template>>,
 }
 
 impl std::fmt::Debug for TemplateCache {
@@ -682,93 +570,116 @@ impl std::fmt::Debug for TemplateCache {
     }
 }
 
-/// One pass's view of the compiled templates, forwarding each template's
-/// recorded structural dependencies into any recording [`Tree`] caller (`EN-5b`).
+/// One pass's view of the templates: the kept ones, and each node's own
+/// overrides, read once in the pass.
+/// What each piece's last applied expansion copied, by the piece's owner (an
+/// entity's body, a picture, an item scope): the template and environment.
+pub(crate) type Pieces = HashMap<NodeId, (Arc<Template>, Arc<Env>)>;
+
 pub(crate) struct Templates<'c> {
     cache: &'c mut TemplateCache,
+    /// The pieces' records, when copies made as recorded may be kept.
+    made: Option<&'c Pieces>,
+    /// The copies a constraint cluster holds (`Owners::held`).
+    held: Option<&'c std::collections::BTreeSet<NodeId>>,
+    own: HashMap<NodeId, Rc<[expand::OwnOverride]>>,
+    /// `Template::same_nodes` for each (recorded, current) pair compared
+    /// this pass, by address.
+    same: HashMap<(usize, usize), Option<Rc<[bool]>>>,
 }
 
 impl<'c> Templates<'c> {
     pub(crate) fn new(cache: &'c mut TemplateCache) -> Templates<'c> {
-        Templates { cache }
+        Templates { cache, made: None, held: None, own: HashMap::new(), same: HashMap::new() }
+    }
+
+    /// A pass that may keep copies their piece's record says are current.
+    pub(crate) fn recorded(cache: &'c mut TemplateCache, made: &'c Pieces, held: &'c std::collections::BTreeSet<NodeId>) -> Templates<'c> {
+        Templates { cache, made: Some(made), held: Some(held), own: HashMap::new(), same: HashMap::new() }
+    }
+
+    /// What piece `piece`'s last accepted expansion copied.
+    pub(crate) fn record(&self, piece: NodeId) -> Option<&'c (Arc<Template>, Arc<Env>)> {
+        self.made?.get(&piece)
+    }
+
+    /// Whether a constraint cluster holds copy `id`.
+    pub(crate) fn held(&self, id: NodeId) -> bool {
+        self.held.is_some_and(|h| h.contains(&id))
+    }
+
+    /// Which of `t`'s nodes piece `piece` copies as its last applied
+    /// expansion did: its environment is the one recorded, and the node
+    /// the same in the recorded template (`same_nodes`).
+    pub(crate) fn kept(&mut self, piece: NodeId, t: &Arc<Template>, env: &Env) -> Option<Rc<[bool]>> {
+        let (was, at) = self.made?.get(&piece)?;
+        if **at != *env {
+            return None;
+        }
+        self.same_nodes(was, t)
+    }
+
+    /// Which of `now`'s nodes make the same copy as `was` made of them, for
+    /// an equal environment (`Template::same_nodes`), compared once a pass.
+    pub(crate) fn same_nodes(&mut self, was: &Arc<Template>, now: &Arc<Template>) -> Option<Rc<[bool]>> {
+        let key = (Arc::as_ptr(was) as usize, Arc::as_ptr(now) as usize);
+        self.same.entry(key).or_insert_with(|| now.same_nodes(was).map(Rc::from)).clone()
     }
 
     pub(crate) fn body(&mut self, doc: Tree<'_>, def: NodeId) -> Arc<Template> {
-        let ck = CacheKey::Body(def);
-        if let Some(t) = self.cache.bodies.get(&def) {
-            if let Some(deps) = self.cache.deps.get(&ck) {
-                doc.note_all(deps);
+        match self.cache.bodies.get(&def) {
+            Some(t) if t.current(doc) => t.clone(),
+            _ => {
+                let t = Arc::new(Template::body(doc, def));
+                self.cache.bodies.insert(def, t.clone());
+                t
             }
-            return t.clone();
         }
-        let rec = Recorder::default();
-        let mut t = Template::body(doc.recording(&rec), def);
-        t.rev = self.cache.alloc_rev();
-        let t = Arc::new(t);
-        self.cache.bodies.insert(def, t.clone());
-        self.cache.record_deps(ck.clone(), rec.into_inner());
-        if let Some(deps) = self.cache.deps.get(&ck) {
-            doc.note_all(deps);
-        }
-        t
     }
 
     pub(crate) fn picture(&mut self, doc: Tree<'_>, def: NodeId, notation: &str) -> Option<Arc<Template>> {
         let key = (def, notation.to_owned());
-        let ck = CacheKey::Picture(def, notation.to_owned());
-        if let Some(t) = self.cache.pictures.get(&key) {
-            if let Some(deps) = self.cache.deps.get(&ck) {
-                doc.note_all(deps);
-            }
+        let stamp = doc.scope_stamp(def);
+        if let Some((at, t)) = self.cache.pictures.get(&key)
+            && *at == stamp
+        {
             return t.clone();
         }
-        let rec = Recorder::default();
-        let rdoc = doc.recording(&rec);
-        let t = definition::template_of(rdoc, def, notation).map(|template| {
-            let mut compiled = Template::picture(rdoc, def, template);
-            compiled.rev = self.cache.alloc_rev();
-            Arc::new(compiled)
-        });
-        self.cache.pictures.insert(key, t.clone());
-        self.cache.record_deps(ck.clone(), rec.into_inner());
-        if let Some(deps) = self.cache.deps.get(&ck) {
-            doc.note_all(deps);
-        }
+        let t = definition::template_of(doc, def, notation).map(|template| Arc::new(Template::picture(doc, def, template)));
+        self.cache.pictures.insert(key, (stamp, t.clone()));
         t
     }
 
     /// Authored repeat `r`'s template.
     pub(crate) fn repeat(&mut self, doc: Tree<'_>, r: NodeId) -> Arc<Template> {
-        let ck = CacheKey::Repeat(r);
-        if let Some(t) = self.cache.repeats.get(&r) {
-            if let Some(deps) = self.cache.deps.get(&ck) {
-                doc.note_all(deps);
+        match self.cache.repeats.get(&r) {
+            Some(t) if t.current(doc) => t.clone(),
+            _ => {
+                let t = Arc::new(Template::repeat(doc, r));
+                self.cache.repeats.insert(r, t.clone());
+                t
             }
-            return t.clone();
         }
-        let rec = Recorder::default();
-        let mut t = Template::repeat(doc.recording(&rec), r);
-        t.rev = self.cache.alloc_rev();
-        let t = Arc::new(t);
-        self.cache.repeats.insert(r, t.clone());
-        self.cache.record_deps(ck.clone(), rec.into_inner());
-        if let Some(deps) = self.cache.deps.get(&ck) {
-            doc.note_all(deps);
-        }
-        t
     }
 
-    /// The template of a copy of `outer`'s repeat `l`, tied to `outer.rev`.
+    /// The template of a copy of `outer`'s repeat `l`, current as `outer`
+    /// is.
     pub(crate) fn sub(&mut self, outer: &Template, l: NodeId) -> Arc<Template> {
-        let key = (outer.rev, l);
-        if let Some(t) = self.cache.subs.get(&key) {
-            return t.clone();
+        let key = (outer.source, outer.scope, l);
+        match self.cache.subs.get(&key) {
+            Some(t) if t.scope == outer.scope && t.stamp == outer.stamp => t.clone(),
+            _ => {
+                let t = Arc::new(Template::sub(outer, l));
+                self.cache.subs.insert(key, t.clone());
+                t
+            }
         }
-        let mut t = Template::sub(outer, l);
-        t.rev = self.cache.alloc_rev();
-        let t = Arc::new(t);
-        self.cache.subs.insert(key, t.clone());
-        self.cache.subs_by_rev.entry(outer.rev).or_default().push(l);
-        t
+    }
+
+    /// The overrides that reach `owner`'s copies, as (target, leaf, value),
+    /// weakest first (`expand::overrides_by`), each node's own read once.
+    pub(crate) fn overrides(&mut self, doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Value)> {
+        let own = &mut self.own;
+        expand::overrides_by(owner, |n| own.entry(n).or_insert_with(|| expand::own_overrides(doc, n).into()).clone()).into_iter().map(|(_, t, l, v)| (t, l, v)).collect()
     }
 }

@@ -86,17 +86,13 @@ Static component instances (`<place>` / `use`) are answered through `Tree` as **
 views** over shared compiled templates plus the active patch stack for their instance
 path, rather than copying nodes into `Docs::copies`:
 
-- **Read path & sparse resolved store (settled by `EN-3` spike):** `Tree` answers effective
-  values at the live point while preserving its borrowed `&'a` API (`Tree::facet`,
-  `Tree::get::<T>`, `Tree::leaf`) with `0` heap allocations per read. A sparse,
-  non-journaled `Resolved` table inside `Docs` (updated eagerly in Stage 1, with
-  `base_facet()` alongside for inspector/planner) holds only patched authored nodes
-  (`EN-4`) and rewritten/patched virtual nodes (`EN-5`); unpatched constant virtual nodes
-  borrow directly from shared `Arc<Template>`. In `tests/views_spike.rs` (700 meters × 62
-  nodes = 43,400 virtual nodes, 10% patched), this cut memory from 31.30 MB to 0.77 MB
-  (2.5% of materialized), delivered 15.8–22.4 ns / 0 allocs per read vs 744–2,700 ns /
-  1–17 allocs for fully-virtual resolution, and reconciled a single-owner patch edit in
-  55.3 µs (enabled by zero-alloc `NodeId::expanded_parts()` metadata in `id.rs`).
+- **Read path & sparse resolved store:** `Tree` answers effective values at the live point
+  while preserving its borrowed `&'a` API. A sparse, non-journaled `Resolved` table inside
+  `Docs` (updated eagerly in Stage 1, with `base_facet()` alongside for inspector/planner)
+  holds only patched authored nodes (`EN-4`) and rewritten/patched virtual nodes (`EN-5`);
+  unpatched constant virtual nodes borrow directly from shared `Arc<Template>`. The `EN-3`
+  spike benchmarks this against fully-virtual per-field resolution before `EN-4` freezes
+  the representation.
 - **View deltas & keys:** Stage 1 diffs each view's record (template `Arc`, environment,
   notation, absent set, sparse resolved nodes) and emits ordinary effective `Node(v)`,
   `Children(v)`, `Facet(v, k)`, `Leaf`, `Relations`, and old/new `In`/`With` keys (plus
@@ -106,24 +102,16 @@ path, rather than copying nodes into `Docs::copies`:
   effective keys. Scoped indexes `In(root, ty)` / `With(root, kind)` index views per
   `(root, ty/kind)` + template local lists minus absent sets rather than inserting every
   virtual `NodeId`. Template compilation moves off `scope_stamp` onto recorded reads.
-- **Per-view coordinates & derived instance/layer semantics (`EN-5a`):** A single global
-  `Point` covers document-level axes (`EN-4`), while each virtual view adds its own
-  derived placement path and component-local coordinates (`(global point, placement path,
-  local state/clock)`). Instance coordinates are derived from the view's placement path
-  (never saved as authored `AxisValue`s), and patch layer precedence is derived from the
-  enclosing scope chain of `anchor` (outermost scope wins without globally renumbering
-  `u32` layer integers).
 - **Solver write-backs on instances (dedicated solve layer):** Solved values on instance
-  parts live in a system-owned **solve layer** keyed by `(DiscretePoint, Leaf)` (between
-  the document layer and session; saved; discrete axis coordinates + exact instance leaf,
-  excluding continuous `times`, so solved poses on one slide or state never mask another;
-  written only by Stage 4 `Transaction` solves). An authored write in the same transaction
-  that moves a leaf with a solve entry clears that entry first (as a derived op) so the
-  authored edit acts as a solver driver; deleting a constraint clears the solve entries of
-  copies no cluster holds (revealing the underlying value cleanly); undo, redo, and replay
-  apply recorded ops only with no re-solve or re-release. Live drag previews write to a
-  gesture-owned session patch (constants on leaves only, discarded on cancel). This
-  deletes `Owners::solved`, `keep_solved`, `release`, and `apply_recorded`.
+  parts live in a system-owned **solve layer** (between the document layer and session;
+  saved; region always the exact instance path; at most one entry per leaf; written only
+  by Stage 4 `Transaction` solves). An authored write in the same transaction that moves a
+  leaf with a solve entry clears that entry first (as a derived op) so the authored edit
+  acts as a solver driver; deleting a constraint clears the solve entries of copies no
+  cluster holds (revealing the underlying value cleanly); undo, redo, and replay apply
+  recorded ops only with no re-solve or re-release. Live drag previews write to a
+  gesture-owned session patch discarded on cancel. This deletes `Owners::solved`,
+  `keep_solved`, `release`, and `apply_recorded`.
 - **Dynamic repeats and `when`:** `EN-5` introduces a minimal keyed `ItemTable`
   (`repeat view id → Vec<ItemRecord>` holding membership, order, value, index, and
   presence/exit state) so `Docs::copies` can be deleted completely in `EN-5`; item
@@ -151,14 +139,12 @@ For any live leaf at the active point, highest precedence first:
    on cancel).
 2. **Binding cell value** (if the effective slot holds a formula — bindings always outrank
    producers and solver poses).
-3. **Producer signal** (layout, network, items, state, selection, theme, machines, clips,
-   steps, presence, queries, events, hosts — resolved by explicit fixed `ProducerId`
-   priority rank, with **layout outranking clips**; waiting requests promote automatically
-   on release). Clips stay at **Tier 3** and evaluate via compiled mux/interpolation cells
-   reading `clock()`, never via per-frame `ResolvedStore` reconciliation (`EN-6b`).
-4. **Solve layer** (system-owned `(DiscretePoint, Leaf)` entries for held constraint
-   poses; never shadows a binding, producer, or another slide/state's pose; reports
-   `Leaf(v)` for self-trigger suppression).
+3. **Producer signal** (layout, network, items, state, selection, theme, machines, steps,
+   presence, queries, events, hosts — resolved by explicit fixed `ProducerId` priority
+   rank, with **layout outranking clips**; waiting requests promote automatically on
+   release).
+4. **Solve layer** (system-owned exact-instance-path entries for held constraint poses;
+   never shadows a binding or producer; reports `Leaf(v)` for self-trigger suppression).
 5. **Winning authored patch entry** (by `(layer, rank)` across active axes).
 6. **Base authored / template constant** (or facet default).
 

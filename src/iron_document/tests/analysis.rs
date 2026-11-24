@@ -4,7 +4,7 @@
 //! the part it touches.
 
 use iron_document::analysis::{self, Channel, Class, Input};
-use iron_document::facet::{Composition, Name};
+use iron_document::facet::{Composition, Name, Override};
 use iron_document::*;
 
 fn ty(n: &str) -> TypeId {
@@ -99,16 +99,13 @@ fn an_override_keys_the_part_it_touches() {
     let doc = store.tree();
     let a = analysis::classify(doc, store.reactive(), u).unwrap();
     let dial = a.parts.iter().find(|p| name(doc, p.node) == "dial").unwrap().node;
-    let copy = NodeId::expanded(u, dial).unwrap();
+    let mut o = Override::default();
+    o.target = Slot::Const(Value::Ref(dial));
+    o.leaf = Slot::Const(Value::Str("fill.color".into()));
+    o.value = Slot::Const(Value::Color([0.2, 0.2, 0.2, 1.0]));
+    let id = doc.next_id();
     store
-        .apply(TransactionInput {
-            label: "override".into(),
-            actor: Actor::Human,
-            ts: 0,
-            idempotency_key: None,
-            ops: vec![Op::Set { id: copy, path: "fill.color".parse().unwrap(), slot: Slot::Const(Value::Color([0.2, 0.2, 0.2, 1.0])) }],
-            exact: false,
-        })
+        .apply(TransactionInput { label: "override".into(), actor: Actor::Human, ts: 0, idempotency_key: None, ops: vec![Op::Create { id, ty: ty("override"), parent: Some(u), order: OrderKey::first(), facets: vec![o.wrap()] }], exact: false })
         .unwrap();
     let doc = store.tree();
     let a = analysis::classify(doc, store.reactive(), u).unwrap();

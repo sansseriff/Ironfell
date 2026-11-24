@@ -2849,7 +2849,7 @@ pub fn narrative_targets(app: &mut WorkerApp, query: String) -> String {
     narrative_run(app, |store| {
         let doc = store.tree();
         let q = query.to_lowercase();
-        let skip = ["block", "narrative", "session", "selection", "port_spec", "template", "constraint", "contour", "point"];
+        let skip = ["block", "narrative", "session", "selection", "port_spec", "template", "override", "constraint", "contour", "point"];
         let mut hits: Vec<(usize, String, iron_document::NodeId)> = Vec::new();
         for node in doc.nodes() {
             let id = node.id;

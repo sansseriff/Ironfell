@@ -767,6 +767,17 @@ facets! {
         mode: Enum = Value::Enum("linked".to_owned()) => ["linked", "detached", "main"],
     }
 
+    /// A per-instance change to one leaf of what an instance derives
+    /// (component-model.md §5.3): `target` is the definition node, `leaf`
+    /// the path in it (`fill.color`), `value` the constant that replaces the
+    /// definition's. An `override` node is a child of the instance (its
+    /// entity, or a `use`); expansion applies it after copying the template.
+    Override / "override" => Override {
+        target: Ref = Value::Ref(crate::id::NodeId::from_raw(0)),
+        leaf: Str = Value::Str(String::new()),
+        value: Any = Value::Number(0.0),
+    }
+
     /// Where a port sits on a picture (component-model.md, anchors): an
     /// `empty` carrying this marks `port`. `wx`, `wy` are its position in its
     /// composition, derived by the graph from its ancestors' transforms

@@ -149,9 +149,6 @@ pub struct Document {
     /// Which scope this document is (scopes.md §3). Identity metadata, not
     /// content: set by the store, saved in the header, never an op.
     scope: Option<ScopeId>,
-    /// Variation axes, authored patches, dedicated solve layer (P17), and
-    /// in-memory patch indexes (plans/specs/patches.md, EN-4).
-    patches: crate::patch::PatchTable,
 
     // Derived. Rebuilt incrementally by the mutators, wholesale by `reindex`.
     // Only live nodes appear in these.
@@ -170,9 +167,39 @@ pub struct Document {
     /// The open transaction's undo records (reactive-engine handoff §4.3,
     /// task 2). Outside equality and cloning: a clone has none open.
     journal: JournalCell,
+    /// Each definition's and repeat's (or conditional's) last write under
+    /// it ([`Document::scope_stamp`]). Not content.
+    scopes: Scopes,
     /// The structural keys written since the store last took them
     /// (structure-in-the-graph.md §3.3). Not content.
     touched: crate::structure::Touched,
+}
+
+/// When each scope was last written under: a stamp from one counter for
+/// the process, so no stamp is ever given twice, whether by a rollback, a
+/// clone going its own way, or another document. A scope never written is
+/// at the document's `base`. Equal to any other.
+#[derive(Clone, Debug)]
+struct Scopes {
+    base: u64,
+    last: std::collections::HashMap<NodeId, u64>,
+}
+
+fn next_stamp() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl Default for Scopes {
+    fn default() -> Scopes {
+        Scopes { base: next_stamp(), last: Default::default() }
+    }
+}
+
+impl PartialEq for Scopes {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 /// One write, as what puts it back. Recorded in the order of the writes and
@@ -206,12 +233,6 @@ enum Rec {
     Placed(Option<NodeId>, usize),
     /// `id` was removed from a child list at `pos`.
     Unplaced(Option<NodeId>, usize, NodeId),
-    /// Patch / axis / solve-layer rollback records (EN-4).
-    Axis(crate::patch::AxisId, Option<crate::patch::Axis>),
-    AxisOrder(Vec<crate::patch::AxisId>),
-    Patch(crate::patch::PatchId, Option<crate::patch::Patch>),
-    Solve(crate::patch::DiscretePoint, Leaf, Option<Slot>),
-    PatchCounters(u64, u64, u64),
 }
 
 #[derive(Default)]
@@ -258,11 +279,6 @@ impl Document {
 
     pub fn version(&self) -> Version {
         self.version
-    }
-
-    /// Authored variation axes, patches, and dedicated solve layer (EN-4).
-    pub fn patches(&self) -> &crate::patch::PatchTable {
-        &self.patches
     }
 
     /// The scope this document belongs to, once it has been given one.
@@ -540,6 +556,36 @@ impl Document {
         false
     }
 
+    /// When anything under definition, repeat or conditional `id` was last
+    /// written: what is compiled from its content (`engine::template`) is
+    /// current while this is unchanged. Written means a node in it made,
+    /// removed, moved, reordered, its facets changed, or a relation from it
+    /// linked or unlinked; a rollback writes again what it puts back.
+    pub(crate) fn scope_stamp(&self, id: NodeId) -> u64 {
+        self.scopes.last.get(&id).copied().unwrap_or(self.scopes.base)
+    }
+
+    /// A write at `id`: a new stamp for every definition, repeat and
+    /// conditional it is in, itself included. Derived nodes are in no
+    /// template. A session node is copied by none, but a compiler can
+    /// still see it (a picture's classes, a body's inputs), so it stamps.
+    fn touch(&mut self, id: NodeId) {
+        if id.is_expanded() {
+            return;
+        }
+        let mut stamp = None;
+        let mut at = Some(id);
+        while let Some(n) = at {
+            let Some(node) = self.nodes.get(&n) else { break };
+            let scope = node.ty.name() == "definition" || [FacetKind::Repeat, FacetKind::When].iter().any(|k| self.facets.get(k).is_some_and(|m| m.contains_key(&n)));
+            if scope {
+                let s = *stamp.get_or_insert_with(next_stamp);
+                self.scopes.last.insert(n, s);
+            }
+            at = node.parent;
+        }
+    }
+
     pub fn relation(&self, id: RelationId) -> Option<&Relation> {
         self.relations.get(&id)
     }
@@ -591,10 +637,6 @@ impl Document {
         std::mem::take(&mut self.touched.keys)
     }
 
-    pub(crate) fn touched_slice(&self) -> &[crate::structure::Key] {
-        &self.touched.keys
-    }
-
     pub(crate) fn touched_empty(&self) -> bool {
         self.touched.keys.is_empty()
     }
@@ -612,8 +654,29 @@ impl Document {
         // store puts its own state back (structure-in-the-graph.md §3.3).
         self.touched.keys.clear();
         let journal = self.journal.0.take().expect("no journal to roll back");
+        // What is put back is written again: the scopes it is in now, and
+        // those it is back in after.
+        let mut touched = BTreeSet::new();
+        for r in &journal.recs {
+            match r {
+                Rec::Node(id, _) | Rec::Facet(_, id, _) => {
+                    touched.insert(*id);
+                }
+                Rec::Relation(id, before) => {
+                    touched.extend(self.relations.get(id).map(|x| x.from));
+                    touched.extend(before.as_ref().map(|x| x.from));
+                }
+                _ => {}
+            }
+        }
+        for &id in &touched {
+            self.touch(id);
+        }
         for r in journal.recs.into_iter().rev() {
             self.undo(r);
+        }
+        for &id in &touched {
+            self.touch(id);
         }
         // Invariants are checked over both documents together, by
         // `Docs::rollback`: a copy's parent is in the other one.
@@ -698,32 +761,6 @@ impl Document {
                 self.container(parent).remove(pos);
             }
             Rec::Unplaced(parent, pos, id) => self.container(parent).insert(pos, id),
-            Rec::Axis(id, old) => put(&mut self.patches.axes, id, old),
-            Rec::AxisOrder(old) => self.patches.axis_order = old,
-            Rec::Patch(id, old) => {
-                if let Some(cur) = self.patches.patches.remove(&id) {
-                    self.patches.unindex_patch(&cur);
-                }
-                if let Some(p) = old {
-                    self.patches.index_patch(&p);
-                    self.patches.patches.insert(id, p);
-                }
-            }
-            Rec::Solve(dp, leaf, old) => {
-                match old {
-                    Some(s) => {
-                        self.patches.solve_insert(dp, leaf, s);
-                    }
-                    None => {
-                        self.patches.solve_remove(&dp, leaf);
-                    }
-                }
-            }
-            Rec::PatchCounters(a, v, p) => {
-                self.patches.next_axis = a;
-                self.patches.next_axis_value = v;
-                self.patches.next_patch = p;
-            }
         }
     }
 
@@ -864,6 +901,7 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
+        self.touch(id);
         self.touched.on = on;
     }
 
@@ -879,6 +917,8 @@ impl Document {
     ) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("restore_node");
+        // Where the tombstone was, and (below) where it comes back.
+        self.touch(id);
         for kind in FacetKind::ALL {
             if let Some(f) = self.facets.get_mut(kind).and_then(|m| m.remove(&id)) {
                 self.touched.note(crate::structure::Key::FacetSet(id));
@@ -899,6 +939,7 @@ impl Document {
             self.insert_facet(id, c);
         }
         self.place(id);
+        self.touch(id);
         self.touched.on = on;
     }
 
@@ -907,6 +948,7 @@ impl Document {
     pub(crate) fn tombstone(&mut self, id: NodeId, at: Version) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("tombstone");
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.tombstoned = Some(at));
         let ty = self.nodes[&id].ty;
@@ -935,6 +977,7 @@ impl Document {
     pub(crate) fn remove_node(&mut self, id: NodeId) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("remove_node");
+        self.touch(id);
         debug_assert!(self.is_live(id), "only a live node is removed");
         self.unplace(id);
         let ty = self.nodes[&id].ty;
@@ -958,18 +1001,21 @@ impl Document {
     pub(crate) fn set_parent(&mut self, id: NodeId, parent: Option<NodeId>, order: OrderKey) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("set_parent");
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| {
             n.parent = parent;
             n.order = order;
         });
         self.place(id);
+        self.touch(id);
         self.touched.on = on;
     }
 
     pub(crate) fn set_order(&mut self, id: NodeId, order: OrderKey) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("set_order");
+        self.touch(id);
         self.unplace(id);
         self.write_node(id, |n| n.order = order);
         self.place(id);
@@ -979,6 +1025,7 @@ impl Document {
     pub(crate) fn insert_facet(&mut self, id: NodeId, c: Facet) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("insert_facet");
+        self.touch(id);
         let kind = c.kind();
         let created = !self.facets.contains_key(&kind);
         self.note_facet_leaves(id, &c);
@@ -1007,6 +1054,7 @@ impl Document {
     ) -> Option<Facet> {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("remove_facet");
+        self.touch(id);
         let Some(c) = self.facets.get_mut(&kind).and_then(|m| m.remove(&id)) else {
             self.touched.on = on;
             return None;
@@ -1054,6 +1102,7 @@ impl Document {
         if let Some(before) = before {
             self.rec(Rec::Facet(path.facet, id, Some(before)));
         }
+        self.touch(id);
         self.touched.note(crate::structure::Key::Facet(id, path.facet));
         self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
         self.touched.on = on;
@@ -1068,6 +1117,7 @@ impl Document {
         id: NodeId,
         kind: FacetKind,
     ) -> Option<&mut Facet> {
+        self.touch(id);
         self.touched.note(crate::structure::Key::Facet(id, kind));
         if self.recording() {
             let before = self.facets.get(&kind)?.get(&id)?.clone();
@@ -1079,6 +1129,7 @@ impl Document {
     pub(crate) fn insert_relation(&mut self, r: Relation) {
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("insert_relation");
+        self.touch(r.from);
         let (id, from, to) = (r.id, r.from, r.to);
         self.touched.note(crate::structure::Key::Relation(id));
         self.touched.note(crate::structure::Key::Relations(from));
@@ -1136,6 +1187,7 @@ impl Document {
         self.touched.note(crate::structure::Key::Relations(r.from));
         self.touched.note(crate::structure::Key::Relations(r.to));
         self.refresh_rooted(id);
+        self.touch(r.from);
         if self.recording() {
             self.rec(Rec::Relation(id, Some(r.clone())));
         }
@@ -1195,346 +1247,6 @@ impl Document {
         }
     }
 
-    /// Apply an axis op to the document, recording rollback records and
-    /// returning `(inverse, affected_targets)` (EN-4).
-    pub(crate) fn apply_axis_op(&mut self, op: &crate::patch::AxisOp) -> Result<(crate::patch::AxisOp, BTreeSet<NodeId>), String> {
-        use crate::patch::AxisOp;
-        let counters = (self.patches.next_axis, self.patches.next_axis_value, self.patches.next_patch);
-        let rec_counters = |doc: &mut Self| {
-            if doc.recording() {
-                doc.rec(Rec::PatchCounters(counters.0, counters.1, counters.2));
-            }
-        };
-        match op {
-            AxisOp::Add { axis } => {
-                if self.patches.axes.contains_key(&axis.id) {
-                    return Err(format!("axis {} already exists", axis.id));
-                }
-                crate::patch::PatchTable::validate_axis(axis)?;
-                if self.recording() {
-                    self.rec(Rec::Axis(axis.id, None));
-                }
-                rec_counters(self);
-                self.patches.next_axis = self.patches.next_axis.max(axis.id.0 + 1);
-                for v in &axis.values {
-                    self.patches.next_axis_value = self.patches.next_axis_value.max(v.id.0 + 1);
-                }
-                self.patches.axes.insert(axis.id, axis.clone());
-                let targets = self.patches.targets_for_axis(axis.id);
-                Ok((AxisOp::Remove { id: axis.id }, targets))
-            }
-            AxisOp::Remove { id } => {
-                if !self.patches.axes.contains_key(id) {
-                    return Err(format!("no axis {id}"));
-                }
-                if self.patches.axis_referenced(*id) {
-                    return Err(format!("axis {id} is still referenced by patches"));
-                }
-                let old = self.patches.axes.remove(id).expect("checked");
-                if self.recording() {
-                    self.rec(Rec::Axis(*id, Some(old.clone())));
-                }
-                let targets = self.patches.targets_for_axis(*id);
-                Ok((AxisOp::Add { axis: old }, targets))
-            }
-            AxisOp::SetOrder { order } => {
-                let old = std::mem::replace(&mut self.patches.axis_order, order.clone());
-                if self.recording() {
-                    self.rec(Rec::AxisOrder(old.clone()));
-                }
-                let targets = self.patches.all_targets();
-                Ok((AxisOp::SetOrder { order: old }, targets))
-            }
-            AxisOp::AddValue { axis, at, value } => {
-                if !value.scopes.is_empty() && value.scopes.len() != value.path.len() {
-                    return Err(format!("axis {axis} value {} scopes length {} != path length {}", value.id, value.scopes.len(), value.path.len()));
-                }
-                let recording = self.recording();
-                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
-                if ax.values.iter().any(|v| v.id == value.id) {
-                    return Err(format!("axis {axis} already has value {}", value.id));
-                }
-                let before = recording.then(|| ax.clone());
-                ax.insert(*at, value.clone());
-                if let Some(b) = before {
-                    self.rec(Rec::Axis(*axis, Some(b)));
-                }
-                rec_counters(self);
-                self.patches.next_axis_value = self.patches.next_axis_value.max(value.id.0 + 1);
-                let targets = self.patches.targets_for_axis(*axis);
-                Ok((AxisOp::RemoveValue { axis: *axis, id: value.id }, targets))
-            }
-            AxisOp::RemoveValue { axis, id } => {
-                let recording = self.recording();
-                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
-                let pos = ax.position(*id).ok_or_else(|| format!("axis {axis} has no value {id}"))?;
-                let before = recording.then(|| ax.clone());
-                let val = ax.values.remove(pos);
-                if let Some(b) = before {
-                    self.rec(Rec::Axis(*axis, Some(b)));
-                }
-                let targets = self.patches.targets_for_axis(*axis);
-                Ok((AxisOp::AddValue { axis: *axis, at: pos, value: val }, targets))
-            }
-            AxisOp::DeleteValue { axis, id } => {
-                let recording = self.recording();
-                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
-                if ax.position(*id).is_none() {
-                    return Err(format!("axis {axis} has no value {id}"));
-                }
-                let before = recording.then(|| ax.clone());
-                ax.delete(*id);
-                if let Some(b) = before {
-                    self.rec(Rec::Axis(*axis, Some(b)));
-                }
-                let targets = self.patches.targets_for_axis(*axis);
-                Ok((AxisOp::RestoreValue { axis: *axis, id: *id }, targets))
-            }
-            AxisOp::RestoreValue { axis, id } => {
-                let recording = self.recording();
-                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
-                if ax.position(*id).is_none() {
-                    return Err(format!("axis {axis} has no value {id}"));
-                }
-                let before = recording.then(|| ax.clone());
-                ax.restore(*id);
-                if let Some(b) = before {
-                    self.rec(Rec::Axis(*axis, Some(b)));
-                }
-                let targets = self.patches.targets_for_axis(*axis);
-                Ok((AxisOp::DeleteValue { axis: *axis, id: *id }, targets))
-            }
-            AxisOp::MoveValue { axis, id, at } => {
-                let recording = self.recording();
-                let ax = self.patches.axes.get_mut(axis).ok_or_else(|| format!("no axis {axis}"))?;
-                let before = recording.then(|| ax.clone());
-                let old_pos = ax.move_to(*id, *at).ok_or_else(|| format!("axis {axis} has no value {id}"))?;
-                if let Some(b) = before {
-                    self.rec(Rec::Axis(*axis, Some(b)));
-                }
-                let targets = self.patches.targets_for_axis(*axis);
-                Ok((AxisOp::MoveValue { axis: *axis, id: *id, at: old_pos }, targets))
-            }
-        }
-    }
-
-    /// Definition ancestor of `id` in raw authored storage (walking even tombstoned parents).
-    pub(crate) fn definition_of_raw(&self, mut id: NodeId) -> Option<NodeId> {
-        while let Some(n) = self.nodes.get(&id) {
-            if n.ty.name() == "definition" {
-                return Some(id);
-            }
-            id = n.parent?;
-        }
-        None
-    }
-
-    /// Placement-aware `Key::Patch` wake targets for authored patch `p` (`EN-5b`):
-    /// a document-level (`anchor: None`) instance suffix override targeting a single
-    /// top-level placement `tail[0]` outside any definition wakes ONLY `tail[0]`
-    /// (avoiding O(N) sibling fan-out across 700 instances of a shared template);
-    /// broader/anchored patches wake their anchor, target definitions, and targets.
-    pub(crate) fn patch_wake_nodes(&self, p: &crate::patch::Patch) -> Vec<NodeId> {
-        let mut out = Vec::new();
-        let single_placement = if p.anchor.is_none() {
-            p.region.sels.iter().find_map(|(a, sel)| {
-                if self.patches.axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance)
-                    && let crate::patch::Sel::Suffix { tail, .. } = sel
-                    && let Some(&first) = tail.first()
-                    && !first.is_expanded()
-                    && !first.is_item_step()
-                    && self.definition_of_raw(first).is_none()
-                {
-                    Some(first)
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
-        if let Some(owner) = single_placement {
-            out.push(owner);
-            for t in p.entries.keys() {
-                if !t.node.is_expanded() && self.definition_of_raw(t.node).is_none() {
-                    out.push(t.node);
-                }
-            }
-            return out;
-        }
-        if let Some(anc) = p.anchor {
-            out.push(anc);
-        }
-        for (a, sel) in &p.region.sels {
-            if self.patches.axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance)
-                && let crate::patch::Sel::Suffix { tail, .. } = sel
-                && let Some(&first) = tail.first()
-                && !first.is_expanded()
-                && !first.is_item_step()
-            {
-                if let Some(def) = self.definition_of_raw(first) {
-                    out.push(def);
-                } else {
-                    out.push(first);
-                }
-            }
-        }
-        for t in p.entries.keys() {
-            if t.node.is_expanded() {
-                if let Some(&root) = t.node.path().first() {
-                    out.push(root);
-                }
-            } else {
-                out.push(t.node);
-                if let Some(def) = self.definition_of_raw(t.node) {
-                    out.push(def);
-                }
-            }
-        }
-        out
-    }
-
-    /// Apply an authored patch op to the document, enforcing distinct ranks
-    /// per `(anchor, layer)` and non-session layer, maintaining the in-memory
-    /// patch index, and returning `(inverse, affected_targets)` (EN-4/EN-5b).
-    pub(crate) fn apply_patch_op(&mut self, op: &crate::patch::PatchOp) -> Result<(crate::patch::PatchOp, BTreeSet<NodeId>), String> {
-        use crate::patch::PatchOp;
-        let on = self.touched.on;
-        self.touched.on &= !crate::structure::silenced("apply_patch");
-        let res = (|| -> Result<(PatchOp, BTreeSet<NodeId>), String> {
-            match op {
-                PatchOp::Add { patch } => {
-                    if self.patches.patches.contains_key(&patch.id) {
-                        return Err(format!("patch {} already exists", patch.id));
-                    }
-                    if self.patches.patches.values().any(|q| q.anchor == patch.anchor && q.layer == patch.layer && q.rank == patch.rank) {
-                        return Err(format!("another patch in layer {} already has rank {}", patch.layer, patch.rank));
-                    }
-                    self.patches.validate_patch(patch, &|id| self.nodes.get(&id).map(|n| n.ty))?;
-                    if self.recording() {
-                        self.rec(Rec::Patch(patch.id, None));
-                        self.rec(Rec::PatchCounters(self.patches.next_axis, self.patches.next_axis_value, self.patches.next_patch));
-                    }
-                    self.patches.next_patch = self.patches.next_patch.max(patch.id.0 + 1);
-                    let targets: BTreeSet<NodeId> = patch.entries.keys().map(|t| t.node).collect();
-                    let wakes = self.patch_wake_nodes(patch);
-                    self.patches.index_patch(patch);
-                    self.patches.patches.insert(patch.id, patch.clone());
-                    for n in wakes {
-                        self.touched.note(crate::structure::Key::Patch(n));
-                    }
-                    Ok((PatchOp::Remove { id: patch.id }, targets))
-                }
-                PatchOp::Remove { id } => {
-                    let old = self.patches.patches.remove(id).ok_or_else(|| format!("no patch {id}"))?;
-                    self.patches.unindex_patch(&old);
-                    if self.recording() {
-                        self.rec(Rec::Patch(*id, Some(old.clone())));
-                    }
-                    let targets: BTreeSet<NodeId> = old.entries.keys().map(|t| t.node).collect();
-                    for n in self.patch_wake_nodes(&old) {
-                        self.touched.note(crate::structure::Key::Patch(n));
-                    }
-                    Ok((PatchOp::Add { patch: old }, targets))
-                }
-                PatchOp::SetEntry { patch, target, value } => {
-                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
-                    if !cur.writable {
-                        return Err(format!("patch {patch} is read-only"));
-                    }
-                    if let Some(v) = value {
-                        crate::patch::PatchTable::validate_entry(*target, v, self.nodes.get(&target.node).map(|n| n.ty))?;
-                    }
-                    let before = self.recording().then(|| cur.clone());
-                    let old_p = self.patches.patches.remove(patch).expect("checked");
-                    let old_wakes = self.patch_wake_nodes(&old_p);
-                    self.patches.unindex_patch(&old_p);
-                    let mut next = old_p;
-                    let prev_val = match value {
-                        Some(v) => next.entries.insert(*target, v.clone()),
-                        None => next.entries.remove(target),
-                    };
-                    let new_wakes = self.patch_wake_nodes(&next);
-                    self.patches.index_patch(&next);
-                    self.patches.patches.insert(*patch, next);
-                    if let Some(b) = before {
-                        self.rec(Rec::Patch(*patch, Some(b)));
-                    }
-                    for n in old_wakes.into_iter().chain(new_wakes) {
-                        self.touched.note(crate::structure::Key::Patch(n));
-                    }
-                    Ok((PatchOp::SetEntry { patch: *patch, target: *target, value: prev_val }, BTreeSet::from([target.node])))
-                }
-                PatchOp::SetRegion { patch, region } => {
-                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
-                    if !cur.writable {
-                        return Err(format!("patch {patch} is read-only"));
-                    }
-                    self.patches.validate_region(region, cur.anchor)?;
-                    let before = self.recording().then(|| cur.clone());
-                    let old_p = self.patches.patches.remove(patch).expect("checked");
-                    let old_wakes = self.patch_wake_nodes(&old_p);
-                    self.patches.unindex_patch(&old_p);
-                    let mut next = old_p;
-                    let prev_region = std::mem::replace(&mut next.region, region.clone());
-                    let targets: BTreeSet<NodeId> = next.entries.keys().map(|t| t.node).collect();
-                    let new_wakes = self.patch_wake_nodes(&next);
-                    self.patches.index_patch(&next);
-                    self.patches.patches.insert(*patch, next);
-                    if let Some(b) = before {
-                        self.rec(Rec::Patch(*patch, Some(b)));
-                    }
-                    for n in old_wakes.into_iter().chain(new_wakes) {
-                        self.touched.note(crate::structure::Key::Patch(n));
-                    }
-                    Ok((PatchOp::SetRegion { patch: *patch, region: prev_region }, targets))
-                }
-                PatchOp::SetRank { patch, rank } => {
-                    let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
-                    if self.patches.patches.values().any(|q| q.id != *patch && q.anchor == cur.anchor && q.layer == cur.layer && &q.rank == rank) {
-                        return Err(format!("another patch in layer {} already has rank {}", cur.layer, rank));
-                    }
-                    let before = self.recording().then(|| cur.clone());
-                    let p = self.patches.patches.get_mut(patch).expect("checked");
-                    let prev_rank = std::mem::replace(&mut p.rank, rank.clone());
-                    let targets: BTreeSet<NodeId> = p.entries.keys().map(|t| t.node).collect();
-                    let p_snap = p.clone();
-                    if let Some(b) = before {
-                        self.rec(Rec::Patch(*patch, Some(b)));
-                    }
-                    for n in self.patch_wake_nodes(&p_snap) {
-                        self.touched.note(crate::structure::Key::Patch(n));
-                    }
-                    Ok((PatchOp::SetRank { patch: *patch, rank: prev_rank }, targets))
-                }
-            }
-        })();
-        self.touched.on = on;
-        res
-    }
-
-    /// Write or clear one entry in the dedicated system-owned solve layer (P17).
-    /// Solve entries are leaf-only and never change structural expansion, so they
-    /// emit `Key::Leaf` only (not `Key::Patch`).
-    pub(crate) fn apply_solve(&mut self, point: crate::patch::DiscretePoint, leaf: Leaf, slot: Option<Slot>) -> Result<Option<Slot>, String> {
-        if let Some(s) = &slot {
-            let ty_node = leaf.node.expanded_parts().map(|(_, local)| local).unwrap_or(leaf.node);
-            crate::patch::PatchTable::validate_solve_entry(leaf, s, self.nodes.get(&ty_node).map(|n| n.ty))?;
-        }
-        let on = self.touched.on;
-        self.touched.on &= !crate::structure::silenced("apply_solve");
-        let old = match slot {
-            Some(s) => self.patches.solve_insert(point.clone(), leaf, s),
-            None => self.patches.solve_remove(&point, leaf),
-        };
-        if self.recording() {
-            self.rec(Rec::Solve(point, leaf, old.clone()));
-        }
-        self.touched.note(crate::structure::Key::Leaf(leaf));
-        self.touched.on = on;
-        Ok(old)
-    }
-
     // ---- bulk construction (used by load) -----------------------------
 
     /// Build from raw tables without validation beyond what `reindex` checks.
@@ -1546,9 +1258,7 @@ impl Document {
         relations: BTreeMap<RelationId, Relation>,
         next: Counters,
         version: Version,
-        mut patches: crate::patch::PatchTable,
     ) -> Document {
-        patches.reindex();
         let mut d = Document {
             nodes,
             facets,
@@ -1556,7 +1266,6 @@ impl Document {
             next_ids: next.nodes,
             next_rels: next.relations,
             version,
-            patches,
             ..Default::default()
         };
         for (client, n) in d.nodes.keys().filter_map(|id| id.minted()).collect::<Vec<_>>() {
@@ -1941,7 +1650,7 @@ mod journal_tests {
         nodes.insert(id, Node { id, ty: ty("group"), parent: None, order: OrderKey::first(), tombstoned: Some(Version(1)) });
         let mut facets = BTreeMap::new();
         facets.insert(FacetKind::Name, BTreeMap::from([(id, name("old"))]));
-        let mut doc = Document::from_parts(nodes, facets, BTreeMap::new(), Counters::default(), Version(1), Default::default());
+        let mut doc = Document::from_parts(nodes, facets, BTreeMap::new(), Counters::default(), Version(1));
         assert!(!doc.children.contains_key(&id));
         let before = doc.clone();
         doc.begin();

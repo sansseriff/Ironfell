@@ -21,10 +21,6 @@ path = "tests/fonts.rs"
 name = "instance_cost"
 path = "tests/instance_cost.rs"
 
-[[test]]
-name = "views_spike"
-path = "tests/views_spike.rs"
-
 # No Bevy, by design (plans/specs/document-spine.md §5). This crate compiles and
 # tests natively; the app crate wraps it in a resource and owns the reconciler.
 [dependencies]
@@ -57,5 +53,3 @@ work = []
 # Only for the test that pins `geom::world_affine` to Bevy's own transform
 # arithmetic. Same version as bevy_math's, so the comparison is exact.
 glam = "0.32"
-# Reference patch model for EN-4 differential parity tests.
-iron_patch = { path = "../iron_patch" }

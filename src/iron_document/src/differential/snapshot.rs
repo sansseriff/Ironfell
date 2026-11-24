@@ -62,6 +62,7 @@ pub struct Other {
     pub contexts: contexts::Library,
     /// `table_grid` for every table that has one.
     pub tables: BTreeMap<NodeId, table::Grid>,
+    pub stale_overrides: Vec<(NodeId, String)>,
     pub expansion_problems: Vec<expand::Problem>,
     pub physics_error: Option<String>,
     pub session_version: u64,
@@ -77,10 +78,6 @@ pub struct Other {
     pub hover_listeners: Vec<(NodeId, Vec<NodeId>)>,
     /// Session state cells that differ from their initial value.
     pub session_state: BTreeMap<Leaf, Value>,
-    /// Active variation-axis point, session-layer patches, and hidden nodes (EN-4b).
-    pub point: patch::Point,
-    pub session_patches: BTreeMap<patch::PatchId, patch::Patch>,
-    pub hidden: Vec<NodeId>,
 }
 
 /// What `take_changes` would return now, and what is buffered for the
@@ -137,13 +134,7 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
             }
         }
     }
-    for p in s.docs.session_patches.values() {
-        for t in p.entries.keys() {
-            if let crate::patch::PatchKey::Leaf(path) = t.key {
-                leaves.insert(Leaf { node: t.node, path });
-            }
-        }
-    }
+    leaves.extend(s.reactive().overlay().keys().copied());
     leaves.extend(s.signals().keys().copied());
     leaves.extend(s.session_state.keys().copied());
     leaves.extend(s.reactive().errors.keys().copied());
@@ -187,6 +178,7 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         layout_preview: s.layout_preview().cloned(),
         contexts: s.contexts().clone(),
         tables,
+        stale_overrides: s.stale_overrides(),
         expansion_problems: s.expansion_problems().to_vec(),
         physics_error: s.physics_error().map(str::to_owned),
         session_version: s.session_version(),
@@ -198,9 +190,6 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         context_reads: live.iter().map(|&n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect(),
         hover_listeners: live.iter().map(|&n| (n, s.hover_listeners(n))).filter(|(_, r)| !r.is_empty()).collect(),
         session_state: s.session_state.clone(),
-        point: s.point().clone(),
-        session_patches: s.docs.session_patches.clone(),
-        hidden: live.iter().copied().filter(|&n| doc.is_hidden(n)).collect(),
     };
     let pending = Pending { changes: s.peek_changes(), revisions: s.revisions().clone(), emitted: s.emitted.clone() };
     Snapshot {
@@ -259,7 +248,7 @@ impl Snapshot {
         let o = fields!("other", a, b, [
             time, time_errors, clock, producers, clusters, port_anchors, gesture_in_progress, active_gesture, gesture_status,
             has_actions, problem_notes, interaction, motion_enabled, pinned_state, shared_edits, inside_open, running_machines,
-            pending_queries, dark, layout_preview, contexts, tables, expansion_problems, physics_error,
+            pending_queries, dark, layout_preview, contexts, tables, stale_overrides, expansion_problems, physics_error,
             session_version, selection, scope, client, horizon, session_state,
         ]);
         let (pa, pb) = (&self.pending, &r.pending);

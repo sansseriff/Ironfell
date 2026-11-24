@@ -48,10 +48,6 @@ mod oracle;
 #[cfg(feature = "differential")]
 pub(crate) use oracle::expand;
 
-/// The copies a constraint cluster holds, and the solver leaves of them the
-/// transaction's own ops set (`Owners::hold`, `Owners::edit`).
-pub(crate) type Held<'a> = (&'a BTreeSet<NodeId>, &'a BTreeSet<Leaf>);
-
 /// One node an instance should have.
 #[derive(Debug, PartialEq)]
 struct Want {
@@ -314,30 +310,6 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &
     out
 }
 
-/// The slot each of `leaves`, leaves of copies, has as its owner's
-/// expansion wants it now: what a copy goes back to when the solver lets go
-/// of it. A leaf whose copy is not wanted has none.
-pub(crate) fn wanted_slots(doc: Tree<'_>, templates: &mut TemplateCache, counts: &Items, leaves: &[Leaf]) -> Vec<(Leaf, Slot)> {
-    let mut cache = Templates::new(templates);
-    let mut by_owner: BTreeMap<NodeId, Vec<Leaf>> = BTreeMap::new();
-    for l in leaves {
-        if let Some(&owner) = l.node.path().first() {
-            by_owner.entry(owner).or_default().push(*l);
-        }
-    }
-    let mut out = Vec::new();
-    for (owner, leaves) in by_owner {
-        let w = wanted_for(doc, owner, counts, NODE_BUDGET, &mut cache);
-        for l in leaves {
-            let slot = w.get(l.node).and_then(|n| n.facets.iter().find(|f| f.kind() == l.path.facet)).and_then(|f| f.get(l.path.field));
-            if let Some(slot) = slot {
-                out.push((l, slot.clone()));
-            }
-        }
-    }
-    out
-}
-
 /// Effective notation of `use` node `u` at coordinate `(path, scopes)`
 /// (`PatchKey::Notation` first, then `Use::notation` from `from_facets` or
 /// `doc`, `EN-5b`). Evaluates at the exact same `(path, scopes)` coordinate
@@ -489,14 +461,10 @@ pub(crate) struct OwnersExpanded {
     pub reads: Vec<(NodeId, NodeId)>,
     /// Recorded structural/patch reads per expanded top-level owner (`EN-5b`).
     pub deps: BTreeMap<NodeId, Vec<Key>>,
-    /// Wanted solver-leaf values for held copies (temporary until EN-5c moves
-    /// solver writes onto `Op::Solve`).
-    pub held_wanted: HashMap<Leaf, Slot>,
 }
 
 /// Bring `owners`' derived nodes to what they derive now, and touch
 /// nothing else (`EN-5b`: recorded-read owner invalidation, no `Owners::made`).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_owners(
     docs: &mut Docs,
     templates: &mut TemplateCache,
@@ -504,8 +472,6 @@ pub(crate) fn expand_owners(
     counts: &Items,
     owners: &BTreeSet<NodeId>,
     mut room: usize,
-    (solved, edited): Held<'_>,
-    prev_held_wanted: &HashMap<Leaf, Slot>,
 ) -> OwnersExpanded {
     let mut want: Vec<Want> = Vec::new();
     let mut rels: Vec<RelWant> = Vec::new();
@@ -516,7 +482,6 @@ pub(crate) fn expand_owners(
         counts: BTreeMap::new(),
         reads: Vec::new(),
         deps: BTreeMap::new(),
-        held_wanted: HashMap::new(),
     };
     let mut cache = Templates::new(templates);
     for &owner in owners {
@@ -530,22 +495,6 @@ pub(crate) fn expand_owners(
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
         out.reads.extend(w.reads.iter().map(|&r| (r, owner)));
-        for n in &w.nodes {
-            if solved.contains(&n.id) {
-                for f in &n.facets {
-                    if f.kind() == FacetKind::Transform2d {
-                        for field in f.field_names() {
-                            if let Ok(path) = LeafPath::new(FacetKind::Transform2d, field)
-                                && crate::solve::writes(path)
-                                && let Some(slot) = f.get(field)
-                            {
-                                out.held_wanted.insert(Leaf { node: n.id, path }, slot.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
         want.extend(w.nodes);
         rels.extend(w.rels);
         problems.extend(w.problems);
@@ -556,7 +505,7 @@ pub(crate) fn expand_owners(
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
     let have_rels: Vec<Relation> = owners.iter().flat_map(|&o| Tree::of(docs).rooted(o).cloned().collect::<Vec<_>>()).collect();
-    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems, (solved, edited), prev_held_wanted, &mut out.held_wanted);
+    out.ops = apply_wanted(docs, stamp, want, rels, have, have_rels, &mut problems);
     for o in owners {
         out.problems.insert(*o, Vec::new());
     }
@@ -608,11 +557,9 @@ pub(crate) struct ItemsExpanded {
     pub held: usize,
     pub reads: Vec<NodeId>,
     pub extra_deps: Vec<Key>,
-    pub held_wanted: HashMap<Leaf, Slot>,
 }
 
 /// Bring only `repeats`' items to what `counts` says.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_items(
     docs: &mut Docs,
     templates: &mut TemplateCache,
@@ -621,8 +568,6 @@ pub(crate) fn expand_items(
     owner: NodeId,
     repeats: &BTreeSet<NodeId>,
     room: usize,
-    (solved, edited): Held<'_>,
-    prev_held_wanted: &HashMap<Leaf, Slot>,
 ) -> Option<(ItemsExpanded, Vec<Problem>)> {
     let mut out = Wanted::new(room);
     out.root = Some(owner);
@@ -648,39 +593,21 @@ pub(crate) fn expand_items(
     if !out.problems.is_empty() || out.full {
         return None;
     }
-    let mut held_wanted = HashMap::new();
-    for n in &out.nodes {
-        if solved.contains(&n.id) {
-            for f in &n.facets {
-                if f.kind() == FacetKind::Transform2d {
-                    for field in f.field_names() {
-                        if let Ok(path) = LeafPath::new(FacetKind::Transform2d, field)
-                            && crate::solve::writes(path)
-                            && let Some(slot) = f.get(field)
-                        {
-                            held_wanted.insert(Leaf { node: n.id, path }, slot.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
     let have: Vec<NodeId> = {
         let tree = Tree::of(docs);
         repeats.iter().flat_map(|&r| tree.descendants(r).into_iter().filter(move |d| d.item_of(r).is_some())).collect()
     };
     let tops: BTreeSet<NodeId> = repeats.iter().map(|&r| r.path().first().copied().unwrap_or(r)).collect();
     let have_rels: Vec<Relation> = tops.iter().flat_map(|&o| Tree::of(docs).rooted(o).filter(|rel| repeats.iter().any(|&r| rel.from.item_of(r).is_some())).cloned().collect::<Vec<_>>()).collect();
-    let mut done = ItemsExpanded {
+    let done = ItemsExpanded {
         ops: Vec::new(),
         wanted: out.nodes.len(),
         held: have.len(),
         reads: out.reads.iter().copied().collect(),
         extra_deps: rec.into_inner(),
-        held_wanted,
     };
     let mut problems = Vec::new();
-    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems, (solved, edited), prev_held_wanted, &mut done.held_wanted);
+    let ops = apply_wanted(docs, stamp, out.nodes, out.rels, have, have_rels, &mut problems);
     Some((ItemsExpanded { ops, ..done }, problems))
 }
 
@@ -1052,10 +979,9 @@ pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Valu
 /// solver writes on them stay as the solver left them.
 #[allow(clippy::too_many_arguments)]
 /// A `kept` copy is wanted as it is: nothing about it is compared. A leaf
-/// the solver writes on a `solved` copy keeps the solver's value unless
-/// what is wanted for it changed since the copy was last made (`was`): a
-/// template or override edit of that leaf still reaches it.
-#[allow(clippy::too_many_arguments)]
+/// Reconcile derived nodes/relations against `want` and `want_rels`.
+/// Solver poses on instance parts live in `PatchTable::solve` (Tier 4, P17),
+/// so expansion writes the template/patch wanted slots cleanly (`EN-5c`).
 fn apply_wanted(
     docs: &mut Docs,
     stamp: Version,
@@ -1064,9 +990,6 @@ fn apply_wanted(
     have: Vec<NodeId>,
     have_rels: Vec<Relation>,
     problems: &mut Vec<Problem>,
-    (solved, edited): Held<'_>,
-    prev_held_wanted: &HashMap<Leaf, Slot>,
-    out_held_wanted: &mut HashMap<Leaf, Slot>,
 ) -> Vec<Op> {
     let wanted_ids: std::collections::HashSet<NodeId> = want.iter().map(|w| w.id).collect();
     let mut ops = Vec::new();
@@ -1098,24 +1021,17 @@ fn apply_wanted(
                         plan.push(Op::Reorder { id: w.id, order: w.order });
                     }
                     let kept: Vec<FacetKind> = w.facets.iter().map(Facet::kind).collect();
-                    let held = solved.contains(&w.id);
                     for f in w.facets {
                         match tree.facet(w.id, f.kind()) {
                             None => plan.push(Op::AddFacet { id: w.id, facet: f }),
-                            Some(old) if *old != f || (held && f.kind() == FacetKind::Transform2d) => {
+                            Some(old) if *old != f => {
                                 if f.kind().is_dynamic() {
                                     plan.push(Op::AddFacet { id: w.id, facet: f });
                                 } else {
                                     for field in f.field_names() {
                                         let slot = f.get(field).expect("own field");
-                                        let path = LeafPath::new(f.kind(), field).expect("declared field");
-                                        if held && crate::solve::writes(path) {
-                                            let leaf = Leaf { node: w.id, path };
-                                            let wanted_before = prev_held_wanted.get(&leaf);
-                                            if edited.contains(&leaf) || wanted_before != Some(slot) {
-                                                plan.push(Op::Set { id: w.id, path, slot: slot.clone() });
-                                            }
-                                        } else if old.get(field) != Some(slot) {
+                                        if old.get(field) != Some(slot) {
+                                            let path = LeafPath::new(f.kind(), field).expect("declared field");
                                             plan.push(Op::Set { id: w.id, path, slot: slot.clone() });
                                         }
                                     }
@@ -1164,15 +1080,6 @@ fn apply_wanted(
         }
         if still.is_empty() || still.len() == before {
             for (op, e) in still.into_iter().zip(errors) {
-                match &op {
-                    Op::Set { id, path, .. } => {
-                        out_held_wanted.remove(&Leaf { node: *id, path: *path });
-                    }
-                    Op::Create { id, .. } | Op::AddFacet { id, .. } => {
-                        out_held_wanted.retain(|leaf, _| leaf.node != *id);
-                    }
-                    _ => {}
-                }
                 if let Some(node) = op_node(Tree::of(docs), &op) {
                     problems.push(Problem { node, kind: "expansion", message: format!("expanding {}: {}", op_target(&op), e.message) });
                 }

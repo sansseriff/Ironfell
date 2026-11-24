@@ -194,7 +194,7 @@ fn a_solved_copy_transform_has_history_and_undo() {
         .apply(tx("tie", built.ops.into_iter().chain([constrain(rels[0], n["fix"], n["p"], "a"), constrain(rels[1], n["d"], n["p"], "a"), constrain(rels[2], n["d"], copy, "b")]).collect()))
         .unwrap_or_else(|e| panic!("{e:?}"));
     let last = store.history().past().last().unwrap();
-    assert!(last.derived_ops.iter().any(|op| matches!(op, Op::Set { id, .. } if *id == copy)), "the solver wrote the copy: {:?}", last.derived_ops);
+    assert!(last.derived_ops.iter().any(|op| matches!(op, Op::Solve { leaf, .. } if leaf.node == copy)), "the solver wrote the copy's solve layer: {:?}", last.derived_ops);
     let moved = store.resolved(copy, x).and_then(|v| v.as_f64()).unwrap();
     assert!((moved - was).abs() > 1.0, "the copy moved: {was} → {moved}");
 
@@ -482,10 +482,12 @@ fn a_driven_solved_copy_is_not_let_go() {
     store.publish(live, BTreeMap::from([(Leaf { node: copy, path: x }, Value::Number(-40.0))]));
     let rename = |name: &str| tx("rename", vec![Op::Set { id: comp, path: path("name.text"), slot: Slot::Const(Value::Str(name.into())) }]);
     store.apply(rename("new")).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+    assert_eq!(store.authored().patches().solve_get(&store.point().discrete(), Leaf { node: copy, path: x }), Some(&num(-40.0)));
+    assert_eq!(store.resolved(copy, x), Some(Value::Number(-40.0)));
     store.undo(0).unwrap().unwrap();
     store.apply(rename("newer")).unwrap_or_else(|e| panic!("{e:?}"));
-    assert_eq!(store.tree().leaf(copy, x), Some(&num(-40.0)));
+    assert_eq!(store.authored().patches().solve_get(&store.point().discrete(), Leaf { node: copy, path: x }), Some(&num(-40.0)));
+    assert_eq!(store.resolved(copy, x), Some(Value::Number(-40.0)));
 }
 
 /// A solved copy a publish removed, outside history, has no solved value

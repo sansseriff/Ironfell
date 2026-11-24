@@ -291,7 +291,7 @@ impl Cx<'_> {
             if self.graph.runtime.get(&leaf).is_some_and(|s| s.producer == producer) {
                 return beneath(self.doc, leaf);
             }
-            return read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf);
+            return read_with(&self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf);
         }
         self.reads.borrow_mut().insert(leaf);
         if let Some(c) = self.graph.cell_of(leaf)
@@ -299,7 +299,7 @@ impl Cx<'_> {
         {
             self.reached.borrow_mut().insert(c);
         }
-        read_with(&self.graph.overlay, &self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf)
+        read_with(&self.graph.runtime, &self.graph.resolved, &self.graph.nodes, self.doc, leaf)
     }
 
     /// A leaf's authored constant, or its facet's default, beneath every
@@ -561,7 +561,6 @@ pub struct Reactive {
     /// Any leaf -> the cells that read it.
     dependents: Counted<BTreeMap<Leaf, BTreeSet<CellId>>, GRAPH_DEPENDENTS>,
     resolved: Counted<BTreeMap<Leaf, Value>, GRAPH_RESOLVED>,
-    overlay: BTreeMap<Leaf, Value>,
     /// The runtime layer (vision 10 §4): named signals published by
     /// producers, read beneath bindings and above authored constants, never
     /// serialised. Clips (`time.rs`) and the across/through network
@@ -712,8 +711,8 @@ impl Reactive {
         self.wired
     }
 
-    /// Value of any leaf as a reader sees it: the gesture overlay first, then
-    /// the resolved value of a binding, then the authored constant.
+    /// Value of any leaf as a reader sees it (engine.md §2.4 6-tier precedence):
+    /// session patch layer > binding > producer > solve layer > authored patch > base.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
         if !self.unneeded.is_empty()
             && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0
@@ -723,7 +722,7 @@ impl Reactive {
             let old = self.behind(c);
             *self.escaped.read.lock().expect("escaped lock").entry(leaf).or_default() |= old;
         }
-        read_with(&self.overlay, &self.runtime, &self.resolved, &self.nodes, doc, leaf)
+        read_with(&self.runtime, &self.resolved, &self.nodes, doc, leaf)
     }
 
     /// Whether evaluation stopped at `leaf`: its inputs changed while
@@ -1137,8 +1136,8 @@ impl Reactive {
             return;
         }
         for &l in &changed {
-            // Only visible when no gesture is previewing this leaf.
-            if !self.overlay.contains_key(&l)
+            // Only visible when no session patch (e.g. gesture preview) shadows this leaf.
+            if doc.session_leaf(l).is_none()
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -1172,7 +1171,7 @@ impl Reactive {
             return;
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if doc.session_leaf(l).is_none()
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -1225,10 +1224,6 @@ impl Reactive {
 
     pub fn height(&self, leaf: Leaf) -> Option<u32> {
         self.nodes.get(&leaf).map(|n| n.height)
-    }
-
-    pub fn overlay(&self) -> &BTreeMap<Leaf, Value> {
-        &self.overlay
     }
 
     /// Seed the initial derived bindings before `rebuild` (EN-2c).
@@ -1723,34 +1718,26 @@ impl Reactive {
         self.evaluate(doc, &dirty, &primed);
     }
 
-    /// Preview a value without writing the document.
-    pub fn preview(&mut self, doc: Tree<'_>, leaf: Leaf, value: Value) {
-        let before = self.read(doc, leaf);
-        self.overlay.insert(leaf, value.clone());
-        if before.as_ref() != Some(&value) {
-            self.note(leaf, value);
-            self.invalidate(doc, [leaf]);
-        }
-    }
-
-    /// Drop one leaf's preview; it falls back to the document.
-    pub fn unpreview(&mut self, doc: Tree<'_>, leaf: Leaf) {
-        if self.overlay.remove(&leaf).is_some() {
-            if let Some(v) = self.read(doc, leaf) {
+    /// Notify the graph that a session-layer preview leaf changed from `before`
+    /// (`EN-5c`, session patch layer Tier 1).
+    pub(crate) fn notify_session_leaf(&mut self, doc: Tree<'_>, leaf: Leaf, before: Option<Value>) {
+        let after = self.read(doc, leaf);
+        if after != before {
+            if let Some(v) = after {
                 self.note(leaf, v);
             }
             self.invalidate(doc, [leaf]);
         }
     }
 
-    /// Drop every preview; values fall back to the document.
-    pub fn clear_overlay(&mut self, doc: Tree<'_>) {
-        let leaves: Vec<Leaf> = self.overlay.keys().copied().collect();
-        self.overlay.clear();
+    /// Notify the graph that session-layer preview leaves were removed;
+    /// values fall back to the document (or facet default for a missing
+    /// optional facet that a gesture previewed).
+    pub(crate) fn notify_session_cleared(&mut self, doc: Tree<'_>, leaves: Vec<Leaf>) {
+        if leaves.is_empty() {
+            return;
+        }
         for &l in &leaves {
-            // A leaf of a facet the node lacks (a gesture that would have
-            // added it) reads nothing now: report its default, so whatever
-            // drew the preview redraws without it.
             let v = self.read(doc, l).or_else(|| l.path.facet.default_facet().get(l.path.field).and_then(|s| s.constant()).cloned());
             if let Some(v) = v {
                 self.note(l, v);
@@ -1972,7 +1959,6 @@ impl Reactive {
             let reached: std::cell::RefCell<BTreeSet<CellId>> = Default::default();
             let result = {
                 let unneeded = &self.unneeded;
-                let overlay = &self.overlay;
                 let runtime = &self.runtime;
                 let resolved = &self.resolved;
                 let nodes = &self.nodes;
@@ -1988,13 +1974,13 @@ impl Reactive {
                     {
                         reached.borrow_mut().insert(c);
                     }
-                    if errors.contains_key(&l) && !overlay.contains_key(&l) {
+                    if errors.contains_key(&l) && doc.session_leaf(l).is_none() {
                         if upstream.get().is_none() {
                             upstream.set(Some(l));
                         }
                         return None;
                     }
-                    read_with(overlay, runtime, resolved, nodes, doc, l)
+                    read_with(runtime, resolved, nodes, doc, l)
                 };
                 let out = expr.eval(&read).and_then(|v| as_leaf_kind(leaf, v)).and_then(|v| {
                     if leaf.path.is_structural() {
@@ -2454,7 +2440,7 @@ impl Reactive {
             self.claims.insert(k, now);
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if doc.session_leaf(l).is_none()
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -2576,7 +2562,7 @@ impl Reactive {
             }
         }
         for &l in &changed {
-            if !self.overlay.contains_key(&l)
+            if doc.session_leaf(l).is_none()
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -3006,7 +2992,7 @@ impl Reactive {
         }
         // Released leaves read as they would without a native: say so.
         for l in released {
-            if !self.overlay.contains_key(&l)
+            if doc.session_leaf(l).is_none()
                 && let Some(v) = self.read(doc, l)
             {
                 self.note(l, v);
@@ -3051,7 +3037,6 @@ fn tracks_reads(doc: Tree<'_>, leaf: Leaf, expr: &Expr) -> bool {
 }
 
 fn read_with(
-    overlay: &BTreeMap<Leaf, Value>,
     runtime: &BTreeMap<Leaf, Signal>,
     resolved: &BTreeMap<Leaf, Value>,
     nodes: &BTreeMap<Leaf, BoundNode>,
@@ -3060,15 +3045,15 @@ fn read_with(
 ) -> Option<Value> {
     // A node that went (tombstoned or patched absent) has no value in any tier.
     doc.live(leaf.node)?;
-    if let Some(v) = overlay.get(&leaf) {
-        return Some(v.clone());
-    }
+    // Tier 1: session patch layer (scratch and live gesture previews; P8).
     if let Some(v) = doc.session_leaf(leaf) {
         return Some(v.clone());
     }
+    // Tier 2: binding cell value.
     if nodes.contains_key(&leaf) {
         return resolved.get(&leaf).cloned();
     }
+    // Tier 3: producer signal (layout > clips > others).
     if let Some(s) = runtime.get(&leaf) {
         return Some(s.value.clone());
     }
@@ -3337,7 +3322,7 @@ mod tests {
         ]))
         .expect("applies");
         assert!(s.reactive.errors.contains_key(&leaf(x, "size.w")), "x is blocked on the cycle: {:?}", s.reactive.errors);
-        s.reactive.preview(Tree::of(&s.docs), leaf(py, "let.value"), Value::Ref(z));
+        s.preview(py, "let.value".parse().unwrap(), Value::Ref(z));
         assert_eq!(num(&s, leaf(y, "size.w")), Some(6.0));
         assert_eq!(num(&s, leaf(x, "size.w")), Some(6.0), "x recovered: {:?}", s.reactive.errors);
         assert!(s.reactive.errors.is_empty(), "{:?}", s.reactive.errors);
@@ -3353,7 +3338,7 @@ mod tests {
         assert!(unneeded.contains(&CellId::Native(NativeKey::Test(b, 0))));
         s.reactive.set_unneeded(doc, unneeded);
         let r0 = runs.load(Ordering::SeqCst);
-        s.reactive.preview(Tree::of(&s.docs), leaf(a, "size.w"), Value::Number(4.0));
+        s.preview(a, "size.w".parse().unwrap(), Value::Number(4.0));
         assert_eq!(runs.load(Ordering::SeqCst), r0, "not run while nothing needs it");
         assert!(s.reactive.is_stale(leaf(b, "size.h")));
         // Read from outside the graph, it is needed and brought up to date.

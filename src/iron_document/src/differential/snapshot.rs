@@ -137,7 +137,13 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
             }
         }
     }
-    leaves.extend(s.reactive().overlay().keys().copied());
+    for p in s.docs.session_patches.values() {
+        for t in p.entries.keys() {
+            if let crate::patch::PatchKey::Leaf(path) = t.key {
+                leaves.insert(Leaf { node: t.node, path });
+            }
+        }
+    }
     leaves.extend(s.signals().keys().copied());
     leaves.extend(s.session_state.keys().copied());
     leaves.extend(s.reactive().errors.keys().copied());

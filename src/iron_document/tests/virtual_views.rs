@@ -1162,3 +1162,315 @@ fn repeat_nested_use_view_coord_and_make_component_patch_order() {
     assert_eq!(s2.resolved(migrated_bx, "transform2d.x".parse().unwrap()), Some(Value::Number(100.0)));
     s2.check_virtual_views_parity().unwrap();
 }
+
+/// EN-5c: solver writes on constrained instance copies go to `(DiscretePoint, Leaf)`
+/// `Op::Solve`, isolate across discrete points, survive save & solver-free reload,
+/// clear on authored edit and on last-constraint deletion (P17), and roundtrip
+/// solver-free through undo, redo, and replay.
+#[test]
+fn en5c_solve_layer_persistence_discrete_isolation_and_p17_release() {
+    use iron_document::patch::{Axis, AxisId, AxisKind, AxisOp, AxisValue, AxisValueId, Point};
+    use std::collections::BTreeMap;
+
+    let mut store = StoreCore::new();
+    let ids = apply_xml(
+        &mut store,
+        r#"<edit>
+          <model name="model"/>
+          <composition id="$c" name="scene" dims="2d"/>
+          <library name="library">
+            <definition id="$d" name="widget">
+              <template notation="free">
+                <rect id="$bx" name="box" x="10" y="0" w="20" h="20"/>
+              </template>
+            </definition>
+          </library>
+        </edit>"#,
+    );
+    let (c, d, bx) = (ids["$c"], ids["$d"], ids["$bx"]);
+    apply_xml(&mut store, &format!(r#"<edit><place def="{d}" in="{c}" x="0" y="0"/></edit>"#));
+    let u = store
+        .tree()
+        .children(c)
+        .iter()
+        .copied()
+        .find(|&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use"))
+        .unwrap();
+    let copy = NodeId::expanded(u, bx).unwrap();
+    let x_path: LeafPath = "transform2d.x".parse().unwrap();
+
+    // Add a discrete mode axis with two points: m0 and m1.
+    let mode_ax = AxisId(1);
+    let m0 = AxisValueId(1);
+    let m1 = AxisValueId(2);
+    store
+        .apply(TransactionInput {
+            label: "add mode axis".into(),
+            actor: Actor::Human,
+            ts: 0,
+            idempotency_key: None,
+            ops: vec![Op::Axis(AxisOp::Add {
+                axis: Axis {
+                    id: mode_ax,
+                    name: "mode".into(),
+                    kind: AxisKind::Unordered,
+                    owner: None,
+                    values: vec![AxisValue::new(m0, "m0"), AxisValue::new(m1, "m1")],
+                },
+            })],
+            exact: false,
+        })
+        .unwrap();
+    let pt0 = Point::default().with_value(mode_ax, m0);
+    let pt1 = Point::default().with_value(mode_ax, m1);
+    store.set_point(pt0.clone());
+
+    // Constrain `copy` with a `pin` at x = 80 and a `fix` at m0.
+    let pin_id = store.authored().next_id();
+    let fix_id = pin_id.offset(1);
+    let rels = store.authored().next_relation_ids(2);
+    let mut pin_c = facet::Constraint::default();
+    pin_c.kind = Slot::Const(Value::Enum("pin".into()));
+    let mut fix_c = facet::Constraint::default();
+    fix_c.kind = Slot::Const(Value::Enum("fix".into()));
+    let mut pin_data = BTreeMap::new();
+    pin_data.insert("role".to_owned(), Value::Str("a".into()));
+    pin_data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+    pin_data.insert("at".to_owned(), Value::Vec2([80.0, 0.0]));
+    let mut fix_data = BTreeMap::new();
+    fix_data.insert("role".to_owned(), Value::Str("a".into()));
+    fix_data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+    store
+        .apply(TransactionInput {
+            label: "pin copy".into(),
+            actor: Actor::Human,
+            ts: 1,
+            idempotency_key: None,
+            ops: vec![
+                Op::Create { id: pin_id, ty: TypeId::lookup("constraint").unwrap(), parent: Some(c), order: OrderKey::after(&OrderKey::first()), facets: vec![pin_c.wrap()] },
+                Op::Link { rel: Relation { id: rels[0], from: pin_id, to: copy, rel: RelKind::Constrains, data: pin_data } },
+            ],
+            exact: false,
+        })
+        .unwrap();
+
+    // Solver wrote into `(pt0, copy.x)` solve layer with ZERO authored patches.
+    assert_eq!(store.authored().patches().patches.len(), 0);
+    assert_eq!(
+        store.authored().patches().solve_get(&pt0.discrete(), Leaf { node: copy, path: x_path }),
+        Some(&Slot::Const(Value::Number(80.0)))
+    );
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(80.0)));
+    assert!(
+        store.history().past().last().unwrap().derived_ops.iter().any(|op| matches!(op, Op::Solve { leaf, .. } if leaf.node == copy)),
+        "solver must record Op::Solve in derived_ops"
+    );
+
+    // Add `fix` too, then save and verify solver-free reload!
+    store
+        .apply(TransactionInput {
+            label: "fix copy".into(),
+            actor: Actor::Human,
+            ts: 2,
+            idempotency_key: None,
+            ops: vec![
+                Op::Create { id: fix_id, ty: TypeId::lookup("constraint").unwrap(), parent: Some(c), order: OrderKey::after(&OrderKey::after(&OrderKey::first())), facets: vec![fix_c.wrap()] },
+                Op::Link { rel: Relation { id: rels[1], from: fix_id, to: copy, rel: RelKind::Constrains, data: fix_data } },
+            ],
+            exact: false,
+        })
+        .unwrap();
+    let saved = store.save();
+    let mut reloaded = StoreCore::load(&saved).unwrap();
+    reloaded.set_point(pt0.clone());
+    assert_eq!(reloaded.resolved(copy, x_path), Some(Value::Number(80.0)), "solver-free reload must restore persisted solve pose");
+
+    // Discrete-point isolation: at pt1 (unsolved), copy reads base template 10.0, NOT pt0's 80.0!
+    reloaded.set_point(pt1.clone());
+    assert_eq!(reloaded.resolved(copy, x_path), Some(Value::Number(10.0)), "pt0 solve pose must not leak to pt1");
+    reloaded.set_point(pt0.clone());
+    assert_eq!(reloaded.resolved(copy, x_path), Some(Value::Number(80.0)));
+
+    // Delete `pin`: `fix` still holds `copy`, so solve entry stays 80.0.
+    store
+        .apply(TransactionInput {
+            label: "unpin".into(),
+            actor: Actor::Human,
+            ts: 3,
+            idempotency_key: None,
+            ops: vec![Op::Delete { id: pin_id }],
+            exact: false,
+        })
+        .unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(80.0)));
+
+    // Authored edit on copy (even to base value 10.0) clears solve via derived Op::Solve { slot: None };
+    // undo restores 80.0 solver-free!
+    store
+        .apply(TransactionInput {
+            label: "authored edit copy".into(),
+            actor: Actor::Human,
+            ts: 4,
+            idempotency_key: None,
+            ops: vec![Op::Set { id: copy, path: x_path, slot: Slot::Const(Value::Number(10.0)) }],
+            exact: false,
+        })
+        .unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(10.0)));
+    assert_eq!(store.authored().patches().solve_get(&pt0.discrete(), Leaf { node: copy, path: x_path }), None);
+    store.undo(5).unwrap().unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(80.0)));
+    assert_eq!(
+        store.authored().patches().solve_get(&pt0.discrete(), Leaf { node: copy, path: x_path }),
+        Some(&Slot::Const(Value::Number(80.0)))
+    );
+
+    // P17 release on last-holder deletion: deleting `fix` clears solve -> snaps back to 10.0;
+    // undo puts 80.0 back and redo clears it again, all solver-free!
+    let unfix_tx = store
+        .apply(TransactionInput {
+            label: "unfix".into(),
+            actor: Actor::Human,
+            ts: 6,
+            idempotency_key: None,
+            ops: vec![Op::Delete { id: fix_id }],
+            exact: false,
+        })
+        .unwrap();
+    assert_eq!(unfix_tx.replayed, false);
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(10.0)));
+    assert_eq!(store.authored().patches().solve_get(&pt0.discrete(), Leaf { node: copy, path: x_path }), None);
+    let recorded_unfix = store.history().past().last().unwrap().clone();
+    store.undo(7).unwrap().unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(80.0)));
+    store.redo(8).unwrap().unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(10.0)));
+    store.undo(9).unwrap().unwrap();
+    store.replay(&recorded_unfix).unwrap();
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(10.0)));
+}
+
+/// EN-5c: gesture previews live on the session patch layer (`GESTURE_PREVIEW_PATCH_ID`)
+/// strictly above scratch session patches (P8), preserve scratch patches on cancel/commit,
+/// support missing optional facets (`corners`), and cancel when another transaction's
+/// `Op::Solve` moves a watched copy.
+#[test]
+fn en5c_gesture_previews_on_session_layer_p8_and_conflict() {
+    use iron_document::patch::{GESTURE_PREVIEW_PATCH_ID, Patch, PatchId, PatchKey, PatchTarget, PatchValue, Product, SESSION_LAYER};
+    use std::collections::BTreeMap;
+
+    let mut store = StoreCore::new();
+    let ids = apply_xml(
+        &mut store,
+        r#"<edit>
+          <model name="model"/>
+          <composition id="$c" name="scene" dims="2d">
+            <rect id="$r" name="r" x="10" y="0" w="20" h="20"/>
+          </composition>
+          <library name="library">
+            <definition id="$d" name="w">
+              <template notation="free"><rect id="$bx" name="bx" x="0" y="0" w="10" h="10"/></template>
+            </definition>
+          </library>
+        </edit>"#,
+    );
+    let (c, r, d, bx) = (ids["$c"], ids["$r"], ids["$d"], ids["$bx"]);
+    let x_path: LeafPath = "transform2d.x".parse().unwrap();
+
+    // 1. Scratch session patch sets r.x = 50; gesture preview sits strictly above it (P8).
+    let scratch_id = PatchId(42);
+    store
+        .set_session_patch(Patch {
+            id: scratch_id,
+            layer: SESSION_LAYER,
+            rank: OrderKey::first(),
+            region: Product::default(),
+            anchor: None,
+            writable: true,
+            entries: BTreeMap::from([(
+                PatchTarget { node: r, key: PatchKey::Leaf(x_path) },
+                PatchValue::Slot { slot: Slot::Const(Value::Number(50.0)) },
+            )]),
+        })
+        .unwrap();
+    assert_eq!(store.resolved(r, x_path), Some(Value::Number(50.0)));
+
+    store.preview(r, x_path, Value::Number(120.0));
+    assert_eq!(store.resolved(r, x_path), Some(Value::Number(120.0)));
+    let stack = store.patch_stack(PatchTarget { node: r, key: PatchKey::Leaf(x_path) });
+    assert_eq!(stack.len(), 2);
+    assert_eq!(stack[0].0.id, GESTURE_PREVIEW_PATCH_ID, "gesture preview must outrank scratch patch");
+    assert_eq!(stack[1].0.id, scratch_id);
+
+    // Reserved gesture preview patch id cannot be overwritten via public set_session_patch.
+    assert!(store
+        .set_session_patch(Patch {
+            id: GESTURE_PREVIEW_PATCH_ID,
+            layer: SESSION_LAYER,
+            rank: OrderKey::first(),
+            region: Product::default(),
+            anchor: None,
+            writable: true,
+            entries: BTreeMap::new(),
+        })
+        .is_err());
+
+    // Cancelling the gesture drops ONLY the gesture preview, preserving scratch patch 42!
+    store.cancel_gesture();
+    assert!(!store.gesture_in_progress());
+    assert_eq!(store.resolved(r, x_path), Some(Value::Number(50.0)), "cancel_gesture must preserve scratch session patches");
+    store.clear_session_patches();
+    assert_eq!(store.resolved(r, x_path), Some(Value::Number(10.0)));
+
+    // 2. Previewing a missing optional facet (`corners.tl`) works live and commits the facet.
+    assert!(!store.tree().has(r, FacetKind::Corners));
+    let tl_path: LeafPath = "corners.tl".parse().unwrap();
+    store.preview(r, tl_path, Value::Number(8.0));
+    assert_eq!(store.resolved(r, tl_path), Some(Value::Number(8.0)));
+    store.commit_gesture("round corner", Actor::Human, 1).unwrap().unwrap();
+    assert!(store.tree().has(r, FacetKind::Corners));
+    assert_eq!(store.resolved(r, tl_path), Some(Value::Number(8.0)));
+
+    // 3. Another transaction whose `Op::Solve` moves a watched expanded copy cancels the gesture.
+    apply_xml(&mut store, &format!(r#"<edit><place def="{d}" in="{c}" x="0" y="0"/></edit>"#));
+    let u = store
+        .tree()
+        .children(c)
+        .iter()
+        .copied()
+        .find(|&n| !n.is_expanded() && store.tree().live(n).is_some_and(|x| x.ty.name() == "use"))
+        .unwrap();
+    let copy = NodeId::expanded(u, bx).unwrap();
+    let g = store.begin_gesture(&[copy]);
+    store.preview(copy, "transform2d.y".parse().unwrap(), Value::Number(30.0));
+    assert_eq!(store.gesture_status(g), GestureStatus::Active);
+
+    // Pinning `copy` at x = 90 makes the solver emit `Op::Solve` for `copy.x` -> cancels gesture!
+    let pin_id = store.authored().next_id();
+    let rel_id = store.authored().next_relation_id();
+    let mut pin_c = facet::Constraint::default();
+    pin_c.kind = Slot::Const(Value::Enum("pin".into()));
+    let mut pin_data = BTreeMap::new();
+    pin_data.insert("role".to_owned(), Value::Str("a".into()));
+    pin_data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+    pin_data.insert("at".to_owned(), Value::Vec2([90.0, 0.0]));
+    store
+        .apply(TransactionInput {
+            label: "pin watched copy".into(),
+            actor: Actor::Model,
+            ts: 2,
+            idempotency_key: None,
+            ops: vec![
+                Op::Create { id: pin_id, ty: TypeId::lookup("constraint").unwrap(), parent: Some(c), order: OrderKey::after(&OrderKey::first()), facets: vec![pin_c.wrap()] },
+                Op::Link { rel: Relation { id: rel_id, from: pin_id, to: copy, rel: RelKind::Constrains, data: pin_data } },
+            ],
+            exact: false,
+        })
+        .unwrap();
+    assert!(
+        matches!(store.gesture_status(g), GestureStatus::Cancelled(_)),
+        "Op::Solve moving watched copy must cancel gesture: {:?}",
+        store.gesture_status(g)
+    );
+    assert_eq!(store.resolved(copy, x_path), Some(Value::Number(90.0)));
+}

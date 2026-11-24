@@ -630,6 +630,9 @@ impl Docs {
     /// Validated before mutation so an invalid patch never leaves queued keys.
     /// Session patches are leaf-only and emit `Key::Leaf` only (not `Key::Patch`).
     pub(crate) fn set_session_patch(&mut self, mut patch: crate::patch::Patch) -> Result<Vec<crate::expr::Leaf>, String> {
+        if patch.id == crate::patch::GESTURE_PREVIEW_PATCH_ID {
+            return Err("reserved gesture preview patch id".into());
+        }
         patch.layer = crate::patch::SESSION_LAYER;
         self.authored
             .patches()
@@ -637,6 +640,13 @@ impl Docs {
                 let ty_node = id.expanded_parts().map(|(_, local)| local).unwrap_or(id);
                 self.authored.node(ty_node).map(|n| n.ty)
             })?;
+        // Keep the live gesture preview patch strictly above any scratch session
+        // patch in rank (`patches.md` P8, `EN-5c`).
+        if let Some(preview) = self.session_patches.get_mut(&crate::patch::GESTURE_PREVIEW_PATCH_ID)
+            && preview.rank <= patch.rank
+        {
+            preview.rank = crate::order::OrderKey::after(&patch.rank);
+        }
         let mut leaves = Vec::new();
         if let Some(old) = self.session_patches.insert(patch.id, patch.clone()) {
             for t in old.entries.keys() {
@@ -654,6 +664,95 @@ impl Docs {
             self.scoped_touched.note(crate::structure::Key::Leaf(l));
         }
         Ok(leaves)
+    }
+
+    /// Set one leaf in the reserved live gesture-preview session patch
+    /// (`GESTURE_PREVIEW_PATCH_ID`, `SESSION_LAYER`, ranked strictly above
+    /// all scratch session patches; `patches.md` P8, `EN-5c`).
+    pub(crate) fn set_gesture_preview(&mut self, leaf: crate::expr::Leaf, value: crate::value::Value) {
+        let top_rank = self
+            .session_patches
+            .iter()
+            .filter(|&(&id, _)| id != crate::patch::GESTURE_PREVIEW_PATCH_ID)
+            .map(|(_, p)| &p.rank)
+            .max()
+            .cloned();
+        let entry = self
+            .session_patches
+            .entry(crate::patch::GESTURE_PREVIEW_PATCH_ID)
+            .or_insert_with(|| crate::patch::Patch {
+                id: crate::patch::GESTURE_PREVIEW_PATCH_ID,
+                layer: crate::patch::SESSION_LAYER,
+                rank: match top_rank.as_ref() {
+                    Some(r) => crate::order::OrderKey::after(r),
+                    None => crate::order::OrderKey::first(),
+                },
+                region: crate::patch::Product::default(),
+                anchor: None,
+                writable: true,
+                entries: BTreeMap::new(),
+            });
+        if let Some(r) = top_rank
+            && entry.rank <= r
+        {
+            entry.rank = crate::order::OrderKey::after(&r);
+        }
+        entry.entries.insert(
+            crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) },
+            crate::patch::PatchValue::Slot { slot: crate::value::Slot::Const(value) },
+        );
+    }
+
+    /// Remove one leaf from the live gesture-preview session patch. Returns
+    /// `true` if the leaf was present.
+    pub(crate) fn remove_gesture_preview(&mut self, leaf: crate::expr::Leaf) -> bool {
+        let target = crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) };
+        let Some(patch) = self.session_patches.get_mut(&crate::patch::GESTURE_PREVIEW_PATCH_ID) else {
+            return false;
+        };
+        let removed = patch.entries.remove(&target).is_some();
+        if patch.entries.is_empty() {
+            self.session_patches.remove(&crate::patch::GESTURE_PREVIEW_PATCH_ID);
+        }
+        removed
+    }
+
+    /// Remove the entire live gesture-preview session patch (leaving any
+    /// scratch session patches untouched) and return the leaves it held.
+    pub(crate) fn clear_gesture_preview(&mut self) -> Vec<crate::expr::Leaf> {
+        let Some(old) = self.session_patches.remove(&crate::patch::GESTURE_PREVIEW_PATCH_ID) else {
+            return Vec::new();
+        };
+        old.entries
+            .into_keys()
+            .filter_map(|t| match t.key {
+                crate::patch::PatchKey::Leaf(path) => Some(crate::expr::Leaf { node: t.node, path }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether any live gesture preview entry is active.
+    pub(crate) fn has_gesture_preview(&self) -> bool {
+        self.session_patches
+            .get(&crate::patch::GESTURE_PREVIEW_PATCH_ID)
+            .is_some_and(|p| !p.entries.is_empty())
+    }
+
+    /// Snapshot all active live gesture-preview `(Leaf, Value)` entries.
+    pub(crate) fn gesture_preview_entries(&self) -> Vec<(crate::expr::Leaf, crate::value::Value)> {
+        let Some(patch) = self.session_patches.get(&crate::patch::GESTURE_PREVIEW_PATCH_ID) else {
+            return Vec::new();
+        };
+        patch
+            .entries
+            .iter()
+            .filter_map(|(t, v)| {
+                let crate::patch::PatchKey::Leaf(path) = t.key else { return None };
+                let val = v.as_slot()?.constant()?.clone();
+                Some((crate::expr::Leaf { node: t.node, path }, val))
+            })
+            .collect()
     }
 
     /// Remove a session-layer patch by id, returning the leaves it touched.
@@ -1780,13 +1879,29 @@ impl<'a> Tree<'a> {
     }
 
     /// Session-layer patch value for `leaf` at the active point (engine.md §2.4 Tier 1, P8).
+    /// Checks the reserved live gesture-preview patch first in O(1) (universal region,
+    /// ranked above all scratch patches; allows previewing an allowed optional facet before
+    /// `commit_gesture` adds it), then falls back to general session patches with strict P21.
     pub(crate) fn session_leaf(self, leaf: Leaf) -> Option<&'a crate::value::Value> {
         let session = self.session_patches.filter(|s| !s.is_empty())?;
+        let target = crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) };
+        if let Some(preview) = session.get(&crate::patch::GESTURE_PREVIEW_PATCH_ID)
+            && let Some(val) = preview.entries.get(&target).and_then(|v| v.as_slot()).and_then(|s| s.constant())
+        {
+            if let Some(node) = self.live(leaf.node)
+                && (self.has(leaf.node, leaf.path.facet) || node.ty.spec().allows(leaf.path.facet))
+            {
+                return Some(val);
+            }
+            return None;
+        }
+        if session.len() == 1 && session.contains_key(&crate::patch::GESTURE_PREVIEW_PATCH_ID) {
+            return None;
+        }
         let point = self.point?;
         if !self.is_live(leaf.node) || !self.has(leaf.node, leaf.path.facet) {
             return None;
         }
-        let target = crate::patch::PatchTarget { node: leaf.node, key: crate::patch::PatchKey::Leaf(leaf.path) };
         let win = if leaf.node.is_expanded()
             && let Some(views) = self.views
             && let Some(coord) = views.coord_of(leaf.node)

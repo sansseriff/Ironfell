@@ -129,11 +129,6 @@ impl Cluster {
     }
 }
 
-/// Whether the solver writes leaf `path` of a node it holds.
-pub(crate) fn writes(path: crate::LeafPath) -> bool {
-    path.facet == FacetKind::Transform2d && TRANSFORM_LEAVES.contains(&path.field)
-}
-
 /// A leaf a transaction asked for by name: pulled toward `requested` at
 /// strong priority.
 #[derive(Clone, Debug, PartialEq)]

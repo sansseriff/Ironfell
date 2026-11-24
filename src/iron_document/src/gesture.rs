@@ -106,6 +106,8 @@ pub(crate) fn conflict(doc: Tree<'_>, ops: &[Op], g: &ActiveGesture, drivers: &B
             Op::Create { id, .. } if g.nodes.contains(id) => format!("{id} was replaced"),
             Op::Set { id, path, .. } if drivers.contains(&Leaf { node: *id, path: *path }) => format!("{id}.{path}, which the gesture drives, was set"),
             Op::Set { id, path, slot } if watched(doc, g, *id) && (GEOMETRY.contains(&path.facet) || slot.expr().is_some()) => format!("{id}.{path} was set"),
+            Op::Solve { leaf, .. } if drivers.contains(leaf) => format!("{}, which the gesture drives, was solved", leaf),
+            Op::Solve { leaf, .. } if watched(doc, g, leaf.node) && GEOMETRY.contains(&leaf.path.facet) => format!("{leaf} was solved"),
             Op::AddFacet { id, facet } if watched(doc, g, *id) && GEOMETRY.contains(&facet.kind()) => format!("{id} gained {}", facet.kind().name()),
             Op::RemoveFacet { id, kind } if watched(doc, g, *id) && GEOMETRY.contains(kind) => format!("{id} lost {}", kind.name()),
             Op::Link { rel } if matches!(rel.rel, RelKind::Constrains | RelKind::Animates) && g.nodes.contains(&rel.to) => {
@@ -127,6 +129,7 @@ pub(crate) fn conflict(doc: Tree<'_>, ops: &[Op], g: &ActiveGesture, drivers: &B
 pub(crate) fn moved(derived: &[Op], g: &ActiveGesture) -> Option<String> {
     derived.iter().find_map(|op| match op {
         Op::Set { id, path, .. } if g.nodes.contains(id) => Some(format!("the solver moved {id}.{path}")),
+        Op::Solve { leaf, .. } if g.nodes.contains(&leaf.node) => Some(format!("the solver moved {leaf}")),
         _ => None,
     })
 }

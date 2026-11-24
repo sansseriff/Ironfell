@@ -14,8 +14,7 @@ use crate::op::Op;
 use crate::registry::TypeId;
 use crate::structure::Key;
 use crate::tree::Docs;
-use crate::value::Slot;
-use crate::{Leaf, NodeId, Tree, Version};
+use crate::{NodeId, Tree, Version};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Which owners to expand again.
@@ -52,12 +51,6 @@ pub(crate) struct Owners {
     dirty_roots: BTreeSet<NodeId>,
     /// Whether `Key::Roots` was touched (new top-level root may hold owners).
     roots_dirty: bool,
-    /// The copies a constraint cluster holds (temporary until `EN-5c`).
-    solved: BTreeSet<NodeId>,
-    /// The solver leaves of copies the current transaction's own ops set (`EN-5c` deletes).
-    edited: BTreeSet<Leaf>,
-    /// Last accepted wanted solver-leaf values for held copies (`EN-5c` deletes).
-    held_wanted: HashMap<Leaf, Slot>,
 }
 
 /// What an expansion would change here, applied only once the transaction
@@ -70,7 +63,6 @@ pub(crate) struct Delta {
     deps: BTreeMap<NodeId, Vec<Key>>,
     extra_deps: BTreeMap<NodeId, Vec<Key>>,
     roots: Vec<NodeId>,
-    held_wanted: HashMap<Leaf, Slot>,
 }
 
 impl Delta {
@@ -79,7 +71,6 @@ impl Delta {
         self.counts.extend(d.counts);
         self.reads.extend(d.reads);
         self.deps.extend(d.deps);
-        self.held_wanted.extend(d.held_wanted);
     }
 
     fn add_delta(&mut self, d: Delta) {
@@ -92,7 +83,6 @@ impl Delta {
             self.extra_deps.entry(o).or_default().extend(ks);
         }
         self.roots.extend(d.roots);
-        self.held_wanted.extend(d.held_wanted);
     }
 
     fn has_budget_problem(&self) -> bool {
@@ -210,7 +200,6 @@ impl Owners {
             deps: BTreeMap::new(),
             extra_deps: BTreeMap::new(),
             roots: Tree::of(docs).roots().to_vec(),
-            held_wanted: HashMap::new(),
         };
         let mut ops = Vec::new();
         let mut done: BTreeSet<NodeId> = BTreeSet::new();
@@ -241,7 +230,7 @@ impl Owners {
                 held = (held + n).saturating_sub(self.counts.get(o).copied().unwrap_or(0));
             }
             let held = held.min(expand::NODE_BUDGET);
-            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.held_wanted);
+            let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held));
             // Advance `template_cursor` past expansion's own derived `copies` writes
             // so they do not feed back into `dirty_owners` on the next transaction (M2).
             let _ = docs.drain_template_touched();
@@ -288,13 +277,12 @@ impl Owners {
             deps: BTreeMap::new(),
             extra_deps: BTreeMap::new(),
             roots: Vec::new(),
-            held_wanted: HashMap::new(),
         };
         let mut ops = Vec::new();
         let mut repair: BTreeSet<NodeId> = BTreeSet::new();
         for (owner, rs) in &by_owner {
             let room = expand::NODE_BUDGET.saturating_sub(held) + self.held_under(Tree::of(docs), rs);
-            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room, (&self.solved, &self.edited), &self.held_wanted) else {
+            let Some((done, problems)) = expand::expand_items(docs, &mut self.templates, stamp, counts, *owner, rs, room) else {
                 if ops.is_empty() {
                     return None;
                 }
@@ -308,7 +296,6 @@ impl Owners {
             delta.counts.insert(*owner, whole);
             delta.reads.extend(done.reads.iter().map(|&r| (r, *owner)));
             delta.extra_deps.entry(*owner).or_default().extend(done.extra_deps);
-            delta.held_wanted.extend(done.held_wanted);
             if !problems.is_empty() {
                 repair.insert(*owner);
             }
@@ -329,7 +316,7 @@ impl Owners {
         let tree = Tree::of(docs);
         let owners = expand::top_owners(tree);
         let roots = tree.roots().to_vec();
-        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, (&self.solved, &self.edited), &self.held_wanted);
+        let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET);
         let _ = docs.drain_template_touched();
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta {
@@ -340,7 +327,6 @@ impl Owners {
             deps: BTreeMap::new(),
             extra_deps: BTreeMap::new(),
             roots,
-            held_wanted: HashMap::new(),
         };
         delta.add(done);
         (ops, delta)
@@ -436,43 +422,10 @@ impl Owners {
         for (o, extra) in d.extra_deps {
             self.append_owner_deps(o, extra);
         }
-        self.held_wanted.extend(d.held_wanted);
     }
 
     pub(crate) fn templates(&self) -> &TemplateCache {
         &self.templates
-    }
-
-    pub(crate) fn wanted_slots(&mut self, doc: Tree<'_>, counts: &Items, leaves: &[Leaf]) -> Vec<(Leaf, Slot)> {
-        expand::wanted_slots(doc, &mut self.templates, counts, leaves)
-    }
-
-    pub(crate) fn hold(&mut self, doc: Tree<'_>, counts: &Items, solved: BTreeSet<NodeId>) {
-        let added: Vec<NodeId> = solved.difference(&self.solved).copied().collect();
-        self.solved = solved;
-        self.held_wanted.retain(|leaf, _| self.solved.contains(&leaf.node));
-        if !added.is_empty() {
-            let leaves: Vec<Leaf> = added
-                .into_iter()
-                .flat_map(|node| {
-                    crate::solve::TRANSFORM_LEAVES.map(move |f| Leaf {
-                        node,
-                        path: crate::facet::LeafPath::new(crate::facet::FacetKind::Transform2d, f).expect("declared"),
-                    })
-                })
-                .collect();
-            for (leaf, slot) in expand::wanted_slots(doc, &mut self.templates, counts, &leaves) {
-                self.held_wanted.entry(leaf).or_insert(slot);
-            }
-        }
-    }
-
-    pub(crate) fn edit(&mut self, leaves: BTreeSet<Leaf>) {
-        self.edited = leaves;
-    }
-
-    pub(crate) fn held(&self) -> &BTreeSet<NodeId> {
-        &self.solved
     }
 
     pub(crate) fn problems(&self) -> Vec<Problem> {

@@ -67,6 +67,11 @@ patch_id_type!(PatchId, "p", "Stable identifier for a patch.");
 /// Never saved in canonical JSON and never recorded in undo history.
 pub const SESSION_LAYER: u32 = u32::MAX;
 
+/// Reserved `PatchId` in `SESSION_LAYER` holding live gesture previews (and
+/// live cluster-solve previews), always ranked strictly above scratch session
+/// patches (`patches.md` P8, `engine.md` §2.4, `EN-5c`).
+pub const GESTURE_PREVIEW_PATCH_ID: PatchId = PatchId(u64::MAX);
+
 // ---------------------------------------------------------------------------
 // Axes and points (patches.md §3)
 // ---------------------------------------------------------------------------

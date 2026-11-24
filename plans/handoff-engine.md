@@ -1,67 +1,56 @@
 # Handoff: Building the Unified Engine
 
-**Date:** 2026-11-22 · **Branch:** `master` · **Keys:** `EN-n` (`plans/README.md`, "Work
-keys") · **Status:** Active. Consolidates the former `RE`, `DS`, and `PT` engine tracks
-into one ordered plan to turn `iron_document` into one cohesive engine first (Stages 1–2),
-then flatten all remaining O(document) scaling costs (Stage 3) and add chunked loading
-(Stage 4).
+**Date:** 2026-11-23 *(revised after reverting universal patch algebra `EN-3`–`EN-5c`)* · **Branch:** `master` · **Keys:** `EN-n` (`plans/README.md`, "Work keys") · **Status:** Active.
+
+**What changed on 2026-11-23:** The universal N-axis patch algebra (`EN-3`–`EN-5c`, preserved on `archive/universal-patch-experiment`) added +11,800 net lines without deleting `Docs::copies` or shipping user-facing variation features, and was reverted in `cc9f380`. Read [`notes/postmortem-universal-patch-algebra.md`](notes/postmortem-universal-patch-algebra.md) first so we never repeat that mistake. Retired keys `EN-3`–`EN-6b` are never reused; new work continues under `EN-12`–`EN-16` alongside existing keys `EN-7`–`EN-11`.
 
 ## 0. Read first
 
 1. This file.
-2. [`specs/engine.md`](specs/engine.md) — the single target architecture (data/patches/views,
-   recorded-read graph & `settle(mode)`, demand/time/host, settled decisions E1–E10).
-3. [`specs/patches.md`](specs/patches.md) — the formal patch algebra (needed starting at `EN-3`;
-   model in `src/iron_patch`).
-4. [`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md) — build,
-   test, smoke, and durations.
+2. [`notes/postmortem-universal-patch-algebra.md`](notes/postmortem-universal-patch-algebra.md) — why the universal patch algebra was reverted and the guardrails it establishes.
+3. [`specs/engine.md`](specs/engine.md) — target architecture (4 orthogonal layers, recorded-read graph & `settle(mode)`, demand/time/host, settled decisions E1–E11).
+4. [`specs/patches.md`](specs/patches.md) — the grounded discrete-variation, semantic-provenance, and node-inspectability plan (`EN-14`–`EN-16`).
+5. [`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md) — build, test, smoke, and durations.
 
-## 1. Baseline (already built and kept)
+## 1. Baseline (Stage 1 complete at `05df865` / `cc9f380`)
 
-Before this consolidation, the following foundation landed on `master` and stays:
+Everything in Stage 0 and Stage 1 is built, green, and stays:
 
-- **In-place journaled transactions & read boundary** (`Document` rollback journal,
-  `Tree`, `Changes`, `Store::take_changes()`).
-- **Reactive cell graph & native cells** (`graph.rs`: height-ordered evaluation, equality
-  cutoff, native cells for layout, network islands, constraint grouping/watchers, repeats).
-- **No refusal after derivation** (`18e3e61`: `Saved` deleted, failed constraint solves
-  apply and report derived problems, `exact` edits dry-run on `scratch()`, +3 constant
-  edit 9.63 → 5.08 ms).
-- **Order-free producer priority** (`95ff421`, `b0e2c68`: fixed `ProducerId` rank with
-  layout over clips, automatic waiting-request promotion, structural-field formula errors).
-- **Recording `Tree` & structural keys pilot** (`structure.rs`: `Node`, `Children`,
-  `FacetSet`, `Facet` keys piloted on unpinned layout natives, +8% on 1,000-item stack).
-- **Per-frame & per-pipeline scaling** (`work` choke-point + allocator counters, scaling
-  test in `document_bridge::scaling`, idle/drag/playback/scrubbing at zero slope).
-- **Composition clocks & visibility gate v1** (`clocks.rs`, `run = always` override).
-- **Pure patch algebra model** (`src/iron_patch`: 19 properties × 10,000 scripts + 16
-  worked examples, green).
+- **In-place journaled transactions & read boundary** (`Document` rollback journal, `Tree`, `Changes`, `Store::take_changes()`).
+- **Recorded-read graph, single write channel & `settle(mode)` (`EN-1`):** `structure::Key`, journaled per-root `ScopedIndexes`, keyed `Wiring` (`Cx::graph()` deleted), `sync_touched`, `MakerCx`, choke-point canaries.
+- **Per-root Makers (`EN-2a`, `EN-2b`, `EN-2c`):** Layout & Pins makers, Constraints & Contexts makers, Network & DerivedBinding makers — all legacy layout/grouping/network hand rules deleted.
+- **No refusal after derivation** (`18e3e61`) & **Order-free producer priority** (`95ff421`, `b0e2c68`).
+- **Composition clocks & visibility gate v1** (`clocks.rs`, `run = always` override) + `work` choke-point & scaling probes.
 
-## 2. Master Work Order (`EN-0` to `EN-11`)
+## 2. Master Work Order
 
-Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s Status
-table. Major design/code milestones go through the council (AGENTS.md).
+Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s Status table. Major milestones go through the council (`AGENTS.md`). Per `plans/README.md`, keys are never reused or renumbered.
 
-| Key | Stage | Builds | Deletes | Gate / Exit | State |
+### Completed & Retired Keys
+
+| Key | Stage | Summary | State |
+|---|---|---|---|
+| **EN-0** | 0 · Stabilize | Round-3 review fixes (`b908d7b`) | **Done 2026-11-22** |
+| **EN-1** | 1 · Spine | One write channel, locked-down `Cx`, scoped indexes, `settle(mode)` (`7a5840e`) | **Done 2026-11-22** |
+| **EN-2a** | 1 · Spine | Per-root Layout & Pins makers (`6e5511e`) | **Done 2026-11-22** |
+| **EN-2b** | 1 · Spine | Per-component Constraints & Contexts makers (`a26395a`) | **Done 2026-11-22** |
+| **EN-2c** | 1 · Spine | Per-root Network & DerivedBinding makers (`05df865`) | **Done 2026-11-22** |
+| **EN-3**..**EN-6b** | *(Retired)* | Universal N-axis patch algebra experiment (`14e4534`..`85c4c45`, archived on `archive/universal-patch-experiment`, reverted in `cc9f380`; see post-mortem) | **Retired 2026-11-23** |
+
+### Active Work Order (`EN-12` → `EN-13` → `EN-7` → `EN-8` → `EN-9` → `EN-10` → `EN-14` → `EN-15` → `EN-16` → `EN-11`)
+
+| Key | Stage | Builds | Deletes | Net-LOC target / Exit | State |
 |---|---|---|---|---|---|
-| **EN-0** | 0 · Stabilize | Round-3 review check on `DS-7`/`DS-10a-1` fixes (`b0e2c68`..`18e3e61`); fix any remaining defects | — | Clean review; plain + differential + smoke pass | **Done 2026-11-22** |
-| **EN-1** | 1 · Spine | **One write channel, locked-down `Cx`, one `settle(mode)` driver:** leaf/relation/index/wiring keys; graph drains touched log; `Cx::graph()` deleted; unkeyed `Tree` reads asserted; scoped per-root indexes `In`/`With`; one `settle(mode)` replacing 6 entry points | Op-built `changed` lists, manual `drain_touched` sites, 6 partial pipeline sequences, `apply_session` structural classifier | All suites pass; choke-point canaries fail when silenced; no unkeyed `Cx` reads | **Done 2026-11-22** |
-| **EN-2a** | 1 · Spine | **Layout pilot:** composition maker over `With(root, Layout)` for layout roots, per-composition `Pins`, pinned parts, glide targets; batched claim handoff | `sync_layout`, `layout_touched`, `layout_roots`, `pinned_by_use`, `prime_layout`, `prime_reorders`, `regraph` `shaped`, `glided` sweep | Per-family layout from-scratch check & canary pass; `cells_demo` within 1.3×; **user checkpoint** before EN-2b | **Done 2026-11-22** |
-| **EN-2b** | 1 · Spine | **Constraints & Contexts:** structural partition maker, per-candidate-component effective-cluster cells, derived cluster dep edges, per-composition attachment check, contexts library cell, `constraint.enabled`/`kind` evaluated with mates | `prime_grouping`, `grouping_reach`, `regroup`, `in_reach`, `moved`, `Clusters` special rule, `sync_cluster_natives`, Kahn's global sort, `resolve_contexts` scan | Retargeted binding, claim-move free-leaf, and ineligible-mate tests pass; per-family check & canary pass | **Done 2026-11-22** |
-| **EN-2c** | 1 · Spine | **Network, Connections & Anchors:** per-island makers/cells, connection signals & anchor followers as cells, scoped network `deref` | `network_shaped`, `rewires_network`, `sync_islands`, `restructure` `rederive`, `chains`, `rest` | Network & anchor tests + per-family check & canary pass | **Done 2026-11-22** |
-| **EN-3** | 2 · Patches & Views | **Design & spike — Patches + Copies as Views:** apply round-3 + council fixes to `specs/patches.md` (map retired `PT-n` keys, settle solve layer, picture/entity ownership, nested-placement anchoring, axis-kind restrictions, optional facet synthesis, static vs `deref` axis cycles); extend `src/iron_patch` (anchoring, nested presence, solve layer); prototype & benchmark sparse `Resolved` store vs fully-virtual `Tree` (nested notation switch, shared entity with 2 pictures, initially-absent read, copy-targeted edit + constraint release + solver-free undo/redo/replay) | — | Working spike passing all 4 scenarios with measured read allocations; `iron_patch` extended; **user approves** before EN-4 | **Next** |
-| **EN-4** | 2 · Patches & Views | **Patches & point evaluation in `iron_document`:** axes, patches, regions, ops, schema bump, sparse `Resolved` effective-value `Tree` + `base_facet()`, in-memory patch index, solve layer + session layer (scratch + gesture previews), evaluation at a point | Ad-hoc `overlay` precedence (once moved onto session layer in EN-5) | Differential parity with extended `src/iron_patch`; axis-growth properties; patch edit at 700 meters ≤ 2× constant edit | Open |
-| **EN-5** | 2 · Patches & Views | **Instances as virtual views + minimal `ItemTable`:** overrides become instance-axis patches, variants become layers, `use.notation` resolved with structure, template compilation off `scope_stamp`, solver writes to dedicated solve layer, minimal keyed `ItemTable` for repeats/when (with `item.value`/`index` as producer signals) | `Docs::copies`, `override` nodes, `stale_overrides`, `Owners::affected`/`made`/`solved`, `keep_solved`, `release`, `apply_recorded`, bulk of `expand.rs`, `scope_stamp` on templates | All instance, override, variant, repeat & constraint tests pass; `Docs::copies` gone | Open |
-| **EN-6a** | 2 · Patches & Views | **Machines on axes:** unordered state axes + pose patches; `std:plot` `vis` migrated; state editor edits pose patches; static + `deref` axis-cycle checks | `machines.md` pose storage & custom pose resolution in `machine.rs` | Machine & plot tests + `plot-view.txt` pass | Open |
-| **EN-6b** | 2 · Patches & Views | **Clips & ordered axes:** clips as patches on time axes (continuous interval arithmetic); ordered axes for slides/takes/narrative extents; `now()` & `clock()` | `touches_clips`, structural `resample` rules, `clips_end` scans, narrative extent kinds | Clip/timeline/machine tests pass; deck & take examples pass | Open |
-| **EN-7** | 2 · Patches & Views | **Remaining wiring & repeats on the unified `Tree`:** per-node binding makers, `@name` scope & boundary checks, theme token cells, blocked retries via `Wiring` keys, selection/state publish, repeat count/input makers & recorded inputs over `ItemTable`, per-root expansion budget | `Rescope`, `regraph` (completely deleted), `after_transaction` classifier, `tokens_shaped`, `retokens`, `token_leaves`, `theme_at`, `REPEAT_INPUTS`, `update_drawn`, `ensure_drawn`, `scope_stamp` | `regraph` deleted; full suite + per-family checks + canaries pass | Open |
-| **EN-8** | 3 · Scaling | **Need counts, scoped pulls & incremental heights:** `leaf_need` + separate demand vs scheduling edges (`retarget` on binding/reservation changes), eager makers, permanent Stage 4 writer holds, un-rooted per-composition `LayoutNative`s, pre-effect `pull()`/`current()` (incl. `run`, `scratch()`, `edit::plan`, `advance`, `engine_api`), local needed-DAG height maintenance | `Store::necessity`, `Reactive::necessity`, `relaxed`, `pinned`, `relax`, stale set, `exact()` (incl. `run` & `engine_api`), `compute_heights` (non-test) | Exact need-count oracle under `observe_all(false)` (incl. first claim, equal-value handoff, stale waiting promotion, `deref` retarget, glide target, repeated edge reversal, mid-pass native raise); constant/structural edit & layout necessity counters flat | Open |
+| **EN-12** | 2 · Lean Core | **Flat solver poses, split previews & Stage-1 carryovers:** flat `Document::solved: BTreeMap<Leaf, Slot>` via `Op::Solve` (cleared on authored edit or last constraint deletion; solver-free undo/redo/replay/load); separate `gesture_preview` & `live_solve_preview` maps (strict `gesture_in_progress()`); zero-alloc `NodeId::expanded_parts()`; recorded-read `TemplateCache` | `Owners::solved`, `Owners::edited`, `Owners::held_wanted`, `Owners::wanted_slots`, `StoreCore::keep_solved`, `apply_recorded`, `release`, `solve::writes`, `scope_stamp` on templates (`Document::scopes`/`scope_stamp`/`touch`, `Tree::scope_stamp`) | **Net negative LOC.** All constraint, drag, undo/redo/replay, `IRON_OWNER_CHECK`, and smoke tests pass | **Next** |
+| **EN-13** | 2 · Lean Core | **Lean Lexical Virtual Views + minimal `ItemTable`:** virtual `Tree` over shared `Arc<Template>` + flat lexical overrides (`outermost instance > inner instance > variant > definition`) + sparse resolved map + keyed `ItemTable` for `repeat`/`when` (`item.value`/`index` as producer signals) | `Docs::copies`, `apart`, `with_copies_in_document`, bulk of `expand.rs`, static `Owners::made`/`affected` | **Big net negative LOC.** All instance, override, variant, repeat, `when`, spatial, and smoke tests pass with `Docs::copies` completely gone | Open |
+| **EN-7** | 2 · Lean Core | **Delete `regraph` & remaining wiring/repeats on virtual `Tree`:** per-node binding makers, `@name` scope & boundary checks, theme token cells, blocked retries via `Wiring` keys, selection/state publish, repeat count/input makers over `ItemTable`, per-root expansion budget | `Rescope`, `regraph` (completely deleted), `after_transaction` classifier, `tokens_shaped`, `retokens`, `token_leaves`, `theme_at`, `REPEAT_INPUTS`, `update_drawn`, `ensure_drawn` | **Net negative LOC.** `regraph` deleted; full suite + per-family checks + canaries + smoke pass | Open |
+| **EN-8** | 3 · Scaling | **Need counts, scoped pulls & incremental heights:** `leaf_need` + separate demand vs scheduling edges (`retarget`), eager makers, permanent Stage 4 writer holds, un-rooted per-composition `LayoutNative`s, pre-effect `pull()`/`current()`, local needed-DAG height maintenance | `Store::necessity`, `Reactive::necessity`, `relaxed`, `pinned`, `relax`, stale set, `exact()` (incl. `run` & `engine_api`), `compute_heights` (non-test) | Exact need-count oracle under `observe_all(false)`; constant/structural edit & layout necessity counters flat | Open |
 | **EN-9** | 3 · Scaling | **Visibility gate & retiring `ROOTED`:** cached node owners, cross-owner read counts, delta clock gating; retire `ROOTED`; captures observe what they draw | `Store::paused` scans, `Clocks::gated`, `Reactive::reader_nodes`, `Docs::reshaped`, `Reactive::wired`, `op::reshapes`, `ROOTED` | All gate & capture tests pass; §8.8 consistency with paused pages passes; playing & gate counters flat | Open |
 | **EN-10** | 3 · Scaling | **Host-side scaling:** per-composition embed/control/3D indexes, touched spatial scopes only, per-composition paint order, incremental timeline lane planning, `gas::find` & `interaction` indexes | Host whole-document scans | Every row of `document_bridge::scaling` flat across both axes (store + host); `document_scaling_time` +6 ≤ 1.2× +0 | Open |
-| **EN-11** | 4 · Storage | **Chunked snapshots & point loading:** revise `specs/patch-storage.md` (cut premature Postgres index tables), implement content-addressed chunks, Merkle manifests, point loading, arrow prefetching, `Pending` reads | Whole-scope snapshot requirement for large scopes | `patch-storage.md` exits met | Open |
-
-*Product UX follow-ups decoupled from the engine track (can run after `EN-6` in `handoff-product.md`):*
-search & provenance UI (former `PT-8`) and clock operators / ghosts / fixed-step accumulators (former `PT-10`).
+| **EN-14** | 4 · Inspect & Vary | **First-class Node Inspectability & Provenance ("Ask the node"):** unified read-only `Store::inspect(node)` returning tree location, semantic derivation (`extends`/instance/slide/take), property provenance stack, incoming drivers (bindings, clips, machines, constraints, layouts), and outgoing consumers; expose in XML `<look id="#…" connections/>` and UI Inspector | Ad-hoc disconnected inspection helpers | Agent and UI can trace any animated/bound/derived component in one query; unit + agent-probe tests pass | Open |
+| **EN-15** | 4 · Inspect & Vary | **Small Discrete Variation Layer (~350–500 lines) + Shared-property Machine States:** finite `Ordered`/`Unordered` axes (stable IDs + tombstones), values & `hidden` only, finite-set resolution/arrows/provenance, bubbling ops (`drag`, `widen`, `narrow`, `split`, `reset`); migrate `machine.rs` poses onto unordered local state patches so cyclic/partial-sharing machines work end-to-end | Legacy per-state channel-value storage in `machine.rs`; historical toy crate `src/iron_patch` | Cyclic 3-state triangle machine (`{A, B}` colour + `{B, C}` position) + smooth arrow transitions + bubbling ops + `plot-view.txt` pass; discrete variation core ≤ ~500 lines | Open |
+| **EN-16** | 4 · Inspect & Vary | **Decks, Takes, Ghosts & Narrative Arrows:** ordered document axes (`slide`, `take`, narrative joints), `@slide`/`@take` readable by `when` for structural/topological changes, `<place … at="take=2" clock="…"/>` with isolated simulation state for ghosts/chaos comparisons, Inspector & State Graph bubbling/provenance UI | Narrative extent special-cases | Slide deck (`[B, ∞)` vs `{C}` + `when` schematic branch), pendulum take+ghost race on shared clock, chaos comparison, and bubbling UX checks pass | Open |
+| **EN-11** | 5 · Storage | **Chunked snapshots & point loading:** revise `specs/patch-storage.md` for the grounded engine (cut premature Postgres index tables), implement content-addressed chunks, Merkle manifests, partial loading | Whole-scope snapshot requirement for large scopes | `patch-storage.md` exits met | Open |
 
 ---
 
@@ -69,63 +58,45 @@ search & provenance UI (former `PT-8`) and clock operators / ghosts / fixed-step
 
 | When | Decision / Gate |
 |---|---|
-| End of `EN-0` | Confirm `DS-7` + `DS-10a-1` fixes are clean before refactoring `lib.rs` in `EN-1`. |
-| Before `EN-1` | Short implementation plan for `EN-1` (write channel, `Cx`, `settle(mode)`) reviewed. |
-| End of `EN-2a` | Verify layout pilot cleanly deletes all layout rules and stays within performance budget. |
-| End of `EN-3` | **User approval** of `specs/patches.md` (round-3 polished) + Copies-as-Views design before starting Stage 2 builds. |
-| End of `EN-7` | **Cohesive Engine milestone:** `regraph`, `Docs::copies`, legacy overrides/machines/clips, and all hand refresh rules are gone. |
+| End of `EN-12` | Confirm net-negative LOC, solver-free undo/redo/replay/load, strict `gesture_in_progress()`, and recorded-read `TemplateCache`. |
+| End of `EN-13` | Confirm `Docs::copies` is completely deleted, net LOC dropped significantly, and read performance matches `views_spike` expectations. |
+| End of `EN-7` | **Cohesive Engine milestone:** `regraph`, `Docs::copies`, and all legacy hand refresh rules are gone. |
 | End of `EN-10` | **Zero-Slope Scaling milestone:** all store and host scaling probes flat on both axes. |
+| End of `EN-14` | Confirm `inspect(node)` / `<look connections/>` makes derivations, animations, bindings, and consumers legible in one query. |
+| End of `EN-15` | Confirm discrete variation core stays small (~350–500 lines) and delivers cyclic shared-property machines cleanly before building decks/takes in `EN-16`. |
 
 ---
 
-## 4. Immediate Next Steps (`EN-0` and `EN-1`)
+## 4. Immediate Next Steps (`EN-12` and `EN-13`)
 
-### EN-0: Close out recent `DS-7` / `DS-10a-1` review
-- Run a focused review check over commits `242798b..18e3e61` (constraint non-refusal,
-  producer priority ranks, waiting requests, settled reads, NaN residuals) to confirm no
-  defects remain before `EN-1` restructures the write channel and driver.
+### EN-12: Flat solver poses, split previews & Stage-1 carryovers
+1. **Flat `Document::solved` (`Op::Solve`):**
+   - Add `solved: BTreeMap<Leaf, Slot>` to `Document` (journaled, saved in `serial.rs`, schema bump) and `Op::Solve { leaf, slot: Option<Slot> }`.
+   - Route Stage 4 `Transaction` constraint solver writes on expanded copies into `Op::Solve`.
+   - When an authored edit modifies a leaf present in `Document::solved`, clear its solve entry as a derived op first (so the authored edit acts as a driver).
+   - When constraint deletion leaves a copy unheld by any cluster, clear its `Document::solved` entries as derived ops (snapping back cleanly to its authored override/template value).
+   - Make undo, redo, replay, and `Store::load` 100% solver-free and delete `Owners::solved`, `Owners::edited`, `Owners::held_wanted`, `Owners::wanted_slots`, `keep_solved`, `apply_recorded`, `release`, and `solve::writes`.
+2. **Split ephemeral previews:**
+   - Separate `gesture_preview: BTreeMap<Leaf, Value>` (owned by `ActiveGesture`) from `live_solve_preview: BTreeMap<Leaf, Value>` (owned by `resolve_clusters_live`).
+   - Tie `gesture_in_progress()` strictly to `gesture_preview`; clear `gesture_preview` cleanly before `cluster_problems()` on `commit_gesture`; handle missing optional facets (e.g. `corners`) cleanly on unpreview.
+3. **Zero-alloc `NodeId::expanded_parts()` & recorded-read `TemplateCache`:**
+   - Cherry-pick zero-alloc `NodeId::expanded_parts()` / `expanded_root()` from `archive/universal-patch-experiment` (`14e4534`).
+   - Move `TemplateCache` onto recorded reads (`Tree::recording` → `Key` reverse index, cleared on rollback) and delete `Document::scopes`, `scope_stamp`, `touch`, and `Tree::scope_stamp`.
+4. **Verify:** Plain + `IRON_OWNER_CHECK=1 --features structure-oracle` + `iron_spatial` + `iron_svg` + `bun test` + `webgl2` smoke. Confirm **net negative LOC**.
 
-### EN-1: Detailed breakdown (One write channel, locked-down `Cx`, one `settle(mode)`)
-1. **Expand `structure::Key` and `Document` scoped indexes:**
-   - Add `Leaf(Leaf)`, `In(NodeId, TypeId)`, `With(NodeId, FacetKind)`, `Relations(NodeId)`,
-     `Relation(RelationId)`, `Roots`, and `Wiring(Leaf)` to `structure::Key`.
-   - Maintain per-top-level-root type and facet indexes in `Document` (updating old & new
-     roots on moves; journaled for rollback).
-   - Report `Leaf` keys on value writes and on node create/delete/restore; report relation,
-     root, and index keys at `Document`'s mutation choke points.
-   - Report `Wiring(leaf)` keys in `Reactive` wherever a binding, claim, or tracked read
-     changes.
-2. **Lock down `Cx` and recording `Tree`:**
-   - Record keys for every `Tree` read used by cells (`relations_from`/`to`, `relation`,
-     `roots`, scoped `nodes_of_type_in`/`nodes_with_in`, absent lookups, `version`).
-   - Key `Cx::is_bound`, `Cx::driven`, `Cx::transitive_deps`.
-   - Delete `Cx::graph()`; put `Cx::previous()` behind `Native::history`; assert on any
-     unkeyed `Tree` read (including `scope_stamp`).
-3. **One write channel into the graph:**
-   - Have `Reactive` consume `Docs`'s touched-key log directly at the start of evaluation.
-   - Delete the op-built `changed` lists in `lib.rs` and the hand-placed `drain_touched`
-     call sites.
-4. **One driver: `StoreCore::settle(mode)`:**
-   - Unify `after_transaction`, `apply_session`, `post_apply`, `pipeline_from`/`derive`,
-     `relayout`, and `advance`'s settle steps into `settle(SettleMode)` following
-     `specs/engine.md` §3.3.
-   - Introduce the typed Maker reader boundary (structure & authored constants only — no
-     evaluated leaf reads) and batched native reconciliation (`set_natives` with claim
-     handoff), ready for `EN-2a`.
-5. **Verify:**
-   - Plain + `differential` + `IRON_OWNER_CHECK` + `iron_spatial` + `iron_svg` + `bun test`
-     + run-iron smoke.
-   - Choke-point canary test verifying silencing each key emitter breaks at least one test.
+### EN-13: Lean Lexical Virtual Views + `ItemTable` (delete `Docs::copies`)
+1. Build lean virtual views directly over shared `Arc<Template>` + flat lexical overrides (`outermost instance > inner instance > variant > definition`) + sparse resolved map for overridden/rewritten virtual nodes.
+2. Add minimal keyed `ItemTable` (`repeat view id → Vec<ItemRecord>`) with `item.value`/`item.index` published as producer signals.
+3. Wire `Tree` and `ViewDelta` directly into `Reactive`, `Changes`, and `iron_spatial` (including vanished-ID spatial root fallback).
+4. Delete `Docs::copies`, `apart`, `with_copies_in_document`, and the bulk of `expand.rs`.
 
 ---
 
 ## 5. Rules
 
-- **One track, one set of keys (`EN-n`).** Do not revive retired `RE`, `DS`, or `PT` keys
-  for new work.
-- **Delete rules as you convert.** A phase is not done until its "Deletes" column is
-  actually gone.
-- **No new op classifiers or stamps.** Until a family is converted to cells, it refreshes
-  coarsely by touched keys in its scope.
-- **Commit and push** each completed phase, updating §2 here and `roadmap.md`'s Status
-  table (`AGENTS.md`).
+- **One track, one set of keys (`EN-n`).** Never reuse or renumber retired keys (`EN-3`–`EN-6b`).
+- **Scope-creep circuit breaker (`AGENTS.md`):** If a simplification phase reaches **+1,500 net lines** without having deleted the old mechanism it replaces, **stop immediately and check in with the user**.
+- **Delete as you go.** A phase is not done until its "Deletes" column is actually gone.
+- **One real consumer before generalizing.** Never generalize a new abstraction across 3+ subsystems before one concrete user-facing workflow uses it end-to-end.
+- **No new op classifiers or stamps.** Until a family is converted to cells, it refreshes coarsely by touched keys in its scope.
+- **Commit and push** each completed phase, updating §2 here and `roadmap.md`'s Status table (`AGENTS.md`).

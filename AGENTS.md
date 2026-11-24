@@ -18,6 +18,13 @@ which plans are historical. Where plans disagree, that index decides.
   over a minute (the full smoke, `gestures.txt`, latency measurements): say which
   step and its estimate. Typical times are in the run-iron skill's "Typical
   durations" table (marked ⏱); add or correct a row when a step's time is new or off.
+- **Scope-creep & net-LOC circuit breaker:** Whenever a refactor or architecture
+  change meant to simplify the codebase exceeds **+1,500 net lines** without having
+  deleted the old mechanism it replaces — or starts growing parallel state layers,
+  forcing ephemeral previews/solver state/continuous time into one storage substrate,
+  or adding hardening passes of 1,000+ lines — **stop immediately and check in with
+  the user** before writing more code (see
+  `plans/notes/postmortem-universal-patch-algebra.md`).
 
 ## Breaking changes are welcome
 

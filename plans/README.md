@@ -1,6 +1,6 @@
 # Plans: where to start
 
-**Updated:** 2026-11-22 for the unified engine track (`handoff-engine.md`, `specs/engine.md`). Update this file whenever a plan is added,
+**Updated:** 2026-11-23 for the revised 4-layer engine & discrete-variation plan (`handoff-engine.md`, `specs/engine.md`, `specs/patches.md`, `notes/postmortem-universal-patch-algebra.md`). Update this file whenever a plan is added,
 finishes, or is superseded.
 
 ## 1. Read first (a new agent)
@@ -9,12 +9,13 @@ finishes, or is superseded.
    place that records what is done.
 2. **The handoff for your track**, the one place that says what to do next and in
    what order:
-   - **Unified engine** (one cohesive engine: recorded-read graph & `settle(mode)`,
-     patches & virtual views, then local need counts, visibility gate, host scaling,
-     and chunked loading; consolidates the former `RE`, `DS`, and `PT` tracks):
+   - **Unified engine** (recorded-read graph & `settle(mode)`, lean lexical virtual views,
+     local need counts, visibility gate, host scaling, first-class node inspectability,
+     and small discrete variations for states/slides/takes/narratives):
      [`handoff-engine.md`](handoff-engine.md), with the target architecture in
-     [`specs/engine.md`](specs/engine.md) and the patch algebra in
-     [`specs/patches.md`](specs/patches.md).
+     [`specs/engine.md`](specs/engine.md), the grounded discrete-variation & inspectability
+     plan in [`specs/patches.md`](specs/patches.md), and the post-mortem of the reverted
+     universal patch algebra in [`notes/postmortem-universal-patch-algebra.md`](notes/postmortem-universal-patch-algebra.md).
    - **Product work** (documents, compositions, tools, signals, lessons):
      [`handoff-product.md`](handoff-product.md). Several tasks are open; it says to ask
      the user which.
@@ -39,7 +40,7 @@ work under a plan gets the next free number.
 
 | Prefix | Plan | Numbering |
 |---|---|---|
-| `EN` | [`handoff-engine.md`](handoff-engine.md) | its §2 phases (`EN-0` … `EN-11`, `EN-2a`) |
+| `EN` | [`handoff-engine.md`](handoff-engine.md) | `EN-0`–`EN-2c` done; `EN-3`–`EN-6b` retired (reverted 2026-11-23); active: `EN-12`, `EN-13`, `EN-7`–`EN-10`, `EN-14`–`EN-16`, `EN-11` |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited (`RE-4.3` moved to §10) |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
 
@@ -66,7 +67,7 @@ that orders them gives them a key.
 |---|---|---|
 | [`agent-vision.md`](specs/agent-vision.md) | Pasted/dropped raster references and GPU composition pictures for the built-in agent | Built on `t3/agent-image-vision`; 2D capture, bounded visual refinement; native/live-provider verification pending |
 | [`agent-runtimes.md`](specs/agent-runtimes.md) | Loopback runtime interoperability, Codex bootstrap, Claude CLI adapter, provider selection and 2D authoring tests | Bootstrap built 2026-11-03 in `agent-runtimes` worktree; live Codex create/edit/undo passes in worker/main modes; live Claude, native and full smoke pending |
-| [`engine.md`](specs/engine.md) (`EN-0` to `EN-11`) | The unified Iron engine: authored document + patches over axes + virtual views; recorded-read cells/makers with one write channel and `settle(mode)`; local need counts, composition-graph clock gate, and host-side scaling | Adopted 2026-11-22; consolidates the former reactive-engine, scaling, structure-in-the-graph, and patches handoffs. Work order in [`handoff-engine.md`](handoff-engine.md) |
+| [`engine.md`](specs/engine.md) (`EN-0`–`EN-2c`, `EN-12`–`EN-16`, `EN-7`–`EN-11`) | The unified Iron engine: 4 orthogonal layers (lexical virtual views, tiny ephemeral/solver tables, Stage-1 clocks/producers, small discrete variation), recorded-read cells/makers with one write channel and `settle(mode)`, node inspectability, and zero-slope scaling | Adopted 2026-11-22; revised 2026-11-23 after reverting `EN-3`–`EN-5c` ([post-mortem](notes/postmortem-universal-patch-algebra.md)). Work order in [`handoff-engine.md`](handoff-engine.md) |
 | [`document-spine.md`](specs/document-spine.md) | `iron_document`: ops, transactions, ids, history, file format | Implemented; the store's rules |
 | [`entity-composition-model.md`](specs/entity-composition-model.md) (ECM) | Units, definitions, entities, compositions, ports, lessons | Phases 1–3 done; 4–7 open |
 | [`constraint-system.md`](specs/constraint-system.md) (CS) | Solver, constraints, interaction-time causality | Phases 1–3 done; 4–7 open |
@@ -110,7 +111,7 @@ that orders them gives them a key.
 | [`frame-constraints.md`](specs/frame-constraints.md) | Figma's resizing model for people: a `pin` facet per child (left, right, stretch, center, scale) interpreted by the layout step, the Resizable toggle, the constraints widget, an auto-layout section | Proposed 2026-11-08; phases 1–2 (minimal) built 2026-11-08 (§7) |
 | [`repeat.md`](specs/repeat.md) | A repeat (a `repeat` facet on a group): one derived copy of its children per element of a series or count, keyed by index or value, entering and exiting through machines; `let` named values; node markup, in which the standard components are written | Phase 1, `let` and node markup built 2026-11-09 (§9): `std:plot` and the other standard components are markup; reworked the same day onto item nodes and live settling (reactivity.md); value keys, enter/exit open |
 | [`reactivity.md`](specs/reactivity.md) | One model for values, structure, state and events, after the council review of repeat and let and a study of Svelte 5's runtime: scopes (one expansion for instances, repeat items and conditionals), keys in ids, structure settling with values, errors that propagate, lists, `let` as state with tiers, `on` actions, tracked reads, queries and accumulators | Phases 1–5 built 2026-11-09 (§13): errors propagate, problems as data, item scopes, structure settling with values; lists and records, keys in ids, `when`; state (`let.keep`) and `on` actions; tracked reads (`deref`). Phase 6 part 1 done 2026-11-10: context (`@name`), traces and accumulators, the delayed `std:fiber`. Part 2 done the same day: the `query` node (a slow Model's answer with pending and stale states). Phase 7 part 1 done too: enter and exit (`presence`). Part 2: a parent's machine over its children's (`machine.at`, in machines.md). Drag and wheel actions, the zoomable `std:plot` and a pulsed `std:laser` done too. Open: declared context reads, reorder by drag, `std:plot` split into parts |
-| [`patches.md`](specs/patches.md) | One algebra for instance overrides, variants, machine poses, clips, narrative extents, decks and takes: patches with regions over axes, stored strength, the drag rule, selectors and queries | Companion algebra spec to `specs/engine.md`, verified by `src/iron_patch`; round-3 polish and user approval in [`handoff-engine.md`](handoff-engine.md) `EN-3` |
+| [`patches.md`](specs/patches.md) | Grounded discrete variation, semantic provenance, and first-class node inspectability (`inspect(node)` / `<look connections/>`): finite `Ordered`/`Unordered` axes (values & `hidden` only) for machine states, decks/slides, takes/ghosts, and narrative arrows, plus bubbling UX | Adopted 2026-11-23 (`EN-14`–`EN-16`); replaces the reverted universal N-axis algebra (`archive/patches-universal-algebra.md`; [post-mortem](notes/postmortem-universal-patch-algebra.md)) |
 | [`patch-storage.md`](specs/patch-storage.md) | Storage for patches: content-addressed chunks, manifests as Merkle trees of `Summary`s, loading by a view's point, the derived index, browser cache, sync of region edits | Draft for Stage 4 ([`handoff-engine.md`](handoff-engine.md) `EN-11`); deferred until Stages 1–3 settle |
 | [`themes.md`](specs/themes.md) | Colour tokens with light and dark values: `@name` in formulas, a palette of token nodes, the built-in validated theme added on first use, the theme published by the store, the picker's Tokens section, `std:plot` on tokens | Built 2026-11-08 (step 5) |
 | [`types-and-units.md`](specs/types-and-units.md) | A typed component boundary: `port.type` (quantities with display units, `choice(a\|b)`, `bool`, `color`, `series`, `fn(n)`, `\| auto`), checks at set and connect, widgets by type, literals that keep their unit, pin visibility (`port.show`, `port.group`) and its author flow. Prior art for plots beyond `std:plot`: `notes/plot-system-vision.md` | Proposed 2026-11-08; phase 1 with widgets and pins built 2026-11-08 (§9) |
@@ -131,6 +132,7 @@ that orders them gives them a key.
 
 | Document | Superseded by |
 |---|---|
+| [`patches-universal-algebra.md`](archive/patches-universal-algebra.md) | [`specs/patches.md`](specs/patches.md) & [`notes/postmortem-universal-patch-algebra.md`](notes/postmortem-universal-patch-algebra.md) (reverted `EN-3`–`EN-5c`, preserved on `archive/universal-patch-experiment`) |
 | [`handoff-2026-10-11.md`](archive/handoff-2026-10-11.md) | `handoff-product.md` (tasks done) |
 | [`vello-hybrid-migration-scope.md`](archive/vello-hybrid-migration-scope.md), [`vello-retention-and-render-plan.md`](archive/vello-retention-and-render-plan.md), [`vello-retained-subtree-renderer-proposal.md`](archive/vello-retained-subtree-renderer-proposal.md) | `rendering/architecture.md`; still the place for their source citations and Zulip quotes |
 | [`bevy-vello-hybrid-design.md`](archive/bevy-vello-hybrid-design.md), [`bevy-vello-hybrid-open-questions.md`](archive/bevy-vello-hybrid-open-questions.md) | The migration happened; see `rendering/architecture.md` |

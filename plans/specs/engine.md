@@ -1,11 +1,13 @@
 # The Iron Engine: Unified Architecture
 
-**Status:** Adopted 2026-11-22. Consolidates and replaces the reactive engine, scaling,
-structure-in-the-graph, and patches handoffs into one cohesive architecture.
+**Status:** Adopted 2026-11-22; **revised 2026-11-23** after reverting the universal patch
+algebra experiment (`EN-3`–`EN-5c`, see
+[`../notes/postmortem-universal-patch-algebra.md`](../notes/postmortem-universal-patch-algebra.md)).
+Consolidates the engine work into one cohesive, legible architecture.
 **Work order and status:** [`../handoff-engine.md`](../handoff-engine.md) (keys `EN-n`).
-**Companion specs:** [`patches.md`](patches.md) (the formal patch algebra, tested by
-`src/iron_patch`), [`patch-storage.md`](patch-storage.md) (Stage 4 storage and partial
-loading, draft), [`document-spine.md`](document-spine.md) (ops, transactions, ids,
+**Companion specs:** [`patches.md`](patches.md) (discrete variation, semantic provenance,
+and node inspectability), [`patch-storage.md`](patch-storage.md) (Stage 4 storage and
+partial loading, draft), [`document-spine.md`](document-spine.md) (ops, transactions, ids,
 canonical JSON).
 
 ---
@@ -28,10 +30,10 @@ overlays), and blurred state-vs-derived boundaries.
 This architecture replaces those layers with **three orthogonal subsystems**, each with
 one mechanism:
 
-| Layer | Question it answers | One mechanism |
+| Layer | Question it answers | Mechanisms |
 |---|---|---|
-| **1. Data & Variation** | What authored content and overrides exist at a point? | Authored `Document` + **Patches over axes** + **Virtual views** (`Tree`) |
-| **2. Derivation & Execution** | What derived work depends on what, and in what order does it run? | **Recorded-read cells & makers** + **one write channel** + **one `settle(mode)` driver** |
+| **1. Data, Views & Discrete Variation** | What authored content, lexical overrides, and discrete variations exist? | Authored `Document` + **Lexical Virtual Views** (`Tree`) + **3 tiny ephemeral/solver tables** + **Small Discrete Variation layer** (`Ordered`/`Unordered` axes, values & `hidden` only) |
+| **2. Derivation, Execution & Inspectability** | What derived work depends on what, in what order does it run, and why is a node what it is? | **Recorded-read cells & makers** + **one write channel** + **one `settle(mode)` driver** + **first-class `inspect(node)` provenance** |
 | **3. Demand, Time & Host** | What actually computes right now, and how does the host consume it? | **Local need counts** + **composition-graph clock gate** + **host-side scoped indexes** |
 
 ### What stays unchanged
@@ -49,104 +51,79 @@ one mechanism:
 
 ---
 
-## 2. Layer 1: Data, Patches, and Virtual Views
+## 2. Layer 1: Data, Lexical Virtual Views, Ephemeral Tables, and Discrete Variation
 
 ### 2.1 Authored document only
 
-`Document` holds authored nodes, facets, and relations only. Derived copies do not live
-in a second materialized `Document` (`Docs::copies` is deleted in `EN-5`).
+`Document` holds authored nodes, facets, relations, flat persisted solver poses
+(`Document::solved`, written via `Op::Solve`), and (in `EN-15`–`EN-16`) discrete variation
+tables. Derived copies do not live in a second materialized `Document` (`Docs::copies` is
+deleted in `EN-13`).
 
-### 2.2 One variation algebra: Patches over axes
+### 2.2 Four orthogonal boundaries (no universal `PatchTable`)
 
-Every mechanism for *"the same thing, a bit different"* uses the patch algebra defined in
-[`patches.md`](patches.md) and verified by `src/iron_patch`:
+Lessons from the reverted `EN-3`–`EN-5c` experiment
+([`../notes/postmortem-universal-patch-algebra.md`](../notes/postmortem-universal-patch-algebra.md)):
+instance overrides, ephemeral previews, solver poses, continuous clips, and discrete
+authored variations have fundamentally different lifetimes and structural legality. Keeping
+them cleanly separated avoids N × M interaction bugs and keeps every node locally legible
+to humans and LLMs ([`patches.md`](patches.md)):
 
-| Today | Unified mechanism |
+| Concern | Mechanism |
 |---|---|
-| Instance overrides (`override` nodes) | Patches on the **instance axis** (suffix patterns), outermost layer wins |
-| Lesson / component variants (`extends`) | **Layers** between a definition and what places it |
-| Machine state poses (`state` channel values) | Patches on an **unordered local state axis** (transitions stay arrows/nodes) |
-| Timeline clips | Patches on a **clock's time axis** (values as functions of `t`) |
-| Slides, takes, narrative extents | Patches on **ordered axes** |
-| Scratch layer and gesture previews | Patches in the **session layer** (outermost, never saved) |
+| **Component instances & `extends` variants** | Lexical override maps (`outermost instance > inner instance > variant > definition`) + `use.notation` on lean virtual views (`EN-13`). No wildcard suffix selectors. |
+| **Gesture & live-solve previews** | Two separate tiny ephemeral maps: `gesture_preview: BTreeMap<Leaf, Value>` (owned by `ActiveGesture`) and `live_solve_preview: BTreeMap<Leaf, Value>` (owned by `resolve_clusters_live`) (`EN-12`). |
+| **Persisted constraint solver poses** | One flat saved table `Document::solved: BTreeMap<Leaf, Slot>` written by `Op::Solve` (`EN-12`); cleared when an authored edit moves that leaf or its last holding constraint is deleted; undo/redo/replay never re-solve. |
+| **Continuous time & simulation** | Clock tree + `ProducerId` priority stack (`LAYOUT > CLIPS > MACHINES > NETWORK`) + isolated simulation history per placed instance. |
+| **Discrete authored variation** *(machine states, slides, takes, narrative moves)* | Small (~350–500 line) discrete variation layer over finite **Ordered** and **Unordered** axes — **values & `hidden` only** (use `when` or `extends` for structural changes), with finite-set arrow diffs, provenance, and bubbling ops (`EN-15`, `EN-16`). |
 
-Key invariants (full laws in [`patches.md`](patches.md) §6, §14):
-- Strength is **`(layer, rank)`**, compared layer first; `rank` is a stored client-minted
-  order key, distinct per layer, defaulted from per-axis keys at creation.
-- Regions are single boxes compared **as written** (stable value ids, tombstones kept),
-  so adding an axis value never alters existing decisions.
-- Structure (`present`, `use.notation`) resolves before field values; hiding cascades;
-  patches do not reorder children.
-- Coordinates are set by drivers, never by patch entries, and axis dependencies are
-  acyclic.
+### 2.3 Lean Lexical Virtual Views (`Tree`, `EN-13`)
 
-### 2.3 Virtual views (`Tree`)
+Static component instances (`<place>` / `use`) and `extends` variants are answered through
+`Tree` as **virtual views** over shared `Arc<Template>` plus lexical override maps, rather
+than copying nodes into `Docs::copies`:
 
-Static component instances (`<place>` / `use`) are answered through `Tree` as **virtual
-views** over shared compiled templates plus the active patch stack for their instance
-path, rather than copying nodes into `Docs::copies`:
-
-- **Read path & sparse resolved store:** `Tree` answers effective values at the live point
-  while preserving its borrowed `&'a` API. A sparse, non-journaled `Resolved` table inside
-  `Docs` (updated eagerly in Stage 1, with `base_facet()` alongside for inspector/planner)
-  holds only patched authored nodes (`EN-4`) and rewritten/patched virtual nodes (`EN-5`);
-  unpatched constant virtual nodes borrow directly from shared `Arc<Template>`. The `EN-3`
-  spike benchmarks this against fully-virtual per-field resolution before `EN-4` freezes
-  the representation.
-- **View deltas & keys:** Stage 1 diffs each view's record (template `Arc`, environment,
-  notation, absent set, sparse resolved nodes) and emits ordinary effective `Node(v)`,
-  `Children(v)`, `Facet(v, k)`, `Leaf`, `Relations`, and old/new `In`/`With` keys (plus
-  `Changes` and `Gone`) — including when a notation switch or patch reveals an
-  initially-absent virtual node or cross-root relation. `Key::Patch(target)` is reserved
-  for patch-structure readers (lints, provenance, drag planner); value cells record only
-  effective keys. Scoped indexes `In(root, ty)` / `With(root, kind)` index views per
-  `(root, ty/kind)` + template local lists minus absent sets rather than inserting every
-  virtual `NodeId`. Template compilation moves off `scope_stamp` onto recorded reads.
-- **Solver write-backs on instances (dedicated solve layer):** Solved values on instance
-  parts live in a system-owned **solve layer** (between the document layer and session;
-  saved; region always the exact instance path; at most one entry per leaf; written only
-  by Stage 4 `Transaction` solves). An authored write in the same transaction that moves a
-  leaf with a solve entry clears that entry first (as a derived op) so the authored edit
-  acts as a solver driver; deleting a constraint clears the solve entries of copies no
-  cluster holds (revealing the underlying value cleanly); undo, redo, and replay apply
-  recorded ops only with no re-solve or re-release. Live drag previews write to a
-  gesture-owned session patch discarded on cancel. This deletes `Owners::solved`,
-  `keep_solved`, `release`, and `apply_recorded`.
-- **Dynamic repeats and `when`:** `EN-5` introduces a minimal keyed `ItemTable`
+- **Read path & sparse resolved store:** Unpatched constant virtual nodes borrow directly
+  from shared `Arc<Template>` with `0` heap allocations per read (`EN-3` spike verified
+  15.8–22.4 ns / 0 allocs and 2.5% of materialized memory). A small sparse resolved table
+  holds only overridden/rewritten virtual nodes; zero-alloc `NodeId::expanded_parts()`
+  splits instance paths without allocating.
+- **View deltas & keys:** Stage 1 diffs each view's record (template `Arc`, lexical
+  overrides, notation, rewritten bindings/relations) and emits ordinary effective `Node`,
+  `Children`, `Facet`, `Leaf`, `Relations`, and scoped `In`/`With` keys (plus `Changes`).
+  Template compilation moves off `scope_stamp` onto recorded reads (`EN-12`).
+- **Dynamic repeats and `when`:** `EN-13` introduces a minimal keyed `ItemTable`
   (`repeat view id → Vec<ItemRecord>` holding membership, order, value, index, and
-  presence/exit state) so `Docs::copies` can be deleted completely in `EN-5`; item
-  descendants use the same virtual template view, and `item.value`/`item.index` are
-  published as producer signals (so value-only changes touch no structure). `EN-7` then
-  migrates repeat count/input evaluation onto makers and recorded inputs.
-- **Structure & binding restrictions by axis kind:**
-  - A node's instance coordinate is the path of the *enclosing* view (not the view it
-    places), so presence patches on a `use` are never self-referential.
-  - Presence and `use.notation` vary directly on the instance axis and layers; on state
-    and sequence axes they resolve in Stage 1 from committed pass-start coordinates
-    (preserving Stage 2 makers' "no evaluated leaves" boundary); on time axes presence is
-    forbidden (use `hide`).
-  - Bound entries (`{= ...}`) are allowed on the instance axis and layers; on dynamic
-    state/sequence/time axes they are either forbidden or compiled as a fixed mux cell so
-    wiring never churns on state/time changes.
-  - Body leaves and history key on the entity (at its point); picture leaves key on `use`
-    (picture-local patches set presentation/notation without duplicating body computation).
+  presence/exit state) so `Docs::copies` can be deleted completely in `EN-13`; item
+  descendants use the same virtual template view, and `item.value`/`item.index` publish as
+  producer signals. `EN-7` then migrates repeat count/input evaluation onto makers and
+  deletes `regraph`.
 
-### 2.4 Effective value precedence at a point
+### 2.4 Effective value precedence
 
-For any live leaf at the active point, highest precedence first:
+For any live leaf, highest precedence first:
 
-1. **Session patch layer** (constants only; live gesture previews above scratch, discarded
-   on cancel).
-2. **Binding cell value** (if the effective slot holds a formula — bindings always outrank
-   producers and solver poses).
-3. **Producer signal** (layout, network, items, state, selection, theme, machines, steps,
-   presence, queries, events, hosts — resolved by explicit fixed `ProducerId` priority
-   rank, with **layout outranking clips**; waiting requests promote automatically on
-   release).
-4. **Solve layer** (system-owned exact-instance-path entries for held constraint poses;
-   never shadows a binding or producer; reports `Leaf(v)` for self-trigger suppression).
-5. **Winning authored patch entry** (by `(layer, rank)` across active axes).
-6. **Base authored / template constant** (or facet default).
+1. **`gesture_preview`** *(ephemeral, owned strictly by `ActiveGesture`, cleared on cancel/commit)*
+2. **`live_solve_preview`** *(ephemeral, owned strictly by `resolve_clusters_live`)*
+3. **Binding cell value** *(formulas always outrank producers, discrete overrides, and solver poses)*
+4. **Layout producer (`ProducerId::LAYOUT`)**
+5. **Clip producer (`ProducerId::CLIPS`)**
+6. **Document discrete variation** *(active slide / narrative joint / take override — `EN-16`)*
+7. **Component machine producer (`ProducerId::MACHINES`)** *(interpolates discrete state poses — `EN-15`)*
+8. **Other runtime producers** *(network, items, state, selection, theme, steps, presence, queries, events, hosts — fixed `ProducerId` priority rank; waiting requests promote on release)*
+9. **Persisted solver pose (`Document::solved`, `Op::Solve`)** *(flat saved map; never shadows a binding or producer)*
+10. **Lexical instance / variant override** *(outermost `<place>` → inner `<place>` → `extends` variant)*
+11. **Base authored / template constant** *(or facet default)*
+
+### 2.5 First-class node inspectability (`EN-14`)
+
+One read-only `inspect(node)` query (backing both the UI Inspector and the agent's XML
+`<look connections/>`) reads the fixed precedence stack above plus the Stage-1 reactive
+graph's incoming/outgoing edges to answer, for any node:
+- its tree path and semantic derivation (`extends` variant, `<place>` definition, active slide/take/state);
+- property provenance (`why` each non-default leaf has its current value);
+- everything driving it (bindings, clips, machines, constraints, layouts, discrete variations);
+- everything it drives downstream.
 
 ---
 
@@ -186,7 +163,6 @@ Every read through `Cx` or a recording `Tree` records a `Key`:
 | `Relations(n)`, `Relation(id)` | relation lookups | `insert_relation`, `remove_relation` (both ends) |
 | `Roots` | top-level roots list | placing/unplacing a root |
 | `Wiring(leaf)` | `Cx::is_bound`, `Cx::driven`, `Cx::transitive_deps` | `Reactive` where bindings, claims, or tracked reads change |
-| `Patch(target)` *(added in `EN-4`)* | patch resolution at a point | patch/axis/driver mutations |
 
 **Enforcement:**
 - `Cx::graph()` is deleted. Every cell reads only through `Cx`'s recorded methods and the
@@ -205,11 +181,11 @@ with `mode ∈ { Transaction, Live, UndoRedo, Replay }`.
 
 | Stage | What runs | Reads | Writes |
 |---|---|---|---|
-| **0. Inputs** | Transaction ops, session writes, playhead/clock advance, host publishes, selection/theme/fonts, drag previews, drivers & fingers | — | Document, patches, input leaves |
-| **1. Structure / Views** | Update view/owner bindings *(until `EN-5`: `Owners` expansion; after `EN-5`: lightweight view/repeat registration)* | Structure | Derived views / repeat items |
+| **0. Inputs** | Transaction ops, session writes, playhead/clock advance, host publishes, selection/theme/fonts, drag previews, drivers & fingers | — | Document, discrete variations, input leaves |
+| **1. Structure / Views** | Update view/owner bindings *(until `EN-13`: `Owners` expansion; after `EN-13`: lean lexical virtual views + `ItemTable`)* | Structure | Derived views / repeat items |
 | **2. Make** | **Makers**: cells whose output is the set of native/binding cells for a bounded scope | Structure, authored constants, contexts library (**no evaluated leaves**, enforced by type) | Graph's native/binding cell set & wiring (reconciled in one batch with claim handoff) |
 | **3. Evaluate** | Value cells: bindings and natives (layouts, cluster candidate/watcher cells, cluster dep order, network islands, repeat inputs) | Values, structure, wiring | Values, claims, extras |
-| **4. Write-back** | Value-driven repeat item settling (`settle_repeats`); constraint cluster solves (ordered by derived cluster deps; `Transaction` writes to doc/patch, `Live` writes previews, `UndoRedo`/`Replay` skip solving) | Evaluated values, state | Repeat items, solved values |
+| **4. Write-back** | Value-driven repeat item settling (`settle_repeats`); constraint cluster solves (ordered by derived cluster deps; `Transaction` writes to `Document::solved`/`Op::Set`, `Live` writes `live_solve_preview`, `UndoRedo`/`Replay` skip solving) | Evaluated values, state | Repeat items, solved values |
 
 **Order rules:**
 - **Earlier stages only:** Within a pass, a stage reads derived results only from earlier
@@ -316,9 +292,8 @@ nodes elsewhere. (Excluded: load, save, export, whole-document queries, undo mem
 - Running status is a small traversal over `(A, B)` from shown compositions, `run = always`
   compositions, and the free owner, emitting only the delta to `Clocks`.
 - `ROOTED`'s 29-kind global list is retired: non-session `let`s and plain `args` are
-  unrooted; repeats/conditionals are rooted only in running owners; clips and poses are
-  already patches on axes rather than globally-rooted imperatives; captures observe what
-  they draw.
+  unrooted; repeats/conditionals are rooted only in running owners; clips and machines
+  publish only for running owners; captures observe what they draw.
 
 ### 4.3 Host-side scaling (`EN-10`)
 
@@ -357,9 +332,10 @@ the engine:
    converted family keeps a simple test-only from-scratch recomputation of *that family
    alone* compared against the incremental cell result, paired with a canary that
    silences each mutation choke point in turn and asserts the test fails.
-3. **Algebra differential tests (Stage 2):** `iron_document` patch resolution and edit
-   ops checked directly against `src/iron_patch` over random scripts and axis-growth
-   properties.
+3. **Virtual view & discrete variation tests (`EN-13`, `EN-15`–`EN-16`):** Virtual views
+   checked against materialized scenes on all gallery pages and nested/sized/main fixtures;
+   discrete variation checked directly on the worked product scenarios (slide decks, cyclic
+   triangle machines, takes/ghosts, bubbling ops, and `inspect(node)` provenance).
 4. **Scaling & need-count oracles (Stage 3):** The `work` choke-point + allocator scaling
    test (`work_does_not_grow_with_the_hidden_document`) across both axes (many hidden
    pages and one large hidden page), plus the need-count reachability oracle under
@@ -373,11 +349,12 @@ the engine:
 |---|---|
 | E1 | **No refusal after derivation.** Failed constraint solves apply, keep their last pose, and report derived problems; `exact` edits dry-run on `scratch()`. |
 | E2 | **Order-free producer conflicts.** Contested leaves are resolved by fixed `ProducerId` priority rank (**layout outranks clips**); waiting requests promote immediately on release. |
-| E3 | **Structural fields.** Binding a structural field (`constraint.kind`, `constraint.enabled`, `use.notation`) reports a problem rather than silently reading default, until value-driven support lands (`EN-2b`, `EN-5`). |
+| E3 | **Structural fields.** Binding a structural field (`constraint.kind`, `constraint.enabled`, `use.notation`) reports a problem rather than silently reading default, until value-driven support lands (`EN-2b`, `EN-13`). |
 | E4 | **One invalidation rule.** Every cached derivation is a bounded-scope cell/maker driven by recorded reads through one write channel; no new op classifiers or hand refresh rules. |
 | E5 | **One driver.** Every mutating store entry point ends in `settle(mode)` with the four-stage order of §3.3; writers keep their own bounded loops and failure rules. |
-| E6 | **Patches + Views before wiring/expansion migration.** Do not convert legacy `Owners` / materialized copies / `machine.rs` / `time.rs` onto makers only to replace them; unify on Patches + Virtual Views first (`EN-3`–`EN-6`), then finish wiring/repeats once (`EN-7`). |
-| E7 | **Patch algebra laws.** `patches.md` P1–P16: `(layer, rank)` strength, stored client-minted rank, regions compared as written, single-box regions, session as outermost layer, variants as layers. |
+| E6 | **Lean Virtual Views & delete `Docs::copies` before wiring/scaling.** Clean up flat `Op::Solve` + split previews (`EN-12`), then build lean lexical virtual views + `ItemTable` to delete `Docs::copies` (`EN-13`), finish `regraph` deletion (`EN-7`), and flatten scaling (`EN-8`–`EN-10`) before layering on discrete variations (`EN-14`–`EN-16`). |
+| E7 | **Grounded discrete variation, not universal algebra.** Keep lexical instance overrides, ephemeral previews, flat `Document::solved`, and continuous clips separate from discrete variations (`patches.md`, post-mortem 2026-11-23). Discrete variations cover finite `Ordered`/`Unordered` axes (values & `hidden` only) with zero hidden CSS-style wildcard selectors. |
 | E8 | **Pragmatic verification.** Verify recorded reads with locked-down `Cx`, per-family from-scratch checks, and choke-point canaries instead of building a whole-store `fresh-oracle` or dynamic `deref` cycle-set SCCs prematurely. |
-| E9 | **Cohesion before scaling.** Finish Stages 1–2 before Stage 3 (`EN-8`–`EN-10`) so need counts, the visibility gate, and host indexing sit cleanly on one unified engine. |
+| E9 | **Cohesion before scaling, scaling before new variation features.** Finish `EN-12`, `EN-13`, and `EN-7` so `Docs::copies` and `regraph` are gone, land Stage 3 scaling (`EN-8`–`EN-10`), then add node inspectability (`EN-14`) and discrete variations (`EN-15`–`EN-16`). |
 | E10 | **No backwards compatibility.** Delete superseded code, rules, facets, and schema paths in the same change; bump `serial::SCHEMA` freely. |
+| E11 | **Legibility, inspectability, and net-LOC discipline.** Every property and driver on a node must be locally inspectable via `inspect(node)` / `<look connections/>`. Any simplification phase that grows net LOC past +1,500 without deleting its target stops and checks in with the user. |

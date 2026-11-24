@@ -499,6 +499,12 @@ impl ViewRegistry {
                         self.views_by_root.remove(&view.spatial_root);
                     }
                 }
+                if let Some(set) = self.owners_by_def.get_mut(&view.def) {
+                    set.remove(&owner);
+                    if set.is_empty() {
+                        self.owners_by_def.remove(&view.def);
+                    }
+                }
                 removed.push(view);
             }
         }
@@ -573,7 +579,7 @@ impl ViewRegistry {
         let used = self.virtual_node_count();
         let mut budget = expand::NODE_BUDGET.saturating_sub(used);
         let new_views = build_owner_views(doc, self, templates, owner, global, local, &mut budget, &mut problems);
-        let delta = diff_views(&old_views, &new_views);
+        let delta = diff_views(doc, &old_views, &new_views);
         for v in new_views {
             self.insert_view(v);
         }
@@ -679,13 +685,13 @@ fn build_owner_views(
         return Vec::new();
     };
     let spatial_root = authored_root_of(doc, top_owner);
-    let base_scopes: Vec<NodeId> = expand::definition_of(doc, top_owner).into_iter().collect();
+    let base_scopes: Vec<(NodeId, usize)> = expand::definition_of(doc, top_owner).into_iter().map(|d| (d, 0)).collect();
     let mut out = Vec::new();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = expand::linked_definition(doc, top_owner) {
                 let mut scopes = base_scopes;
-                scopes.push(def);
+                scopes.push((def, 1));
                 let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                 build_entity_view(doc, templates, top_owner, top_owner, spatial_root, def, coord, global, budget, problems, &mut out);
             }
@@ -693,19 +699,21 @@ fn build_owner_views(
         "use" => {
             let sized = doc.facet(top_owner, FacetKind::Size).is_some();
             if let Some(def) = expand::main_definition(doc, top_owner) {
-                let mut scopes = base_scopes;
-                scopes.push(def);
-                let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
-                if let Some(notation) = effective_notation(doc, global, &coord, top_owner, None, None, None) {
+                let mut scopes = base_scopes.clone();
+                scopes.push((def, 1));
+                let use_coord = ViewCoord { path: Vec::new(), scopes: base_scopes, local: local_dp.clone() };
+                if let Some(notation) = effective_notation(doc, global, &use_coord, top_owner, None, None, None) {
+                    let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                     build_use_view(doc, reg, templates, top_owner, top_owner, spatial_root, sized, None, def, &notation, coord, global, budget, problems, &mut out);
                 }
             } else if let Some(entity) = resolve_use_entity(doc, reg, top_owner)
                 && let Some(def) = resolve_entity_def(doc, reg, &out, entity)
             {
-                let mut scopes = base_scopes;
-                scopes.push(def);
-                let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
-                if let Some(notation) = effective_notation(doc, global, &coord, top_owner, None, None, None) {
+                let mut scopes = base_scopes.clone();
+                scopes.push((def, 1));
+                let use_coord = ViewCoord { path: Vec::new(), scopes: base_scopes, local: local_dp.clone() };
+                if let Some(notation) = effective_notation(doc, global, &use_coord, top_owner, None, None, None) {
+                    let coord = ViewCoord { path: vec![top_owner], scopes, local: local_dp.clone() };
                     build_use_view(doc, reg, templates, top_owner, top_owner, spatial_root, sized, Some(entity), def, &notation, coord, global, budget, problems, &mut out);
                 }
             }
@@ -881,58 +889,26 @@ fn env_overrides_node(n: &TNode, env: &Env) -> bool {
 /// Compute sparse resolved facets for virtual node `i`, returning `None` when
 /// the node can borrow directly from `template.nodes[i].facets` with 0 clones!
 fn resolve_virtual_facets(
-    doc: Tree<'_>,
+    _doc: Tree<'_>,
     template: &Template,
     i: usize,
     env: &Env,
-    coord: &ViewCoord,
+    _coord: &ViewCoord,
     patch: &NodePatchState,
 ) -> Option<BTreeMap<FacetKind, Facet>> {
     let n = &template.nodes[i];
-    // If `coord.local` overrides an axis locally and `n.local` has any patch in
-    // the table, rebuild from unpatched base facets so a local point can
-    // un-match a global patch.
-    let local_resets_base = !coord.local.is_empty()
-        && doc.patches().patches_for_target(n.local).next().is_some();
-
+    // Templates now compile strictly from unpatched base storage (EN-5b), so
+    // `resolve_virtual_facets` only allocates when rewriting refs, binding args,
+    // or applying active patches/overrides at `coord`.
     let needs_resolved = n.rewrite
         || n.arg.is_some()
         || env_overrides_node(n, env)
-        || patch.has_facet_or_leaf_patch
-        || local_resets_base;
+        || patch.has_facet_or_leaf_patch;
     if !needs_resolved {
         return None;
     }
 
-    let mut map: BTreeMap<FacetKind, Facet> = if local_resets_base && !n.rewrite && n.arg.is_none() && !env_overrides_node(n, env) {
-        doc.base_facets_of(n.local).map(|f| (f.kind(), f.clone())).collect()
-    } else {
-        let mut base_vec = template.materialise(i, env);
-        if local_resets_base {
-            // Re-seed unmodified slots from unpatched base before applying patches at `coord`.
-            let base_map: BTreeMap<FacetKind, Facet> = doc.base_facets_of(n.local).map(|f| (f.kind(), f.clone())).collect();
-            for f in &mut base_vec {
-                if let Some(bf) = base_map.get(&f.kind()) {
-                    for field in f.field_names() {
-                        if let Some(Slot::Const(_)) = f.get(field)
-                            && let Some(bs) = bf.get(field)
-                            && !env.overrides.iter().any(|(t, pk, _)| {
-                                *t == n.target
-                                    && match pk {
-                                        PatchKey::Leaf(lp) => lp.facet == f.kind() && lp.field == field,
-                                        PatchKey::Notation => f.kind() == FacetKind::Use && field == "notation",
-                                        _ => false,
-                                    }
-                            })
-                        {
-                            let _ = f.set(field, bs.clone());
-                        }
-                    }
-                }
-            }
-        }
-        base_vec.into_iter().map(|f| (f.kind(), f)).collect()
-    };
+    let mut map: BTreeMap<FacetKind, Facet> = template.materialise(i, env).into_iter().map(|f| (f.kind(), f)).collect();
 
     for (&fk, &on) in &patch.opt_facets {
         if on {
@@ -944,11 +920,9 @@ fn resolve_virtual_facets(
         }
     }
     for (lp, slot) in &patch.leaf_patches {
+        // P21: field writes never synthesize missing optional facets implicitly.
         if patch.opt_facets.get(&lp.facet) == Some(&false) {
             continue;
-        }
-        if !map.contains_key(&lp.facet) && n.ty.spec().allows(lp.facet) {
-            map.insert(lp.facet, lp.facet.default_facet());
         }
         if let Some(f) = map.get_mut(&lp.facet) {
             let _ = f.set(lp.field, slot.clone());
@@ -1134,7 +1108,7 @@ fn build_entity_view(
         let mut inner_path = coord.path.clone();
         inner_path.push(inner_local);
         let mut inner_scopes = coord.scopes.clone();
-        inner_scopes.push(inner_def);
+        inner_scopes.push((inner_def, inner_path.len()));
         let inner_coord = ViewCoord { path: inner_path, scopes: inner_scopes, local: coord.local.clone() };
         build_entity_view(doc, templates, inner_id, top_owner, spatial_root, inner_def, inner_coord, global, budget, problems, out);
     }
@@ -1252,22 +1226,15 @@ fn build_use_view(
                         Some(m) => m.contains_key(&FacetKind::Size),
                         None => n.facets.iter().any(|f| matches!(f, Facet::Size(_))),
                     };
-                    let mut inner_path = coord.path.clone();
-                    inner_path.push(n.local);
+                    // Resolve the nested `use`'s notation ONCE at the enclosing owner `u`'s
+                    // `coord` — matching the exact coordinate that resolved `id`'s `Use` facet!
+                    let inner_notation = effective_notation(doc, global, &coord, id, Some(n.local), res_map.as_ref(), Some(&n.facets));
                     if n.own {
-                        if let Some(d) = linked_def_of_node(doc, r.to) {
-                            let mut inner_scopes = coord.scopes.clone();
-                            inner_scopes.push(d);
-                            let inner_coord = ViewCoord { path: inner_path, scopes: inner_scopes, local: coord.local.clone() };
-                            if let Some(inner_notation) = effective_notation(doc, global, &inner_coord, id, Some(n.local), res_map.as_ref(), Some(&n.facets)) {
-                                inner_uses.push((id, n.local, inner_sized, inner_entity, d, inner_notation));
-                            }
+                        if let (Some(d), Some(inner_notation)) = (linked_def_of_node(doc, r.to), inner_notation) {
+                            inner_uses.push((id, n.local, inner_sized, inner_entity, d, inner_notation));
                         }
-                    } else {
-                        let inner_coord = ViewCoord { path: inner_path, scopes: coord.scopes.clone(), local: coord.local.clone() };
-                        if let Some(inner_notation) = effective_notation(doc, global, &inner_coord, id, Some(n.local), res_map.as_ref(), Some(&n.facets)) {
-                            other_uses.push((id, n.local, inner_sized, inner_entity, inner_notation));
-                        }
+                    } else if let Some(inner_notation) = inner_notation {
+                        other_uses.push((id, n.local, inner_sized, inner_entity, inner_notation));
                     }
                 }
             } else if n.ty.name() == "entity" {
@@ -1336,7 +1303,7 @@ fn build_use_view(
         let mut inner_path = coord.path.clone();
         inner_path.push(inner_local);
         let mut inner_scopes = coord.scopes.clone();
-        inner_scopes.push(inner_def);
+        inner_scopes.push((inner_def, inner_path.len()));
         let inner_coord = ViewCoord { path: inner_path, scopes: inner_scopes, local: coord.local.clone() };
         build_use_view(doc, reg, templates, inner_u, top_owner, spatial_root, inner_sized, Some(inner_entity), inner_def, &inner_notation, inner_coord, global, budget, problems, out);
     }
@@ -1346,7 +1313,7 @@ fn build_use_view(
         let mut inner_path = coord.path.clone();
         inner_path.push(inner_local);
         let mut inner_scopes = coord.scopes.clone();
-        inner_scopes.push(inner_def);
+        inner_scopes.push((inner_def, inner_path.len()));
         let inner_coord = ViewCoord { path: inner_path, scopes: inner_scopes, local: coord.local.clone() };
         build_entity_view(doc, templates, inner_e, top_owner, spatial_root, inner_def, inner_coord, global, budget, problems, out);
     }
@@ -1357,7 +1324,7 @@ fn build_use_view(
             let mut inner_path = coord.path.clone();
             inner_path.push(inner_local);
             let mut inner_scopes = coord.scopes.clone();
-            inner_scopes.push(inner_def);
+            inner_scopes.push((inner_def, inner_path.len()));
             let inner_coord = ViewCoord { path: inner_path, scopes: inner_scopes, local: coord.local.clone() };
             build_use_view(doc, reg, templates, inner_u, top_owner, spatial_root, inner_sized, Some(inner_entity), inner_def, &inner_notation, inner_coord, global, budget, problems, out);
         }
@@ -1367,14 +1334,15 @@ fn build_use_view(
 /// Diff old vs new `ViewRecord`s of one top-level owner to produce an exact
 /// [`ViewDelta`] (structural keys + spatial root tracking for disappearing IDs).
 #[allow(dead_code)]
-fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
+fn diff_views(doc: Tree<'_>, old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
     let mut delta = ViewDelta::default();
     let mut keys: Vec<Key> = Vec::new();
 
-    // Index live virtual nodes by id -> (&ViewRecord, &ViewNode).
+    // Index live virtual nodes by id -> (&ViewRecord, &ViewNode), merging
+    // child lists when a node is both a virtual child container and an inner owner.
     let mut old_nodes: HashMap<NodeId, (&ViewRecord, &ViewNode)> = HashMap::new();
     let mut old_rels: HashMap<RelationId, &Relation> = HashMap::new();
-    let mut old_children: HashMap<NodeId, &[NodeId]> = HashMap::new();
+    let mut old_children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
     for v in old_views {
         for vn in &v.nodes {
             if !v.absent.contains(&vn.node.id) {
@@ -1387,13 +1355,13 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
             }
         }
         for (&p, list) in &v.children {
-            old_children.insert(p, list.as_slice());
+            old_children.entry(p).or_default().extend_from_slice(list);
         }
     }
 
     let mut new_nodes: HashMap<NodeId, (&ViewRecord, &ViewNode)> = HashMap::new();
     let mut new_rels: HashMap<RelationId, &Relation> = HashMap::new();
-    let mut new_children: HashMap<NodeId, &[NodeId]> = HashMap::new();
+    let mut new_children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
     for v in new_views {
         for vn in &v.nodes {
             if !v.absent.contains(&vn.node.id) {
@@ -1406,7 +1374,7 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
             }
         }
         for (&p, list) in &v.children {
-            new_children.insert(p, list.as_slice());
+            new_children.entry(p).or_default().extend_from_slice(list);
         }
     }
 
@@ -1450,6 +1418,11 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
             }
             keys.push(Key::In(ov.spatial_root, ovn.node.ty));
             emit_all_facet_keys(ov, id, ov.spatial_root, &mut keys);
+            for r in doc.relations_to(id).chain(doc.relations_from(id)) {
+                keys.push(Key::Relation(r.id));
+                keys.push(Key::Relations(r.from));
+                keys.push(Key::Relations(r.to));
+            }
         }
     }
 
@@ -1464,6 +1437,11 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
                 }
                 keys.push(Key::In(nv.spatial_root, nvn.node.ty));
                 emit_all_facet_keys(nv, id, nv.spatial_root, &mut keys);
+                for r in doc.relations_to(id).chain(doc.relations_from(id)) {
+                    keys.push(Key::Relation(r.id));
+                    keys.push(Key::Relations(r.from));
+                    keys.push(Key::Relations(r.to));
+                }
             }
             Some(&(ov, ovn)) => {
                 let mut changed = false;
@@ -1479,10 +1457,19 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
                         }
                     }
                 }
-                if ovn.node.ty != nvn.node.ty || ov.spatial_root != nv.spatial_root {
+                let root_moved = ov.spatial_root != nv.spatial_root;
+                if ovn.node.ty != nvn.node.ty || root_moved {
                     changed = true;
                     keys.push(Key::In(ov.spatial_root, ovn.node.ty));
                     keys.push(Key::In(nv.spatial_root, nvn.node.ty));
+                    if root_moved {
+                        for k in facet_kinds_of(ov, id) {
+                            keys.push(Key::With(ov.spatial_root, k));
+                        }
+                        for k in facet_kinds_of(nv, id) {
+                            keys.push(Key::With(nv.spatial_root, k));
+                        }
+                    }
                 }
                 // Fast path: if both borrow from the exact same Template Arc & index and neither is in `resolved`, facets are identical!
                 let same_borrowed = !ov.resolved.contains_key(&id)
@@ -1531,6 +1518,9 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
                     }
                 }
                 if changed {
+                    if root_moved {
+                        delta.changed_nodes.push((id, ov.spatial_root));
+                    }
                     delta.changed_nodes.push((id, nv.spatial_root));
                 }
             }
@@ -1538,13 +1528,13 @@ fn diff_views(old_views: &[ViewRecord], new_views: &[ViewRecord]) -> ViewDelta {
     }
 
     // Cached child list changes (including direct children of `owner`).
-    for (&p, &old_list) in &old_children {
-        if new_children.get(&p).copied() != Some(old_list) {
+    for (&p, old_list) in &old_children {
+        if new_children.get(&p) != Some(old_list) {
             keys.push(Key::Children(p));
         }
     }
-    for (&p, &new_list) in &new_children {
-        if old_children.get(&p).copied() != Some(new_list) {
+    for (&p, new_list) in &new_children {
+        if old_children.get(&p) != Some(new_list) {
             keys.push(Key::Children(p));
         }
     }
@@ -1946,7 +1936,7 @@ mod tests {
             id: PatchId(1),
             layer: 5, // higher stored u32 than outer_patch!
             rank: OrderKey::after(&OrderKey::first()),
-            region: Product::default().with(inst_ax, Sel::Suffix { tail: vec![sub_u], not: vec![] }),
+            region: Product::default().with(inst_ax, Sel::Suffix { tail: vec![], not: vec![] }),
             anchor: Some(inner_def),
             writable: true,
             entries: BTreeMap::from([(
@@ -1958,7 +1948,7 @@ mod tests {
             id: PatchId(2),
             layer: 1, // LOWER stored u32, but anchored at outer_def -> MUST win structurally!
             rank: OrderKey::first(),
-            region: Product::default().with(inst_ax, Sel::Suffix { tail: vec![top_u, sub_u], not: vec![] }),
+            region: Product::default().with(inst_ax, Sel::Suffix { tail: vec![sub_u], not: vec![] }),
             anchor: Some(outer_def),
             writable: true,
             entries: BTreeMap::from([(

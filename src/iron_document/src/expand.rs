@@ -133,10 +133,12 @@ pub fn main_definition(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     doc.live(def).filter(|n| n.ty.name() == "definition").map(|_| def)
 }
 
-/// The template a main shows, for its notation.
+/// The template a main shows, for its effective notation (`PatchKey::Notation`
+/// first, then `Use::notation`, `EN-5b` Sol #2).
 pub fn main_template(doc: Tree<'_>, u: NodeId) -> Option<NodeId> {
     let def = main_definition(doc, u)?;
-    let notation = doc.get::<Use>(u)?.notation.constant()?.as_str()?.to_owned();
+    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, u).into_iter().map(|d| (d, 0)).collect();
+    let notation = effective_notation(doc, &[], u, None, &base_scopes, None)?;
     definition::template_of(doc, def, &notation)
 }
 
@@ -157,9 +159,10 @@ struct Wanted {
     nodes: Vec<Want>,
     /// Where each wanted node is in `nodes`.
     index: BTreeMap<NodeId, usize>,
-    /// Enclosing definition scopes for each derived node (outermost first),
-    /// for derived scope-chain layer precedence (`EN-5b`).
-    scopes: HashMap<NodeId, Vec<NodeId>>,
+    /// Enclosing definition scopes with path start offsets `(scope, start)`
+    /// for each derived node (outermost first), for derived scope-chain layer
+    /// precedence (`EN-5b`).
+    scopes: HashMap<NodeId, Vec<(NodeId, usize)>>,
     rels: Vec<RelWant>,
     problems: Vec<Problem>,
     full: bool,
@@ -282,21 +285,21 @@ pub fn is_item_owner(doc: Tree<'_>, id: NodeId) -> bool {
 fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize, cache: &mut Templates<'_>) -> Wanted {
     let mut out = Wanted::new(cap);
     out.root = Some(owner);
-    doc.note_key(Key::Patch(owner));
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
-    let base_scopes: Vec<NodeId> = definition_of(doc, owner).into_iter().collect();
+    doc.note_key(Key::Patch(owner));
+    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner).into_iter().map(|d| (d, 0)).collect();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = linked_definition(doc, owner) {
                 let mut scopes = base_scopes;
-                scopes.push(def);
+                scopes.push((def, 1));
                 want_entity(doc, owner, def, &scopes, &mut out, cache);
             }
         }
         "use" => {
             if let Some(p) = picture_of(doc, owner, &base_scopes) {
                 let mut scopes = base_scopes;
-                scopes.push(p.def);
+                scopes.push((p.def, 1));
                 want_use(doc, owner, p.sized, p.entity, p.def, &p.notation, &scopes, &mut out, cache);
             }
         }
@@ -335,23 +338,33 @@ pub(crate) fn wanted_slots(doc: Tree<'_>, templates: &mut TemplateCache, counts:
     out
 }
 
-/// Effective notation of `use` node `u` at the active point (`PatchKey::Notation`
-/// first, then `Use::notation` from `from_facets` or `doc`, `EN-5b`).
+/// Effective notation of `use` node `u` at coordinate `(path, scopes)`
+/// (`PatchKey::Notation` first, then `Use::notation` from `from_facets` or
+/// `doc`, `EN-5b`). Evaluates at the exact same `(path, scopes)` coordinate
+/// that resolved `u`'s `Use` facet so facet display and child expansion agree.
 pub(crate) fn effective_notation(
     doc: Tree<'_>,
+    path: &[NodeId],
     u: NodeId,
     local_u: Option<NodeId>,
-    scopes: &[NodeId],
+    scopes: &[(NodeId, usize)],
     from_facets: Option<&[Facet]>,
 ) -> Option<String> {
-    doc.note_key(Key::Patch(u));
-    if let Some(l) = local_u {
+    if let Some(&root) = u.path().first() {
+        doc.note_key(Key::Patch(root));
+    }
+    for &(scope, _) in scopes {
+        doc.note_key(Key::Patch(scope));
+    }
+    if scopes.is_empty()
+        && let Some(l) = local_u
+    {
         doc.note_key(Key::Patch(l));
     }
     let pt = doc.patches();
     if !pt.patches.is_empty() {
         let global = doc.point().cloned().unwrap_or_default();
-        let coord = ViewCoord { path: u.path(), scopes: scopes.to_vec(), local: DiscretePoint::default() };
+        let coord = ViewCoord { path: path.to_vec(), scopes: scopes.to_vec(), local: DiscretePoint::default() };
         let mut best: Option<(&Patch, PatchTarget)> = None;
         for cand in std::iter::once(u).chain(local_u.filter(|&l| l != u)) {
             let target = PatchTarget { node: cand, key: PatchKey::Notation };
@@ -388,19 +401,15 @@ struct Picture {
     sized: bool,
 }
 
-fn picture_of(doc: Tree<'_>, u: NodeId, base_scopes: &[NodeId]) -> Option<Picture> {
+fn picture_of(doc: Tree<'_>, u: NodeId, base_scopes: &[(NodeId, usize)]) -> Option<Picture> {
     let sized = doc.facet(u, FacetKind::Size).is_some();
     if let Some(def) = main_definition(doc, u) {
-        let mut scopes = base_scopes.to_vec();
-        scopes.push(def);
-        let notation = effective_notation(doc, u, None, &scopes, None)?;
+        let notation = effective_notation(doc, &[], u, None, base_scopes, None)?;
         return Some(Picture { entity: None, def, notation, sized });
     }
     let entity = use_entity(doc, u)?;
     let def = linked_definition(doc, entity)?;
-    let mut scopes = base_scopes.to_vec();
-    scopes.push(def);
-    let notation = effective_notation(doc, u, None, &scopes, None)?;
+    let notation = effective_notation(doc, &[], u, None, base_scopes, None)?;
     Some(Picture { entity: Some(entity), def, notation, sized })
 }
 
@@ -413,7 +422,10 @@ fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<
     if owner.is_item_scope() {
         let (q, key, _) = owner.repeat_item()?;
         let (t, outer) = collection_of(doc, q, None, cache)?;
-        let scopes = outer.as_ref().map(|(_, e)| e.scopes.clone()).unwrap_or_else(|| definition_of(doc, q.path()[0]).into_iter().collect());
+        let scopes = outer
+            .as_ref()
+            .map(|(_, e)| e.scopes.clone())
+            .unwrap_or_else(|| definition_of(doc, q.path()[0]).into_iter().map(|d| (d, 0)).collect());
         let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
         let overrides = patch_overrides_for(doc, owner, &scopes, &locals);
         let env = Env { owner, entity: None, sized: false, item: Some(Item { repeat: q, key, outer }), scopes, overrides };
@@ -422,10 +434,10 @@ fn maker_of(doc: Tree<'_>, r: NodeId, cache: &mut Templates<'_>) -> Option<(Arc<
     if owner.is_expanded() {
         return None;
     }
-    let base_scopes: Vec<NodeId> = definition_of(doc, owner).into_iter().collect();
+    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner).into_iter().map(|d| (d, 0)).collect();
     let p = picture_of(doc, owner, &base_scopes)?;
     let mut scopes = base_scopes;
-    scopes.push(p.def);
+    scopes.push((p.def, 1));
     let t = cache.picture(doc, p.def, &p.notation)?;
     let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
     let overrides = patch_overrides_for(doc, owner, &scopes, &locals);
@@ -509,8 +521,12 @@ pub(crate) fn expand_owners(
     let mut cache = Templates::new(templates);
     for &owner in owners {
         let rec = Recorder::default();
-        let w = wanted_for(Tree::of(docs).recording(&rec), owner, counts, room, &mut cache);
-        out.deps.insert(owner, rec.into_inner());
+        let tree = Tree::of(docs);
+        let alive = tree.is_live(owner) && !owner.is_expanded();
+        let w = wanted_for(tree.recording(&rec), owner, counts, room, &mut cache);
+        // Dead authored owners record empty deps so `Owners::apply` prunes them
+        // instead of leaking dead entries forever (M2 / Sol #10).
+        out.deps.insert(owner, if alive { rec.into_inner() } else { Vec::new() });
         room = room.saturating_sub(w.nodes.len());
         out.counts.insert(owner, w.nodes.len());
         out.reads.extend(w.reads.iter().map(|&r| (r, owner)));
@@ -534,12 +550,9 @@ pub(crate) fn expand_owners(
         rels.extend(w.rels);
         problems.extend(w.problems);
     }
-    // What the owners hold now: their live derived nodes and the derived
-    // relations from them.
-    let have: Vec<NodeId> = {
-        let tree = Tree::of(docs);
-        owners.iter().flat_map(|&o| tree.descendants(o).into_iter().filter(move |d| d.is_expanded() && d.path().first() == Some(&o))).collect()
-    };
+    // What the owners hold now: read from raw storage so an authored owner
+    // made absent by a patch still cleans up its derived copies (Sol #1).
+    let have: Vec<NodeId> = owners.iter().flat_map(|&o| docs.raw_derived_descendants(o)).collect();
     // Relations by the owner their id names: one from a node already gone
     // is still the owner's to unlink.
     let have_rels: Vec<Relation> = owners.iter().flat_map(|&o| Tree::of(docs).rooted(o).cloned().collect::<Vec<_>>()).collect();
@@ -617,7 +630,7 @@ pub(crate) fn expand_items(
     {
         let mut cache = Templates::new(templates);
         let tree = Tree::of(docs).recording(&rec);
-        let base_scopes: Vec<NodeId> = definition_of(tree, owner).into_iter().collect();
+        let base_scopes: Vec<(NodeId, usize)> = definition_of(tree, owner).into_iter().map(|d| (d, 0)).collect();
         for &r in repeats {
             let ok = r.path().first() == Some(&owner)
                 && tree.is_live(r)
@@ -745,13 +758,15 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
                 "entity" => {
                     if let Some(def) = linked_def_of(doc, &w.facets) {
                         let mut scopes = out.scopes.get(&id).cloned().unwrap_or_default();
-                        scopes.push(def);
+                        scopes.push((def, id.path().len()));
                         want_entity(doc, id, def, &scopes, out, cache);
                     }
                 }
                 "use" => {
                     let sized = w.facets.iter().any(|f| matches!(f, Facet::Size(_)));
-                    let local_u = id.path().last().copied();
+                    let id_path = id.path();
+                    let parent_path = &id_path[..id_path.len().saturating_sub(1)];
+                    let local_u = id_path.last().copied();
                     let base_scopes = out.scopes.get(&id).cloned().unwrap_or_default();
                     let facets = w.facets.clone();
                     // The entity it pictures: one this expansion derives
@@ -761,12 +776,12 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
                         Some(copy) => linked_def_of(doc, &copy.facets),
                         None => linked_definition(doc, e),
                     });
-                    if let (Some(entity), Some(def)) = (entity, def) {
+                    if let (Some(entity), Some(def)) = (entity, def)
+                        && let Some(notation) = effective_notation(doc, parent_path, id, local_u, &base_scopes, Some(&facets))
+                    {
                         let mut scopes = base_scopes;
-                        scopes.push(def);
-                        if let Some(notation) = effective_notation(doc, id, local_u, &scopes, Some(&facets)) {
-                            want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out, cache);
-                        }
+                        scopes.push((def, id_path.len()));
+                        want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out, cache);
                     }
                 }
                 _ => {}
@@ -782,7 +797,7 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
 }
 
 /// The items of repeat (or conditional) `r`, by key.
-fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[NodeId], keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) -> bool {
+fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[String], out: &mut Wanted, cache: &mut Templates<'_>) -> bool {
     if keys.is_empty() || !out.enter(r) {
         return true;
     }
@@ -833,7 +848,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[NodeId], keys: &[String], out:
 
 /// What entity `entity` (authored, or derived for an outer instance)
 /// derives from `def`.
-fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], out: &mut Wanted, cache: &mut Templates<'_>) {
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[(NodeId, usize)], out: &mut Wanted, cache: &mut Templates<'_>) {
     if !out.enter(entity) {
         return;
     }
@@ -863,7 +878,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], ou
         }
         if let Some(inner) = inner_def {
             let mut inner_scopes = scopes.to_vec();
-            inner_scopes.push(inner);
+            inner_scopes.push((inner, id.path().len()));
             want_entity(doc, id, inner, &inner_scopes, out, cache);
         }
     }
@@ -872,7 +887,7 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], ou
 /// What `use` `u`, figuring `entity` (an instance of `def`), derives: the
 /// definition's template for `notation`, as its children.
 #[allow(clippy::too_many_arguments)]
-fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[NodeId], out: &mut Wanted, cache: &mut Templates<'_>) {
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[(NodeId, usize)], out: &mut Wanted, cache: &mut Templates<'_>) {
     // A picture of another owner's derived entity reads that owner's copy.
     if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())
         && out.root.is_some_and(|o| o != r)
@@ -885,6 +900,7 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
     let Some(t) = cache.picture(doc, def, notation) else { return };
     let crate::engine::template::Source::Picture(template) = t.source else { return };
     let locals: Vec<NodeId> = t.nodes.iter().map(|n| n.target).collect();
+    let u_path = u.path();
     let env = Arc::new(Env {
         owner: u,
         entity,
@@ -904,11 +920,13 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
             n.figures.as_ref().map(|r| {
                 let inner_sized = facets.iter().any(|f| matches!(f, Facet::Size(_)));
                 let inner_def = n.own.then(|| linked_def_of_node(doc, r.to)).flatten();
+                // Evaluate notation at enclosing `u`'s exact `(u_path, scopes)` so it
+                // agrees 100% with the `Use.notation` facet resolved on `id` (Sol #2).
+                let inner_notation = effective_notation(doc, &u_path, id, Some(n.local), scopes, Some(&facets));
                 let mut inner_scopes = scopes.to_vec();
                 if let Some(d) = inner_def {
-                    inner_scopes.push(d);
+                    inner_scopes.push((d, id.path().len()));
                 }
-                let inner_notation = effective_notation(doc, id, Some(n.local), &inner_scopes, Some(&facets));
                 (r, inner_sized, inner_def, inner_scopes, inner_notation)
             })
         } else {
@@ -937,19 +955,27 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
 
 /// Resolve all active authored patch overrides reaching `owner`'s copies of
 /// `locals` at `(doc.point(), ViewCoord { path: owner.path(), scopes })` (`EN-5b`).
-/// Always records `Key::Patch` reads on `owner`, each `local`, and each copy id
-/// when `doc` is a recording tree so future patches wake this owner.
+///
+/// Records O(1) placement/scope-aware `Key::Patch` reads (`owner.path()[0]` and
+/// each enclosing scope, plus `local` only for un-scoped repeats outside any
+/// definition), avoiding O(N) sibling wakeups and `NodeId::expanded` interning
+/// when no patches exist (Sol #6 / Gemini M6).
 pub(crate) fn patch_overrides_for(
     doc: Tree<'_>,
     owner: NodeId,
-    scopes: &[NodeId],
+    scopes: &[(NodeId, usize)],
     locals: &[NodeId],
 ) -> Vec<(NodeId, PatchKey, PatchValue)> {
-    doc.note_key(Key::Patch(owner));
-    for &local in locals {
-        doc.note_key(Key::Patch(local));
-        if let Some(copy) = NodeId::expanded(owner, local) {
-            doc.note_key(Key::Patch(copy));
+    let owner_path = owner.path();
+    if let Some(&root) = owner_path.first() {
+        doc.note_key(Key::Patch(root));
+    }
+    for &(scope, _) in scopes {
+        doc.note_key(Key::Patch(scope));
+    }
+    if scopes.is_empty() {
+        for &local in locals {
+            doc.note_key(Key::Patch(local));
         }
     }
     let pt = doc.patches();
@@ -957,7 +983,7 @@ pub(crate) fn patch_overrides_for(
         return Vec::new();
     }
     let global = doc.point().cloned().unwrap_or_default();
-    let coord = ViewCoord { path: owner.path(), scopes: scopes.to_vec(), local: DiscretePoint::default() };
+    let coord = ViewCoord { path: owner_path, scopes: scopes.to_vec(), local: DiscretePoint::default() };
     let mut out = Vec::new();
     for &local in locals {
         let copy = NodeId::expanded(owner, local);
@@ -1003,12 +1029,12 @@ pub fn overrides_of(doc: Tree<'_>, owner: NodeId) -> Vec<(NodeId, LeafPath, Valu
     if doc.patches().patches.is_empty() {
         return Vec::new();
     }
-    let base_scopes: Vec<NodeId> = definition_of(doc, owner.path()[0]).into_iter().collect();
+    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner.path()[0]).into_iter().map(|d| (d, 0)).collect();
     let Some(p) = picture_of(doc, owner, &base_scopes) else { return Vec::new() };
     let Some(template) = definition::template_of(doc, p.def, &p.notation) else { return Vec::new() };
     let mut scopes = base_scopes;
-    scopes.push(p.def);
-    let locals: Vec<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+    scopes.push((p.def, owner.path().len()));
+    let locals: Vec<NodeId> = doc.base_descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
     patch_overrides_for(doc, owner, &scopes, &locals)
         .into_iter()
         .filter_map(|(target, key, val)| match (key, val) {
@@ -1246,8 +1272,16 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             return Err(ApplyError { op: i, kind: ErrorKind::BadId, message: format!("{target} is item {k} of {repeat}, a copy: {what}") });
         }
     }
-    // Anchor/layer-aware patch planner for overrides on derived copies (`EN-5b`).
-    let mut inst_ax: Option<crate::patch::AxisId> = doc.patches().instance_axis_id();
+    // Anchor/layer-aware patch planner for overrides on derived copies (`EN-5b`):
+    // tracks in-tx axes, removals, and occupied ranks per `(anchor, layer)` so
+    // multiple new patches never collide on rank and reuse never updates a losing
+    // patch (C2, H3, Sol #4).
+    let mut inst_ax: Option<crate::patch::AxisId> = doc.patches().instance_axis_id().or_else(|| {
+        ops.iter().find_map(|op| match op {
+            Op::Axis(AxisOp::Add { axis }) if axis.kind == AxisKind::Instance => Some(axis.id),
+            _ => None,
+        })
+    });
     let mut next_patch_raw = doc.patches().next_patch_id().0.max(
         ops.iter()
             .filter_map(|op| match op {
@@ -1266,10 +1300,28 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             .max()
             .unwrap_or(0),
     );
+    let removed_patches: std::collections::HashSet<crate::patch::PatchId> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Patch(PatchOp::Remove { id }) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let mut used_ranks: HashMap<(Option<NodeId>, u32), BTreeSet<OrderKey>> = HashMap::new();
+    for p in doc.patches().patches.values() {
+        if !removed_patches.contains(&p.id) {
+            used_ranks.entry((p.anchor, p.layer)).or_default().insert(p.rank.clone());
+        }
+    }
+    for op in &ops {
+        if let Op::Patch(PatchOp::Add { patch }) = op {
+            used_ranks.entry((patch.anchor, patch.layer)).or_default().insert(patch.rank.clone());
+        }
+    }
+    let global_point = doc.point().cloned().unwrap_or_default();
     let mut out: Vec<Op> = Vec::with_capacity(ops.len());
-    // Newly created override patches in this transaction: (anchor, tail, patch_id).
-    let mut made_patches: Vec<(Option<NodeId>, Vec<NodeId>, crate::patch::PatchId)> = Vec::new();
-    let mut last_rank: Option<OrderKey> = None;
+    // Newly created override patches in this transaction: (anchor, tail, patch_id, rank).
+    let mut made_patches: Vec<(Option<NodeId>, Vec<NodeId>, crate::patch::PatchId, OrderKey)> = Vec::new();
 
     let mut patch_override_entry = |owner: NodeId, local: NodeId, key: PatchKey, val: PatchValue, out: &mut Vec<Op>| -> Result<(), String> {
         let mut steps = owner.path();
@@ -1295,33 +1347,71 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
             }
         };
         let target = PatchTarget { node: local, key };
-        let existing = doc
-            .patches()
+        // Check whether a higher-ranked patch in the same `(anchor, 0)` scope
+        // currently sets `target` at this placement (PutGet, P12 / H3 / Sol #4).
+        let pt = doc.patches();
+        let same_scope_winner_rank: Option<OrderKey> = {
+            let scopes: Vec<(NodeId, usize)> = anchor.into_iter().map(|d| (d, 0)).collect();
+            let coord = ViewCoord { path: steps.clone(), scopes, local: DiscretePoint::default() };
+            pt.patches_for_target(local)
+                .filter(|p| {
+                    !removed_patches.contains(&p.id)
+                        && p.anchor == anchor
+                        && p.layer == 0
+                        && p.entries.contains_key(&target)
+                        && p.region.contains_at_view(&pt.axes, &global_point, &coord, p.anchor)
+                })
+                .map(|p| &p.rank)
+                .max()
+                .cloned()
+        };
+        let existing_doc = pt
             .instance_override_patch(ax, anchor, &steps)
-            .or_else(|| made_patches.iter().find(|(a, t, _)| *a == anchor && *t == steps).map(|(_, _, id)| *id));
-        match existing {
-            Some(patch) => {
+            .filter(|p| !removed_patches.contains(&p.id))
+            .map(|p| (p.id, p.rank.clone()));
+        let existing_made = made_patches
+            .iter()
+            .rev()
+            .find(|(a, t, _, _)| *a == anchor && *t == steps)
+            .map(|(_, _, id, r)| (*id, r.clone()));
+        let best_existing = match (existing_doc, existing_made) {
+            (Some(a), Some(b)) => Some(if b.1 > a.1 { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        let reusable = best_existing.filter(|(_, r)| same_scope_winner_rank.as_ref().is_none_or(|w| r >= w));
+        match reusable {
+            Some((patch, _)) => {
                 out.push(Op::Patch(PatchOp::SetEntry { patch, target, value: Some(val) }));
             }
             None => {
                 let region = Product::default().with(ax, Sel::Suffix { tail: steps.clone(), not: Vec::new() });
-                let rank = match &last_rank {
-                    Some(prev) => OrderKey::after(prev),
-                    None => doc.patches().default_rank(&region, 0),
+                let used = used_ranks.entry((anchor, 0)).or_default();
+                let mine = pt.keys(&region);
+                let default_floor = pt
+                    .patches
+                    .values()
+                    .filter(|p| !removed_patches.contains(&p.id) && p.anchor == anchor && p.layer == 0 && pt.keys(&p.region) <= mine)
+                    .map(|p| &p.rank)
+                    .max()
+                    .cloned();
+                let floor = match (default_floor, same_scope_winner_rank) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
                 };
-                last_rank = Some(rank.clone());
+                let rank = crate::patch::PatchTable::alloc_rank(used, floor.as_ref());
+                used.insert(rank.clone());
                 let pid = crate::patch::PatchId(next_patch_raw);
                 next_patch_raw += 1;
                 let patch = Patch {
                     id: pid,
                     layer: 0,
-                    rank,
+                    rank: rank.clone(),
                     region,
                     anchor,
                     writable: true,
                     entries: BTreeMap::from([(target, val)]),
                 };
-                made_patches.push((anchor, steps, pid));
+                made_patches.push((anchor, steps, pid, rank));
                 out.push(Op::Patch(PatchOp::Add { patch }));
             }
         }
@@ -1352,10 +1442,19 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
         };
         // A facet added to what an instance derives (an ellipse gaining an arc,
         // a rect gaining a stroke) becomes a `FacetPresent(true)` + leaf entries
-        // on the instance's patch (`EN-5b`).
+        // on the instance's patch (`EN-5b`). Reject bound fields (L1).
         if let Op::AddFacet { id, facet } = &op
             && let Some((owner, local)) = id.expanded_parts()
         {
+            for field in facet.field_names() {
+                if facet.get(field).is_some_and(|s| s.expr().is_some()) {
+                    return Err(ApplyError {
+                        op: i,
+                        kind: ErrorKind::BadId,
+                        message: format!("{id} is inside instance {owner}: a binding from outside cannot reach it; give its definition an `in` port and bind that"),
+                    });
+                }
+            }
             patch_override_entry(owner, local, PatchKey::FacetPresent(facet.kind()), PatchValue::Bool { v: true }, &mut out)
                 .map_err(|m| ApplyError { op: i, kind: ErrorKind::BadId, message: m })?;
             for field in facet.field_names() {
@@ -1407,9 +1506,9 @@ pub fn translate(doc: Tree<'_>, reactive: &crate::graph::Reactive, ops: Vec<Op>)
                     {
                         patch_override_entry(owner, local, PatchKey::Notation, PatchValue::Notation { notation }, &mut out).map_err(err)?;
                     } else {
-                        // P21: if setting a leaf on an optional facet the base template
-                        // node lacks, enable `FacetPresent` in the same patch.
-                        if doc.base_facet(local, path.facet).is_none() {
+                        // P21 / L2: if setting a leaf on an optional facet effectively
+                        // absent on `id`, enable `FacetPresent(true)` in the same patch.
+                        if !doc.has(*id, path.facet) {
                             patch_override_entry(owner, local, PatchKey::FacetPresent(path.facet), PatchValue::Bool { v: true }, &mut out).map_err(err)?;
                         }
                         patch_override_entry(owner, local, PatchKey::Leaf(*path), PatchValue::Slot { slot: Slot::Const(value) }, &mut out).map_err(err)?;

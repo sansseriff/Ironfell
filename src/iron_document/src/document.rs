@@ -712,12 +712,10 @@ impl Document {
             Rec::Solve(dp, leaf, old) => {
                 match old {
                     Some(s) => {
-                        self.patches.solve.insert((dp.clone(), leaf), s);
-                        self.patches.index_solve(&dp, leaf, true);
+                        self.patches.solve_insert(dp, leaf, s);
                     }
                     None => {
-                        self.patches.solve.remove(&(dp.clone(), leaf));
-                        self.patches.index_solve(&dp, leaf, false);
+                        self.patches.solve_remove(&dp, leaf);
                     }
                 }
             }
@@ -1320,9 +1318,85 @@ impl Document {
         }
     }
 
+    /// Definition ancestor of `id` in raw authored storage (walking even tombstoned parents).
+    pub(crate) fn definition_of_raw(&self, mut id: NodeId) -> Option<NodeId> {
+        while let Some(n) = self.nodes.get(&id) {
+            if n.ty.name() == "definition" {
+                return Some(id);
+            }
+            id = n.parent?;
+        }
+        None
+    }
+
+    /// Placement-aware `Key::Patch` wake targets for authored patch `p` (`EN-5b`):
+    /// a document-level (`anchor: None`) instance suffix override targeting a single
+    /// top-level placement `tail[0]` outside any definition wakes ONLY `tail[0]`
+    /// (avoiding O(N) sibling fan-out across 700 instances of a shared template);
+    /// broader/anchored patches wake their anchor, target definitions, and targets.
+    pub(crate) fn patch_wake_nodes(&self, p: &crate::patch::Patch) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let single_placement = if p.anchor.is_none() {
+            p.region.sels.iter().find_map(|(a, sel)| {
+                if self.patches.axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance)
+                    && let crate::patch::Sel::Suffix { tail, .. } = sel
+                    && let Some(&first) = tail.first()
+                    && !first.is_expanded()
+                    && !first.is_item_step()
+                    && self.definition_of_raw(first).is_none()
+                {
+                    Some(first)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        if let Some(owner) = single_placement {
+            out.push(owner);
+            for t in p.entries.keys() {
+                if !t.node.is_expanded() && self.definition_of_raw(t.node).is_none() {
+                    out.push(t.node);
+                }
+            }
+            return out;
+        }
+        if let Some(anc) = p.anchor {
+            out.push(anc);
+        }
+        for (a, sel) in &p.region.sels {
+            if self.patches.axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance)
+                && let crate::patch::Sel::Suffix { tail, .. } = sel
+                && let Some(&first) = tail.first()
+                && !first.is_expanded()
+                && !first.is_item_step()
+            {
+                if let Some(def) = self.definition_of_raw(first) {
+                    out.push(def);
+                } else {
+                    out.push(first);
+                }
+            }
+        }
+        for t in p.entries.keys() {
+            if t.node.is_expanded() {
+                if let Some(&root) = t.node.path().first() {
+                    out.push(root);
+                }
+            } else {
+                out.push(t.node);
+                if let Some(def) = self.definition_of_raw(t.node) {
+                    out.push(def);
+                }
+            }
+        }
+        out
+    }
+
     /// Apply an authored patch op to the document, enforcing distinct ranks
-    /// per layer and non-session layer, maintaining the in-memory patch index,
-    /// and returning `(inverse, affected_targets)` (EN-4).
+    /// per `(anchor, layer)` and non-session layer, maintaining the in-memory
+    /// patch index, and returning `(inverse, affected_targets)` (EN-4/EN-5b).
     pub(crate) fn apply_patch_op(&mut self, op: &crate::patch::PatchOp) -> Result<(crate::patch::PatchOp, BTreeSet<NodeId>), String> {
         use crate::patch::PatchOp;
         let on = self.touched.on;
@@ -1333,7 +1407,7 @@ impl Document {
                     if self.patches.patches.contains_key(&patch.id) {
                         return Err(format!("patch {} already exists", patch.id));
                     }
-                    if self.patches.patches.values().any(|q| q.layer == patch.layer && q.rank == patch.rank) {
+                    if self.patches.patches.values().any(|q| q.anchor == patch.anchor && q.layer == patch.layer && q.rank == patch.rank) {
                         return Err(format!("another patch in layer {} already has rank {}", patch.layer, patch.rank));
                     }
                     self.patches.validate_patch(patch, &|id| self.nodes.get(&id).map(|n| n.ty))?;
@@ -1343,9 +1417,10 @@ impl Document {
                     }
                     self.patches.next_patch = self.patches.next_patch.max(patch.id.0 + 1);
                     let targets: BTreeSet<NodeId> = patch.entries.keys().map(|t| t.node).collect();
+                    let wakes = self.patch_wake_nodes(patch);
                     self.patches.index_patch(patch);
                     self.patches.patches.insert(patch.id, patch.clone());
-                    for &n in &targets {
+                    for n in wakes {
                         self.touched.note(crate::structure::Key::Patch(n));
                     }
                     Ok((PatchOp::Remove { id: patch.id }, targets))
@@ -1357,7 +1432,7 @@ impl Document {
                         self.rec(Rec::Patch(*id, Some(old.clone())));
                     }
                     let targets: BTreeSet<NodeId> = old.entries.keys().map(|t| t.node).collect();
-                    for &n in &targets {
+                    for n in self.patch_wake_nodes(&old) {
                         self.touched.note(crate::structure::Key::Patch(n));
                     }
                     Ok((PatchOp::Add { patch: old }, targets))
@@ -1372,18 +1447,22 @@ impl Document {
                     }
                     let before = self.recording().then(|| cur.clone());
                     let old_p = self.patches.patches.remove(patch).expect("checked");
+                    let old_wakes = self.patch_wake_nodes(&old_p);
                     self.patches.unindex_patch(&old_p);
                     let mut next = old_p;
                     let prev_val = match value {
                         Some(v) => next.entries.insert(*target, v.clone()),
                         None => next.entries.remove(target),
                     };
+                    let new_wakes = self.patch_wake_nodes(&next);
                     self.patches.index_patch(&next);
                     self.patches.patches.insert(*patch, next);
                     if let Some(b) = before {
                         self.rec(Rec::Patch(*patch, Some(b)));
                     }
-                    self.touched.note(crate::structure::Key::Patch(target.node));
+                    for n in old_wakes.into_iter().chain(new_wakes) {
+                        self.touched.note(crate::structure::Key::Patch(n));
+                    }
                     Ok((PatchOp::SetEntry { patch: *patch, target: *target, value: prev_val }, BTreeSet::from([target.node])))
                 }
                 PatchOp::SetRegion { patch, region } => {
@@ -1394,33 +1473,36 @@ impl Document {
                     self.patches.validate_region(region, cur.anchor)?;
                     let before = self.recording().then(|| cur.clone());
                     let old_p = self.patches.patches.remove(patch).expect("checked");
+                    let old_wakes = self.patch_wake_nodes(&old_p);
                     self.patches.unindex_patch(&old_p);
                     let mut next = old_p;
                     let prev_region = std::mem::replace(&mut next.region, region.clone());
                     let targets: BTreeSet<NodeId> = next.entries.keys().map(|t| t.node).collect();
+                    let new_wakes = self.patch_wake_nodes(&next);
                     self.patches.index_patch(&next);
                     self.patches.patches.insert(*patch, next);
                     if let Some(b) = before {
                         self.rec(Rec::Patch(*patch, Some(b)));
                     }
-                    for &n in &targets {
+                    for n in old_wakes.into_iter().chain(new_wakes) {
                         self.touched.note(crate::structure::Key::Patch(n));
                     }
                     Ok((PatchOp::SetRegion { patch: *patch, region: prev_region }, targets))
                 }
                 PatchOp::SetRank { patch, rank } => {
                     let cur = self.patches.patches.get(patch).ok_or_else(|| format!("no patch {patch}"))?;
-                    if self.patches.patches.values().any(|q| q.id != *patch && q.layer == cur.layer && &q.rank == rank) {
+                    if self.patches.patches.values().any(|q| q.id != *patch && q.anchor == cur.anchor && q.layer == cur.layer && &q.rank == rank) {
                         return Err(format!("another patch in layer {} already has rank {}", cur.layer, rank));
                     }
                     let before = self.recording().then(|| cur.clone());
                     let p = self.patches.patches.get_mut(patch).expect("checked");
                     let prev_rank = std::mem::replace(&mut p.rank, rank.clone());
                     let targets: BTreeSet<NodeId> = p.entries.keys().map(|t| t.node).collect();
+                    let p_snap = p.clone();
                     if let Some(b) = before {
                         self.rec(Rec::Patch(*patch, Some(b)));
                     }
-                    for &n in &targets {
+                    for n in self.patch_wake_nodes(&p_snap) {
                         self.touched.note(crate::structure::Key::Patch(n));
                     }
                     Ok((PatchOp::SetRank { patch: *patch, rank: prev_rank }, targets))
@@ -1432,27 +1514,23 @@ impl Document {
     }
 
     /// Write or clear one entry in the dedicated system-owned solve layer (P17).
+    /// Solve entries are leaf-only and never change structural expansion, so they
+    /// emit `Key::Leaf` only (not `Key::Patch`).
     pub(crate) fn apply_solve(&mut self, point: crate::patch::DiscretePoint, leaf: Leaf, slot: Option<Slot>) -> Result<Option<Slot>, String> {
         if let Some(s) = &slot {
-            crate::patch::PatchTable::validate_solve_entry(leaf, s, self.nodes.get(&leaf.node).map(|n| n.ty))?;
+            let ty_node = leaf.node.expanded_parts().map(|(_, local)| local).unwrap_or(leaf.node);
+            crate::patch::PatchTable::validate_solve_entry(leaf, s, self.nodes.get(&ty_node).map(|n| n.ty))?;
         }
         let on = self.touched.on;
         self.touched.on &= !crate::structure::silenced("apply_solve");
         let old = match slot {
-            Some(s) => {
-                self.patches.index_solve(&point, leaf, true);
-                self.patches.solve.insert((point.clone(), leaf), s)
-            }
-            None => {
-                self.patches.index_solve(&point, leaf, false);
-                self.patches.solve.remove(&(point.clone(), leaf))
-            }
+            Some(s) => self.patches.solve_insert(point.clone(), leaf, s),
+            None => self.patches.solve_remove(&point, leaf),
         };
         if self.recording() {
             self.rec(Rec::Solve(point, leaf, old.clone()));
         }
         self.touched.note(crate::structure::Key::Leaf(leaf));
-        self.touched.note(crate::structure::Key::Patch(leaf.node));
         self.touched.on = on;
         Ok(old)
     }

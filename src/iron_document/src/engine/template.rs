@@ -136,9 +136,9 @@ pub(crate) struct Env {
     pub(crate) sized: bool,
     /// A collection item.
     pub(crate) item: Option<Item>,
-    /// Enclosing definition scopes (outermost first), for derived scope-chain
-    /// layer precedence (`EN-5b`).
-    pub(crate) scopes: Vec<NodeId>,
+    /// Enclosing definition scopes with path start offsets `(scope, start)`
+    /// (outermost first), for derived scope-chain layer precedence (`EN-5b`).
+    pub(crate) scopes: Vec<(NodeId, usize)>,
     /// The patch overrides reaching the owner's copies: `(target, key, value)`,
     /// resolved from `PatchTable` at `(global, ViewCoord)` (`EN-5b`).
     pub(crate) overrides: Vec<(NodeId, PatchKey, PatchValue)>,
@@ -226,19 +226,21 @@ impl Template {
     }
 
     /// Definition `def`'s body (`expand::want_entity`'s copies).
+    /// Compiled strictly from unpatched base storage so templates are
+    /// point-independent (`EN-5b`).
     pub(crate) fn body(doc: Tree<'_>, def: NodeId) -> Template {
         let inputs = definition::inputs_of(doc, def).unwrap_or_default();
         let port = TypeId::lookup("port").expect("registered");
         let mut nodes = Vec::new();
-        for &child in doc.children(def).iter() {
+        for &child in doc.base_children(def).iter() {
             // A session node gets no copy (`NodeId::expanded`).
-            let Some(node) = doc.live(child).filter(|_| !child.is_session()) else { continue };
+            let Some(node) = doc.base_live(child).filter(|_| !child.is_session()) else { continue };
             let ty = match node.ty.name() {
                 "port_spec" => port,
                 "equation" | "entity" | "connection" | "channel" | "machine" | "let" | "trace" | "accumulate" | "query" => node.ty,
                 _ => continue,
             };
-            let mut t = TNode::new(child, def, ty, node.order.clone(), doc.facets_of(child).cloned().collect());
+            let mut t = TNode::new(child, def, ty, node.order.clone(), doc.base_facets_of(child).cloned().collect());
             t.top = true;
             t.arg = inputs.iter().find(|i| i.spec == child).map(|i| LeafPath::new(FacetKind::Args, i.name).expect("argument path"));
             if matches!(node.ty.name(), "connection" | "port_spec") {
@@ -250,13 +252,13 @@ impl Template {
         // after the ports they read.
         // A session node gets no copy, so nothing under it does either.
         let copied = |n: NodeId| !n.is_expanded() && !n.is_session();
-        for &machine in doc.children(def).iter().filter(|&&c| !c.is_session() && doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
-            let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|&c| copied(c)).collect();
+        for &machine in doc.base_children(def).iter().filter(|&&c| !c.is_session() && doc.base_live(c).is_some_and(|n| n.ty.name() == "machine")) {
+            let mut stack: Vec<NodeId> = doc.base_children(machine).iter().rev().copied().filter(|&c| copied(c)).collect();
             while let Some(local) = stack.pop() {
-                let Some(n) = doc.live(local) else { continue };
+                let Some(n) = doc.base_live(local) else { continue };
                 let Some(parent) = n.parent else { continue };
-                nodes.push(TNode::new(local, parent, n.ty, n.order.clone(), doc.facets_of(local).cloned().collect()));
-                stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
+                nodes.push(TNode::new(local, parent, n.ty, n.order.clone(), doc.base_facets_of(local).cloned().collect()));
+                stack.extend(doc.base_children(local).iter().rev().copied().filter(|&c| copied(c)));
             }
         }
         Template::classify(Source::Body(def), nodes, Vec::new(), OrderKey::first(), |id| expand::is_body(doc, def, id.path()[0]).then_some(Ref::Inside))
@@ -264,18 +266,17 @@ impl Template {
 
     /// Definition `def`'s picture from its template node `template`
     /// (`expand::want_use`'s copies): preorder, each `use` without its
-    /// subtree. A template's own derived children and its overrides are
-    /// not copied, nor a session node or anything under it (it gets no
-    /// copy, `NodeId::expanded`).
+    /// subtree. Compiled strictly from unpatched base storage so templates are
+    /// point-independent (`EN-5b`).
     pub(crate) fn picture(doc: Tree<'_>, def: NodeId, template: NodeId) -> Template {
-        let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
-        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.is_live(n);
+        let inside: BTreeSet<NodeId> = doc.base_descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+        let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.base_live(n).is_some();
         let mut nodes = Vec::new();
-        let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
+        let mut stack: Vec<NodeId> = doc.base_children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
         while let Some(local) = stack.pop() {
-            let Some(node) = doc.live(local) else { continue };
+            let Some(node) = doc.base_live(local) else { continue };
             let Some(parent) = node.parent else { continue };
-            let mut t = TNode::new(local, parent, node.ty, node.order.clone(), doc.facets_of(local).cloned().collect());
+            let mut t = TNode::new(local, parent, node.ty, node.order.clone(), doc.base_facets_of(local).cloned().collect());
             if node.ty.name() == "use" {
                 if let Some(r) = doc.relations_from(local).find(|r| r.rel == RelKind::Figures) {
                     t.own = !inside.contains(&r.to.path()[0]);
@@ -285,7 +286,7 @@ impl Template {
                 continue;
             }
             nodes.push(t);
-            stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
+            stack.extend(doc.base_children(local).iter().rev().copied().filter(|&c| copied(c)));
         }
         Template::classify(Source::Picture(template), nodes, Vec::new(), OrderKey::first(), |id| {
             if id == template {
@@ -304,18 +305,17 @@ impl Template {
 
     /// Authored repeat (or conditional) `r`'s template: its children that
     /// are not items, and their subtrees, parents first, with the
-    /// relations from them. A session node gets no copy, nor anything under
-    /// it, and does not order the items.
+    /// relations from them. Compiled strictly from unpatched base storage (`EN-5b`).
     pub(crate) fn repeat(doc: Tree<'_>, r: NodeId) -> Template {
         let mut nodes = Vec::new();
         let mut rels = Vec::new();
         let copied = |c: &NodeId| !c.is_expanded() && !c.is_session();
-        let mut stack: Vec<NodeId> = doc.children(r).iter().rev().copied().filter(copied).collect();
+        let mut stack: Vec<NodeId> = doc.base_children(r).iter().rev().copied().filter(copied).collect();
         while let Some(n) = stack.pop() {
-            let Some(node) = doc.live(n) else { continue };
-            nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.facets_of(n).cloned().collect()));
+            let Some(node) = doc.base_live(n) else { continue };
+            nodes.push(TNode::new(n, node.parent.unwrap_or(r), node.ty, node.order.clone(), doc.base_facets_of(n).cloned().collect()));
             rels.extend(doc.relations_from(n).filter(|x| !x.id.is_expanded()).cloned());
-            stack.extend(doc.children(n).iter().rev().copied().filter(copied));
+            stack.extend(doc.base_children(n).iter().rev().copied().filter(copied));
         }
         Template::collection(r, nodes, rels)
     }
@@ -516,14 +516,9 @@ fn apply_overrides(t: &Template, n: &TNode, env: &Env, facets: &mut Vec<Facet>) 
         }
         match (key, val) {
             (PatchKey::Leaf(leaf), PatchValue::Slot { slot }) => {
+                // P21: field writes never synthesize missing optional facets implicitly.
                 if suppressed.contains(&leaf.facet) {
                     continue;
-                }
-                if !facets.iter().any(|f| f.kind() == leaf.facet) {
-                    if !n.ty.spec().allows(leaf.facet) {
-                        continue;
-                    }
-                    facets.push(leaf.facet.default_facet());
                 }
                 if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
                     let _ = f.set(leaf.field, slot.clone());

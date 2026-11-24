@@ -38,31 +38,30 @@ fn wanted_for(doc: Tree<'_>, owner: NodeId, counts: &Items, cap: usize) -> Wante
     let mut out = Wanted::new(cap);
     out.root = Some(owner);
     let Some(node) = doc.live(owner).filter(|_| !owner.is_expanded()) else { return out };
-    let base_scopes: Vec<NodeId> = definition_of(doc, owner).into_iter().collect();
+    let base_scopes: Vec<(NodeId, usize)> = definition_of(doc, owner).into_iter().map(|d| (d, 0)).collect();
     match node.ty.name() {
         "entity" => {
             if let Some(def) = linked_definition(doc, owner) {
                 let mut scopes = base_scopes;
-                scopes.push(def);
+                scopes.push((def, 1));
                 want_entity(doc, owner, def, &scopes, &mut out);
             }
         }
         "use" => {
             let sized = doc.facet(owner, FacetKind::Size).is_some();
             if let Some(def) = main_definition(doc, owner) {
-                let mut scopes = base_scopes;
-                scopes.push(def);
-                if let Some(notation) = effective_notation(doc, owner, None, &scopes, None) {
+                if let Some(notation) = effective_notation(doc, &[], owner, None, &base_scopes, None) {
+                    let mut scopes = base_scopes;
+                    scopes.push((def, 1));
                     want_use(doc, owner, sized, None, def, &notation, &scopes, &mut out);
                 }
             } else if let Some(entity) = use_entity(doc, owner)
                 && let Some(def) = linked_definition(doc, entity)
+                && let Some(notation) = effective_notation(doc, &[], owner, None, &base_scopes, None)
             {
                 let mut scopes = base_scopes;
-                scopes.push(def);
-                if let Some(notation) = effective_notation(doc, owner, None, &scopes, None) {
-                    want_use(doc, owner, sized, Some(entity), def, &notation, &scopes, &mut out);
-                }
+                scopes.push((def, 1));
+                want_use(doc, owner, sized, Some(entity), def, &notation, &scopes, &mut out);
             }
         }
         "group" => {
@@ -95,13 +94,15 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
                 "entity" => {
                     if let Some(def) = linked_def_of(doc, &w.facets) {
                         let mut scopes = out.scopes.get(&id).cloned().unwrap_or_default();
-                        scopes.push(def);
+                        scopes.push((def, id.path().len()));
                         want_entity(doc, id, def, &scopes, out);
                     }
                 }
                 "use" => {
                     let sized = w.facets.iter().any(|f| matches!(f, Facet::Size(_)));
-                    let local_u = id.path().last().copied();
+                    let id_path = id.path();
+                    let parent_path = &id_path[..id_path.len().saturating_sub(1)];
+                    let local_u = id_path.last().copied();
                     let base_scopes = out.scopes.get(&id).cloned().unwrap_or_default();
                     let facets = w.facets.clone();
                     let entity = out.rels.iter().find(|r| r.rel.from == id && r.rel.rel == RelKind::Figures).map(|r| r.rel.to);
@@ -109,12 +110,12 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
                         Some(copy) => linked_def_of(doc, &copy.facets),
                         None => linked_definition(doc, e),
                     });
-                    if let (Some(entity), Some(def)) = (entity, def) {
+                    if let (Some(entity), Some(def)) = (entity, def)
+                        && let Some(notation) = effective_notation(doc, parent_path, id, local_u, &base_scopes, Some(&facets))
+                    {
                         let mut scopes = base_scopes;
-                        scopes.push(def);
-                        if let Some(notation) = effective_notation(doc, id, local_u, &scopes, Some(&facets)) {
-                            want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out);
-                        }
+                        scopes.push((def, id_path.len()));
+                        want_use(doc, id, sized, Some(entity), def, &notation, &scopes, out);
                     }
                 }
                 _ => {}
@@ -129,7 +130,7 @@ fn want_scopes(doc: Tree<'_>, counts: &Items, out: &mut Wanted, mut repeats: Vec
 }
 
 /// The items of repeat (or conditional) `r`, by key.
-fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[NodeId], keys: &[String], out: &mut Wanted) {
+fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[(NodeId, usize)], keys: &[String], out: &mut Wanted) {
     if keys.is_empty() || !out.enter(r) {
         return;
     }
@@ -207,7 +208,7 @@ fn want_items(doc: Tree<'_>, r: NodeId, scopes: &[NodeId], keys: &[String], out:
 }
 
 /// What entity `entity` derives from `def`.
-fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], out: &mut Wanted) {
+fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[(NodeId, usize)], out: &mut Wanted) {
     if !out.enter(entity) {
         return;
     }
@@ -218,15 +219,15 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], ou
             None => leaf,
         }
     };
-    for &child in doc.children(def).iter() {
-        let Some(node) = doc.live(child) else { continue };
+    for &child in doc.base_children(def).iter() {
+        let Some(node) = doc.base_live(child).filter(|_| !child.is_session()) else { continue };
         let ty = match node.ty.name() {
             "port_spec" => TypeId::lookup("port").expect("registered"),
             "equation" | "entity" | "connection" | "channel" | "machine" | "let" | "trace" | "accumulate" | "query" => node.ty,
             _ => continue,
         };
         let Some(id) = NodeId::expanded(entity, child) else { continue };
-        let mut facets = rewritten(doc, child, &follow);
+        let mut facets = rewritten_base(doc, child, &follow);
         if let Some(input) = inputs.iter().find(|i| i.spec == child) {
             let arg = Leaf { node: entity, path: LeafPath::new(FacetKind::Args, input.name).expect("argument path") };
             for f in &mut facets {
@@ -249,29 +250,29 @@ fn want_entity(doc: Tree<'_>, entity: NodeId, def: NodeId, scopes: &[NodeId], ou
         }
         if let Some(inner) = inner_def {
             let mut inner_scopes = scopes.to_vec();
-            inner_scopes.push(inner);
+            inner_scopes.push((inner, id.path().len()));
             want_entity(doc, id, inner, &inner_scopes, out);
         }
     }
-    for &machine in doc.children(def).iter().filter(|&&c| doc.live(c).is_some_and(|n| n.ty.name() == "machine")) {
-        let mut stack: Vec<NodeId> = doc.children(machine).iter().rev().copied().filter(|c| !c.is_expanded()).collect();
+    for &machine in doc.base_children(def).iter().filter(|&&c| !c.is_session() && doc.base_live(c).is_some_and(|n| n.ty.name() == "machine")) {
+        let mut stack: Vec<NodeId> = doc.base_children(machine).iter().rev().copied().filter(|c| !c.is_expanded() && !c.is_session()).collect();
         while let Some(local) = stack.pop() {
-            let Some(n) = doc.live(local) else { continue };
+            let Some(n) = doc.base_live(local) else { continue };
             let (Some(copy), Some(parent)) = (NodeId::expanded(entity, local), n.parent.and_then(|p| NodeId::expanded(entity, p))) else { continue };
-            let mut facets = rewritten(doc, local, &follow);
+            let mut facets = rewritten_base(doc, local, &follow);
             apply_overrides(doc, entity, scopes, local, n.ty, &mut facets);
             if !out.push(Want { id: copy, ty: n.ty, parent, order: n.order.clone(), facets, scoped: true }) {
                 return;
             }
             out.scopes.insert(copy, scopes.to_vec());
-            stack.extend(doc.children(local).iter().rev().copied().filter(|c| !c.is_expanded()));
+            stack.extend(doc.base_children(local).iter().rev().copied().filter(|c| !c.is_expanded() && !c.is_session()));
         }
     }
 }
 
 /// What `use` `u`, figuring `entity` (an instance of `def`), derives.
 #[allow(clippy::too_many_arguments)]
-fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[NodeId], out: &mut Wanted) {
+fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: NodeId, notation: &str, scopes: &[(NodeId, usize)], out: &mut Wanted) {
     if let Some(r) = entity.filter(|e| e.is_expanded()).and_then(|e| e.path().first().copied())
         && out.root.is_some_and(|o| o != r)
     {
@@ -281,7 +282,8 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
         return;
     }
     let Some(template) = definition::template_of(doc, def, notation) else { return };
-    let inside: BTreeSet<NodeId> = doc.descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+    let inside: BTreeSet<NodeId> = doc.base_descendants(template).into_iter().filter(|d| !d.is_expanded()).collect();
+    let u_path = u.path();
     let follow = |leaf: Leaf| -> Leaf {
         if leaf.node == template {
             return if sized && leaf.path.facet == FacetKind::Size { Leaf { node: u, path: leaf.path } } else { leaf };
@@ -302,17 +304,17 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
             None => leaf,
         }
     };
-    let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.is_live(n);
-    let mut stack: Vec<NodeId> = doc.children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
+    let copied = |n: NodeId| !n.is_expanded() && !n.is_session() && doc.base_live(n).is_some();
+    let mut stack: Vec<NodeId> = doc.base_children(template).iter().rev().copied().filter(|&c| copied(c)).collect();
     while let Some(local) = stack.pop() {
-        let Some(node) = doc.live(local) else { continue };
+        let Some(node) = doc.base_live(local) else { continue };
         let parent = match node.parent {
             Some(p) if p == template => Some(u),
             Some(p) => NodeId::expanded(u, p),
             None => None,
         };
         let (Some(id), Some(parent)) = (NodeId::expanded(u, local), parent) else { continue };
-        let mut facets = rewritten(doc, local, &follow);
+        let mut facets = rewritten_base(doc, local, &follow);
         apply_overrides(doc, u, scopes, local, node.ty, &mut facets);
         let inner = (node.ty.name() == "use").then(|| doc.relations_from(local).find(|r| r.rel == RelKind::Figures)).flatten();
         let own = inner.is_some_and(|r| !inside.contains(&r.to.path()[0]));
@@ -327,11 +329,11 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
                 let inner_def = doc.node(r.to).and_then(|_| doc.get::<Instance>(r.to)).and_then(|i| {
                     (i.mode.constant().and_then(|v| v.as_str()) == Some("linked")).then(|| i.def.constant().and_then(|v| v.as_ref())).flatten()
                 });
+                let inner_notation = effective_notation(doc, &u_path, id, Some(local), scopes, Some(&facets));
                 let mut inner_scopes = scopes.to_vec();
                 if let Some(d) = inner_def {
-                    inner_scopes.push(d);
+                    inner_scopes.push((d, id.path().len()));
                 }
-                let inner_notation = effective_notation(doc, id, Some(local), &inner_scopes, Some(&facets));
                 if let (Some(n), Some(d)) = (inner_notation, inner_def)
                     && own
                 {
@@ -340,12 +342,12 @@ fn want_use(doc: Tree<'_>, u: NodeId, sized: bool, entity: Option<NodeId>, def: 
             }
             continue;
         }
-        stack.extend(doc.children(local).iter().rev().copied().filter(|&c| copied(c)));
+        stack.extend(doc.base_children(local).iter().rev().copied().filter(|&c| copied(c)));
     }
 }
 
 /// Apply `owner`'s patch overrides of `local` to the facets its copy will have.
-fn apply_overrides(doc: Tree<'_>, owner: NodeId, scopes: &[NodeId], local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
+fn apply_overrides(doc: Tree<'_>, owner: NodeId, scopes: &[(NodeId, usize)], local: NodeId, ty: TypeId, facets: &mut Vec<Facet>) {
     let ovs = patch_overrides_for(doc, owner, scopes, &[local]);
     if ovs.is_empty() {
         return;
@@ -366,14 +368,9 @@ fn apply_overrides(doc: Tree<'_>, owner: NodeId, scopes: &[NodeId], local: NodeI
     for (_, key, val) in ovs {
         match (key, val) {
             (PatchKey::Leaf(leaf), PatchValue::Slot { slot }) => {
+                // P21: field writes never synthesize missing optional facets implicitly.
                 if suppressed.contains(&leaf.facet) {
                     continue;
-                }
-                if !facets.iter().any(|f| f.kind() == leaf.facet) {
-                    if !ty.spec().allows(leaf.facet) {
-                        continue;
-                    }
-                    facets.push(leaf.facet.default_facet());
                 }
                 if let Some(f) = facets.iter_mut().find(|f| f.kind() == leaf.facet) {
                     let _ = f.set(leaf.field, slot);
@@ -390,10 +387,10 @@ fn apply_overrides(doc: Tree<'_>, owner: NodeId, scopes: &[NodeId], local: NodeI
     facets.sort_by_key(Facet::kind);
 }
 
-/// `node`'s facets with every reference passed through `follow`: those in
-/// bindings, and node references held as constants (an anchor's `port`).
-fn rewritten(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
-    doc.facets_of(node)
+/// `node`'s unpatched base facets with every reference passed through `follow`:
+/// those in bindings, and node references held as constants (an anchor's `port`).
+fn rewritten_base(doc: Tree<'_>, node: NodeId, follow: &dyn Fn(Leaf) -> Leaf) -> Vec<Facet> {
+    doc.base_facets_of(node)
         .map(|c| {
             let mut c = c.clone();
             for field in c.field_names() {

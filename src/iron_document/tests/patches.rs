@@ -496,7 +496,25 @@ fn differential_parity_with_iron_patch() {
                     w_patch.anchor = w_anchor;
                     let pid = w_patch.id.0 as u64;
                     let d_region = h.to_doc_product(&region);
-                    let d_rank = h.store.authored().patches().default_rank(&d_region, layer);
+                    // Mirror `iron_patch::World::default_rank`, which ranks all patches in `layer`
+                    // in one shared rank order across anchors (no derived ViewCoord layers).
+                    let d_rank = {
+                        let table = h.store.authored().patches();
+                        let mine = table.keys(&d_region);
+                        let used: BTreeSet<OrderKey> = table
+                            .patches
+                            .values()
+                            .filter(|p| p.layer == layer)
+                            .map(|p| p.rank.clone())
+                            .collect();
+                        let floor = table
+                            .patches
+                            .values()
+                            .filter(|p| p.layer == layer && table.keys(&p.region) <= mine)
+                            .map(|p| p.rank.clone())
+                            .max();
+                        iron_document::patch::PatchTable::alloc_rank(&used, floor.as_ref())
+                    };
                     let d_patch = Patch {
                         id: PatchId(pid),
                         layer,

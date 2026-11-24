@@ -40,7 +40,8 @@ pub(crate) struct Owners {
     /// Recorded structural & patch reads per top-level owner (`EN-5b`).
     owner_deps: HashMap<NodeId, Vec<Key>>,
     /// Reverse index: `Key` -> top-level owners that read it (`EN-5b`).
-    owner_by_key: HashMap<Key, Vec<NodeId>>,
+    /// `HashSet` avoids O(N²) linear removal when re-expanding many instances.
+    owner_by_key: HashMap<Key, HashSet<NodeId>>,
     /// Top-level owners currently tracked by `owner_deps`.
     known_owners: BTreeSet<NodeId>,
     /// Top-level roots already scanned for owners.
@@ -99,7 +100,24 @@ impl Delta {
     }
 }
 
+/// Saved pre-transaction dirty queue so a rollback drops only uncommitted dirty
+/// keys while preserving previously committed dirty work (`EN-5b`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DirtySnapshot {
+    dirty_owners: BTreeSet<NodeId>,
+    dirty_roots: BTreeSet<NodeId>,
+    roots_dirty: bool,
+}
+
 impl Owners {
+    pub(crate) fn snapshot_dirty(&self) -> DirtySnapshot {
+        DirtySnapshot {
+            dirty_owners: self.dirty_owners.clone(),
+            dirty_roots: self.dirty_roots.clone(),
+            roots_dirty: self.roots_dirty,
+        }
+    }
+
     /// Notify both `TemplateCache` and recorded-read owner index of touched
     /// structural/patch keys (`EN-5a`, `EN-5b`).
     pub(crate) fn note_touched(&mut self, keys: &[Key]) {
@@ -128,13 +146,13 @@ impl Owners {
         }
     }
 
-    /// Clear uncommitted dirty state and templates after a transaction rollback
+    /// Restore pre-transaction dirty state and clear templates after a rollback
     /// (`EN-5a`, `EN-5b`). Committed `owner_deps`/`known_owners` stay intact.
-    pub(crate) fn clear_on_rollback(&mut self) {
+    pub(crate) fn restore_on_rollback(&mut self, snap: DirtySnapshot) {
         self.templates.clear();
-        self.dirty_owners.clear();
-        self.dirty_roots.clear();
-        self.roots_dirty = false;
+        self.dirty_owners = snap.dirty_owners;
+        self.dirty_roots = snap.dirty_roots;
+        self.roots_dirty = snap.roots_dirty;
     }
 
     /// Drain touched keys from `docs` and return the dirty owners that must
@@ -196,6 +214,27 @@ impl Owners {
         };
         let mut ops = Vec::new();
         let mut done: BTreeSet<NodeId> = BTreeSet::new();
+        // Expand `entity` owners before `use`/repeat owners in the same wave so
+        // a picture figuring a derived entity updated in the same transaction
+        // always reads the freshly derived inner entity (Sol #3).
+        let mut pending_non_entities: BTreeSet<NodeId> = BTreeSet::new();
+        let entity_ty = TypeId::lookup("entity");
+        {
+            let doc = Tree::of(docs);
+            let mut entities = BTreeSet::new();
+            for &o in &todo {
+                if doc.live(o).is_some_and(|n| Some(n.ty) == entity_ty) {
+                    entities.insert(o);
+                } else {
+                    pending_non_entities.insert(o);
+                }
+            }
+            if !entities.is_empty() && !pending_non_entities.is_empty() {
+                todo = entities;
+            } else {
+                pending_non_entities.clear();
+            }
+        }
         while !todo.is_empty() {
             let mut held = self.held - todo.iter().filter_map(|o| self.counts.get(o)).sum::<usize>();
             for (o, &n) in delta.counts.iter().filter(|(o, _)| !todo.contains(o)) {
@@ -203,11 +242,16 @@ impl Owners {
             }
             let held = held.min(expand::NODE_BUDGET);
             let wave = expand::expand_owners(docs, &mut self.templates, stamp, counts, &todo, expand::NODE_BUDGET.saturating_sub(held), (&self.solved, &self.edited), &self.held_wanted);
+            // Advance `template_cursor` past expansion's own derived `copies` writes
+            // so they do not feed back into `dirty_owners` on the next transaction (M2).
+            let _ = docs.drain_template_touched();
             ops.extend(std::mem::take(&mut { wave.ops.clone() }));
             delta.add(expand::OwnersExpanded { ops: Vec::new(), ..wave });
             done.extend(todo.iter().copied());
             let reading = |o: &NodeId| self.readers.get(o).into_iter().flatten().copied().chain(delta.reads.iter().filter(move |(r, _)| r == o).map(|(_, w)| *w)).collect::<Vec<_>>();
-            todo = done.iter().flat_map(reading).filter(|o| !done.contains(o)).collect();
+            let mut next: BTreeSet<NodeId> = done.iter().flat_map(reading).filter(|o| !done.contains(o)).collect();
+            next.extend(std::mem::take(&mut pending_non_entities).into_iter().filter(|o| !done.contains(o)));
+            todo = next;
         }
         if delta.has_budget_problem() || self.problems.values().flatten().any(|p| p.kind == "budget") {
             let (more, all) = self.expand_all(docs, stamp, counts);
@@ -257,6 +301,7 @@ impl Owners {
                 repair.insert(*owner);
                 continue;
             };
+            let _ = docs.drain_template_touched();
             ops.extend(done.ops);
             let whole = (self.counts[owner] + done.wanted).saturating_sub(done.held);
             held = (held + whole).saturating_sub(self.counts[owner]);
@@ -285,6 +330,7 @@ impl Owners {
         let owners = expand::top_owners(tree);
         let roots = tree.roots().to_vec();
         let mut done = expand::expand_owners(docs, &mut self.templates, stamp, counts, &owners, expand::NODE_BUDGET, (&self.solved, &self.edited), &self.held_wanted);
+        let _ = docs.drain_template_touched();
         let ops = std::mem::take(&mut done.ops);
         let mut delta = Delta {
             all: true,
@@ -303,9 +349,9 @@ impl Owners {
     fn set_owner_deps(&mut self, owner: NodeId, raw: Vec<Key>) {
         if let Some(old) = self.owner_deps.remove(&owner) {
             for k in old {
-                if let Some(list) = self.owner_by_key.get_mut(&k) {
-                    list.retain(|&x| x != owner);
-                    if list.is_empty() {
+                if let Some(set) = self.owner_by_key.get_mut(&k) {
+                    set.remove(&owner);
+                    if set.is_empty() {
                         self.owner_by_key.remove(&k);
                     }
                 }
@@ -323,7 +369,7 @@ impl Owners {
             }
         }
         for &k in &uniq {
-            self.owner_by_key.entry(k).or_default().push(owner);
+            self.owner_by_key.entry(k).or_default().insert(owner);
         }
         self.owner_deps.insert(owner, uniq);
         self.known_owners.insert(owner);
@@ -338,7 +384,7 @@ impl Owners {
         for k in extra {
             if seen.insert(k) {
                 list.push(k);
-                self.owner_by_key.entry(k).or_default().push(owner);
+                self.owner_by_key.entry(k).or_default().insert(owner);
             }
         }
         self.known_owners.insert(owner);
@@ -350,12 +396,24 @@ impl Owners {
             self.problems.clear();
             self.counts.clear();
             self.held = 0;
+            self.readers.clear();
             self.owner_deps.clear();
             self.owner_by_key.clear();
             self.known_owners.clear();
             self.known_roots.clear();
+        } else if !d.deps.is_empty() {
+            // Replace cross-owner read edges for every re-expanded owner so stale
+            // edges never leak after a `use` stops figuring another owner's entity.
+            self.readers.retain(|_, ws| {
+                ws.retain(|w| !d.deps.contains_key(w));
+                !ws.is_empty()
+            });
         }
-        self.known_roots.extend(d.roots);
+        if d.all {
+            self.known_roots.extend(d.roots);
+        } else if !d.roots.is_empty() {
+            self.known_roots = d.roots.into_iter().collect();
+        }
         for (o, p) in d.problems {
             if p.is_empty() {
                 self.problems.remove(&o);

@@ -135,7 +135,10 @@ pub fn save(doc: &Document) -> String {
             let solve_map: BTreeMap<String, &crate::value::Slot> = pt
                 .solve
                 .iter()
-                .map(|((dp, l), s)| (format!("{}|{}.{}", crate::patch::Point::format_discrete(dp), l.node, l.path), s))
+                .flat_map(|(dp, leaves)| {
+                    let prefix = crate::patch::Point::format_discrete(dp);
+                    leaves.iter().map(move |(l, s)| (format!("{prefix}|{}.{}", l.node, l.path), s))
+                })
                 .collect();
             out.push_str(&format!(",\n \"solve\": {}", n_compact(&json!(solve_map))));
         }
@@ -400,7 +403,7 @@ pub fn load(text: &str) -> Result<Document, LoadError> {
             let (node_s, path_s) = leaf_s.split_once('.').ok_or_else(|| LoadError(format!("solve key {k:?} must be `<point>|<node>.<facet>.<field>`")))?;
             let node: NodeId = node_s.parse().map_err(|e: crate::id::IdParseError| LoadError(e.to_string()))?;
             let path: crate::facet::LeafPath = path_s.parse().map_err(|e: crate::facet::LeafError| LoadError(e.to_string()))?;
-            patch_table.solve.insert((dp, crate::expr::Leaf { node, path }), slot);
+            patch_table.solve.entry(dp).or_default().insert(crate::expr::Leaf { node, path }, slot);
         }
     }
     patch_table.validate_all(&|id| nodes.get(&id).map(|n| n.ty)).map_err(LoadError)?;

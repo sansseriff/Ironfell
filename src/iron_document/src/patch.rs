@@ -196,26 +196,32 @@ impl Axis {
 /// continuous `times`): keys persisted solve-layer poses (P17).
 pub type DiscretePoint = BTreeMap<AxisId, AxisValueId>;
 
-/// Per-view coordinate (`engine.md` §2.3, `EN-5a`): combines a virtual view's
-/// derived placement path & enclosing scope chain (never saved as authored
-/// `AxisValue`s) with its component-local discrete coordinates (e.g. machine
-/// state or variant). Structural layer precedence is derived from `scopes`
-/// (outermost scope wins without globally renumbering `u32` layer integers).
+/// Per-view coordinate (`engine.md` §2.3, `EN-5a`/`EN-5b`): combines a virtual
+/// view's derived placement path & enclosing scope chain (never saved as
+/// authored `AxisValue`s) with its component-local discrete coordinates (e.g.
+/// machine state or variant). Each scope entry `(scope, start)` records the
+/// definition/variant scope and the index into `path` *after* the step that
+/// entered `scope` (`0` for a scope enclosing the top-level authored node).
+/// Structural layer precedence is derived from `scopes` (outermost scope wins
+/// without globally renumbering `u32` layer integers).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ViewCoord {
     /// Placement steps from outermost placement to this view's owner.
     pub path: Vec<NodeId>,
-    /// Enclosing scope chain (definition / variant IDs, parallel to `path`,
-    /// outermost first).
-    pub scopes: Vec<NodeId>,
+    /// Enclosing scope chain as `(scope_id, path_start_offset)`, outermost first.
+    pub scopes: Vec<(NodeId, usize)>,
     /// Component-local discrete coordinates (e.g. machine state, variant).
     pub local: DiscretePoint,
 }
 
 impl ViewCoord {
-    pub fn new(path: Vec<NodeId>, scopes: Vec<NodeId>) -> Self {
-        debug_assert!(scopes.is_empty() || scopes.len() == path.len());
+    pub fn new(path: Vec<NodeId>, scopes: Vec<(NodeId, usize)>) -> Self {
+        debug_assert!(scopes.iter().all(|&(_, start)| start <= path.len()));
         ViewCoord { path, scopes, local: BTreeMap::new() }
+    }
+
+    pub fn has_scope(&self, scope: NodeId) -> bool {
+        self.scopes.iter().any(|&(s, _)| s == scope)
     }
 
     pub fn with_local(mut self, axis: AxisId, value: AxisValueId) -> Self {
@@ -450,8 +456,9 @@ impl Sel {
     }
 
     /// Direct path/scope matching for derived virtual-view instance coordinates
-    /// (`engine.md` §2.3, `EN-5a`): requires no saved instance `AxisValue`.
-    pub fn contains_path(&self, path: &[NodeId], scopes: &[NodeId], anchor: Option<NodeId>) -> bool {
+    /// (`engine.md` §2.3, `EN-5a`/`EN-5b`): requires no saved instance `AxisValue`.
+    /// Each `(scope, start)` in `scopes` gives the slice `&path[start..]` inside `scope`.
+    pub fn contains_path(&self, path: &[NodeId], scopes: &[(NodeId, usize)], anchor: Option<NodeId>) -> bool {
         match anchor {
             None => match self {
                 Sel::All => true,
@@ -459,17 +466,25 @@ impl Sel {
                 _ => false,
             },
             Some(scope) => match self {
-                Sel::All => scopes.contains(&scope),
+                Sel::All => scopes.iter().any(|&(s, _)| s == scope),
                 Sel::Suffix { tail, not } => scopes
                     .iter()
-                    .enumerate()
-                    .filter(|&(k, &s)| s == scope && k < path.len())
-                    .any(|(k, _)| {
-                        let sub = &path[k..];
+                    .filter(|&&(s, start)| s == scope && start <= path.len())
+                    .any(|&(_, start)| {
+                        let sub = &path[start..];
                         ends_with(sub, tail) && !not.iter().any(|n| ends_with(sub, n))
                     }),
                 _ => false,
             },
+        }
+    }
+
+    /// Whether this selector matches a specific slice `sub` inside an already-matched scope.
+    pub fn contains_subpath(&self, sub: &[NodeId]) -> bool {
+        match self {
+            Sel::All => true,
+            Sel::Suffix { tail, not } => ends_with(sub, tail) && !not.iter().any(|n| ends_with(sub, n)),
+            _ => false,
         }
     }
 
@@ -770,7 +785,7 @@ impl Product {
         }
         if let Some(scope) = anchor
             && !checked_instance
-            && !view.scopes.contains(&scope)
+            && !view.has_scope(scope)
         {
             return false;
         }
@@ -1097,9 +1112,10 @@ pub struct PatchTable {
     pub axes: BTreeMap<AxisId, Axis>,
     pub axis_order: Vec<AxisId>,
     pub patches: BTreeMap<PatchId, Patch>,
-    /// Dedicated system-owned solve layer keyed by `(DiscretePoint, Leaf)`
-    /// (engine.md §2.4, patches.md P17).
-    pub solve: BTreeMap<(DiscretePoint, Leaf), Slot>,
+    /// Dedicated system-owned solve layer keyed by `DiscretePoint` -> `Leaf` -> `Slot`
+    /// (engine.md §2.4, patches.md P17). Nested by `DiscretePoint` so `Tree::solve_leaf`
+    /// performs zero-allocation lookups and `Docs::set_point` touches only old/new points.
+    pub solve: BTreeMap<DiscretePoint, BTreeMap<Leaf, Slot>>,
     pub next_axis: u64,
     pub next_axis_value: u64,
     pub next_patch: u64,
@@ -1171,15 +1187,53 @@ impl PatchTable {
         self.axes.values().find(|a| a.kind == AxisKind::Instance).map(|a| a.id)
     }
 
+    /// Look up one solve-layer entry at discrete point `dp` without allocating.
+    pub fn solve_get(&self, dp: &DiscretePoint, leaf: Leaf) -> Option<&Slot> {
+        self.solve.get(dp)?.get(&leaf)
+    }
+
+    /// Insert or update a solve-layer entry (maintaining `solve_by_node`).
+    pub(crate) fn solve_insert(&mut self, dp: DiscretePoint, leaf: Leaf, slot: Slot) -> Option<Slot> {
+        self.index_solve(&dp, leaf, true);
+        self.solve.entry(dp).or_default().insert(leaf, slot)
+    }
+
+    /// Remove a solve-layer entry (pruning empty inner maps and maintaining `solve_by_node`).
+    pub(crate) fn solve_remove(&mut self, dp: &DiscretePoint, leaf: Leaf) -> Option<Slot> {
+        self.index_solve(dp, leaf, false);
+        let old = self.solve.get_mut(dp)?.remove(&leaf);
+        if self.solve.get(dp).is_some_and(BTreeMap::is_empty) {
+            self.solve.remove(dp);
+        }
+        old
+    }
+
     /// Existing writable layer-0 patch matching `(anchor, Suffix { tail, not: [] })`
-    /// on `inst_ax` (and no other axis restrictions), for reusing one override
-    /// patch per instance placement (`EN-5b`).
-    pub fn instance_override_patch(&self, inst_ax: AxisId, anchor: Option<NodeId>, tail: &[NodeId]) -> Option<PatchId> {
+    /// on `inst_ax` (and no other axis restrictions), highest-ranked first (`EN-5b`).
+    pub fn instance_override_patch(&self, inst_ax: AxisId, anchor: Option<NodeId>, tail: &[NodeId]) -> Option<&Patch> {
         let want = Product::default().with(inst_ax, Sel::Suffix { tail: tail.to_vec(), not: Vec::new() });
         self.patches
             .values()
-            .find(|p| p.writable && p.layer == 0 && p.anchor == anchor && p.region == want)
-            .map(|p| p.id)
+            .filter(|p| p.writable && p.layer == 0 && p.anchor == anchor && p.region == want)
+            .max_by(|a, b| self.compare(a, b))
+    }
+
+    /// Allocate a fresh `OrderKey` strictly above `floor` (when present) and strictly
+    /// below the next occupied key in `used`, guaranteed never to collide (`EN-5b`).
+    pub fn alloc_rank(used: &BTreeSet<OrderKey>, floor: Option<&OrderKey>) -> OrderKey {
+        match floor {
+            None => match used.iter().next() {
+                Some(first) => OrderKey::before(first),
+                None => OrderKey::first(),
+            },
+            Some(lo) => {
+                let next = used.range((std::ops::Bound::Excluded(lo), std::ops::Bound::Unbounded)).next();
+                match next {
+                    Some(hi) => OrderKey::between(Some(lo), Some(hi)).expect("alloc_rank: hi > lo"),
+                    None => OrderKey::after(lo),
+                }
+            }
+        }
     }
 
     pub fn reindex(&mut self) {
@@ -1198,8 +1252,10 @@ impl PatchTable {
                 self.anchored.insert(p.id);
             }
         }
-        for (dp, leaf) in self.solve.keys() {
-            self.solve_by_node.entry(leaf.node).or_default().insert((dp.clone(), leaf.path));
+        for (dp, leaves) in &self.solve {
+            for leaf in leaves.keys() {
+                self.solve_by_node.entry(leaf.node).or_default().insert((dp.clone(), leaf.path));
+            }
         }
     }
 
@@ -1337,7 +1393,12 @@ impl PatchTable {
                     }
                 }
                 (AxisKind::Unordered, Sel::Set { .. } | Sel::Not { .. }) => {}
-                (AxisKind::Instance, Sel::Suffix { .. } | Sel::Set { .. }) => {}
+                (AxisKind::Instance, Sel::Suffix { .. }) => {}
+                (AxisKind::Instance, Sel::Set { values }) => {
+                    if ax.values.is_empty() && !values.is_empty() {
+                        return Err(format!("derived-path instance axis {a} cannot use non-empty Set selector"));
+                    }
+                }
                 (kind, _) => {
                     return Err(format!("selector not allowed on {kind:?} axis {a}"));
                 }
@@ -1376,13 +1437,26 @@ impl PatchTable {
         }
     }
 
-    /// Validate an authored patch (region, layer, anchor, and all entries).
+    /// Validate an authored patch (region, layer, anchor, P19 time-axis rules, and all entries).
     pub fn validate_patch(&self, patch: &Patch, node_ty: &dyn Fn(NodeId) -> Option<crate::registry::TypeId>) -> Result<(), String> {
         if patch.layer == SESSION_LAYER {
             return Err("authored patch may not use SESSION_LAYER".into());
         }
         self.validate_region(&patch.region, patch.anchor)?;
+        let constrains_time = patch.region.sels.iter().any(|(a, sel)| {
+            !matches!(sel, Sel::All) && self.axes.get(a).is_some_and(|ax| ax.kind == AxisKind::Time)
+        });
         for (&target, val) in &patch.entries {
+            if constrains_time {
+                if matches!(target.key, PatchKey::Present) {
+                    return Err(format!("time-axis patch may not set Present on {}", target.node));
+                }
+                if let PatchValue::Slot { slot } = val
+                    && slot.expr().is_some()
+                {
+                    return Err(format!("time-axis patch {target} must hold a constant, not a binding"));
+                }
+            }
             Self::validate_entry(target, val, node_ty(target.node))?;
         }
         Ok(())
@@ -1427,18 +1501,20 @@ impl PatchTable {
             }
             Self::validate_axis(ax)?;
         }
-        let mut ranks: BTreeSet<(u32, OrderKey)> = BTreeSet::new();
+        let mut ranks: BTreeSet<(Option<NodeId>, u32, OrderKey)> = BTreeSet::new();
         for (&k, p) in &self.patches {
             if k != p.id {
                 return Err(format!("patch map key {k} disagrees with embedded id {}", p.id));
             }
-            if !ranks.insert((p.layer, p.rank.clone())) {
+            if !ranks.insert((p.anchor, p.layer, p.rank.clone())) {
                 return Err(format!("duplicate rank {} in layer {}", p.rank, p.layer));
             }
             self.validate_patch(p, node_ty)?;
         }
-        for ((_, leaf), slot) in &self.solve {
-            Self::validate_solve_entry(*leaf, slot, node_ty(leaf.node))?;
+        for leaves in self.solve.values() {
+            for (leaf, slot) in leaves {
+                Self::validate_solve_entry(*leaf, slot, node_ty(leaf.node))?;
+            }
         }
         Ok(())
     }
@@ -1488,30 +1564,40 @@ impl PatchTable {
         p.layer.cmp(&q.layer).then_with(|| p.rank.cmp(&q.rank)).then_with(|| p.id.cmp(&q.id))
     }
 
-    /// Default rank for a new patch on `region` in `layer` (patches.md §6.1):
-    /// just above every patch of `layer` whose keys are `<= mine`, below the
-    /// next rank above those. Never collides with an existing rank in `layer`.
+    /// Default rank for a new patch on `region` in `(anchor, layer)` (patches.md §6.1):
+    /// just above every patch of `(anchor, layer)` whose keys are `<= mine`, below the
+    /// next rank above those. Never collides with an existing rank in `(anchor, layer)`.
     pub fn default_rank(&self, region: &Product, layer: u32) -> OrderKey {
+        self.default_rank_in(region, None, layer)
+    }
+
+    pub fn default_rank_in(&self, region: &Product, anchor: Option<NodeId>, layer: u32) -> OrderKey {
         let mine = self.keys(region);
         let below = self
             .patches
             .values()
-            .filter(|p| p.layer == layer && self.keys(&p.region) <= mine)
+            .filter(|p| p.anchor == anchor && p.layer == layer && self.keys(&p.region) <= mine)
             .map(|p| &p.rank)
             .max();
         match below {
-            None => match self.patches.values().filter(|p| p.layer == layer).map(|p| &p.rank).min() {
+            None => match self.patches.values().filter(|p| p.anchor == anchor && p.layer == layer).map(|p| &p.rank).min() {
                 Some(first) => OrderKey::before(first),
                 None => OrderKey::first(),
             },
-            Some(b) => self.rank_above(layer, b),
+            Some(b) => self.rank_above_in(anchor, layer, b),
         }
     }
 
-    /// A distinct fractional `OrderKey` in `layer` strictly between `r` and
+    /// A distinct fractional `OrderKey` in `(None, layer)` strictly between `r` and
     /// the next existing rank above `r`.
     pub fn rank_above(&self, layer: u32, r: &OrderKey) -> OrderKey {
-        let next = self.patches.values().filter(|p| p.layer == layer && &p.rank > r).map(|p| &p.rank).min();
+        self.rank_above_in(None, layer, r)
+    }
+
+    /// A distinct fractional `OrderKey` in `(anchor, layer)` strictly between `r` and
+    /// the next existing rank above `r`.
+    pub fn rank_above_in(&self, anchor: Option<NodeId>, layer: u32, r: &OrderKey) -> OrderKey {
+        let next = self.patches.values().filter(|p| p.anchor == anchor && p.layer == layer && &p.rank > r).map(|p| &p.rank).min();
         match next {
             Some(hi) => OrderKey::between(Some(r), Some(hi)).expect("rank_above: hi > r"),
             None => OrderKey::after(r),
@@ -1546,28 +1632,60 @@ impl PatchTable {
 
     /// Derive structural layer precedence for a patch anchored at `anchor`
     /// inside a view whose enclosing scope chain is `scopes` (outermost first;
-    /// `engine.md` §2.3, `patches.md` §6.1, `EN-5a`).
+    /// `engine.md` §2.3, `patches.md` §6.1, `EN-5a`/`EN-5b`).
     ///
     /// Outermost wins by structure without globally renumbering `u32` layers:
     /// - `anchor == None` (document-level) -> `Some(usize::MAX - 1)` (outermost authored)
     /// - `anchor == Some(scope)` at index `pos` in `scopes` -> `Some(scopes.len() - 1 - pos)`
     /// - `anchor == Some(scope)` not in `scopes` -> `None` (cannot apply in this view)
-    pub fn derived_layer(anchor: Option<NodeId>, scopes: &[NodeId]) -> Option<usize> {
+    pub fn derived_layer(anchor: Option<NodeId>, scopes: &[(NodeId, usize)]) -> Option<usize> {
         match anchor {
             None => Some(usize::MAX - 1),
-            Some(scope) => scopes.iter().position(|&s| s == scope).map(|pos| scopes.len() - 1 - pos),
+            Some(scope) => scopes.iter().position(|&(s, _)| s == scope).map(|pos| scopes.len() - 1 - pos),
         }
+    }
+
+    /// Derived layer for patch `p` at `view`, handling recursive scope nesting
+    /// (`[A, B, A]`) by choosing the outermost matching scope index whose
+    /// subpath satisfies `p`'s instance selectors (`EN-5b`).
+    pub fn derived_layer_for(&self, p: &Patch, view: &ViewCoord) -> Option<usize> {
+        let Some(scope) = p.anchor else {
+            return Some(usize::MAX - 1);
+        };
+        let has_inst_sel = p
+            .region
+            .sels
+            .iter()
+            .any(|(a, sel)| matches!(sel, Sel::Suffix { .. }) && self.axes.get(a).is_some_and(|ax| ax.kind == AxisKind::Instance));
+        if !has_inst_sel {
+            return Self::derived_layer(Some(scope), &view.scopes);
+        }
+        view.scopes
+            .iter()
+            .enumerate()
+            .find(|&(_, &(s, start))| {
+                s == scope
+                    && start <= view.path.len()
+                    && p.region.sels.iter().all(|(a, sel)| {
+                        if matches!(sel, Sel::Suffix { .. }) && self.axes.get(a).is_some_and(|ax| ax.kind == AxisKind::Instance) {
+                            sel.contains_subpath(&view.path[start..])
+                        } else {
+                            true
+                        }
+                    })
+            })
+            .map(|(pos, _)| view.scopes.len() - 1 - pos)
     }
 
     /// Compare two patches within a virtual view: session layer first, then
     /// derived enclosing scope-chain layer (outermost scope wins), then stored
-    /// `(layer, rank, id)` within the same scope (`EN-5a`).
+    /// `(layer, rank, id)` within the same scope (`EN-5a`/`EN-5b`).
     pub fn compare_at_view(&self, p: &Patch, q: &Patch, view: &ViewCoord) -> Ordering {
         let eff_layer = |x: &Patch| -> usize {
             if x.layer == SESSION_LAYER {
                 usize::MAX
             } else {
-                Self::derived_layer(x.anchor, &view.scopes).unwrap_or(0)
+                self.derived_layer_for(x, view).unwrap_or(0)
             }
         };
         eff_layer(p)
@@ -1689,8 +1807,8 @@ impl PatchTable {
                 for q in self.patches_for_target(target.node) {
                     if q.id != p.id
                         && q.layer == p.layer
+                        && q.anchor == p.anchor
                         && q.entries.contains_key(&target)
-                        && anchor_covers(q.anchor, p.anchor)
                         && self.compare(q, p) == Ordering::Greater
                     {
                         left = left.minus(&q.region, &self.axes);
@@ -1730,9 +1848,9 @@ impl PatchTable {
         let mut out = Vec::new();
         for p in self.patches.values() {
             for q in self.patches.values() {
-                let inside = anchor_covers(q.anchor, p.anchor)
+                let inside = p.anchor == q.anchor
                     && p.region.within(&q.region, &self.axes)
-                    && !(anchor_covers(p.anchor, q.anchor) && q.region.within(&p.region, &self.axes));
+                    && !q.region.within(&p.region, &self.axes);
                 if p.id != q.id && p.layer == q.layer && inside && !p.region.void(&self.axes) && self.compare(p, q) == Ordering::Less {
                     out.push((p.id, q.id));
                 }
@@ -1812,12 +1930,25 @@ impl PatchTable {
                         return true;
                     }
                     if let PatchKey::Leaf(lp) = target.key {
-                        let self_adds_facet = p
-                            .entries
-                            .get(&PatchTarget { node: target.node, key: PatchKey::FacetPresent(lp.facet) })
-                            .and_then(|v| v.as_bool())
-                            == Some(true);
-                        return !self_adds_facet && !has_facet(x, target.node, lp.facet);
+                        let fp_target = PatchTarget { node: target.node, key: PatchKey::FacetPresent(lp.facet) };
+                        let self_adds_facet = p.entries.get(&fp_target).and_then(|v| v.as_bool()) == Some(true);
+                        if self_adds_facet || has_facet(x, target.node, lp.facet) {
+                            return false;
+                        }
+                        // Also check whether another derived-instance patch covering `p`'s
+                        // anchor/region enables `FacetPresent(lp.facet)` on the same target (M5).
+                        if uses_derived_inst {
+                            let peer_adds_facet = self.patches_for_target(target.node).any(|q| {
+                                q.layer < SESSION_LAYER
+                                    && anchor_covers(q.anchor, p.anchor)
+                                    && q.entries.get(&fp_target).and_then(|v| v.as_bool()) == Some(true)
+                                    && q.region.meets(&p.region, &self.axes)
+                            });
+                            if peer_adds_facet {
+                                return false;
+                            }
+                        }
+                        return true;
                     }
                     false
                 };
@@ -1896,7 +2027,7 @@ pub fn plan_drag(
     let mut prefix: Vec<Op> = Vec::new();
     if let PatchKey::Leaf(lp) = target.key {
         let leaf = Leaf { node: target.node, path: lp };
-        if layer < SESSION_LAYER && table.solve.contains_key(&(dp.clone(), leaf)) {
+        if layer < SESSION_LAYER && table.solve_get(&dp, leaf).is_some() {
             prefix.push(Op::Solve { point: dp, leaf, slot: None });
         }
     }
@@ -1912,7 +2043,7 @@ pub fn plan_drag(
     };
     let set_entry = |patch: PatchId| vec![Op::Patch(PatchOp::SetEntry { patch, target, value: Some(value.clone()) })];
     let add_patch = |region: Product, rank: Option<OrderKey>| {
-        let rank = rank.unwrap_or_else(|| table.default_rank(&region, layer));
+        let rank = rank.unwrap_or_else(|| table.default_rank_in(&region, anchor, layer));
         let patch = Patch {
             id: table.next_patch_id(),
             layer,
@@ -1935,10 +2066,10 @@ pub fn plan_drag(
             None => add_patch(edit.clone(), None),
         }));
     };
-    if win.layer > layer {
+    if win.layer > layer || (win.layer == layer && win.anchor.is_none() && anchor.is_some()) {
         return Err("an outer scope sets it here".into());
     }
-    if win.layer == layer && win.writable && anchor_covers(anchor, win.anchor) && win.region.within(edit, &table.axes) {
+    if win.layer == layer && win.writable && win.anchor == anchor && win.region.within(edit, &table.axes) {
         return Ok(finish(set_entry(win.id)));
     }
     let region = edit.intersect(&win.region, &table.axes);
@@ -1966,7 +2097,7 @@ pub fn plan_drag(
         .min_by(|a, b| table.compare(a, b));
     Ok(finish(match reuse {
         Some(q) => set_entry(q.id),
-        None if win.layer == layer => add_patch(region, Some(table.rank_above(layer, &win.rank))),
+        None if win.layer == layer && win.anchor == anchor => add_patch(region, Some(table.rank_above_in(anchor, layer, &win.rank))),
         None => add_patch(region, None),
     }))
 }
@@ -1983,9 +2114,9 @@ pub fn plan_split(table: &PatchTable, id: PatchId, targets: &[PatchTarget], regi
         .filter_map(|t| src.entries.get(t).map(|v| (*t, v.clone())))
         .collect();
     let rank = if region.same(&src.region, &table.axes) {
-        table.rank_above(src.layer, &src.rank)
+        table.rank_above_in(src.anchor, src.layer, &src.rank)
     } else {
-        table.default_rank(&region, src.layer)
+        table.default_rank_in(&region, src.anchor, src.layer)
     };
     let new = Patch {
         id: table.next_patch_id(),
@@ -2027,7 +2158,9 @@ pub fn plan_merge(table: &PatchTable, a: PatchId, b: PatchId) -> Result<Vec<Op>,
         .map(|(k, v)| (*k, v.clone()))
         .collect();
     for r in table.patches.values() {
-        let between = table.compare(r, weak) == Ordering::Greater && table.compare(strong, r) == Ordering::Greater;
+        let between = r.anchor == weak.anchor
+            && table.compare(r, weak) == Ordering::Greater
+            && table.compare(strong, r) == Ordering::Greater;
         if between && r.region.meets(&weak.region, &table.axes) && moving.iter().any(|(k, _)| r.entries.contains_key(k)) {
             return Err(format!("{} lies between them and sets what {} sets", r.id, weak.id));
         }
@@ -2040,10 +2173,10 @@ pub fn plan_merge(table: &PatchTable, a: PatchId, b: PatchId) -> Result<Vec<Op>,
     Ok(ops)
 }
 
-/// Plan reordering patch `id` to `rank` within its layer (distinct ranks enforced).
+/// Plan reordering patch `id` to `rank` within its `(anchor, layer)` (distinct ranks enforced).
 pub fn plan_reorder(table: &PatchTable, id: PatchId, rank: OrderKey) -> Result<Vec<Op>, String> {
     let src = table.patches.get(&id).ok_or_else(|| "no such patch".to_owned())?;
-    if table.patches.values().any(|q| q.id != id && q.layer == src.layer && q.rank == rank) {
+    if table.patches.values().any(|q| q.id != id && q.anchor == src.anchor && q.layer == src.layer && q.rank == rank) {
         return Err("another patch of the layer has that rank".into());
     }
     Ok(vec![Op::Patch(PatchOp::SetRank { patch: id, rank })])
@@ -2054,7 +2187,7 @@ pub fn plan_release_solve(table: &PatchTable, point: &Point, leaves: &[Leaf]) ->
     let dp = point.discrete();
     leaves
         .iter()
-        .filter(|l| table.solve.contains_key(&(dp.clone(), **l)))
+        .filter(|l| table.solve_get(&dp, **l).is_some())
         .map(|&leaf| Op::Solve { point: dp.clone(), leaf, slot: None })
         .collect()
 }
@@ -2063,10 +2196,13 @@ pub fn plan_release_solve(table: &PatchTable, point: &Point, leaves: &[Leaf]) ->
 /// (e.g. when a constraint holding an instance part is deleted, P17).
 pub fn plan_release_solve_all(table: &PatchTable, leaves: &[Leaf]) -> Vec<Op> {
     let want: BTreeSet<Leaf> = leaves.iter().copied().collect();
-    table
-        .solve
-        .keys()
-        .filter(|(_, l)| want.contains(l))
-        .map(|(dp, leaf)| Op::Solve { point: dp.clone(), leaf: *leaf, slot: None })
-        .collect()
+    let mut ops = Vec::new();
+    for (dp, entries) in &table.solve {
+        for &leaf in entries.keys() {
+            if want.contains(&leaf) {
+                ops.push(Op::Solve { point: dp.clone(), leaf, slot: None });
+            }
+        }
+    }
+    ops
 }

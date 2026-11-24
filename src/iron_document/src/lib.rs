@@ -2213,6 +2213,7 @@ impl StoreCore {
         let mut structural = false;
         // A failure part-way puts the document back exactly, through the
         // journal (reactive-engine handoff §4.4, stage 1).
+        let dirty_snap = self.owners.snapshot_dirty();
         self.docs.begin();
         for (i, op) in ops.iter().enumerate() {
             let in_session = match op {
@@ -2231,7 +2232,7 @@ impl StoreCore {
                 Ok(inverse) => undo.extend(inverse),
                 Err(e) => {
                     self.docs.rollback();
-                    self.owners.clear_on_rollback();
+                    self.owners.restore_on_rollback(dirty_snap);
                     return Err(e);
                 }
             }
@@ -4791,8 +4792,9 @@ impl StoreCore {
             return;
         }
         let delta = self.docs.take_resolved_delta();
+        let had_presence_change = delta.has_presence_change();
         if !delta.is_empty() {
-            if delta.has_presence_change() {
+            if had_presence_change {
                 self.geometry.note_structure();
                 self.docs.reshaped = stamp();
                 self.docs.tokens_shaped = stamp();
@@ -4803,12 +4805,14 @@ impl StoreCore {
         let tkeys = self.docs.drain_template_touched();
         self.owners.note_touched(&tkeys);
         let mut owner_structural = false;
+        let mut owner_ops: Vec<Op> = Vec::new();
         if let Some(which) = self.owners.take_dirty(&mut self.docs) {
             let stamp = self.docs.authored.version();
             let (ops, odelta) = self.owners.expand(&mut self.docs, stamp, &self.repeats, which);
             self.owners.apply(odelta);
             self.expansion_problems = self.owners.problems();
             if !ops.is_empty() {
+                self.update_drawn(ops.iter());
                 self.note_changes(ops.iter(), &[]);
                 self.geometry.note_ops(ops.iter());
                 for op in &ops {
@@ -4837,9 +4841,24 @@ impl StoreCore {
                         _ => {}
                     }
                 }
+                owner_ops = ops;
             }
         }
         let keys = self.docs.take_touched();
+        let touches_repeat = owner_structural
+            || had_presence_change
+            || keys.iter().any(|k| {
+                matches!(k, structure::Key::Facet(_, FacetKind::Repeat | FacetKind::When) | structure::Key::With(_, FacetKind::Repeat | FacetKind::When))
+                    || matches!(k, structure::Key::Leaf(Leaf { path, .. }) if matches!(path.facet, FacetKind::Repeat | FacetKind::When))
+            });
+        let owner_rescopes = owner_ops.iter().any(|op| match op {
+            Op::Create { facets, .. } => facets.iter().any(|f| matches!(f, Facet::Let(_) | Facet::Token(_))),
+            Op::AddFacet { facet, .. } => matches!(facet, Facet::Let(_) | Facet::Token(_)),
+            Op::RemoveFacet { kind, .. } => matches!(kind, FacetKind::Let | FacetKind::Token),
+            Op::Set { path, .. } => names_context(path),
+            Op::Delete { .. } => true,
+            _ => false,
+        });
         if keys.iter().any(|k| {
             matches!(k, structure::Key::Facet(_, FacetKind::Token))
                 || matches!(k, structure::Key::Leaf(Leaf { path, .. }) if path.facet == FacetKind::Token)
@@ -4883,7 +4902,8 @@ impl StoreCore {
         if structural {
             self.geometry.note_structure();
             let tokens = self.token_leaves();
-            self.reactive.restructure(Tree::of(&self.docs), &targets, graph::Rescope::No, &tokens, &leaves);
+            let rescope = if owner_rescopes { graph::Rescope::All } else { graph::Rescope::No };
+            self.reactive.restructure(Tree::of(&self.docs), &targets, rescope, &tokens, &leaves);
             self.resample();
         } else {
             let doc = Tree::of(&self.docs);
@@ -4899,7 +4919,7 @@ impl StoreCore {
             }
             self.resample_running();
         }
-        if owner_structural {
+        if touches_repeat {
             let _ = self.settle_repeats();
             self.sync_clusters();
         }
@@ -5525,6 +5545,7 @@ impl StoreCore {
                 .filter_map(|l| doc.leaf(l.node, l.path).map(|s| (l, s.clone())))
                 .collect()
         };
+        let dirty_snap = self.owners.snapshot_dirty();
         self.docs.begin();
         let docs = &mut self.docs;
         let stamp = docs.authored.version().next();
@@ -5600,7 +5621,7 @@ impl StoreCore {
         }
         if !errors.is_empty() {
             self.docs.rollback();
-            self.owners.clear_on_rollback();
+            self.owners.restore_on_rollback(dirty_snap);
             return Err(errors);
         }
         docs.authored.set_version(stamp);

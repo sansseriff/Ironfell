@@ -479,9 +479,72 @@ impl Docs {
         self.of_relation(id).remove_relation(id)
     }
 
+    /// All live derived descendants currently stored under `owner` in raw
+    /// storage (ignoring `ResolvedStore::absent` on `owner`), so an authored
+    /// owner made absent by a patch still cleans up its derived copies (`EN-5b`).
+    pub(crate) fn raw_derived_descendants(&self, owner: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = vec![owner];
+        while let Some(cur) = stack.pop() {
+            let children_a = self.authored.children(cur);
+            let children_c = if self.apart { self.copies.children(cur) } else { &[][..] };
+            for &c in children_a.iter().chain(children_c.iter()) {
+                let live = if self.apart && c.is_expanded() {
+                    self.copies.is_live(c)
+                } else {
+                    self.authored.is_live(c)
+                };
+                if live {
+                    if c.is_expanded() && c.path().first() == Some(&owner) {
+                        out.push(c);
+                    }
+                    stack.push(c);
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn apply_axis_op(&mut self, op: &crate::patch::AxisOp) -> Result<crate::patch::AxisOp, String> {
         let (inv, targets) = self.authored.apply_axis_op(op)?;
         if !targets.is_empty() {
+            for &t in &targets {
+                self.scoped_touched.note(crate::structure::Key::Patch(t));
+                if let Some(def) = self.authored.definition_of_raw(t) {
+                    self.scoped_touched.note(crate::structure::Key::Patch(def));
+                }
+            }
+            // Also wake any anchored patches referencing the mutated axis.
+            let axis_id = match op {
+                crate::patch::AxisOp::Add { axis } => Some(axis.id),
+                crate::patch::AxisOp::Remove { id } => Some(*id),
+                crate::patch::AxisOp::AddValue { axis, .. }
+                | crate::patch::AxisOp::RemoveValue { axis, .. }
+                | crate::patch::AxisOp::DeleteValue { axis, .. }
+                | crate::patch::AxisOp::RestoreValue { axis, .. }
+                | crate::patch::AxisOp::MoveValue { axis, .. } => Some(*axis),
+                crate::patch::AxisOp::SetOrder { .. } => None,
+            };
+            let wake_nodes: Vec<NodeId> = match axis_id {
+                Some(a) => self
+                    .authored
+                    .patches()
+                    .patches
+                    .values()
+                    .filter(|p| p.region.sels.contains_key(&a))
+                    .flat_map(|p| self.authored.patch_wake_nodes(p))
+                    .collect(),
+                None => self
+                    .authored
+                    .patches()
+                    .patches
+                    .values()
+                    .flat_map(|p| self.authored.patch_wake_nodes(p))
+                    .collect(),
+            };
+            for n in wake_nodes {
+                self.scoped_touched.note(crate::structure::Key::Patch(n));
+            }
             self.reconcile_resolved(Some(&targets));
         }
         Ok(inv)
@@ -510,35 +573,39 @@ impl Docs {
         let new_dp = point.discrete();
         self.point = point;
         let mut targets = BTreeSet::new();
+        let mut wake_nodes = Vec::new();
         for a in &changed {
             targets.extend(self.authored.patches().targets_for_axis(*a));
             let is_instance = self.authored.patches().axes.get(a).is_some_and(|ax| ax.kind == crate::patch::AxisKind::Instance);
+            for p in self.authored.patches().patches.values() {
+                if p.region.sels.contains_key(a) || (is_instance && p.anchor.is_some()) {
+                    wake_nodes.extend(self.authored.patch_wake_nodes(p));
+                }
+            }
             for p in self.session_patches.values() {
                 if p.region.sels.contains_key(a) || (is_instance && p.anchor.is_some()) {
                     targets.extend(p.entries.keys().map(|t| t.node));
                 }
             }
         }
-        // Emit Leaf keys for any solve-layer entry whose discrete point changed.
+        // Emit Leaf keys (never Patch keys) for solve-layer entries at old/new discrete point (O(delta)).
         if old_dp != new_dp && !self.authored.patches().solve.is_empty() {
-            let solve_leaves: Vec<crate::expr::Leaf> = self
-                .authored
-                .patches()
-                .solve
-                .keys()
-                .filter(|(dp, _)| *dp == old_dp || *dp == new_dp)
-                .map(|(_, l)| *l)
-                .collect();
+            let mut solve_leaves: Vec<crate::expr::Leaf> = Vec::new();
+            if let Some(m) = self.authored.patches().solve.get(&old_dp) {
+                solve_leaves.extend(m.keys().copied());
+            }
+            if let Some(m) = self.authored.patches().solve.get(&new_dp) {
+                solve_leaves.extend(m.keys().copied());
+            }
             for leaf in solve_leaves {
                 targets.insert(leaf.node);
                 self.scoped_touched.note(crate::structure::Key::Leaf(leaf));
-                self.scoped_touched.note(crate::structure::Key::Patch(leaf.node));
             }
         }
+        for n in wake_nodes {
+            self.scoped_touched.note(crate::structure::Key::Patch(n));
+        }
         if !targets.is_empty() {
-            for &t in &targets {
-                self.scoped_touched.note(crate::structure::Key::Patch(t));
-            }
             self.reconcile_resolved(Some(&targets));
             // Also emit Leaf keys for session-patched leaves on changed axes.
             for p in self.session_patches.values() {
@@ -561,25 +628,27 @@ impl Docs {
 
     /// Install or replace a session-layer patch (`SESSION_LAYER`, P8; never saved).
     /// Validated before mutation so an invalid patch never leaves queued keys.
+    /// Session patches are leaf-only and emit `Key::Leaf` only (not `Key::Patch`).
     pub(crate) fn set_session_patch(&mut self, mut patch: crate::patch::Patch) -> Result<Vec<crate::expr::Leaf>, String> {
         patch.layer = crate::patch::SESSION_LAYER;
         self.authored
             .patches()
-            .validate_session_patch(&patch, &|id| self.authored.node(id).map(|n| n.ty))?;
+            .validate_session_patch(&patch, &|id| {
+                let ty_node = id.expanded_parts().map(|(_, local)| local).unwrap_or(id);
+                self.authored.node(ty_node).map(|n| n.ty)
+            })?;
         let mut leaves = Vec::new();
         if let Some(old) = self.session_patches.insert(patch.id, patch.clone()) {
             for t in old.entries.keys() {
                 if let crate::patch::PatchKey::Leaf(lp) = t.key {
                     leaves.push(crate::expr::Leaf { node: t.node, path: lp });
                 }
-                self.scoped_touched.note(crate::structure::Key::Patch(t.node));
             }
         }
         for t in patch.entries.keys() {
             if let crate::patch::PatchKey::Leaf(lp) = t.key {
                 leaves.push(crate::expr::Leaf { node: t.node, path: lp });
             }
-            self.scoped_touched.note(crate::structure::Key::Patch(t.node));
         }
         for &l in &leaves {
             self.scoped_touched.note(crate::structure::Key::Leaf(l));
@@ -597,7 +666,6 @@ impl Docs {
                     leaves.push(l);
                     self.scoped_touched.note(crate::structure::Key::Leaf(l));
                 }
-                self.scoped_touched.note(crate::structure::Key::Patch(t.node));
             }
         }
         leaves
@@ -1654,13 +1722,51 @@ impl<'a> Tree<'a> {
         self.at(id).leaf(id, path)
     }
 
-    /// All unpatched base facets of a node from the authored document (EN-4b).
+    /// All unpatched base facets of a node from the authored document (EN-4b),
+    /// recording `FacetSet` + per-facet keys on a recording tree so `Template`
+    /// compilation stays point-independent and properly invalidated (`EN-5b`).
     pub fn base_facets_of(self, id: NodeId) -> impl Iterator<Item = &'a Facet> + 'a {
+        if self.rec.is_some() {
+            self.note(crate::structure::Key::FacetSet(id));
+            for f in self.at(id).facets_of(id) {
+                self.note(crate::structure::Key::Facet(id, f.kind()));
+            }
+        }
         self.at(id).facets_of(id)
     }
 
+    /// Unpatched authored liveness of `id` (ignoring `ResolvedStore::absent`),
+    /// recording `Key::Node(id)` (`EN-5b` point-independent template compilation).
+    pub(crate) fn base_live(self, id: NodeId) -> Option<&'a Node> {
+        self.note(crate::structure::Key::Node(id));
+        self.at(id).live(id)
+    }
+
+    /// Unpatched authored children of `id` (ignoring `ResolvedStore::absent`),
+    /// recording `Key::Children(id)` (`EN-5b`).
+    pub(crate) fn base_children(self, id: NodeId) -> &'a [NodeId] {
+        self.note(crate::structure::Key::Children(id));
+        self.at(id).children(id)
+    }
+
+    /// Unpatched authored descendants of `id` (ignoring `ResolvedStore::absent`),
+    /// recording `Key::Children` along the walk (`EN-5b`).
+    pub(crate) fn base_descendants(self, id: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            for &c in self.base_children(cur) {
+                if self.base_live(c).is_some() {
+                    out.push(c);
+                    stack.push(c);
+                }
+            }
+        }
+        out
+    }
+
     /// Dedicated system-owned solve-layer value for `leaf` at the active
-    /// discrete point (engine.md §2.4 Tier 4, P17).
+    /// discrete point (engine.md §2.4 Tier 4, P17) — zero heap allocations.
     pub(crate) fn solve_leaf(self, leaf: Leaf) -> Option<&'a crate::value::Value> {
         if self.doc.patches().solve.is_empty() {
             return None;
@@ -1668,8 +1774,9 @@ impl<'a> Tree<'a> {
         if !self.is_live(leaf.node) || !self.has(leaf.node, leaf.path.facet) {
             return None;
         }
-        let dp = self.point.map(|p| p.discrete()).unwrap_or_default();
-        self.doc.patches().solve.get(&(dp, leaf))?.constant()
+        static EMPTY_DISCRETE: crate::patch::DiscretePoint = BTreeMap::new();
+        let dp = self.point.map(|p| &p.values).unwrap_or(&EMPTY_DISCRETE);
+        self.doc.patches().solve_get(dp, leaf)?.constant()
     }
 
     /// Session-layer patch value for `leaf` at the active point (engine.md §2.4 Tier 1, P8).

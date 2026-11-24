@@ -268,32 +268,73 @@ pub fn make(doc: Tree<'_>, resolved: &dyn Fn(Leaf) -> Option<Value>, selection: 
     }
     // Move document-level instance override patches targeting the selected
     // entities or pictures into the new definition (anchored at `def`, `EN-5b`).
+    // Sort by original `(layer, rank, id)` so relative winner strength is preserved,
+    // allocate collision-free ranks per `(Some(def), layer)`, and remap `not`
+    // exclusions, targets, and references through `moved`/`moved_use`.
     let mut patch_ops: Vec<Op> = Vec::new();
     if let Some(inst_ax) = doc.patches().instance_axis_id() {
         let mut next_patch = doc.patches().next_patch_id().0;
-        let mut last_rank: Option<OrderKey> = None;
-        for p in doc.patches().patches.values() {
-            if p.anchor.is_some() {
-                continue;
+        let mut used_ranks: BTreeMap<u32, BTreeSet<OrderKey>> = BTreeMap::new();
+        let mut migrating: Vec<&crate::patch::Patch> = doc
+            .patches()
+            .patches
+            .values()
+            .filter(|p| {
+                p.anchor.is_none()
+                    && matches!(p.region.sels.get(&inst_ax), Some(crate::patch::Sel::Suffix { tail, .. }) if tail.first().is_some_and(|first| moved.contains_key(first) || moved_use.contains_key(first)))
+            })
+            .collect();
+        migrating.sort_by(|a, b| a.layer.cmp(&b.layer).then_with(|| a.rank.cmp(&b.rank)).then_with(|| a.id.cmp(&b.id)));
+        let remap_step = |n: NodeId| moved.get(&n).or_else(|| moved_use.get(&n)).copied().unwrap_or(n);
+        let remap_node = |n: NodeId| -> NodeId {
+            let path = n.path();
+            if let Some(&first) = path.first()
+                && let Some(&to) = moved.get(&first).or_else(|| moved_use.get(&first))
+            {
+                let mut p = vec![to];
+                p.extend_from_slice(&path[1..]);
+                return NodeId::from_path(&p).unwrap_or(n);
             }
+            n
+        };
+        for p in migrating {
             let Some(crate::patch::Sel::Suffix { tail, not }) = p.region.sels.get(&inst_ax) else { continue };
-            let Some(&first) = tail.first() else { continue };
-            let Some(&new_first) = moved.get(&first).or_else(|| moved_use.get(&first)) else { continue };
-            let mut new_tail = tail.clone();
-            new_tail[0] = new_first;
-            let new_region = p.region.clone().with(inst_ax, crate::patch::Sel::Suffix { tail: new_tail, not: not.clone() });
-            let rank = match &last_rank {
-                Some(prev) => OrderKey::after(prev),
-                None => doc.patches().default_rank(&new_region, p.layer),
-            };
-            last_rank = Some(rank.clone());
+            let new_tail: Vec<NodeId> = tail.iter().map(|&s| remap_step(s)).collect();
+            let new_not: Vec<Vec<NodeId>> = not
+                .iter()
+                .map(|excl| excl.iter().map(|&s| remap_step(s)).collect())
+                .collect();
+            let new_region = p.region.clone().with(inst_ax, crate::patch::Sel::Suffix { tail: new_tail, not: new_not });
+            let ranks = used_ranks.entry(p.layer).or_default();
+            let floor = ranks.iter().next_back().cloned();
+            let rank = crate::patch::PatchTable::alloc_rank(ranks, floor.as_ref());
+            ranks.insert(rank.clone());
             let new_id = crate::patch::PatchId(next_patch);
             next_patch += 1;
+            let new_entries = p
+                .entries
+                .iter()
+                .map(|(t, v)| {
+                    let nt = crate::patch::PatchTarget { node: remap_node(t.node), key: t.key };
+                    let nv = match v {
+                        crate::patch::PatchValue::Slot { slot } => crate::patch::PatchValue::Slot {
+                            slot: match slot {
+                                Slot::Bound(e) => Slot::Bound(e.map_refs(&|l: Leaf| Leaf { node: remap_node(l.node), path: l.path })),
+                                Slot::Const(Value::Ref(r)) => Slot::Const(Value::Ref(remap_node(*r))),
+                                other => other.clone(),
+                            },
+                        },
+                        other => other.clone(),
+                    };
+                    (nt, nv)
+                })
+                .collect();
             let mut cloned = p.clone();
             cloned.id = new_id;
             cloned.anchor = Some(def);
             cloned.region = new_region;
             cloned.rank = rank;
+            cloned.entries = new_entries;
             patch_ops.push(Op::Patch(crate::patch::PatchOp::Remove { id: p.id }));
             patch_ops.push(Op::Patch(crate::patch::PatchOp::Add { patch: cloned }));
         }

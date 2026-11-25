@@ -281,6 +281,10 @@ and owner-level demand reuses what `EN-8b` built.*
 - **No bridge cone in the first cut.** One cross-owner read keeps the whole source owner in
   demand. A scaling row in which a shown page reads one value from a hidden page shows the
   cost; a cone of only the cells read is added only if that row grows.
+- **As built (`EN-8c`, 2026-11-24):** `StoreCore::sync_demand`, `Reactive::rest` /
+  `wake_cells` / `pull`, `Store::pull_nodes` for host commands, `exact_all()` for export
+  and unscoped views. Still whole-document: `scratch()` wakes every resting cell of its
+  clone for an edit plan (`EN-9`).
 - **Local pass scheduling** (`EN-8a`, done): ranks are computed over the dirty cone only
   (`compute_local_ranks`, `raise_queued`); no global heights.
 

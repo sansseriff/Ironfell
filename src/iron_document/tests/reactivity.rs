@@ -1187,30 +1187,33 @@ fn setting_run_to_always_on_a_hidden_page_starts_it() {
     assert!(acc(&store) > 0.5, "run = always set mid-run: the accumulator stepped: {}", acc(&store));
 }
 
-/// §8.7's idle sweep: at rest, an unobserved composition's stale pictures
-/// are brought up to date a few at a time, and then nothing is woken.
+/// EN-8a: at rest, an unobserved composition's cells stay resting with zero
+/// idle-sweep wakeups, and catch up in one pass as soon as the composition is
+/// observed.
 #[test]
-fn at_rest_stale_pictures_are_swept_up_to_date() {
+fn at_rest_unobserved_pictures_stay_resting_until_observed() {
     let (mut all, ..) = two_tabs();
-    let (mut store, t, a, _, rects) = two_tabs();
+    let (mut store, t, a, b, rects) = two_tabs();
     let p = store.register_producer("host");
     all.register_producer("host");
     store.set_observe_all(false);
-    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let obs = store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
     let at = BTreeMap::from([(Leaf { node: t, path: path("let.value") }, Value::Number(7.0))]);
     store.publish(p, at.clone());
     all.publish(p, at);
     assert!(store.reactive().stale_count() > 0);
+    let before = store.reactive().evaluations;
     let out = store.advance(1.0);
-    assert_eq!(out.wake.next, Some(1.0), "published since the last frame: not at rest, called again");
-    assert!(store.reactive().stale_count() > 0);
-    let out = store.advance(1.05);
-    assert_eq!(out.wake.next, None, "swept in one frame, nothing left to call back for");
+    assert_eq!(out.wake.next, None, "no idle-sweep wakeup at rest");
+    assert_eq!(store.reactive().evaluations, before, "no hidden evaluations at rest");
+    assert!(store.reactive().stale_count() > 0, "hidden cells stay resting until needed");
+    assert_eq!(store.advance(1.05).changed, false, "stays at rest");
+    // Showing the hidden composition catches it up cleanly in one pass.
+    store.reobserve(obs, Interest::Region { composition: b, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
     assert_eq!(store.reactive().stale_count(), 0);
     for &r in &rects {
         assert_eq!(store.resolved(r, path("transform2d.x")), all.resolved(r, path("transform2d.x")));
     }
-    assert_eq!(store.advance(1.1).changed, false, "then at rest");
 }
 
 /// Compositions `$a` and `$b` with what `body` holds (it names them), a
@@ -1537,12 +1540,13 @@ fn a_publish_every_frame_leaves_hidden_pictures_resting() {
         store.advance(f64::from(i) / 60.0);
     }
     assert_eq!(store.reactive().evaluations - before, 10, "the shown rect, once a frame");
-    // At rest: swept, then a publish costs the shown rect only again.
-    store.advance(1.0);
-    assert_eq!(store.reactive().stale_count(), 0);
+    // At rest: no idle sweep wakes hidden pictures, and another publish still costs the shown rect only.
+    let rest_before = store.reactive().evaluations;
+    assert_eq!(store.advance(1.0).wake.next, None);
+    assert_eq!(store.reactive().evaluations, rest_before);
     let before = store.reactive().evaluations;
     store.publish(p, at(11.0));
-    assert_eq!(store.reactive().evaluations - before, 1, "the sweep left nothing needed");
+    assert_eq!(store.reactive().evaluations - before, 1, "hidden pictures stayed resting");
 }
 
 /// A cycle check waits for the whole pass, not only what it reads

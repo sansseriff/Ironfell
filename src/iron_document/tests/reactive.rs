@@ -124,8 +124,6 @@ fn diamond_is_glitch_free_and_cutoff_stops_propagation() {
             ],
         ))
         .unwrap();
-    assert_eq!(store.reactive().height(Leaf { node: bar, path: path("size.w") }), Some(1));
-    assert_eq!(store.reactive().height(Leaf { node: bar, path: path("size.h") }), Some(2));
     store.take_changes();
 
     let before = store.reactive().evaluations;

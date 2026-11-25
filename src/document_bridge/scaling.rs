@@ -255,17 +255,17 @@ impl Ctx {
         self.store.advance(self.now).changed
     }
 
-    /// Step until nothing is stale and a frame changes nothing.
+    /// Step until a frame changes nothing.
     fn settle(&mut self) {
         let mut quiet = 0;
         for _ in 0..400 {
             let changed = self.frame();
-            quiet = if !changed && self.store.reactive().stale_count() == 0 { quiet + 1 } else { 0 };
+            quiet = if !changed { quiet + 1 } else { 0 };
             if quiet == 2 {
                 return;
             }
         }
-        panic!("the store did not settle: {} stale", self.store.reactive().stale_count());
+        panic!("the store did not settle");
     }
 
     fn apply(&mut self, label: &str, ops: Vec<Op>) {

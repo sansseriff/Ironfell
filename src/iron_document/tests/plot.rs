@@ -305,17 +305,18 @@ fn a_hidden_plot_s_transition_holds_part_way() {
     let mid = pose(&store);
     assert_eq!(mid, pose(&reference));
     store.reobserve(id, region(other));
-    // Hidden from 1.2 s: nothing is reported moving, and once the idle
-    // sweep has brought the hidden pictures up to date they show 1.2 s.
+    // Hidden from 1.2 s: nothing is reported moving, and hidden pictures stay
+    // resting (no idle sweep, EN-8a) until the page is shown again.
     for k in 0..20 {
         let out = store.advance(1.2 + k as f64 * 0.1);
         assert!(out.wake.live.is_empty(), "the hidden plot is reported moving at {}", 1.2 + k as f64 * 0.1);
     }
+    assert_eq!(pose(&store), mid, "hidden pictures stayed resting while unobserved");
     reference.advance(1.2);
-    assert_eq!(pose(&store), pose(&reference), "held at 1.2 s while hidden");
-    assert_ne!(pose(&store), mid, "it moved before it was hidden");
-    assert_ne!(pose(&store)[2], Some(Value::Number(0.0)), "part-way");
     store.reobserve(id, region(bench));
+    assert_eq!(pose(&store), pose(&reference), "held at 1.2 s when shown again");
+    assert_ne!(pose(&store), mid, "it moved before its clock paused at 1.2 s");
+    assert_ne!(pose(&store)[2], Some(Value::Number(0.0)), "part-way");
     for (wall, local) in [(4.0, 1.2), (4.05, 1.25), (4.15, 1.35), (5.0, 2.2)] {
         store.advance(wall);
         reference.advance(local);

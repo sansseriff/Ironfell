@@ -56,12 +56,11 @@ thread_local! {
 }
 
 /// The large maps `Counted` wraps, by the name a report gives them.
-pub const MAP_NAMES: [&str; 25] = [
+pub const MAP_NAMES: [&str; 24] = [
     "graph.nodes",
     "graph.dependents",
     "graph.natives",
     "graph.unneeded",
-    "graph.stale",
     "graph.runtime",
     "graph.held",
     "graph.owned",
@@ -89,27 +88,26 @@ pub const GRAPH_NODES: usize = 0;
 pub const GRAPH_DEPENDENTS: usize = 1;
 pub const GRAPH_NATIVES: usize = 2;
 pub const GRAPH_UNNEEDED: usize = 3;
-pub const GRAPH_STALE: usize = 4;
-pub const GRAPH_RUNTIME: usize = 5;
-pub const GRAPH_HELD: usize = 6;
-pub const GRAPH_OWNED: usize = 7;
-pub const GRAPH_CLAIMS: usize = 8;
-pub const GRAPH_BASE_READERS: usize = 9;
-pub const GRAPH_DERIVED: usize = 10;
-pub const GRAPH_RESOLVED: usize = 11;
-pub const GRAPH_CANDIDATES: usize = 12;
-pub const STORE_PRESENCE: usize = 13;
-pub const STORE_ITEM_MEMO: usize = 14;
-pub const STORE_REPEATS: usize = 15;
-pub const STORE_OBSERVERS: usize = 16;
-pub const STORE_CLUSTERS: usize = 17;
-pub const MACHINES: usize = 18;
-pub const STEPS: usize = 19;
-pub const QUERIES: usize = 20;
-pub const CLOCKS: usize = 21;
+pub const GRAPH_RUNTIME: usize = 4;
+pub const GRAPH_HELD: usize = 5;
+pub const GRAPH_OWNED: usize = 6;
+pub const GRAPH_CLAIMS: usize = 7;
+pub const GRAPH_BASE_READERS: usize = 8;
+pub const GRAPH_DERIVED: usize = 9;
+pub const GRAPH_RESOLVED: usize = 10;
+pub const GRAPH_CANDIDATES: usize = 11;
+pub const STORE_PRESENCE: usize = 12;
+pub const STORE_ITEM_MEMO: usize = 13;
+pub const STORE_REPEATS: usize = 14;
+pub const STORE_OBSERVERS: usize = 15;
+pub const STORE_CLUSTERS: usize = 16;
+pub const MACHINES: usize = 17;
+pub const STEPS: usize = 18;
+pub const QUERIES: usize = 19;
+pub const CLOCKS: usize = 20;
 /// The readers of one leaf or native, as a pass visits them (`Readers`).
-pub const GRAPH_READERS: usize = 23;
-pub const PRODUCER_PUBLISHED: usize = 24;
+pub const GRAPH_READERS: usize = 22;
+pub const PRODUCER_PUBLISHED: usize = 23;
 
 /// Count `n` units of work at `site`.
 #[inline(always)]

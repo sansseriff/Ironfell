@@ -405,9 +405,6 @@ impl ThemeMaker {
 /// chain, bounded for a loop.
 const RESOLVES: usize = 4;
 
-/// Stale cells an idle `advance` brings up to date (§8.7).
-const IDLE_SWEEP: usize = 256;
-
 /// Settles that read every drawn repeat's inputs, since the process
 /// started: what RE-5.4's demonstrations count.
 static SETTLE_SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -607,10 +604,6 @@ pub struct StoreCore {
     clocks: clocks::Clocks,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
-    /// The graph's propagation count as the last `advance` ended: when it
-    /// has not moved since, nothing published or changed in between, and
-    /// the store is at rest for the idle sweep.
-    evaluated_at: u64,
     /// What the host shows (§8.2), and whether everything counts as shown
     /// (`observe_all`: the default, and the differential reference).
     observers: work::Counted<BTreeMap<ObserverId, Interest>, { work::STORE_OBSERVERS }>,
@@ -760,7 +753,6 @@ impl StoreCore {
             presence_at: self.presence_at,
             clocks: self.clocks.clone(),
             advanced_at: self.advanced_at,
-            evaluated_at: self.evaluated_at,
             advanced: self.advanced.clone(),
             observers: self.observers.clone(),
             next_observer: self.next_observer,
@@ -919,7 +911,6 @@ impl StoreCore {
             presence_at: None,
             clocks: clocks::Clocks::default(),
             advanced_at: None,
-            evaluated_at: 0,
             advanced: (BTreeSet::new(), Vec::new()),
             observers: Default::default(),
             next_observer: 0,
@@ -3665,22 +3656,12 @@ impl StoreCore {
         let (was_live, was_waiting) = std::mem::take(&mut self.advanced);
         // Anything moving keeps time going, whether or not it is drawn in a
         // composition (a trace at the root driving a shape in one; the
-        // playhead with nothing animated).
+        // playhead with nothing animated). Unneeded cells stay at rest until
+        // observed or pulled, tracked via epoch version stamps (`EN-8a`).
         let active = !moving.is_empty() || !running.is_empty() || !stepping.is_empty() || !waiting.is_empty() || !entering.is_empty() || playing;
-        // At rest, cells nothing observed needs are brought up to date a
-        // few at a time (§8.7), calling again until none is stale. Not on a
-        // frame something was published or written since the last: a host
-        // producer moving every frame would make the sweep evaluate each
-        // frame what necessity saved.
-        let rest = !active && !read && self.reactive.propagations == self.evaluated_at;
-        let swept = rest && self.reactive.sweep(Tree::of(&self.docs), IDLE_SWEEP);
-        if swept {
-            self.settle(SettleMode::Live { clusters: true });
-        }
-        let changed = active || swept || read || !was_live.is_empty() || waiting != was_waiting;
-        let next = (active || self.reactive.stale_count() > 0).then_some(now);
+        let changed = active || read || !was_live.is_empty() || waiting != was_waiting;
+        let next = active.then_some(now);
         self.advanced = (live.clone(), waiting);
-        self.evaluated_at = self.reactive.propagations;
         Advanced { wake: Wake { next, live }, queries, changed }
     }
 

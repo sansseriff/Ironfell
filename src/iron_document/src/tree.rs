@@ -261,8 +261,6 @@ pub(crate) struct Docs {
     /// Each node deleted since the changes were last taken, as it was when it went.
     pub(crate) gone: crate::changes::Gone,
     gone_journal: Option<Vec<(NodeId, Option<crate::changes::Went>)>>,
-    /// Gate cache stamp (`op::reshapes`).
-    pub(crate) reshaped: u64,
 }
 
 impl Docs {
@@ -279,7 +277,6 @@ impl Docs {
             pending_view_delta: ViewDelta::default(),
             gone: Default::default(),
             gone_journal: None,
-            reshaped: crate::stamp(),
         }
     }
 
@@ -497,15 +494,6 @@ impl Docs {
             &mut self.gone,
             &mut self.gone_journal,
         );
-        if !delta.created.is_empty()
-            || !delta.removed.is_empty()
-            || !delta.moved.is_empty()
-            || !delta.rels_added.is_empty()
-            || !delta.rels_removed.is_empty()
-            || delta.slots.iter().any(|l| matches!(l.path.facet, FacetKind::Embed | FacetKind::EmbedCamera | FacetKind::Use | FacetKind::Instance))
-        {
-            self.reshaped = crate::stamp();
-        }
         delta
     }
 
@@ -573,7 +561,6 @@ impl Docs {
     }
 
     pub(crate) fn rollback(&mut self) {
-        self.reshaped = crate::stamp();
         self.authored.rollback();
         self.views.rollback();
         self.scoped_touched.keys.clear();
@@ -828,6 +815,13 @@ impl<'a> Tree<'a> {
     pub fn roots(self) -> &'a [NodeId] {
         self.note(crate::structure::Key::Roots);
         self.doc.roots()
+    }
+
+    /// O(1) top-level root containing live node `id` (authored or expanded),
+    /// via `ScopedIndexes::root_of`. Unkeyed — used only by internal indexes.
+    pub(crate) fn root_of(self, id: NodeId) -> Option<NodeId> {
+        let anchor = id.expanded_root().unwrap_or(id);
+        self.scoped?.root_of.get(&anchor).copied()
     }
 
     pub fn last_root(self) -> Option<NodeId> {

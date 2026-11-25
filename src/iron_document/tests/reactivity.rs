@@ -1619,3 +1619,141 @@ fn a_publish_only_hidden_pictures_read_leaves_them_resting() {
     }
     assert_eq!(store.reactive().evaluations - before, 0, "nothing shown reads h");
 }
+
+/// EN-8b: a dynamic cross-owner `deref` activates a hidden composition's clock
+/// while reading it, pauses it when the read drops, and resumes without jumping
+/// over the paused interval when re-attached.
+#[test]
+fn cross_owner_deref_activates_and_pauses_hidden_accumulator() {
+    let (mut store, _, p, n) = split(
+        r#"<let id="$sel" name="sel" value="0"/>
+        <composition id="$a" name="a" dims="2d">
+          <rect id="$m" x="{= deref($sel, 'accumulate.value', 0)}" y="0" w="1" h="1"/>
+        </composition>
+        <composition id="$b" name="b" dims="2d">
+          <accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/>
+        </composition>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+    let mx = |s: &Store| s.resolved(n["$m"], path("transform2d.x")).and_then(|v| v.as_f64()).unwrap();
+
+    // Initially $sel = 0: $b is hidden and unread, so $acc stays at 0.
+    store.advance(0.0);
+    store.advance(0.5);
+    assert_eq!(acc(&store), 0.0, "unobserved and unread: paused");
+    assert_eq!(mx(&store), 0.0);
+
+    // Point $sel at $acc: cross-owner read activates $b.
+    store.publish(p, lets(&[(n["$sel"], Value::Ref(n["$acc"]))]));
+    for k in 6..=11 {
+        store.advance(k as f64 * 0.1);
+    }
+    let after_run = acc(&store);
+    assert!(after_run > 4.0 && after_run < 7.0, "active via cross-owner deref: {after_run}");
+    assert!((mx(&store) - after_run).abs() < 1e-6);
+
+    // Drop the cross-owner read: $b pauses again and does not advance.
+    store.publish(p, lets(&[(n["$sel"], Value::Number(0.0))]));
+    for k in 12..=50 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!((acc(&store) - after_run).abs() < 1e-6, "paused again after read dropped");
+
+    // Re-attach the cross-owner read: $b resumes cleanly without jumping over the 3.9s pause.
+    store.publish(p, lets(&[(n["$sel"], Value::Ref(n["$acc"]))]));
+    for k in 51..=56 {
+        store.advance(k as f64 * 0.1);
+    }
+    let after_resume = acc(&store);
+    let delta = after_resume - after_run;
+    assert!(delta > 4.0 && delta < 7.0, "resumed without jumping across pause: delta={delta}");
+}
+
+/// EN-8b: reparenting an accumulator from a hidden composition into an observed
+/// composition re-owns it and starts it immediately; undoing pauses it again.
+#[test]
+fn reparenting_an_accumulator_into_an_observed_composition_starts_it() {
+    let (mut store, _, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d">
+          <accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/>
+        </composition>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+
+    for k in 0..=5 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert_eq!(acc(&store), 0.0, "in hidden $b: paused");
+
+    // Reparent $acc into observed $a.
+    store.apply(tx("move", vec![Op::Reparent { id: n["$acc"], parent: Some(n["$a"]), order: OrderKey::first() }])).unwrap();
+    for k in 6..=11 {
+        store.advance(k as f64 * 0.1);
+    }
+    let moved = acc(&store);
+    assert!(moved > 4.0, "in observed $a: running ({moved})");
+
+    // Undo moves $acc back to hidden $b and pauses it again.
+    store.undo(1).unwrap().unwrap();
+    for k in 12..=20 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!((acc(&store) - moved).abs() < 1e-6, "back in hidden $b: paused");
+}
+
+/// EN-8b: unpicturing a model entity (removing its `Figures` relation from a
+/// hidden composition) transitions its owner from `Entity(e)` to `Free` so it
+/// runs freely; undoing restores `Entity(e)` ownership and pauses it again.
+#[test]
+fn unpicturing_an_entity_transitions_its_owner_to_free() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit>
+          <definition id="$def" name="d"/>
+          <model name="model">
+            <entity id="$e" name="e" instance.def="$def">
+              <accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/>
+            </entity>
+          </model>
+          <composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+          <composition id="$b" name="b" dims="2d"><rect id="$fig" x="0" y="0" w="1" h="1"/></composition>
+          <link rel="figures" from="$fig" to="$e"/>
+        </edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("setup", plan.ops)).unwrap();
+    let n = plan.aliases;
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$a"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+
+    // $e is pictured only in hidden $b, so its owner Entity($e) is paused.
+    for k in 0..=5 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert_eq!(acc(&store), 0.0, "pictured only in hidden $b: paused");
+
+    // Unlink the Figures relation: $e becomes Free and runs immediately.
+    let fig_rel = store
+        .tree()
+        .relations()
+        .find(|r| r.rel == RelKind::Figures && r.from == n["$fig"] && r.to == n["$e"])
+        .expect("figures relation")
+        .id;
+    store.apply(tx("unfigure", vec![Op::Unlink { id: fig_rel }])).unwrap();
+    for k in 6..=11 {
+        store.advance(k as f64 * 0.1);
+    }
+    let free_val = acc(&store);
+    assert!(free_val > 4.0, "unpictured entity is Free and runs ({free_val})");
+
+    // Undo restores the Figures link to hidden $b, re-owning $e as Entity($e) and pausing it.
+    store.undo(1).unwrap().unwrap();
+    for k in 12..=20 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!((acc(&store) - free_val).abs() < 1e-6, "re-pictured in hidden $b: paused again");
+}

@@ -687,10 +687,14 @@ pub struct Reactive {
     /// Counts the times cells were made or remade: a binding made since a
     /// native last ran may close a cycle through what it already read.
     structure: u64,
-    /// A stamp taken whenever an edge (who reads what) or a native changes,
-    /// unique across graphs (`crate::stamp`): the gate's cache key
-    /// (`Store::gate`), so it decides again only when readers change.
-    wired: u64,
+    /// Cells whose reactive dependency edges changed since `take_edge_changes`
+    /// (`EN-8b`, replacing `wired` and `reader_nodes`).
+    edge_changed_cells: BTreeSet<CellId>,
+    /// True after `rebuild` until `take_edge_changes` drains it.
+    edges_rebuilt: bool,
+    /// Query nodes whose output leaves gained or lost a reactive dependent
+    /// since `take_query_dep_changed` (`EN-8b`, replacing full `queries.prune`).
+    query_dep_changed: BTreeSet<NodeId>,
     /// The inputs the store set (`set_input`).
     inputs: BTreeMap<InputKey, Held>,
     /// The natives that read each input.
@@ -726,9 +730,79 @@ impl Clone for Escaped {
 }
 
 impl Reactive {
-    /// The wiring stamp: changes whenever who reads what does.
-    pub(crate) fn wired(&self) -> u64 {
-        self.wired
+    /// Drain cells whose reactive edges changed since the last take, plus
+    /// whether a full `rebuild` occurred (`EN-8b`).
+    pub(crate) fn take_edge_changes(&mut self) -> (BTreeSet<CellId>, bool) {
+        (std::mem::take(&mut self.edge_changed_cells), std::mem::take(&mut self.edges_rebuilt))
+    }
+
+    /// Drain query nodes whose output leaves gained or lost a reactive reader.
+    pub(crate) fn take_query_dep_changed(&mut self) -> BTreeSet<NodeId> {
+        std::mem::take(&mut self.query_dep_changed)
+    }
+
+    /// Whether `c` is currently a live cell in the graph.
+    pub(crate) fn cell_exists(&self, c: CellId) -> bool {
+        self.exists(c)
+    }
+
+    /// Every live cell id (used only on initial `OwnerIndex::rebuild`).
+    pub(crate) fn all_cell_ids(&self) -> Vec<CellId> {
+        self.nodes.keys().map(|&l| CellId::Leaf(l)).chain(self.natives.keys().map(|&k| CellId::Native(k))).collect()
+    }
+
+    /// The nodes where cell `c` runs, and whether it always runs as `Owner::Free`
+    /// (a rooted network island).
+    pub(crate) fn cell_reader_nodes(&self, c: CellId) -> (Vec<NodeId>, bool) {
+        match c {
+            CellId::Leaf(l) => (vec![l.node], false),
+            CellId::Native(k) => {
+                let Some(native) = self.natives.get(&k) else {
+                    return (Vec::new(), false);
+                };
+                let always_free = native.rooted && matches!(k, NativeKey::Island(_));
+                let outputs = native.rule.outputs();
+                let mut nodes: Vec<NodeId> = if outputs.is_empty() {
+                    vec![k.node()]
+                } else {
+                    outputs.iter().map(|o| o.node).collect()
+                };
+                nodes.sort_unstable();
+                nodes.dedup();
+                (nodes, always_free)
+            }
+        }
+    }
+
+    /// The leaves cell `c` reads (for `OwnerIndex` cross-owner edge accounting).
+    pub(crate) fn cell_read_leaves(&self, c: CellId) -> Vec<Leaf> {
+        match c {
+            CellId::Leaf(l) => self.nodes.get(&l).map(|n| n.deps.iter().chain(&n.tracked).copied().collect()).unwrap_or_default(),
+            CellId::Native(k) => self.natives.get(&k).map(|n| n.reads.iter().copied().collect()).unwrap_or_default(),
+        }
+    }
+
+    /// Collect every cell on `nodes` (bindings + owned natives) and every cell
+    /// that reads a leaf on `nodes` (used only when a subtree changes owner).
+    pub(crate) fn cells_for_nodes(&self, nodes: &[NodeId], out: &mut BTreeSet<CellId>) {
+        for &n in nodes {
+            for (l, _) in self.nodes.range(first_leaf(n)..).take_while(|(l, _)| l.node == n) {
+                out.insert(CellId::Leaf(*l));
+            }
+            for (_, k) in self.owned.range(first_leaf(n)..).take_while(|(l, _)| l.node == n) {
+                out.insert(CellId::Native(*k));
+            }
+            for (_, ds) in self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n) {
+                out.extend(ds.iter().copied());
+            }
+        }
+    }
+
+    fn note_dep_edge(&mut self, leaf: Leaf, cell: CellId) {
+        self.edge_changed_cells.insert(cell);
+        if leaf.path.facet == FacetKind::Query {
+            self.query_dep_changed.insert(leaf.node);
+        }
     }
 
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
@@ -1123,39 +1197,6 @@ impl Reactive {
         (wake, count)
     }
 
-    /// The nodes where the cells reading any of `nodes` run, added to
-    /// `out`: a binding at its own node, a native where a node it writes is,
-    /// or at its own when it writes none. True when one runs everywhere (a
-    /// rooted island: the network integrates). For the gate
-    /// (`Store::paused`), which decides over every hidden composition's
-    /// readers at once.
-    pub(crate) fn reader_nodes(&self, nodes: impl IntoIterator<Item = NodeId>, out: &mut BTreeSet<NodeId>) -> bool {
-        let mut always = false;
-        for n in nodes {
-            for (_, ds) in self.dependents.range(first_leaf(n)..).take_while(|(l, _)| l.node == n) {
-                for d in ds {
-                    match d {
-                        CellId::Leaf(l) => {
-                            out.insert(l.node);
-                        }
-                        CellId::Native(k) => {
-                            let Some(native) = self.natives.get(k) else { continue };
-                            if native.rooted && matches!(k, NativeKey::Island(_)) {
-                                always = true;
-                            }
-                            let outputs = native.rule.outputs();
-                            if outputs.is_empty() {
-                                out.insert(k.node());
-                            }
-                            out.extend(outputs.iter().map(|o| o.node));
-                        }
-                    }
-                }
-            }
-        }
-        always
-    }
-
     /// Need every cell again, bringing the stale ones up to date: what a
     /// transaction and a structure change start from, so that what they
     /// read and write is exact. Whether it evaluated anything.
@@ -1471,7 +1512,8 @@ impl Reactive {
         self.leaf_changed_at.clear();
         self.key_changed_at.clear();
         self.structure += 1;
-        self.wired = crate::stamp();
+        self.edges_rebuilt = true;
+        self.edge_changed_cells.clear();
         let old_bound: BTreeSet<Leaf> = self.nodes.keys().copied().collect();
         self.nodes.clear();
         self.dependents.clear();
@@ -1725,10 +1767,10 @@ impl Reactive {
             let old: Vec<Leaf> = self.nodes.get_mut(l).map(|n| std::mem::take(&mut n.tracked).into_iter().collect()).unwrap_or_default();
             if !old.is_empty() {
                 self.note_edge_gone();
-                self.wired = crate::stamp();
                 self.prime_key(crate::structure::Key::Wiring(*l));
             }
             for t in old {
+                self.note_dep_edge(t, *c);
                 if let Some(ds) = self.dependents.get_mut(&t) {
                     ds.remove(c);
                     if ds.is_empty() {
@@ -1830,15 +1872,17 @@ impl Reactive {
     fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: Expr, tokens: &BTreeMap<String, Leaf>) {
         self.drop_cell(leaf);
         self.structure += 1;
-        self.wired = crate::stamp();
         let mut deps = expr.deps();
         for n in expr.tokens() {
             self.token_readers_by.entry(n).or_default().insert(leaf);
         }
         let (ctx, tracks, _, rec_keys) = resolve_cell_structure(doc, leaf, &expr, tokens);
         deps.extend(ctx.values().copied());
+        let cell = CellId::Leaf(leaf);
+        self.edge_changed_cells.insert(cell);
         for d in &deps {
-            self.dependents.entry(*d).or_default().insert(CellId::Leaf(leaf));
+            self.dependents.entry(*d).or_default().insert(cell);
+            self.note_dep_edge(*d, cell);
         }
         self.index_cell_keys(leaf, rec_keys);
         self.nodes.insert(
@@ -1875,9 +1919,10 @@ impl Reactive {
             self.claim_came_or_went(leaf);
         }
         self.conflict(leaf);
-        self.wired = crate::stamp();
         let cell = CellId::Leaf(leaf);
+        self.edge_changed_cells.insert(cell);
         for d in old.deps.iter().chain(&old.tracked) {
+            self.note_dep_edge(*d, cell);
             if let Some(ds) = self.dependents.get_mut(d) {
                 ds.remove(&cell);
                 if ds.is_empty() {
@@ -2081,9 +2126,18 @@ impl Reactive {
         }
     }
 
-    /// Wait on `nodes` (the machine player's instances): a change to any
-    /// leaf of one, or of an expanded copy it owns, wakes it.
-    pub(crate) fn watch_nodes(&mut self, nodes: BTreeSet<NodeId>) {
+    /// Incrementally watch or unwatch one entity node (`EN-8b`).
+    pub(crate) fn watch_node(&mut self, node: NodeId) {
+        self.watched_nodes.insert(node);
+    }
+
+    pub(crate) fn unwatch_node(&mut self, node: NodeId) {
+        self.watched_nodes.remove(&node);
+        self.woken_nodes.remove(&node);
+    }
+
+    /// Clear and replace watched nodes (only on `rebuild_owners`).
+    pub(crate) fn set_watched_nodes(&mut self, nodes: BTreeSet<NodeId>) {
         self.woken_nodes.retain(|n| nodes.contains(n));
         self.watched_nodes = nodes;
     }
@@ -2093,9 +2147,18 @@ impl Reactive {
         std::mem::take(&mut self.woken_nodes)
     }
 
-    /// Wait on `leaves` (a held trace's input): a change to one is kept
-    /// until `take_woken`, so a player need not visit what did not change.
-    pub(crate) fn watch(&mut self, leaves: BTreeSet<Leaf>) {
+    /// Incrementally watch or unwatch one leaf (a held trace's or query's input, `EN-8b`).
+    pub(crate) fn watch_leaf(&mut self, leaf: Leaf) {
+        self.watched.insert(leaf);
+    }
+
+    pub(crate) fn unwatch_leaf(&mut self, leaf: Leaf) {
+        self.watched.remove(&leaf);
+        self.woken.remove(&leaf);
+    }
+
+    /// Clear and replace watched leaves (only on `rebuild_owners` / mode switch).
+    pub(crate) fn set_watched_leaves(&mut self, leaves: BTreeSet<Leaf>) {
         self.woken.retain(|l| leaves.contains(l));
         self.watched = leaves;
     }
@@ -2457,6 +2520,7 @@ impl Reactive {
                             self.blocked.insert(cell);
                         } else {
                             for gone in old.difference(&tracked) {
+                                self.note_dep_edge(*gone, cell);
                                 if let Some(ds) = self.dependents.get_mut(gone) {
                                     ds.remove(&cell);
                                     if ds.is_empty() {
@@ -2474,10 +2538,10 @@ impl Reactive {
                                 }
                             }
                             if tracked != old {
-                                self.wired = crate::stamp();
                                 self.prime_key(crate::structure::Key::Wiring(leaf));
                             }
                             for new in tracked.difference(&old) {
+                                self.note_dep_edge(*new, cell);
                                 self.dependents.entry(*new).or_default().insert(cell);
                             }
                             // A newly read cell still waiting in this pass:
@@ -2664,10 +2728,8 @@ impl Reactive {
         self.natives.get_mut(&k).expect("native").checked = self.structure;
         // Its edges: what it read this time.
         let old = std::mem::take(&mut self.natives.get_mut(&k).expect("native").reads);
-        if old != reads {
-            self.wired = crate::stamp();
-        }
         for gone in old.difference(&reads) {
+            self.note_dep_edge(*gone, cell);
             if let Some(ds) = self.dependents.get_mut(gone) {
                 ds.remove(&cell);
                 if ds.is_empty() {
@@ -2684,6 +2746,7 @@ impl Reactive {
             }
         }
         for new in reads.difference(&old) {
+            self.note_dep_edge(*new, cell);
             self.dependents.entry(*new).or_default().insert(cell);
         }
         let old_base = std::mem::take(&mut self.natives.get_mut(&k).expect("native").base);
@@ -3321,12 +3384,13 @@ impl Reactive {
         let mut released: Vec<Leaf> = Vec::new();
         let mut runs_of: BTreeMap<NativeKey, u64> = BTreeMap::new();
         self.structure += 1;
-        self.wired = crate::stamp();
         if batch.iter().any(|(k, _)| matches!(k, NativeKey::Component(_))) {
             self.components_rev += 1;
         }
         for (k, new) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
+            let cell = CellId::Native(*k);
+            self.edge_changed_cells.insert(cell);
             if new.is_none()
                 && old.rule.producer() == ProducerId::LAYOUT
                 && let Some(g) = self.glide.as_mut()
@@ -3338,8 +3402,8 @@ impl Reactive {
                     }
                 }
             }
-            let cell = CellId::Native(*k);
             for r in &old.reads {
+                self.note_dep_edge(*r, cell);
                 if let Some(ds) = self.dependents.get_mut(r) {
                     ds.remove(&cell);
                     if ds.is_empty() {
@@ -3406,6 +3470,7 @@ impl Reactive {
         for (k, new) in batch {
             let Some((rule, rooted)) = new else { continue };
             let cell = CellId::Native(k);
+            self.edge_changed_cells.insert(cell);
             for o in rule.outputs() {
                 debug_assert!(self.owned.get(o).is_none_or(|o2| *o2 == k), "{o} owned twice");
                 self.owned.insert(*o, k);

@@ -296,6 +296,20 @@ impl Player {
         self.last_clock = None;
     }
 
+    /// Forget one deleted entity in O(1), returning any leaves it published
+    /// so the caller withdraws them without forcing a full `machines` scan (`EN-8b`).
+    pub(crate) fn forget(&mut self, entity: NodeId) -> Vec<Leaf> {
+        self.moving.remove(&entity);
+        self.clocked.remove(&entity);
+        self.snap.remove(&entity);
+        self.running.retain(|r| r.entity != entity);
+        let keys: Vec<(NodeId, NodeId)> = self.known.range((entity, NodeId::from_raw(0))..).map(|(&k, _)| k).take_while(|(e, _)| *e == entity).collect();
+        for k in keys {
+            self.known.remove(&k);
+        }
+        self.shown.remove(&entity).into_iter().flat_map(|m| m.into_keys()).collect()
+    }
+
     /// Advance to `now` (seconds on the host's clock). Answers the channel
     /// values to publish (only those away from rest), and what is running.
     /// `time` is each entity's time at `now` and whether its clock is

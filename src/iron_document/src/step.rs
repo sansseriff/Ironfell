@@ -17,7 +17,7 @@
 //!   length is not republished, so nothing changes and no frame is drawn.
 
 use crate::Tree;
-use crate::clocks::Clocks;
+use crate::clocks::{Clocks, OwnerIndex};
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::expr::Leaf;
@@ -127,18 +127,14 @@ impl Steps {
         [leaf(n, FacetKind::Trace, "of"), leaf(n, FacetKind::Trace, "delay")]
     }
 
-    /// Forget the steppers no longer live (`live` holds every one): what
-    /// they published, to withdraw.
-    pub(crate) fn prune(&mut self, live: &std::collections::BTreeSet<NodeId>) -> Vec<Leaf> {
+    /// Forget one deleted stepper node in O(1), returning any leaves it
+    /// published so the caller withdraws them (`EN-8b`, replacing O(all) `prune`).
+    pub(crate) fn forget(&mut self, n: NodeId) -> Vec<Leaf> {
         let mut gone = Vec::new();
-        let traces: Vec<NodeId> = self.traces.keys().copied().filter(|n| !live.contains(n)).collect();
-        for n in traces {
-            self.traces.remove(&n);
+        if self.traces.remove(&n).is_some() {
             gone.extend(["out", "dash", "ages", "values"].map(|f| leaf(n, FacetKind::Trace, f)));
         }
-        let accs: Vec<NodeId> = self.values.keys().copied().filter(|n| !live.contains(n)).collect();
-        for n in accs {
-            self.values.remove(&n);
+        if self.values.remove(&n).is_some() {
             gone.extend(["value", "dt"].map(|f| leaf(n, FacetKind::Accumulate, f)));
         }
         gone.retain(|l| self.shown.remove(l).is_some());
@@ -152,7 +148,7 @@ impl Steps {
     /// otherwise: its value and its trace's changes in flight stand, as
     /// published (DS-2: nothing visits a paused page each frame). Answers
     /// what changed, to publish, and the nodes still changing.
-    pub(crate) fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clocks: &Clocks, traces: &[NodeId], accs: &[NodeId], woken: &[NodeId]) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
+    pub(crate) fn advance(&mut self, doc: Tree<'_>, read: &dyn Fn(Leaf) -> Option<Value>, now: f64, clocks: &Clocks, owners: &OwnerIndex, traces: &[NodeId], accs: &[NodeId], woken: &[NodeId]) -> (BTreeMap<Leaf, Value>, Vec<NodeId>) {
         let presentation = now;
         let mut out = BTreeMap::new();
         let mut active = Vec::new();
@@ -166,7 +162,7 @@ impl Steps {
             if !doc.is_live(n) {
                 continue;
             }
-            let now = clocks.time(doc, n, presentation);
+            let now = clocks.time(doc, owners, n, presentation);
             let f = |field| leaf(n, FacetKind::Trace, field);
             let delay = read(f("delay")).and_then(|v| v.as_f64()).filter(|d| d.is_finite()).unwrap_or(0.0).max(0.0);
             let ring = self.traces.entry(n).or_default();
@@ -196,7 +192,7 @@ impl Steps {
             put(&mut self.shown, f("dash"), dash);
             put(&mut self.shown, f("ages"), ages);
             put(&mut self.shown, f("values"), values);
-            if busy && !clocks.held(doc, n) {
+            if busy && !clocks.held(doc, owners, n) {
                 active.push(n);
             }
         }
@@ -209,7 +205,7 @@ impl Steps {
             let before = self.values.get(&n).cloned();
             let bound = doc.leaf(n, f("next").path).is_some_and(|s| s.expr().is_some());
             let value = match &before {
-                Some(v) if clocks.held(doc, n) => v.clone(),
+                Some(v) if clocks.held(doc, owners, n) => v.clone(),
                 Some(v) if !reset => if bound { read(f("next")).unwrap_or_else(|| v.clone()) } else { v.clone() },
                 _ => read(f("initial")).unwrap_or(Value::Number(0.0)),
             };

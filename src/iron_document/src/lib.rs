@@ -576,15 +576,17 @@ pub struct StoreCore {
     machines: machine::Player,
     /// Traces and accumulators (step.rs): presentation state.
     steps: step::Steps,
-    /// The traces and accumulators on running clocks, as the gate last
-    /// decided: what the step player visits each frame (DS-2).
-    running_steps: (Vec<NodeId>, Vec<NodeId>),
-    /// The machine player visits every instance at its next advance: the
-    /// structure changed (DS-2: otherwise only what changed).
+    /// The traces and accumulators on running clocks, maintained incrementally
+    /// by `sync_owners` / `sync_gate` (`EN-8b`).
+    running_steps: (BTreeSet<NodeId>, BTreeSet<NodeId>),
+    /// The machine player visits every instance at its next advance (only on
+    /// load or when a definition/machine/state/transition/tween/channel changes).
     machines_full: bool,
+    /// Specific entities to visit at the next `advance_machines` (`EN-8b`).
+    machines_dirty: BTreeSet<NodeId>,
     /// The clips animating something on a running clock, and the
-    /// compositions they animate, as the gate last decided.
-    running_clips: Vec<NodeId>,
+    /// compositions they animate, maintained incrementally (`EN-8b`).
+    running_clips: BTreeSet<NodeId>,
     animated: BTreeSet<NodeId>,
     /// Where the last clip ends, kept until the clips or keys change.
     clips_end: Option<f64>,
@@ -602,6 +604,21 @@ pub struct StoreCore {
     /// Each composition's and pictured entity's clock, which the gate
     /// pauses while nothing shows or reads it (clocks.rs).
     clocks: clocks::Clocks,
+    /// Incremental owner & cross-owner read index (`EN-8b`).
+    owner_index: clocks::OwnerIndex,
+    /// Currently active owners as last decided by `sync_gate` (`EN-8b`).
+    active_owners: BTreeSet<clocks::Owner>,
+    /// Whether `sync_gate` must recompute `active_owners` (observers, embeds,
+    /// `composition.run`, `Figures`, or `comp_accumulators` changed).
+    gate_dirty: bool,
+    /// True after `set_observe_all` flips so `sync_gate` does a mode-switch sync.
+    gate_mode_switched: bool,
+    /// True once `sync_gate` has run at least once.
+    gate_initialized: bool,
+    /// Newly created compositions or newly pictured entities not yet gated.
+    new_owners: BTreeSet<clocks::Owner>,
+    /// Cells whose owner changed (pictured/unpictured entity or cross-owner reparent).
+    owner_dirty_cells: BTreeSet<graph::CellId>,
     /// The host time of the last `advance`: the playhead player's step.
     advanced_at: Option<f64>,
     /// What the host shows (§8.2), and whether everything counts as shown
@@ -741,6 +758,7 @@ impl StoreCore {
             steps: self.steps.clone(),
             running_steps: self.running_steps.clone(),
             machines_full: true,
+            machines_dirty: self.machines_dirty.clone(),
             // What runs, as the gate decided (it is copied): a plan that
             // edits a key samples the clips it runs (council review of DS-2).
             running_clips: self.running_clips.clone(),
@@ -752,6 +770,13 @@ impl StoreCore {
             presence_moving: self.presence_moving.clone(),
             presence_at: self.presence_at,
             clocks: self.clocks.clone(),
+            owner_index: self.owner_index.clone(),
+            active_owners: self.active_owners.clone(),
+            gate_dirty: self.gate_dirty,
+            gate_mode_switched: self.gate_mode_switched,
+            gate_initialized: self.gate_initialized,
+            new_owners: self.new_owners.clone(),
+            owner_dirty_cells: self.owner_dirty_cells.clone(),
             advanced_at: self.advanced_at,
             advanced: self.advanced.clone(),
             observers: self.observers.clone(),
@@ -901,7 +926,8 @@ impl StoreCore {
             steps: step::Steps::default(),
             running_steps: Default::default(),
             machines_full: true,
-            running_clips: Vec::new(),
+            machines_dirty: BTreeSet::new(),
+            running_clips: BTreeSet::new(),
             animated: BTreeSet::new(),
             clips_end: None,
             theme_maker: ThemeMaker::default(),
@@ -910,6 +936,13 @@ impl StoreCore {
             presence_moving: BTreeSet::new(),
             presence_at: None,
             clocks: clocks::Clocks::default(),
+            owner_index: clocks::OwnerIndex::default(),
+            active_owners: BTreeSet::new(),
+            gate_dirty: false,
+            gate_mode_switched: false,
+            gate_initialized: false,
+            new_owners: BTreeSet::new(),
+            owner_dirty_cells: BTreeSet::new(),
             advanced_at: None,
             advanced: (BTreeSet::new(), Vec::new()),
             observers: Default::default(),
@@ -968,6 +1001,7 @@ impl StoreCore {
         store.resolve_physics();
         store.embed_topology.rebuild(Tree::of(&store.docs));
         store.docs.cyclic_embeds = Some(store.embed_topology.cyclic_embeds().clone());
+        store.rebuild_owners();
         // Initial load already ran rebuild and resolve_physics from scratch;
         // leave the touched log empty before the first transaction.
         let _ = store.docs.take_touched();
@@ -1492,20 +1526,13 @@ impl StoreCore {
         self.reactive.publish(Tree::of(&self.docs), ProducerId::CLIPS, sample.values);
     }
 
-    /// Sample the clips animating something on a running clock (as the
-    /// gate last decided), publishing what changed: the playhead moving, a
-    /// constant set. A clip on a paused page holds its value until its page
-    /// runs again, when the gate decides again and every clip is sampled
-    /// (DS-2).
-    fn resample_running(&mut self) {
-        // Before the gate has decided, and with everything observed, every
-        // clip runs.
-        if self.observe_all || self.clocks.gated.is_none() {
-            return self.resample();
+    /// Sample `clips` at `self.time` and publish only deltas (`EN-8b`).
+    fn sample_clip_subset(&mut self, clips: &[NodeId]) {
+        if clips.is_empty() {
+            return;
         }
-        let clips = self.running_clips.clone();
         let sample = time::sample_clips(Tree::of(&self.docs), self.time, clips.iter().copied());
-        for c in &clips {
+        for c in clips {
             self.time_errors.remove(c);
         }
         self.time_errors.extend(sample.errors);
@@ -1527,6 +1554,21 @@ impl StoreCore {
         if !sample.values.is_empty() || !gone.is_empty() {
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::CLIPS, sample.values, &gone);
         }
+    }
+
+    /// Sample the clips animating something on a running clock (as the
+    /// gate last decided), publishing what changed: the playhead moving, a
+    /// constant set. A clip on a paused page holds its value until its page
+    /// runs again, when the gate decides again and newly-running clips are
+    /// sampled (DS-2, EN-8b).
+    fn resample_running(&mut self) {
+        // Before the gate has decided, and with everything observed, every
+        // clip runs.
+        if self.observe_all || !self.gate_initialized {
+            return self.resample();
+        }
+        let clips: Vec<NodeId> = self.running_clips.iter().copied().collect();
+        self.sample_clip_subset(&clips);
     }
 
     /// Name a host producer of runtime signals (a simulation, a Model) and
@@ -2069,6 +2111,7 @@ impl StoreCore {
         self.note_changes(ops.iter(), &undo, None);
         self.geometry.note_ops(ops.iter());
         self.sync_embed_topology(&ops, &undo, None);
+        self.sync_owners(&ops, &undo, None);
         // Single recorded-read sync handles both structural and constant
         // session edits and marks moved session leaves for the host.
         self.sync_touched(true);
@@ -2295,9 +2338,7 @@ impl StoreCore {
                     expand::sort_problems(&mut self.expansion_problems);
                 }
             }
-            if structural {
-                self.sync_touched(false);
-            }
+            let clip_touched = if structural { self.sync_touched(false) } else { false };
             unset.retain(|l| !set.contains_key(l));
             if !set.is_empty() || !unset.is_empty() {
                 self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::ITEMS, set, &unset);
@@ -2305,7 +2346,9 @@ impl StoreCore {
             // An item that has just joined starts unseen, in this same pass.
             self.publish_presence();
             if structural {
-                self.resample();
+                if clip_touched {
+                    self.resample();
+                }
                 self.publish_state();
             }
             // What the round's publishing and structure ran.
@@ -2317,6 +2360,7 @@ impl StoreCore {
             let net = self.docs.views.finish_net();
             self.geometry.note_views(&net);
             self.sync_embed_topology(&[], &[], Some(&net));
+            self.sync_owners(&[], &[], Some(&net));
             return net;
         }
         // An enclosing transaction (`settle_tx`) owns the open net window and
@@ -2355,7 +2399,7 @@ impl StoreCore {
         self.presence_at = Some(now);
         let mut gone = false;
         let mut active = Vec::new();
-        let (doc, clocks) = (Tree::of(&self.docs), &self.clocks);
+        let (doc, clocks, owner_index) = (Tree::of(&self.docs), &self.clocks, &self.owner_index);
         let moving: Vec<NodeId> = self.presence_moving.iter().copied().collect();
         for r in moving {
             let Some(p) = self.presence.get_mut(&r) else {
@@ -2363,7 +2407,7 @@ impl StoreCore {
                 continue;
             };
             // On a paused clock (clocks.rs) items hold where they are.
-            if clocks.held(doc, r) {
+            if clocks.held(doc, owner_index, r) {
                 continue;
             }
             let (enter_ms, exit_ms) = (p.enter_ms, p.exit_ms);
@@ -3054,9 +3098,8 @@ impl StoreCore {
     }
 
     pub fn advance_machines(&mut self, now: f64) -> Vec<machine::Running> {
-        // Which instances are watched is the gate's to keep (`gate`); a
-        // caller playing machines alone asks it here.
-        self.gate(now);
+        // Which instances are watched is maintained incrementally by `sync_owners` / `sync_gate`.
+        self.sync_gate(now);
         // A pin whose state is gone (deleted, or a rename undone) lets go.
         if let Some(pin) = &self.machines.pinned
             && !machine::state_names(Tree::of(&self.docs), pin.machine).contains(&pin.state)
@@ -3071,17 +3114,26 @@ impl StoreCore {
         const ROUNDS: usize = 8;
         let mut running = Vec::new();
         let mut moving = None;
-        // Every instance after a structural change (the gate decided),
-        // else those whose leaves or copies changed (the graph wakes them,
-        // `watch_nodes`), and the player's own moving and clocked ones.
-        let mut visit: Option<BTreeSet<NodeId>> = if std::mem::take(&mut self.machines_full) { None } else { Some(self.reactive.take_woken_nodes()) };
+        // Every instance after a definition/machine change (`machines_full`),
+        // else those whose leaves or copies changed (`watch_nodes`), entities
+        // whose owner just paused/resumed/changed (`machines_dirty`), and the
+        // player's own moving and clocked ones (`EN-8b`).
+        let dirty_entities = std::mem::take(&mut self.machines_dirty);
+        let mut visit: Option<BTreeSet<NodeId>> = if std::mem::take(&mut self.machines_full) {
+            None
+        } else {
+            let mut set = self.reactive.take_woken_nodes();
+            set.extend(dirty_entities);
+            Some(set)
+        };
         for round in 0..=ROUNDS {
             let (set, unset, now_running) = {
                 let reactive = &self.reactive;
                 let doc = Tree::of(&self.docs);
                 let read = |l: Leaf| reactive.read(doc, l);
                 let clocks = &self.clocks;
-                self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, e, now), clocks.held(doc, e)), visit.as_ref())
+                let owners = &self.owner_index;
+                self.machines.advance(doc, &read, now, self.time(), &|e, now| (clocks.time(doc, owners, e, now), clocks.held(doc, owners, e)), visit.as_ref())
             };
             running = now_running;
             // A leaf the graph holds against the machines (bound, or a
@@ -3114,8 +3166,8 @@ impl StoreCore {
     }
 
     pub fn advance_queries(&mut self, now: f64) -> Vec<query::Request> {
-        // Which queries are live is the gate's to keep (`gate`).
-        self.gate(now);
+        // Which queries are live is maintained incrementally by `sync_owners` / `sync_gate`.
+        self.sync_gate(now);
         let woken = self.take_woken(FacetKind::Query);
         self.queries.touch(woken);
         let (values, due) = {
@@ -3158,9 +3210,10 @@ impl StoreCore {
         // which, `gate`), and only what changed is published (DS-2).
         // Which run is the gate's to say; a caller stepping alone (not
         // through `advance`) asks it here. A cache hit costs nothing.
-        self.gate(now);
+        self.sync_gate(now);
         let dt = self.steps.tick(now);
-        let (traces, accs) = self.running_steps.clone();
+        let traces: Vec<NodeId> = self.running_steps.0.iter().copied().collect();
+        let accs: Vec<NodeId> = self.running_steps.1.iter().copied().collect();
         if !accs.is_empty() {
             let first = Value::Number(1.0 / 60.0);
             let mut set = BTreeMap::new();
@@ -3190,12 +3243,12 @@ impl StoreCore {
                 }
             }
         }
-        let woken: Vec<NodeId> = self.take_woken(FacetKind::Trace).into_iter().filter(|n| !traces.contains(n)).collect();
+        let woken: Vec<NodeId> = self.take_woken(FacetKind::Trace).into_iter().filter(|n| !self.running_steps.0.contains(n)).collect();
         let (values, active) = {
             let reactive = &self.reactive;
             let doc = Tree::of(&self.docs);
             let read = |l: Leaf| reactive.read(doc, l);
-            self.steps.advance(doc, &read, now, &self.clocks, &traces, &accs, &woken)
+            self.steps.advance(doc, &read, now, &self.clocks, &self.owner_index, &traces, &accs, &woken)
         };
         if !values.is_empty() {
             self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, values, &[]);
@@ -3209,6 +3262,7 @@ impl StoreCore {
         let id = ObserverId(self.next_observer);
         self.next_observer += 1;
         self.observers.insert(id, interest);
+        self.gate_dirty = true;
         self.necessity();
         id
     }
@@ -3219,12 +3273,14 @@ impl StoreCore {
             && *i != interest
         {
             *i = interest;
+            self.gate_dirty = true;
             self.necessity();
         }
     }
 
     pub fn unobserve(&mut self, id: ObserverId) {
         if self.observers.remove(&id).is_some() {
+            self.gate_dirty = true;
             self.necessity();
         }
     }
@@ -3235,6 +3291,8 @@ impl StoreCore {
     pub fn set_observe_all(&mut self, all: bool) {
         if self.observe_all != all {
             self.observe_all = all;
+            self.gate_dirty = true;
+            self.gate_mode_switched = true;
             self.necessity();
         }
     }
@@ -3385,6 +3443,7 @@ impl StoreCore {
         *expanded = net;
         self.geometry.note_views(expanded);
         self.sync_embed_topology(&tx.ops, full_inverse, Some(expanded));
+        self.sync_owners(&tx.ops, full_inverse, Some(expanded));
         summary
     }
 
@@ -3451,64 +3510,693 @@ impl StoreCore {
         out
     }
 
-    /// Pause the clocks of what nothing shows or reads (clocks.rs; the
-    /// gate of handoff-patches.md PT-1.2): every composition no observer
-    /// shows, and every entity pictured only there, unless something
-    /// running reads it or its composition's `run` is `always` (PT-1.3).
-    /// Nothing is paused while everything is observed.
-    fn gate(&mut self, now: f64) {
-        let key: clocks::GateKey = (self.docs.reshaped, self.reactive.wired(), if self.observe_all { Vec::new() } else { self.observed_compositions() });
-        // Nothing the decision reads changed: the clocks stand as they are,
-        // and nothing is cloned or walked (DS-2).
-        if !self.observe_all && self.clocks.gated.as_ref().is_some_and(|(k, ..)| *k == key) {
+    fn is_owner_active(&self, owner: clocks::Owner) -> bool {
+        self.observe_all || !self.gate_initialized || self.active_owners.contains(&owner)
+    }
+
+    fn recompute_animated(&mut self) {
+        self.animated.clear();
+        for &clip in &self.running_clips {
+            if let Some(owners) = self.owner_index.clip_targets.get(&clip) {
+                for owner in owners.keys() {
+                    if let clocks::Owner::Composition(c) = *owner {
+                        self.animated.insert(c);
+                    }
+                }
+            }
+        }
+    }
+
+    /// One-time full build of `owner_index` and incremental player caches on
+    /// `StoreCore::new` / `StoreCore::load` (`EN-8b`).
+    fn rebuild_owners(&mut self) {
+        self.owner_index.rebuild(Tree::of(&self.docs), &self.reactive);
+        let _ = self.reactive.take_edge_changes();
+        let _ = self.reactive.take_query_dep_changed();
+        self.reactive.set_watched_nodes(self.owner_index.entity_owner.keys().copied().collect());
+        self.reactive.set_watched_leaves(self.owner_index.live_queries.iter().flat_map(|&q| query::Queries::input_leaves(q)).collect());
+        self.running_steps = (
+            self.owner_index.trace_owner.keys().copied().collect(),
+            self.owner_index.acc_owner.keys().copied().collect(),
+        );
+        self.running_clips = self.owner_index.clip_targets.keys().copied().collect();
+        self.recompute_animated();
+        self.queries.touch(self.owner_index.live_queries.iter().copied());
+        self.machines_full = true;
+        self.machines_dirty.clear();
+        self.active_owners.clear();
+        self.new_owners.clear();
+        self.owner_dirty_cells.clear();
+        self.gate_initialized = false;
+        self.gate_dirty = false;
+        self.gate_mode_switched = false;
+    }
+
+    /// Incrementally maintain `owner_index`, `running_steps`, `running_clips`,
+    /// `queries`, `machines`, and `reactive` watches from committed ops and
+    /// net `ViewDelta` without scanning the document (`EN-8b`).
+    fn sync_owners(&mut self, ops: &[Op], inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
+        let comp_ty = TypeId::lookup("composition").expect("registered");
+        let entity_ty = TypeId::lookup("entity").expect("registered");
+        let clip_ty = TypeId::lookup("clip").expect("registered");
+        let def_ty = TypeId::lookup("definition").expect("registered");
+        let machine_ty = TypeId::lookup("machine").expect("registered");
+        let state_ty = TypeId::lookup("state").expect("registered");
+        let transition_ty = TypeId::lookup("transition").expect("registered");
+        let tween_ty = TypeId::lookup("tween").expect("registered");
+        let channel_ty = TypeId::lookup("channel").expect("registered");
+
+        let is_machine_def_ty = |t: TypeId| {
+            t == def_ty || t == machine_ty || t == state_ty || t == transition_ty || t == tween_ty || t == channel_ty
+        };
+
+        let mut touched_nodes: BTreeSet<NodeId> = BTreeSet::new();
+        let mut reparent_old_parent: BTreeMap<NodeId, Option<NodeId>> = BTreeMap::new();
+        let mut reparent_new_parent: BTreeMap<NodeId, Option<NodeId>> = BTreeMap::new();
+        let mut added_rels: Vec<Relation> = Vec::new();
+        let mut removed_rel_ids: Vec<RelationId> = Vec::new();
+        let mut entity_leaf_touched: BTreeSet<NodeId> = BTreeSet::new();
+
+        for op in ops {
+            match op {
+                Op::Create { id, ty, .. } => {
+                    touched_nodes.insert(*id);
+                    if is_machine_def_ty(*ty) {
+                        self.machines_full = true;
+                    }
+                }
+                Op::Delete { id } => {
+                    touched_nodes.insert(*id);
+                }
+                Op::Reparent { id, parent, .. } => {
+                    touched_nodes.insert(*id);
+                    reparent_new_parent.insert(*id, *parent);
+                }
+                Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
+                    touched_nodes.insert(*id);
+                }
+                Op::Set { id, path, .. } => {
+                    if path.facet == FacetKind::Composition && path.field == "run" {
+                        touched_nodes.insert(*id);
+                    }
+                    entity_leaf_touched.insert(*id);
+                }
+                Op::Link { rel } => {
+                    if matches!(rel.rel, RelKind::Figures | RelKind::Animates) {
+                        added_rels.push(rel.clone());
+                    }
+                }
+                Op::Unlink { id } => {
+                    removed_rel_ids.push(*id);
+                }
+                Op::Reorder { .. } | Op::Solve { .. } => {}
+            }
+        }
+        for op in inverse {
+            match op {
+                Op::Create { id, ty, .. } => {
+                    touched_nodes.insert(*id);
+                    if is_machine_def_ty(*ty) {
+                        self.machines_full = true;
+                    }
+                }
+                Op::Reparent { id, parent, .. } => {
+                    reparent_old_parent.entry(*id).or_insert(*parent);
+                }
+                Op::Link { rel } => {
+                    // `Op::Link` in `inverse` means `rel` was removed (via `Unlink` or cascading `Delete`).
+                    if matches!(rel.rel, RelKind::Figures | RelKind::Animates) {
+                        removed_rel_ids.push(rel.id);
+                    }
+                }
+                Op::Unlink { id } => {
+                    // `Op::Unlink` in `inverse` means `id` was added (already in `added_rels`).
+                    let _ = id;
+                }
+                Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
+                    touched_nodes.insert(*id);
+                }
+                Op::Set { id, path, .. } => {
+                    if path.facet == FacetKind::Composition && path.field == "run" {
+                        touched_nodes.insert(*id);
+                    }
+                }
+                Op::Reorder { .. } | Op::Solve { .. } => {}
+            }
+        }
+
+        let mut moved_views: Vec<(NodeId, NodeId, NodeId)> = Vec::new();
+        if let Some(vd) = views {
+            for &(id, _, _, ty) in vd.created.iter().chain(&vd.removed) {
+                touched_nodes.insert(id);
+                if is_machine_def_ty(ty) {
+                    self.machines_full = true;
+                }
+            }
+            for &(id, old_p, new_p) in &vd.moved {
+                touched_nodes.insert(id);
+                if old_p != new_p {
+                    moved_views.push((id, old_p, new_p));
+                }
+            }
+            for &id in &vd.facet_shaped {
+                touched_nodes.insert(id);
+            }
+            for r in &vd.rels_removed {
+                if matches!(r.rel, RelKind::Figures | RelKind::Animates) {
+                    removed_rel_ids.push(r.id);
+                }
+            }
+            for r in &vd.rels_added {
+                if matches!(r.rel, RelKind::Figures | RelKind::Animates) {
+                    added_rels.push(r.clone());
+                }
+            }
+        }
+
+        // Check whether any `Op::Set` touched a machine definition node or an entity.
+        {
+            let doc = Tree::of(&self.docs);
+            for id in entity_leaf_touched {
+                if let Some(ty) = doc.ty_of(id) {
+                    if is_machine_def_ty(ty) {
+                        self.machines_full = true;
+                    } else if ty == entity_ty {
+                        self.machines_dirty.insert(id);
+                    }
+                }
+                if let Some((owner, _)) = id.expanded_parts()
+                    && doc.ty_of(owner) == Some(entity_ty)
+                {
+                    self.machines_dirty.insert(owner);
+                }
+            }
+        }
+
+        // 1. Update live compositions and `run_always`.
+        {
+            let doc = Tree::of(&self.docs);
+            for &id in &touched_nodes {
+                let is_live_comp = doc.live(id).is_some_and(|n| n.ty == comp_ty);
+                if is_live_comp {
+                    if self.owner_index.compositions.insert(id) {
+                        self.new_owners.insert(clocks::Owner::Composition(id));
+                        self.gate_dirty = true;
+                    }
+                    let always = composition::run_mode(doc, id) == composition::RunMode::Always;
+                    let was = self.owner_index.run_always.contains(&id);
+                    if always != was {
+                        if always {
+                            self.owner_index.run_always.insert(id);
+                        } else {
+                            self.owner_index.run_always.remove(&id);
+                        }
+                        self.gate_dirty = true;
+                    }
+                } else if self.owner_index.compositions.remove(&id) {
+                    self.owner_index.run_always.remove(&id);
+                    self.owner_index.comp_accumulators.remove(&id);
+                    self.clocks.forget(id);
+                    self.active_owners.remove(&clocks::Owner::Composition(id));
+                    self.gate_dirty = true;
+                }
+            }
+        }
+
+        // 2. Update `Figures` relations & track subtrees whose `Owner` changed.
+        let mut owner_changed_subtrees: Vec<NodeId> = Vec::new();
+        let mut affected_clips: BTreeSet<NodeId> = BTreeSet::new();
+        for rid in &removed_rel_ids {
+            let (changed, unpictured) = self.owner_index.remove_figure_rel(*rid);
+            if changed {
+                self.gate_dirty = true;
+            }
+            if let Some(e) = unpictured {
+                self.clocks.forget(e);
+                self.active_owners.remove(&clocks::Owner::Entity(e));
+                if Tree::of(&self.docs).is_live(e) {
+                    owner_changed_subtrees.push(e);
+                }
+            }
+            if let Some(clip) = self.owner_index.remove_animates_rel(*rid) {
+                affected_clips.insert(clip);
+            }
+        }
+        {
+            let doc = Tree::of(&self.docs);
+            for rel in &added_rels {
+                if !doc.is_live(rel.from) || !doc.is_live(rel.to) {
+                    continue;
+                }
+                match rel.rel {
+                    RelKind::Figures => {
+                        if let Some(comp) = composition::composition_of(doc, rel.from) {
+                            let became_pictured = self.owner_index.add_figure_rel(rel.id, comp, rel.to);
+                            self.gate_dirty = true;
+                            if became_pictured {
+                                self.new_owners.insert(clocks::Owner::Entity(rel.to));
+                                owner_changed_subtrees.push(rel.to);
+                            }
+                        }
+                    }
+                    RelKind::Animates => {
+                        if doc.ty_of(rel.from) == Some(clip_ty) {
+                            let o = self.owner_index.owner_of(doc, rel.to);
+                            self.owner_index.add_animates_rel(rel.id, rel.from, rel.to, o);
+                            affected_clips.insert(rel.from);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // 3. Detect cross-owner reparents (intra-composition reparents stay O(1)!).
+        {
+            let doc = Tree::of(&self.docs);
+            for (id, new_p) in reparent_new_parent {
+                if !doc.is_live(id) {
+                    continue;
+                }
+                let old_o = reparent_old_parent.get(&id).copied().flatten().map_or(clocks::Owner::Free, |p| self.owner_index.owner_of(doc, p));
+                let new_o = new_p.map_or(clocks::Owner::Free, |p| self.owner_index.owner_of(doc, p));
+                if old_o != new_o {
+                    owner_changed_subtrees.push(id);
+                }
+            }
+            for (id, old_p, new_p) in moved_views {
+                if !doc.is_live(id) {
+                    continue;
+                }
+                if self.owner_index.owner_of(doc, old_p) != self.owner_index.owner_of(doc, new_p) {
+                    owner_changed_subtrees.push(id);
+                }
+            }
+        }
+
+        // 4. Re-owner any subtree that actually moved between owners (or became pictured/unpictured).
+        if !owner_changed_subtrees.is_empty() {
+            let doc = Tree::of(&self.docs);
+            let mut sub_nodes: Vec<NodeId> = Vec::new();
+            for root in owner_changed_subtrees {
+                if doc.is_live(root) {
+                    sub_nodes.push(root);
+                    sub_nodes.extend(doc.descendants(root));
+                }
+            }
+            self.reactive.cells_for_nodes(&sub_nodes, &mut self.owner_dirty_cells);
+            for &n in &sub_nodes {
+                touched_nodes.insert(n);
+                // Refresh any `Figures` relation originating from `n`.
+                let figs: Vec<(RelationId, NodeId)> = doc
+                    .relations_from(n)
+                    .filter(|r| r.rel == RelKind::Figures && doc.is_live(r.to))
+                    .map(|r| (r.id, r.to))
+                    .collect();
+                for (rid, entity) in figs {
+                    let (changed, unpictured) = self.owner_index.remove_figure_rel(rid);
+                    if changed {
+                        self.gate_dirty = true;
+                    }
+                    if let Some(e) = unpictured {
+                        self.clocks.forget(e);
+                        self.active_owners.remove(&clocks::Owner::Entity(e));
+                    }
+                    if let Some(comp) = composition::composition_of(doc, n) {
+                        let became = self.owner_index.add_figure_rel(rid, comp, entity);
+                        self.gate_dirty = true;
+                        if became {
+                            self.new_owners.insert(clocks::Owner::Entity(entity));
+                        }
+                    }
+                }
+                // Refresh any `Animates` relation targeting `n`.
+                if let Some(rids) = self.owner_index.animates_on_target.get(&n).cloned() {
+                    let new_o = self.owner_index.owner_of(doc, n);
+                    for rid in rids {
+                        if let Some(&(clip, target, old_o)) = self.owner_index.clip_rels.get(&rid)
+                            && old_o != new_o
+                        {
+                            self.owner_index.add_animates_rel(rid, clip, target, new_o);
+                            affected_clips.insert(clip);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Reconcile affected clips in `running_clips` / `animated`.
+        if !affected_clips.is_empty() {
+            let mut clips_changed = false;
+            for clip in affected_clips {
+                let want = self.owner_index.clip_targets.contains_key(&clip)
+                    && (self.observe_all || !self.gate_initialized || self.owner_index.clip_is_active(clip, &self.active_owners));
+                if want {
+                    clips_changed |= self.running_clips.insert(clip);
+                } else {
+                    clips_changed |= self.running_clips.remove(&clip);
+                }
+            }
+            if clips_changed {
+                self.recompute_animated();
+            }
+        }
+
+        // 6. Reconcile runtime nodes (`Trace`, `Accumulate`, `Query`, `entity`) for `touched_nodes`.
+        let mut steps_gone: Vec<Leaf> = Vec::new();
+        let mut queries_gone: Vec<Leaf> = Vec::new();
+        let mut machines_gone: Vec<Leaf> = Vec::new();
+        for n in touched_nodes {
+            let (is_live, has_trace, has_acc, has_query, is_entity, is_mdef, owner) = {
+                let doc = Tree::of(&self.docs);
+                let live = doc.live(n);
+                let ty = live.as_ref().map(|x| x.ty);
+                let has_trace = live.is_some() && doc.has(n, FacetKind::Trace);
+                let has_acc = live.is_some() && doc.has(n, FacetKind::Accumulate);
+                let has_query = live.is_some() && doc.has(n, FacetKind::Query);
+                let is_entity = ty == Some(entity_ty);
+                let is_mdef = ty.is_some_and(is_machine_def_ty);
+                let owner = if live.is_some() && (has_trace || has_acc || is_entity) {
+                    Some(self.owner_index.owner_of(doc, n))
+                } else {
+                    None
+                };
+                (live.is_some(), has_trace, has_acc, has_query, is_entity, is_mdef, owner)
+            };
+            if is_mdef {
+                self.machines_full = true;
+            }
+            // Trace
+            if has_trace {
+                let o = owner.expect("live owner");
+                let prev = self.owner_index.trace_owner.insert(n, o);
+                if prev != Some(o) {
+                    if let Some(old_o) = prev
+                        && let Some(set) = self.owner_index.traces_by_owner.get_mut(&old_o)
+                    {
+                        set.remove(&n);
+                        if set.is_empty() {
+                            self.owner_index.traces_by_owner.remove(&old_o);
+                        }
+                    }
+                    self.owner_index.traces_by_owner.entry(o).or_default().insert(n);
+                    if self.is_owner_active(o) {
+                        self.running_steps.0.insert(n);
+                        for l in clocks::trace_input_leaves(n) {
+                            self.reactive.unwatch_leaf(l);
+                        }
+                    } else {
+                        self.running_steps.0.remove(&n);
+                        for l in clocks::trace_input_leaves(n) {
+                            self.reactive.watch_leaf(l);
+                        }
+                    }
+                }
+            } else if let Some(old_o) = self.owner_index.trace_owner.remove(&n) {
+                if let Some(set) = self.owner_index.traces_by_owner.get_mut(&old_o) {
+                    set.remove(&n);
+                    if set.is_empty() {
+                        self.owner_index.traces_by_owner.remove(&old_o);
+                    }
+                }
+                self.running_steps.0.remove(&n);
+                for l in clocks::trace_input_leaves(n) {
+                    self.reactive.unwatch_leaf(l);
+                }
+                steps_gone.extend(self.steps.forget(n));
+            }
+            // Accumulate
+            if has_acc {
+                let o = owner.expect("live owner");
+                let prev = self.owner_index.acc_owner.insert(n, o);
+                if prev != Some(o) {
+                    if let Some(old_o) = prev {
+                        if let Some(set) = self.owner_index.accs_by_owner.get_mut(&old_o) {
+                            set.remove(&n);
+                            if set.is_empty() {
+                                self.owner_index.accs_by_owner.remove(&old_o);
+                            }
+                        }
+                        if let clocks::Owner::Composition(c) = old_o
+                            && let Some(set) = self.owner_index.comp_accumulators.get_mut(&c)
+                        {
+                            set.remove(&n);
+                            if set.is_empty() {
+                                self.owner_index.comp_accumulators.remove(&c);
+                                self.gate_dirty = true;
+                            }
+                        }
+                    }
+                    self.owner_index.accs_by_owner.entry(o).or_default().insert(n);
+                    if let clocks::Owner::Composition(c) = o {
+                        let entry = self.owner_index.comp_accumulators.entry(c).or_default();
+                        let was_empty = entry.is_empty();
+                        entry.insert(n);
+                        if was_empty {
+                            self.gate_dirty = true;
+                        }
+                    }
+                    if self.is_owner_active(o) {
+                        self.running_steps.1.insert(n);
+                    } else {
+                        self.running_steps.1.remove(&n);
+                    }
+                }
+            } else if let Some(old_o) = self.owner_index.acc_owner.remove(&n) {
+                if let Some(set) = self.owner_index.accs_by_owner.get_mut(&old_o) {
+                    set.remove(&n);
+                    if set.is_empty() {
+                        self.owner_index.accs_by_owner.remove(&old_o);
+                    }
+                }
+                if let clocks::Owner::Composition(c) = old_o
+                    && let Some(set) = self.owner_index.comp_accumulators.get_mut(&c)
+                {
+                    set.remove(&n);
+                    if set.is_empty() {
+                        self.owner_index.comp_accumulators.remove(&c);
+                        self.gate_dirty = true;
+                    }
+                }
+                self.running_steps.1.remove(&n);
+                steps_gone.extend(self.steps.forget(n));
+            }
+            // Query
+            if has_query {
+                if self.owner_index.live_queries.insert(n) {
+                    for l in query::Queries::input_leaves(n) {
+                        self.reactive.watch_leaf(l);
+                    }
+                    self.queries.touch([n]);
+                }
+            } else if self.owner_index.live_queries.remove(&n) {
+                for l in query::Queries::input_leaves(n) {
+                    self.reactive.unwatch_leaf(l);
+                }
+                queries_gone.extend(self.queries.forget(n));
+            }
+            // Entity (for machines)
+            if is_live && is_entity {
+                let o = owner.expect("live owner");
+                let prev = self.owner_index.entity_owner.insert(n, o);
+                if prev != Some(o) {
+                    if let Some(old_o) = prev
+                        && let Some(set) = self.owner_index.entities_by_owner.get_mut(&old_o)
+                    {
+                        set.remove(&n);
+                        if set.is_empty() {
+                            self.owner_index.entities_by_owner.remove(&old_o);
+                        }
+                    }
+                    self.owner_index.entities_by_owner.entry(o).or_default().insert(n);
+                    self.reactive.watch_node(n);
+                }
+                self.machines_dirty.insert(n);
+            } else if let Some(old_o) = self.owner_index.entity_owner.remove(&n) {
+                if let Some(set) = self.owner_index.entities_by_owner.get_mut(&old_o) {
+                    set.remove(&n);
+                    if set.is_empty() {
+                        self.owner_index.entities_by_owner.remove(&old_o);
+                    }
+                }
+                self.reactive.unwatch_node(n);
+                self.machines_dirty.remove(&n);
+                machines_gone.extend(self.machines.forget(n));
+            }
+        }
+
+        if !steps_gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, BTreeMap::new(), &steps_gone);
+        }
+        if !queries_gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, BTreeMap::new(), &queries_gone);
+        }
+        if !machines_gone.is_empty() {
+            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, BTreeMap::new(), &machines_gone);
+        }
+    }
+
+    /// Incremental owner-level visibility & clock gate (`EN-8b`, replacing
+    /// `Store::gate` + `Store::paused` + `Clocks::gated`).
+    /// Runs in O(1) when nothing cross-owner or observer-related changed, and
+    /// in O(|active| + |cross-owner edges| + |delta|) when active owners shift.
+    fn sync_gate(&mut self, now: f64) {
+        let query_deps = self.reactive.take_query_dep_changed();
+        if !query_deps.is_empty() {
+            self.queries.touch(query_deps);
+        }
+        let (mut edge_cells, rebuilt) = self.reactive.take_edge_changes();
+        edge_cells.extend(std::mem::take(&mut self.owner_dirty_cells));
+        let cross_changed = if rebuilt || !edge_cells.is_empty() {
+            self.owner_index.sync_cross_reads(Tree::of(&self.docs), &self.reactive, edge_cells, rebuilt)
+        } else {
+            false
+        };
+        if self.gate_initialized && !self.gate_dirty && !self.gate_mode_switched && !cross_changed && self.new_owners.is_empty() {
             return;
         }
         self.clocks.decisions += 1;
-        let (paused, pictured) = self.paused();
-        let doc = Tree::of(&self.docs);
-        self.clocks.set(doc, now, &paused, &pictured);
-        self.clocks.gated = Some((key, paused, pictured));
-        // Which steppers run, for the step player; a held trace is woken by
-        // a change to its input. Steppers gone are withdrawn.
-        let live = |kind| doc.nodes_with(kind).filter(|&n| doc.is_live(n)).collect::<Vec<NodeId>>();
-        let (traces, accs) = (live(FacetKind::Trace), live(FacetKind::Accumulate));
-        let held = |n: &NodeId| self.clocks.held(doc, *n);
-        let queries: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Query).filter(|&n| doc.is_live(n)).collect();
-        let mut watched: BTreeSet<Leaf> = traces.iter().filter(|n| held(n)).flat_map(|&n| step::Steps::input_leaves(n)).collect();
-        watched.extend(queries.iter().flat_map(|&n| query::Queries::input_leaves(n)));
-        let all: BTreeSet<NodeId> = traces.iter().chain(&accs).copied().collect();
-        self.running_steps = (traces.into_iter().filter(|n| !held(n)).collect(), accs.into_iter().filter(|n| !held(n)).collect());
-        self.reactive.watch(watched);
-        let gone = self.steps.prune(&all);
-        if !gone.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, BTreeMap::new(), &gone);
+
+        if self.observe_all {
+            if self.gate_mode_switched || !self.gate_initialized {
+                self.clocks.resume_all(now);
+                self.running_steps = (
+                    self.owner_index.trace_owner.keys().copied().collect(),
+                    self.owner_index.acc_owner.keys().copied().collect(),
+                );
+                self.running_clips = self.owner_index.clip_targets.keys().copied().collect();
+                self.recompute_animated();
+                self.reactive.set_watched_leaves(self.owner_index.live_queries.iter().flat_map(|&q| query::Queries::input_leaves(q)).collect());
+                self.active_owners.clear();
+            }
+            self.gate_dirty = false;
+            self.gate_mode_switched = false;
+            self.new_owners.clear();
+            self.gate_initialized = true;
+            return;
         }
-        // The clips that animate something running, and where: what the
-        // playhead samples and wakes each frame. Every clip is sampled now,
-        // so one on a page that just resumed shows its time.
-        let clip = TypeId::lookup("clip").expect("registered");
-        let mut running_clips = Vec::new();
-        let mut animated = BTreeSet::new();
-        for c in doc.nodes_of_type(clip).filter(|&c| doc.is_live(c)) {
-            let targets: Vec<NodeId> = doc.relations_from(c).filter(|r| r.rel == RelKind::Animates && doc.is_live(r.to)).map(|r| r.to).collect();
-            if targets.iter().any(|&t| !self.clocks.held(doc, t)) {
-                running_clips.push(c);
-                animated.extend(targets.iter().filter_map(|&t| composition::composition_of(doc, t)));
+
+        let observed = self.observed_compositions();
+        let next_active = self.owner_index.compute_active(Tree::of(&self.docs), &observed);
+
+        if self.gate_mode_switched || !self.gate_initialized {
+            // One-time initialization when switching into partial observation (`observe_all == false`).
+            for k in self.owner_index.all_clock_keys() {
+                let is_active = next_active.contains(&clocks::Owner::Composition(k)) || next_active.contains(&clocks::Owner::Entity(k));
+                if is_active {
+                    self.clocks.resume(k, now);
+                } else {
+                    self.clocks.pause(k, now);
+                }
+            }
+            self.running_steps.0.clear();
+            self.running_steps.1.clear();
+            self.running_clips.clear();
+            for &o in &next_active {
+                if let Some(ts) = self.owner_index.traces_by_owner.get(&o) {
+                    self.running_steps.0.extend(ts.iter().copied());
+                }
+                if let Some(accs) = self.owner_index.accs_by_owner.get(&o) {
+                    self.running_steps.1.extend(accs.iter().copied());
+                }
+                if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
+                    self.running_clips.extend(cs.keys().copied());
+                }
+            }
+            self.recompute_animated();
+            let mut watched: BTreeSet<Leaf> = self.owner_index.live_queries.iter().flat_map(|&q| query::Queries::input_leaves(q)).collect();
+            for (&t, &o) in &self.owner_index.trace_owner {
+                if !next_active.contains(&o) {
+                    watched.extend(clocks::trace_input_leaves(t));
+                }
+            }
+            self.reactive.set_watched_leaves(watched);
+            self.active_owners = next_active;
+            self.gate_dirty = false;
+            self.gate_mode_switched = false;
+            self.new_owners.clear();
+            self.gate_initialized = true;
+            let clips: Vec<NodeId> = self.running_clips.iter().copied().collect();
+            self.sample_clip_subset(&clips);
+            return;
+        }
+
+        // Incremental delta transition: touch ONLY owners that entered or left `active_owners`.
+        let resumed: Vec<clocks::Owner> = next_active.difference(&self.active_owners).copied().collect();
+        let paused: Vec<clocks::Owner> = self.active_owners.difference(&next_active).copied().collect();
+        let new_owners = std::mem::take(&mut self.new_owners);
+        for o in new_owners {
+            if !next_active.contains(&o)
+                && let Some(k) = o.clock_key()
+            {
+                self.clocks.pause(k, now);
             }
         }
-        self.running_clips = running_clips;
-        self.animated = animated;
-        // Every instance is visited once; then each is woken by a change to
-        // its own leaves or its copies'.
-        self.machines_full = true;
-        let entity = TypeId::lookup("entity").expect("registered");
-        self.reactive.watch_nodes(doc.nodes_of_type(entity).filter(|&e| doc.is_live(e)).collect());
-        let gone = self.queries.prune(&queries);
-        if !gone.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, BTreeMap::new(), &gone);
+
+        let mut newly_running_clips: Vec<NodeId> = Vec::new();
+        let mut clips_changed = false;
+        for &o in &resumed {
+            if let Some(k) = o.clock_key() {
+                self.clocks.resume(k, now);
+            }
+            if let Some(ts) = self.owner_index.traces_by_owner.get(&o) {
+                for &t in ts {
+                    self.running_steps.0.insert(t);
+                    for l in clocks::trace_input_leaves(t) {
+                        self.reactive.unwatch_leaf(l);
+                    }
+                }
+            }
+            if let Some(accs) = self.owner_index.accs_by_owner.get(&o) {
+                self.running_steps.1.extend(accs.iter().copied());
+            }
+            if let Some(es) = self.owner_index.entities_by_owner.get(&o) {
+                self.machines_dirty.extend(es.iter().copied());
+            }
+            if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
+                for &c in cs.keys() {
+                    if self.running_clips.insert(c) {
+                        newly_running_clips.push(c);
+                        clips_changed = true;
+                    }
+                }
+            }
         }
-        if !self.observe_all {
-            self.resample();
+        for &o in &paused {
+            if let Some(k) = o.clock_key() {
+                self.clocks.pause(k, now);
+            }
+            if let Some(ts) = self.owner_index.traces_by_owner.get(&o) {
+                for &t in ts {
+                    self.running_steps.0.remove(&t);
+                    for l in clocks::trace_input_leaves(t) {
+                        self.reactive.watch_leaf(l);
+                    }
+                }
+            }
+            if let Some(accs) = self.owner_index.accs_by_owner.get(&o) {
+                for a in accs {
+                    self.running_steps.1.remove(a);
+                }
+            }
+            if let Some(es) = self.owner_index.entities_by_owner.get(&o) {
+                self.machines_dirty.extend(es.iter().copied());
+            }
+            if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
+                for &c in cs.keys() {
+                    if !self.owner_index.clip_is_active(c, &next_active) && self.running_clips.remove(&c) {
+                        clips_changed = true;
+                    }
+                }
+            }
+        }
+        if clips_changed {
+            self.recompute_animated();
+        }
+        self.active_owners = next_active;
+        self.gate_dirty = false;
+        if !newly_running_clips.is_empty() {
+            self.sample_clip_subset(&newly_running_clips);
         }
     }
 
@@ -3517,109 +4205,6 @@ impl StoreCore {
     /// nothing the gate reads should not decide).
     pub fn gate_decisions(&self) -> u64 {
         self.clocks.decisions
-    }
-
-    /// The clocks to pause, and the entities some composition pictures.
-    fn paused(&self) -> (BTreeSet<NodeId>, BTreeSet<NodeId>) {
-        if self.observe_all {
-            return Default::default();
-        }
-        let doc = Tree::of(&self.docs);
-        let comps: BTreeSet<NodeId> = composition::compositions(doc).into_iter().collect();
-        let observed = self.observed_compositions();
-        // What an observer shows runs, but accumulators step only on an
-        // open path: one in an `on_demand` composition holds even while
-        // shown (free-running.md), and so does all of that composition.
-        let holding: BTreeSet<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).filter_map(|n| composition::composition_of(doc, n)).collect();
-        let still: BTreeSet<NodeId> = holding.difference(&composition::reach(doc, &observed, &holding).running).copied().collect();
-        let mut live: BTreeSet<NodeId> = composition::shown(doc, &observed).difference(&still).copied().collect();
-        // `run = always` keeps a composition's clock running while hidden
-        // (PT-1.3; free-running.md §2).
-        live.extend(comps.iter().copied().filter(|&c| composition::run_mode(doc, c) == composition::RunMode::Always));
-        let hidden: Vec<NodeId> = comps.iter().copied().filter(|c| !live.contains(c)).collect();
-        if hidden.is_empty() {
-            return Default::default();
-        }
-        let mut pictured: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
-        for r in doc.relations().filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.is_live(r.to)) {
-            if let Some(c) = composition::composition_of(doc, r.from) {
-                pictured.entry(r.to).or_default().insert(c);
-            }
-        }
-        // The pictured entity a model node belongs to: itself or its
-        // nearest such ancestor.
-        let entity_of = |n: NodeId| {
-            let mut cur = Some(n);
-            while let Some(node) = cur.and_then(|c| doc.live(c)) {
-                if pictured.contains_key(&node.id) {
-                    return Some(node.id);
-                }
-                cur = node.parent;
-            }
-            None
-        };
-        // A composition read from one that runs runs too: a meter in view
-        // reading a simulation in a hidden tab, directly, through a trace or
-        // through a stack's placements. A reader outside every composition
-        // is a model node, such as a placed instance's entity reading its
-        // arguments: it runs where it is pictured, when something running
-        // reads it, or always when nothing pictures it (the timeline, loose
-        // roots). Decided until no more join (one hidden tab read through
-        // another).
-        let mut entities: BTreeSet<NodeId> = pictured.iter().filter(|(_, cs)| cs.iter().any(|c| live.contains(c))).map(|(&e, _)| e).collect();
-        // Who reads each hidden composition and each pictured entity not yet
-        // running, found once: where each reading cell runs, as the
-        // composition it is in, else the pictured entity it belongs to, else
-        // nowhere in particular (it always runs). Then decided over those
-        // small sets until no more join. (Walking every hidden composition's
-        // readers each round cost 8-10 ms on the demo, 2026-11-21.)
-        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        enum Owner {
-            Composition(NodeId),
-            Entity(NodeId),
-            Free,
-        }
-        let mut owners: BTreeMap<NodeId, Owner> = BTreeMap::new();
-        let mut readers_of = |root: NodeId| -> BTreeSet<Owner> {
-            let mut nodes = BTreeSet::new();
-            let always = self.reactive.reader_nodes(std::iter::once(root).chain(doc.descendants(root)), &mut nodes);
-            let mut out: BTreeSet<Owner> = nodes
-                .into_iter()
-                .map(|n| {
-                    *owners.entry(n).or_insert_with(|| match composition::composition_of(doc, n) {
-                        Some(c) => Owner::Composition(c),
-                        None => entity_of(n).map_or(Owner::Free, Owner::Entity),
-                    })
-                })
-                .collect();
-            if always {
-                out.insert(Owner::Free);
-            }
-            out
-        };
-        let hidden_readers: Vec<(NodeId, BTreeSet<Owner>)> = hidden.iter().map(|&c| (c, readers_of(c))).collect();
-        let entity_readers: Vec<(NodeId, BTreeSet<Owner>)> = pictured.keys().filter(|e| !entities.contains(e)).map(|&e| (e, readers_of(e))).collect();
-        loop {
-            let runs = |o: &Owner| match o {
-                Owner::Composition(c) => live.contains(c),
-                Owner::Entity(e) => entities.contains(e),
-                Owner::Free => true,
-            };
-            let joined: Vec<NodeId> = hidden_readers.iter().filter(|(c, rs)| !live.contains(c) && rs.iter().any(runs)).map(|(c, _)| *c).collect();
-            let joined_entities: Vec<NodeId> = entity_readers
-                .iter()
-                .filter(|(e, rs)| !entities.contains(e) && (pictured[e].iter().any(|c| live.contains(c) || joined.contains(c)) || rs.iter().any(runs)))
-                .map(|(e, _)| *e)
-                .collect();
-            if joined.is_empty() && joined_entities.is_empty() {
-                break;
-            }
-            live.extend(joined);
-            entities.extend(joined_entities);
-        }
-        let mut paused: BTreeSet<NodeId> = hidden.into_iter().filter(|c| !live.contains(c)).collect();
-        paused.extend(pictured.keys().filter(|e| !entities.contains(e)));
-        (paused, pictured.into_keys().collect())
     }
 
     /// Bring everything that runs on time to `now` (seconds, the host's
@@ -3633,7 +4218,7 @@ impl StoreCore {
         if !self.observe_all && self.reactive.relaxed() {
             self.necessity();
         }
-        self.gate(now);
+        self.sync_gate(now);
         let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
         // What they read that nothing needed is needed from the next frame
         // (what the player reads besides is rooted: `ROOTED`).
@@ -4420,11 +5005,20 @@ impl StoreCore {
             self.owners.note_touched(&unconsumed_ak, &unconsumed_dk);
         }
         let keys = self.docs.take_touched();
+        let clip_ty = TypeId::lookup("clip").expect("registered");
+        let key_ty = TypeId::lookup("key").expect("registered");
+        let doc = Tree::of(&self.docs);
         let clip_or_structure = keys.iter().any(|k| match k {
             structure::Key::Leaf(l) => matches!(l.path.facet, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
             structure::Key::Facet(_, f) => matches!(f, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
-            structure::Key::Node(_) | structure::Key::Children(_) | structure::Key::FacetSet(_) | structure::Key::Relation(_) | structure::Key::Relations(_) | structure::Key::Roots | structure::Key::LetsIn(_) | structure::Key::In(_, _) | structure::Key::With(_, _) => true,
-            structure::Key::Wiring(_) => false,
+            structure::Key::Node(n) | structure::Key::Children(n) | structure::Key::FacetSet(n) => {
+                doc.node(*n).is_some_and(|x| x.ty == clip_ty || x.ty == key_ty)
+                    || self.owner_index.animates_on_target.contains_key(n)
+            }
+            structure::Key::Relation(_) | structure::Key::Relations(_) => true,
+            structure::Key::In(_, ty) => *ty == clip_ty || *ty == key_ty,
+            structure::Key::With(_, f) => matches!(f, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
+            structure::Key::Roots | structure::Key::LetsIn(_) | structure::Key::Wiring(_) => false,
         });
         if !keys.is_empty() {
             self.theme_maker.note_touched(&keys);
@@ -4714,6 +5308,9 @@ impl StoreCore {
         }
         let changed = self.embed_topology.sync_from_comps(Tree::of(&self.docs), &dirty_comps, &camera_comps);
         self.docs.cyclic_embeds = Some(self.embed_topology.cyclic_embeds().clone());
+        if !changed.is_empty() {
+            self.gate_dirty = true;
+        }
         for c in changed {
             self.geometry.note_shaped(c);
         }
@@ -5634,13 +6231,4 @@ fn item_keys(elements: &[Value], listed: bool, key: Option<&Value>) -> Result<Ve
         return Err(format!("two items share the key {twice}"));
     }
     Ok(keys)
-}
-
-/// A number no earlier call returned, in this process: change stamps that
-/// stay distinct across stores and graphs (`Docs::edited`,
-/// `Reactive::wired`), so a cache keyed on them never matches state it was
-/// not computed from.
-pub(crate) fn stamp() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

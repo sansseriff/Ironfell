@@ -151,19 +151,13 @@ impl Queries {
         ["model", "input", "debounce", "initial"].map(|f| leaf(n, f))
     }
 
-    /// Forget the queries no longer live (`live` holds every one), and
-    /// visit every live one at the next advance (what reads them may have
-    /// changed with the structure): what they published, to withdraw.
-    pub fn prune(&mut self, live: &std::collections::BTreeSet<NodeId>) -> Vec<Leaf> {
-        let gone: Vec<NodeId> = self.states.keys().copied().filter(|n| !live.contains(n)).collect();
-        let mut out = Vec::new();
-        for n in gone {
-            self.states.remove(&n);
-            self.waiting.remove(&n);
-            out.extend(OUTPUTS.map(|f| leaf(n, f)).into_iter().filter(|l| self.shown.remove(l).is_some()));
-        }
-        self.dirty.extend(live.iter().copied());
-        out
+    /// Forget one deleted query node in O(1), returning any leaves it
+    /// published so the caller withdraws them (`EN-8b`, replacing O(all) `prune`).
+    pub fn forget(&mut self, n: NodeId) -> Vec<Leaf> {
+        self.states.remove(&n);
+        self.waiting.remove(&n);
+        self.dirty.remove(&n);
+        OUTPUTS.map(|f| leaf(n, f)).into_iter().filter(|l| self.shown.remove(l).is_some()).collect()
     }
 
     /// The host's answer to request `seq` of `node`. False when it was not

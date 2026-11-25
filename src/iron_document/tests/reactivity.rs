@@ -2064,9 +2064,32 @@ fn the_agent_s_view_of_a_resting_page_is_current() {
     set_let(&mut store, n["$n"], 3.0);
     set_let(&mut store, n["$k"], 4.0);
     let query = ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(n["$b"]), fidelity: Fidelity::Full, depth: None };
-    let view = store.current(|s| s.view(&query)).unwrap();
+    let view = store.view_current(&query).unwrap();
     assert!(view.contains(r#"copies="3""#), "the repeat makes three items:\n{view}");
     assert!(view.contains(&format!(r#"id="{}" x="40""#, n["$r2"])), "r2 sits after r1's new width:\n{view}");
+}
+
+/// Council review of `EN-9` (Opus): a view of structure alone reads no
+/// leaf, so reading it through `current` pulled nothing and showed a
+/// resting page's old items. Every fidelity, scoped or not, now matches a
+/// store with every cell woken.
+#[cfg(not(feature = "differential"))]
+#[test]
+fn every_fidelity_of_the_agent_s_view_is_current() {
+    let (_, n) = resting_bench();
+    let mut bad = Vec::new();
+    for (fidelity, scope) in [(Fidelity::Summary, Some(n["$b"])), (Fidelity::Skeleton, None), (Fidelity::Skeleton, Some(n["$b"])), (Fidelity::Full, None)] {
+        let query = ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope, fidelity, depth: None };
+        let (mut store, _) = resting_bench();
+        set_let(&mut store, n["$n"], 3.0);
+        let (mut woken, _) = resting_bench();
+        set_let(&mut woken, n["$n"], 3.0);
+        woken.exact_all();
+        if store.view_current(&query).unwrap() != woken.view(&query).unwrap() {
+            bad.push(format!("{fidelity:?} scope {scope:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "views differ from the woken store's: {bad:?}");
 }
 
 /// Pull on ask by page: asking about a node on a resting page (the

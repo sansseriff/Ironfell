@@ -6027,6 +6027,20 @@ impl StoreCore {
         view::with_problems(self.problem_notes(), || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))
     }
 
+    /// `view` as the agent reads it, to write back (§8.9): current. The
+    /// pages it covers are brought up to date first (its scope's, or every
+    /// composition's), since a view of structure alone (`Skeleton`) reads
+    /// no leaf for `current` to follow; then it reads through `current`
+    /// (`EN-9`, council review: was `exact_all()`).
+    pub fn view_current(&mut self, q: &ViewQuery) -> Result<String, ViewError> {
+        let pages = match q.scope {
+            Some(scope) => vec![scope],
+            None => composition::compositions(Tree::of(&self.docs)),
+        };
+        self.pull_nodes(&pages);
+        self.current(|s| s.view(q))
+    }
+
     pub fn save(&self) -> String {
         serial::save(&self.docs.authored)
     }

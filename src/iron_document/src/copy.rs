@@ -138,10 +138,15 @@ fn preorder_key(doc: Tree<'_>, id: NodeId) -> Vec<usize> {
     key
 }
 
-/// The top-level node of type `name`, found by type, not by a pass over
-/// the roots (`EN-9`).
+/// The first top-level node of type `name` in root order, found by type,
+/// not by a pass over the roots (`EN-9`).
 fn top_of_type(doc: Tree<'_>, name: &str) -> Option<NodeId> {
-    doc.nodes_of_type(ty(name)).find(|&r| doc.live(r).is_some_and(|n| n.parent.is_none()))
+    let tops: Vec<NodeId> = doc.nodes_of_type(ty(name)).filter(|&r| doc.live(r).is_some_and(|n| n.parent.is_none())).collect();
+    match tops.as_slice() {
+        [] => None,
+        [one] => Some(*one),
+        _ => tops.into_iter().min_by_key(|&r| preorder_key(doc, r)),
+    }
 }
 
 /// Copy `roots` (and what belongs with them) out of `store`. Roots inside

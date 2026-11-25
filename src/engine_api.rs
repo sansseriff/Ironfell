@@ -311,10 +311,12 @@ pub fn scope_log(app: &mut WorkerApp, since: u64) -> Result<String, String> {
     Ok(serde_json::json!({"pending": false, "scope": scope, "version": version, "gap": gap, "ndjson": ndjson, "count": count}).to_string())
 }
 
-/// Every node id a command's arguments name, at any depth: what it acts on.
+/// Every node id a command's arguments name (`#…`), at any depth: what it
+/// acts on. Other strings (a table cell, a state's name) are not ids.
 fn named_nodes(args: &serde_json::Value) -> Vec<iron_document::NodeId> {
     match args {
-        serde_json::Value::String(s) => s.parse().into_iter().collect(),
+        serde_json::Value::String(s) if s.starts_with('#') => s.parse().into_iter().collect(),
+        serde_json::Value::String(_) => Vec::new(),
         serde_json::Value::Array(xs) => xs.iter().flat_map(named_nodes).collect(),
         serde_json::Value::Object(m) => m.values().flat_map(named_nodes).collect(),
         _ => Vec::new(),
@@ -329,9 +331,9 @@ pub fn document_view(app: &mut WorkerApp, query_json: String) -> Result<String, 
         .get_resource_mut::<crate::document_bridge::DocumentStore>()
         .ok_or_else(|| String::from("document bridge not installed"))?;
     // The agent reads to write back: what it sees of a hidden composition
-    // is current (reactive-engine.md §8.9). Only the pages it reads are
+    // is current (reactive-engine.md §8.9). Only the pages it covers are
     // brought up to date (`EN-9`).
-    store.0.current(|s| s.view(&query)).map_err(|e| String::from(&e.to_string()))
+    store.0.view_current(&query).map_err(|e| String::from(&e.to_string()))
 }
 
 pub fn document_apply(app: &mut WorkerApp, transaction_json: String, expect_version: u32) -> String {

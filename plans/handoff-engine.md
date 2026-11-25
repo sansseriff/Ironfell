@@ -53,8 +53,8 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 - **Constraint problems found by index:** `Reactive` keeps the cluster natives whose last run found a violated constraint, so `cluster_problems` visits only those. A transaction compares only the nodes in trouble before it and writes messages only for the new ones. This removed every `store.clusters` row (12) and the `allocations` row of every ordinary transaction (9).
 - **Paste:** copied roots are sorted by their place among their ancestors' children, not by a preorder walk of the document. Connections, constraints and clips are found from the relations into the copy, not from every one in the document. The model and library are found by type, and the model's last entity only when a main is pasted. All four paste rows are gone.
 - **Host commands:**
-  - the agent's whole-document view and the SVG export read through `Store::current`, so only the pages they read are brought up to date;
-  - `author`, `table` and `link` pull the nodes their arguments name.
+  - the agent's view (`Store::view_current`) brings the pages it covers up to date (its scope's, or every composition's: a `Skeleton` view reads no leaf) and reads through `Store::current`; the SVG export reads through `current`, so only the pages whose leaves it reads are brought up to date;
+  - `author`, `table` and `link` pull the nodes their arguments name (`#…` strings only).
   - `exact_all()` is left only as `current`'s fallback. Test `the_agent_s_view_of_a_resting_page_is_current`.
 - **An allocation tracer:** `WORK_TRACE=allocations` in `scaling::trace_one_count` groups allocations by store stack.
 - **Clip structure edits hold paused clips:** an `Animates` link made or gone samples the running clips; a paused clip keeps what it gave; a target no clip drives goes back to its own value. Before, `resample()` sampled every clip, moving a paused hidden target (open since `EN-8c` round 2). Test `an_animates_edit_leaves_a_paused_hidden_clip_target_alone`, failing before.
@@ -168,6 +168,22 @@ Both: round 1's fixes are real, with no regressions; the placement step and chec
 | The 1,000-seed script pulls every page each step, hiding lag that lasts longer | Opus | Accepted: targeted tests instead (its picks filter on each store's own tree) |
 | `check_demand` skips the end of a transaction; exempts every rooted native | Opus | Fixed |
 | Reconciling inside a settle nested in another's stages | Opus | Fixed: only the outermost settle reconciles |
+
+### 2026-11-25: review of `EN-9` part 1 (`0312343`)
+
+| Delegate | Score |
+|---|---|
+| Claude Opus 5.5 | 7/10 |
+| GPT 6.2 Sol | not asked (usage limit) |
+
+Opus: the constraint-problem index (same problems, same order; `violated` changes only where `extra` is written, and a native is removed in one place) and the paste rewrite (same roots, extras and drops, in the same order) match the old behaviour. The engine API commands it traced read only named nodes, their pages, or what pulled cells read.
+
+| Finding | Outcome |
+|---|---|
+| A `Skeleton` view reads no leaf, so through `current` it pulled nothing and showed a resting page's old items | Fixed: `view_current` pulls the pages the view covers first; test over every fidelity, failing before |
+| `top_of_type` took the lowest id, not the first in root order, with two models or libraries | Fixed: root order |
+| `named_nodes` parsed any string (a table cell `"a"`) as an id | Fixed: `#…` only |
+| A command reading a node its arguments don't name, on another page | Not found; left as a risk |
 
 ### 2026-11-25: review of `EN-17` (`45a09ae`)
 

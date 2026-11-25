@@ -79,8 +79,10 @@ report is read.
 - step, clip, query and machine state.
 
 Multiply by measured sizes per kind, calibrated once against
-`instance_cost`. This is the same accounting `EN-17` needs to explain the
-memory per meter, so build the counting there and reuse it.
+`instance_cost`. `EN-17` measured the store by part, not by owner
+(`Store::drop_in_parts`, `instance_cost::memory_by_part`: graph cells,
+makers, scoped indexes, views…), which gives the sizes per kind to
+calibrate with.
 
 **5. A diagnostic view in the shell.** Model it on `LatencyView.svelte`: a
 table of owners, with a chip for evaluated, resting or clock paused, plus the

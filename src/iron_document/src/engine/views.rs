@@ -249,6 +249,7 @@ pub(crate) struct VirtualViews {
     /// Optional multi-wave net delta capture: first-before snapshot + depth per
     /// touched `top_owner` across a transaction / `settle_repeats` sequence.
     net_before: Option<BTreeMap<NodeId, (OwnerUndo, usize)>>,
+    template_diffs: TemplateDiffs,
 }
 
 impl VirtualViews {
@@ -305,11 +306,13 @@ impl VirtualViews {
             return ViewDelta::default();
         };
         let mut net = ViewDelta::default();
+        let mut diffs = std::mem::take(&mut self.template_diffs);
         for (top_owner, (first_old, owner_depth)) in before {
             let final_now = self.snapshot_top(top_owner);
-            let mut d = self.diff_top_snapshots(top_owner, owner_depth, &first_old, &final_now);
+            let mut d = self.diff_top_snapshots(top_owner, owner_depth, &first_old, &final_now, &mut diffs);
             net.extend(std::mem::take(&mut d));
         }
+        self.template_diffs = diffs;
         net
     }
 
@@ -704,6 +707,7 @@ impl VirtualViews {
             &mut new_nodes,
             &mut old_parents,
             &mut new_parents,
+            &mut self.template_diffs,
         );
 
         // 1. Removed nodes (or nodes whose type changed, which are removed then created).
@@ -895,7 +899,7 @@ impl VirtualViews {
 
     /// Read-only net diff between a first-before `OwnerUndo` snapshot and the
     /// final `OwnerUndo` snapshot for `top_owner` after all waves/rounds settle.
-    fn diff_top_snapshots(&self, top_owner: NodeId, owner_depth: usize, old: &OwnerUndo, now: &OwnerUndo) -> ViewDelta {
+    fn diff_top_snapshots(&self, top_owner: NodeId, owner_depth: usize, old: &OwnerUndo, now: &OwnerUndo, template_diffs: &mut TemplateDiffs) -> ViewDelta {
         let mut delta = ViewDelta::default();
         let old_views: HashMap<NodeId, &Arc<View>> = old.views.iter().map(|v| (v.owner, v)).collect();
         let new_views: HashMap<NodeId, &Arc<View>> = now.views.iter().map(|v| (v.owner, v)).collect();
@@ -928,6 +932,7 @@ impl VirtualViews {
             &mut new_nodes,
             &mut old_parents,
             &mut new_parents,
+            template_diffs,
         );
 
         let mut removed_list: Vec<(usize, NodeId, NodeId, TypeId)> = Vec::new();
@@ -1008,6 +1013,30 @@ impl VirtualViews {
 /// the union of `old.sparse_facets ∪ new.sparse_facets ∪ old.extra_facets ∪ new.extra_facets`
 /// node indices is visited (O(|sparse|), never walking `0..limit`).
 #[allow(clippy::too_many_arguments)]
+/// What a definition edit changed in its template (`Template::changed_nodes`),
+/// by the old and new template's revision: every instance of the definition
+/// gets the same pair, so it is worked out once, not once per instance (`EN-17`).
+#[derive(Clone, Default)]
+pub(crate) struct TemplateDiffs(HashMap<(u64, u64), Option<Arc<[usize]>>>);
+
+impl TemplateDiffs {
+    /// The template nodes whose facets differ, when `old` and `new` have the
+    /// same nodes; `None` when they are not two revisions of one shape.
+    fn get(&mut self, old: &Arc<Template>, new: &Arc<Template>) -> Option<Arc<[usize]>> {
+        if Arc::ptr_eq(old, new) {
+            return None;
+        }
+        let diff = || old.changed_nodes(new).map(Arc::from);
+        if old.rev == 0 || new.rev == 0 {
+            return diff();
+        }
+        if self.0.len() > 64 {
+            self.0.clear();
+        }
+        self.0.entry((old.rev, new.rev)).or_insert_with(diff).clone()
+    }
+}
+
 fn collect_changed_nodes<'a>(
     old_view_list: &'a [Arc<View>],
     new_view_list: &'a [Arc<View>],
@@ -1021,6 +1050,7 @@ fn collect_changed_nodes<'a>(
     new_nodes: &mut BTreeMap<NodeId, NodeView<'a>>,
     old_parents: &mut HashMap<NodeId, NodeId>,
     new_parents: &mut HashMap<NodeId, NodeId>,
+    template_diffs: &mut TemplateDiffs,
 ) {
     for (r, recs) in old_item_list {
         if new_items.get(r).is_some_and(|ni| Arc::ptr_eq(ni, recs) || ni.as_ref() == recs.as_ref()) {
@@ -1041,12 +1071,15 @@ fn collect_changed_nodes<'a>(
         }
     }
     for ov in old_view_list {
-        match new_views.get(&ov.owner) {
-            Some(&nv) if Arc::ptr_eq(ov, nv) || ov.same_as(nv) => continue,
-            Some(&nv) if Arc::ptr_eq(&ov.template, &nv.template) && ov.limit == nv.limit => {
+        let nv = new_views.get(&ov.owner).copied();
+        let template_changed = nv.filter(|nv| ov.limit == nv.limit).and_then(|nv| template_diffs.get(&ov.template, &nv.template));
+        match nv {
+            Some(nv) if Arc::ptr_eq(ov, nv) || ov.same_as(nv) => continue,
+            Some(nv) if ov.limit == nv.limit && (Arc::ptr_eq(&ov.template, &nv.template) || template_changed.is_some()) => {
                 // Fast sparse diff: every node `0..limit` has identical id/ty/parent/order;
-                // only indices present in either view's `sparse_facets` or `extra_facets` can differ.
-                let mut touched_idxs: BTreeSet<usize> = BTreeSet::new();
+                // only indices present in either view's `sparse_facets` or `extra_facets`,
+                // or whose template facets changed, can differ.
+                let mut touched_idxs: BTreeSet<usize> = template_changed.iter().flat_map(|c| c.iter().copied()).collect();
                 touched_idxs.extend(ov.sparse_facets.keys().map(|&(i, _)| i));
                 touched_idxs.extend(nv.sparse_facets.keys().map(|&(i, _)| i));
                 touched_idxs.extend(ov.extra_facets.keys().copied());
@@ -1076,7 +1109,10 @@ fn collect_changed_nodes<'a>(
     for nv in new_view_list {
         match old_views.get(&nv.owner) {
             Some(&ov) if Arc::ptr_eq(ov, nv) || ov.same_as(nv) => continue,
-            Some(&ov) if Arc::ptr_eq(&ov.template, &nv.template) && ov.limit == nv.limit => {
+            Some(&ov)
+                if ov.limit == nv.limit
+                    && (Arc::ptr_eq(&ov.template, &nv.template) || template_diffs.get(&ov.template, &nv.template).is_some()) =>
+            {
                 // Already handled symmetrically in the sparse fast path above.
                 continue;
             }

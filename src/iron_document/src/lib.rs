@@ -606,7 +606,7 @@ pub struct StoreCore {
     /// plus the x-placed nodes of each layout root (for glide specs).
     layout_makers: PerRootMakers<Vec<graph::NativeKey>>,
     network_makers: PerRootMakers<port::RootNetwork>,
-    derived_makers: PerRootMakers<BTreeMap<Leaf, Expr>>,
+    derived_makers: PerRootMakers<BTreeMap<Leaf, std::sync::Arc<Expr>>>,
     repeat_makers: PerRootMakers<BTreeSet<NodeId>>,
     /// Per-root runtime summaries the owner index is the sum of (`EN-8c.0`).
     owner_makers: PerRootMakers<clocks::RootRuntime>,
@@ -699,6 +699,30 @@ const DEFAULT_HORIZON: usize = 200;
 const RECENT_KEYS: usize = 64;
 
 impl StoreCore {
+    /// A memory probe (`instance_cost::memory_by_part`, `EN-17`): drops
+    /// the store one part at a time, calling `after` with each part's name
+    /// once it is gone. Shared `Arc`s count against the last part to drop them.
+    #[doc(hidden)]
+    pub fn drop_in_parts(self, after: &mut dyn FnMut(&'static str)) {
+        let StoreCore { docs, owners, history, reactive, owner_index, clocks, owner_makers, layout_makers, network_makers, derived_makers, repeat_makers, constraint_makers, geometry, repeats, item_memo, .. } = self;
+        drop(history);
+        after("history");
+        reactive.drop_in_parts(after);
+        drop((owner_index, clocks, owner_makers));
+        after("owner index, clocks, owner makers");
+        drop(layout_makers);
+        after("layout makers");
+        drop(derived_makers);
+        after("derived makers");
+        drop((network_makers, repeat_makers, constraint_makers));
+        after("network, repeat, constraint makers");
+        drop((geometry, repeats, item_memo));
+        after("geometry, repeats, item memo");
+        drop(owners);
+        after("owners (template cache, recorded reads)");
+        docs.drop_in_parts(after);
+    }
+
     /// A scratch store for planning an edit (`edit`, `compose`, `parts`):
     /// this one as it stands, both documents and everything derived from
     /// them copied rather than derived again, which re-expanded every owner
@@ -4477,13 +4501,20 @@ impl StoreCore {
 
     /// Compute one top-level root's derived connection signals and anchor
     /// bindings through `MakerCx` (Stage 2, EN-2c).
-    fn make_derived_root(cx: &MakerCx<'_>, root: NodeId) -> BTreeMap<Leaf, Expr> {
+    /// A root's derived bindings, shared with the graph's cells: an
+    /// expression equal to one in `old` keeps `old`'s allocation (`EN-17`).
+    fn make_derived_root(cx: &MakerCx<'_>, root: NodeId, old: Option<&BTreeMap<Leaf, std::sync::Arc<Expr>>>) -> BTreeMap<Leaf, std::sync::Arc<Expr>> {
         let doc = cx.tree();
         let mut out = anchor::derived_in(doc, root);
         for (l, e) in port::derived_signals_in(doc, root) {
             out.insert(l, e);
         }
-        out
+        out.into_iter()
+            .map(|(l, e)| match old.and_then(|o| o.get(&l)).filter(|o| ***o == e) {
+                Some(o) => (l, o.clone()),
+                None => (l, std::sync::Arc::new(e)),
+            })
+            .collect()
     }
 
     /// Seed `derived_makers` and `reactive.derived` for all initial roots
@@ -4499,7 +4530,7 @@ impl StoreCore {
             let rec = structure::Recorder::default();
             let map = {
                 let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
-                Self::make_derived_root(&cx, root)
+                Self::make_derived_root(&cx, root, None)
             };
             self.derived_makers.set_keys(root, rec.into_inner());
             all.extend(map.iter().map(|(l, e)| (*l, e.clone())));
@@ -4550,7 +4581,7 @@ impl StoreCore {
             let rec = structure::Recorder::default();
             let next = {
                 let cx = MakerCx::new(Tree::of(&self.docs), &rec, self.contexts());
-                Self::make_derived_root(&cx, root)
+                Self::make_derived_root(&cx, root, self.derived_makers.per_root.get(&root))
             };
             self.derived_makers.set_keys(root, rec.into_inner());
             if let Some(old) = self.derived_makers.per_root.get(&root) {
@@ -4572,7 +4603,7 @@ impl StoreCore {
         if touched.is_empty() {
             return;
         }
-        let diff: Vec<(Leaf, Option<Expr>)> = touched
+        let diff: Vec<(Leaf, Option<std::sync::Arc<Expr>>)> = touched
             .into_iter()
             .map(|leaf| {
                 let want = self.derived_makers.per_root.values().find_map(|m| m.get(&leaf).cloned());
@@ -4975,8 +5006,8 @@ impl StoreCore {
         let mut expected_derived: BTreeMap<Leaf, Expr> = port::derived_signals(doc).into_iter().collect();
         expected_derived.extend(anchors.iter().flat_map(|&a| anchor::positions(doc, a)));
         expected_derived.extend(anchor::followers(doc, &anchors));
-        let kept = self.reactive.derived_bindings();
-        if *kept != expected_derived {
+        let kept: BTreeMap<Leaf, Expr> = self.reactive.derived_bindings().iter().map(|(l, e)| (*l, (**e).clone())).collect();
+        if kept != expected_derived {
             return Err(format!(
                 "derived bindings differ from fresh derivation:\n kept {:?}\n fresh {:?}",
                 kept.keys().collect::<Vec<_>>(),

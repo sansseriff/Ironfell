@@ -44,16 +44,32 @@ pub const SESSION_BASE: u64 = 1 << 62;
 pub const EXPANDED: u64 = 1 << 63;
 
 mod paths {
+    use super::EXPANDED;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{OnceLock, RwLock};
 
+    /// A path is one step after its owner's path: `(owner_raw, local_raw)`,
+    /// the owner the authored instance or `EXPANDED | slot` of the inner one
+    /// (`EN-17`: a path is stored once, as its last step, and found without
+    /// building it).
     #[derive(Default)]
     struct Registry {
-        paths: Vec<Vec<u64>>,
-        /// Parallel to `paths`: `(owner_raw, local_raw, root_raw)` so
-        /// `expanded_parts` and `expanded_root` do zero heap allocations.
-        meta: Vec<(u64, u64, u64)>,
-        slots: HashMap<Vec<u64>, u64>,
+        slots: HashMap<(u64, u64), u64>,
+    }
+
+    /// Bucket `b` holds `2^b` slots' `(owner_raw, local_raw, root_raw)`;
+    /// slots below `LEN` are written once and never change, so they are
+    /// read without a lock (every read of an expanded node asks).
+    const BUCKETS: usize = 40;
+    type Bucket = Box<[[AtomicU64; 3]]>;
+    static META: [OnceLock<Bucket>; BUCKETS] = [const { OnceLock::new() }; BUCKETS];
+    static LEN: AtomicUsize = AtomicUsize::new(0);
+
+    fn place(slot: u64) -> (usize, usize) {
+        let n = slot + 1;
+        let b = 63 - n.leading_zeros() as usize;
+        (b, (n - (1 << b)) as usize)
     }
 
     fn registry() -> &'static RwLock<Registry> {
@@ -61,54 +77,88 @@ mod paths {
         R.get_or_init(Default::default)
     }
 
-    fn intern_locked(r: &mut Registry, path: &[u64]) -> u64 {
-        if let Some(&slot) = r.slots.get(path) {
+    /// The slot of the path one `local` step after `owner`'s, giving it one
+    /// the first time it is seen.
+    pub fn step(owner: u64, local: u64) -> u64 {
+        if let Some(&slot) = registry().read().expect("path registry").slots.get(&(owner, local)) {
             return slot;
         }
-        let meta = match path.split_last() {
-            Some((&local, rest)) if !rest.is_empty() => {
-                let owner = if rest.len() == 1 {
-                    rest[0]
-                } else {
-                    super::EXPANDED | intern_locked(r, rest)
-                };
-                (owner, local, rest[0])
-            }
-            Some((&only, _)) => (0, only, only),
-            None => (0, 0, 0),
-        };
-        let slot = r.paths.len() as u64;
-        r.paths.push(path.to_vec());
-        r.meta.push(meta);
-        r.slots.insert(path.to_vec(), slot);
+        let mut r = registry().write().expect("path registry");
+        if let Some(&slot) = r.slots.get(&(owner, local)) {
+            return slot;
+        }
+        let root = if owner & EXPANDED != 0 { parts(owner & !EXPANDED).map_or(owner, |p| p.2) } else if owner == 0 { local } else { owner };
+        let slot = LEN.load(Ordering::Relaxed) as u64;
+        let (b, i) = place(slot);
+        let bucket = META[b].get_or_init(|| (0..1usize << b).map(|_| [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]).collect());
+        for (cell, v) in bucket[i].iter().zip([owner, local, root]) {
+            cell.store(v, Ordering::Relaxed);
+        }
+        LEN.store(slot as usize + 1, Ordering::Release);
+        r.slots.insert((owner, local), slot);
         slot
     }
 
     /// The slot for `path`, giving it one the first time it is seen.
     pub fn intern(path: &[u64]) -> u64 {
-        if let Some(&slot) = registry().read().expect("path registry").slots.get(path) {
-            return slot;
+        match path {
+            [] => step(0, 0),
+            [only] => step(0, *only),
+            [first, rest @ ..] => {
+                let mut owner = *first;
+                let mut slot = 0;
+                for &local in rest {
+                    slot = step(owner, local);
+                    owner = EXPANDED | slot;
+                }
+                slot
+            }
         }
-        let mut r = registry().write().expect("path registry");
-        intern_locked(&mut r, path)
+    }
+
+    /// `(owner_raw, local_raw, root_raw)` for `slot`, with no lock and no
+    /// allocation; the owner is 0 for a path of one step.
+    fn entry(slot: u64) -> Option<(u64, u64, u64)> {
+        if slot as usize >= LEN.load(Ordering::Acquire) {
+            return None;
+        }
+        let (b, i) = place(slot);
+        let [o, l, r] = &META[b].get()?[i];
+        Some((o.load(Ordering::Relaxed), l.load(Ordering::Relaxed), r.load(Ordering::Relaxed)))
     }
 
     /// How many paths are interned, and their steps in total.
     pub fn size() -> (usize, usize) {
-        let r = registry().read().expect("path registry");
-        (r.paths.len(), r.paths.iter().map(Vec::len).sum())
+        let n = LEN.load(Ordering::Acquire);
+        let mut depth: Vec<usize> = Vec::with_capacity(n);
+        for slot in 0..n as u64 {
+            let (owner, _, _) = entry(slot).expect("interned");
+            let d = if owner & EXPANDED != 0 { depth[(owner & !EXPANDED) as usize] + 1 } else if owner == 0 { 1 } else { 2 };
+            depth.push(d);
+        }
+        (n, depth.iter().sum())
     }
 
     /// The path a slot holds.
     pub fn path(slot: u64) -> Option<Vec<u64>> {
-        registry().read().expect("path registry").paths.get(slot as usize).cloned()
+        let (mut owner, local, _) = entry(slot)?;
+        let mut out = vec![local];
+        while owner & EXPANDED != 0 {
+            let (o, l, _) = entry(owner & !EXPANDED)?;
+            out.push(l);
+            owner = o;
+        }
+        if owner != 0 {
+            out.push(owner);
+        }
+        out.reverse();
+        Some(out)
     }
 
-    /// Zero-allocation lookup of `(owner_raw, local_raw, root_raw)` for `slot`.
+    /// `(owner_raw, local_raw, root_raw)` for `slot`, `None` for a path of
+    /// one step.
     pub fn parts(slot: u64) -> Option<(u64, u64, u64)> {
-        let r = registry().read().expect("path registry");
-        let &(owner, local, root) = r.meta.get(slot as usize)?;
-        (owner != 0).then_some((owner, local, root))
+        entry(slot).filter(|p| p.0 != 0)
     }
 }
 
@@ -402,9 +452,7 @@ impl NodeId {
         if local.0 & EXPANDED != 0 || local.0 >= SESSION_BASE || owner.is_session() {
             return None;
         }
-        let mut path = expanded_path(owner.0).unwrap_or_else(|| vec![owner.0]);
-        path.push(local.0);
-        Some(NodeId(expanded_raw(&path)))
+        Some(NodeId(EXPANDED | paths::step(owner.0, local.0)))
     }
 
     /// Derived from a definition for one instance: never saved, never in
@@ -439,9 +487,7 @@ impl NodeId {
         if repeat.is_session() {
             return None;
         }
-        let mut path: Vec<u64> = repeat.path().iter().map(|n| n.0).collect();
-        path.push(item_step(key)?);
-        Some(NodeId(expanded_raw(&path)))
+        Some(NodeId(EXPANDED | paths::step(repeat.0, item_step(key)?)))
     }
 
     /// Item `key` of repeat `repeat`'s copy of template node `local` (its
@@ -451,9 +497,7 @@ impl NodeId {
         if last.0 & EXPANDED != 0 || last.0 >= SESSION_BASE {
             return None;
         }
-        let mut path: Vec<u64> = NodeId::item_scope(repeat, key)?.path().iter().map(|n| n.0).collect();
-        path.push(last.0);
-        Some(NodeId(expanded_raw(&path)))
+        Some(NodeId(EXPANDED | paths::step(NodeId::item_scope(repeat, key)?.0, last.0)))
     }
 
     /// Which item of `repeat` this node is, or is part of, by key: the

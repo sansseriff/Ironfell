@@ -40,7 +40,7 @@ work under a plan gets the next free number.
 
 | Prefix | Plan | Numbering |
 |---|---|---|
-| `EN` | [`handoff-engine.md`](handoff-engine.md) | `EN-0`–`EN-2c` done; `EN-3`–`EN-6b` retired (reverted 2026-11-23); done: `EN-12`, `EN-13`, `EN-7`, `EN-8a`, `EN-8b`, `EN-8c.0`, `EN-8c` (council-reviewed 2026-11-24); next: `EN-17`; active: `EN-9`, `EN-10`, `EN-14`–`EN-16`, `EN-11` |
+| `EN` | [`handoff-engine.md`](handoff-engine.md) | `EN-0`–`EN-2c` done; `EN-3`–`EN-6b` retired (reverted 2026-11-23); done: `EN-12`, `EN-13`, `EN-7`, `EN-8a`, `EN-8b`, `EN-8c.0`, `EN-8c` (council-reviewed 2026-11-24), `EN-17`; next: `EN-9`; active: `EN-10`, `EN-14`–`EN-16`, `EN-11` |
 | `RH` | [`handoff-render.md`](handoff-render.md) | its §4 items (`RH-4`); keys added when it is next edited (`RE-4.3` moved to §10) |
 | `PD` | [`handoff-product.md`](handoff-product.md) | its §4 subsections and items (`PD-4.2.3`); keys added when it is next edited |
 

@@ -264,6 +264,17 @@ pub(crate) struct Docs {
 }
 
 impl Docs {
+    /// Part of `StoreCore::drop_in_parts`.
+    pub(crate) fn drop_in_parts(self, after: &mut dyn FnMut(&'static str)) {
+        let Docs { authored, views, scoped, .. } = self;
+        drop(scoped);
+        after("scoped indexes");
+        drop(views);
+        after("virtual views");
+        drop(authored);
+        after("authored document");
+    }
+
     pub(crate) fn new(authored: Document) -> Docs {
         let scoped = ScopedIndexes::build(&authored);
         Docs {

@@ -232,6 +232,24 @@ fn scan_facet(f: &Facet, out: &mut Vec<NodeId>) -> (bool, bool) {
 }
 
 impl Template {
+    /// The indices whose facets differ from `other`'s, when both have the
+    /// same nodes (ids, parents, types, order); `None` when they do not.
+    pub(crate) fn changed_nodes(&self, other: &Template) -> Option<Vec<usize>> {
+        if self.source_root() != other.source_root() || self.nodes.len() != other.nodes.len() {
+            return None;
+        }
+        let mut changed = Vec::new();
+        for (i, (a, b)) in self.nodes.iter().zip(&other.nodes).enumerate() {
+            if a.local != b.local || a.parent != b.parent || a.ty != b.ty || a.order != b.order {
+                return None;
+            }
+            if a.facets != b.facets {
+                changed.push(i);
+            }
+        }
+        Some(changed)
+    }
+
     pub(crate) fn source_root(&self) -> NodeId {
         match self.source {
             Source::Body(d) | Source::Picture(d) | Source::Collection(d) => d,

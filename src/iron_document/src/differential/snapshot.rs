@@ -6,7 +6,7 @@
 //! this looks at the buffer behind it.
 
 use crate::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 /// Everything the differential harness compares, after every call.
@@ -188,8 +188,8 @@ pub fn snapshot(s: &StoreCore) -> Snapshot {
         client: s.client(),
         horizon: h.horizon,
         geometry: live.iter().map(|&n| (n, s.world_affine(n), s.local_bounds(n))).collect(),
-        context_reads: live.iter().map(|&n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect(),
-        hover_listeners: live.iter().map(|&n| (n, s.hover_listeners(n))).filter(|(_, r)| !r.is_empty()).collect(),
+        context_reads: context_reads(s, doc),
+        hover_listeners: hover_listeners(s, doc, &live),
         session_state: s.session_state.clone(),
     };
     let pending = Pending { changes: s.peek_changes(), revisions: s.revisions().clone(), emitted: s.emitted.clone() };
@@ -274,4 +274,42 @@ impl Snapshot {
             .or_else(|| list("other.hover_listeners", &a.hover_listeners, &b.hover_listeners))
             .or(p)
     }
+}
+
+/// `Store::context_reads` of every node that has any: only a node at or
+/// above a cell reading a context can (asking every live node scans every
+/// cell once per node, which made the snapshot quadratic; `EN-17`).
+fn context_reads(s: &StoreCore, doc: Tree<'_>) -> Vec<(NodeId, Vec<(String, Option<NodeId>, Option<Value>)>)> {
+    let mut figures = BTreeSet::new();
+    for (leaf, _) in s.reactive().contexts() {
+        let mut at = Some(leaf.node);
+        while let Some(n) = at.filter(|&n| figures.insert(n)) {
+            at = doc.node(n).and_then(|x| x.parent);
+        }
+    }
+    figures.into_iter().map(|n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect()
+}
+
+/// `Store::hover_listeners` of every live node that has any, from the
+/// listeners found once rather than once per node (`EN-17`).
+fn hover_listeners(s: &StoreCore, doc: Tree<'_>, live: &[NodeId]) -> Vec<(NodeId, Vec<NodeId>)> {
+    let listening: BTreeSet<NodeId> = s.listeners("enter").into_keys().chain(s.listeners("leave").into_keys()).collect();
+    if listening.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for &node in live {
+        let mut found = Vec::new();
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if listening.contains(&n) {
+                found.push(n);
+            }
+            at = doc.node(n).and_then(|x| x.parent);
+        }
+        if !found.is_empty() {
+            out.push((node, found));
+        }
+    }
+    out
 }

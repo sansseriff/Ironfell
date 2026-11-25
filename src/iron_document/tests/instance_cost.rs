@@ -175,3 +175,37 @@ fn memory_per_meter() {
     );
 }
 
+
+/// Where `memory_per_meter`'s bytes live (`EN-17`): the store at 100 and at
+/// 700 meters dropped one part at a time (`Store::drop_in_parts`), each
+/// part's bytes per meter beyond the first hundred.
+///   cargo test -p iron_document --release --target aarch64-apple-darwin --test instance_cost memory_by_part -- --ignored --nocapture --test-threads=1
+#[test]
+#[ignore]
+fn memory_by_part() {
+    let parts = |count: usize| {
+        let (mut store, comp) = desk();
+        for i in 1..count {
+            store.place_standard("meter", comp, [(i % 30) as f64 * 130.0, (i / 30) as f64 * 140.0], Actor::Human).unwrap();
+        }
+        store.clear_history();
+        let mut freed = Vec::new();
+        let mut last = LIVE.load(Ordering::Relaxed);
+        store.drop_in_parts(&mut |part| {
+            let now = LIVE.load(Ordering::Relaxed);
+            freed.push((part, last - now));
+            last = now;
+        });
+        freed.push(("rest of the store", last - LIVE.load(Ordering::Relaxed)));
+        freed
+    };
+    let small = parts(100);
+    let large = parts(700);
+    let mut total = 0.0;
+    for ((part, a), (_, b)) in small.iter().zip(&large) {
+        let per = (b - a) as f64 / 600.0 / 1024.0;
+        total += per;
+        println!("{per:8.1} KiB/meter  {part}");
+    }
+    println!("{total:8.1} KiB/meter  total");
+}

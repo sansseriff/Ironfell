@@ -626,7 +626,7 @@ pub struct Reactive {
     key_changed_at: HashMap<crate::structure::Key, u64>,
     /// The signals connections and anchors derive, maintained incrementally
     /// by Stage 2 `DerivedBindingMakers` (EN-2c).
-    derived: Counted<BTreeMap<Leaf, Expr>, GRAPH_DERIVED>,
+    derived: Counted<BTreeMap<Leaf, std::sync::Arc<Expr>>, GRAPH_DERIVED>,
     /// Theme token readers indexed by `@name`, woken only when `ThemeMaker`
     /// reports that token name changed (EN-7).
     token_readers_by: BTreeMap<String, BTreeSet<Leaf>>,
@@ -729,6 +729,28 @@ impl Clone for Escaped {
 }
 
 impl Reactive {
+    /// Part of `StoreCore::drop_in_parts`.
+    #[doc(hidden)]
+    pub fn drop_in_parts(self, after: &mut dyn FnMut(&'static str)) {
+        let Reactive { nodes, dependents, resolved, leaf_changed_at, input_changed_at, key_changed_at, derived, cell_keys, cells_by_key, natives, owned, claims, base_readers, inputs, input_readers, key_readers, .. } = self;
+        drop(nodes);
+        after("graph: bound nodes");
+        drop(dependents);
+        after("graph: dependents");
+        drop(resolved);
+        after("graph: resolved values");
+        drop((leaf_changed_at, input_changed_at, key_changed_at));
+        after("graph: epoch stamps");
+        drop(derived);
+        after("graph: derived exprs");
+        drop((cell_keys, cells_by_key));
+        after("graph: cell keys");
+        drop((natives, owned, claims, base_readers));
+        after("graph: natives, owned, claims, base readers");
+        drop((inputs, input_readers, key_readers));
+        after("graph: inputs, input/key readers");
+    }
+
     /// Drain cells whose reactive edges changed since the last take, plus
     /// whether a full `rebuild` occurred (`EN-8b`).
     pub(crate) fn take_edge_changes(&mut self) -> (BTreeSet<CellId>, bool) {
@@ -1444,12 +1466,12 @@ impl Reactive {
     }
 
     /// Seed the initial derived bindings before `rebuild` (EN-2c).
-    pub(crate) fn set_initial_derived(&mut self, derived: BTreeMap<Leaf, Expr>) {
+    pub(crate) fn set_initial_derived(&mut self, derived: BTreeMap<Leaf, std::sync::Arc<Expr>>) {
         self.derived = derived.into();
     }
 
     #[cfg(feature = "structure-oracle")]
-    pub(crate) fn derived_bindings(&self) -> &BTreeMap<Leaf, Expr> {
+    pub(crate) fn derived_bindings(&self) -> &BTreeMap<Leaf, std::sync::Arc<Expr>> {
         &self.derived
     }
 
@@ -1457,7 +1479,7 @@ impl Reactive {
     /// updates `self.derived`, installs/drops affected `BoundNode`s, raises
     /// heights, and either evaluates immediately (`run == true`) or queues
     /// them in `self.pending` for the upcoming pass (`run == false`).
-    pub(crate) fn sync_derived(&mut self, doc: Tree<'_>, diff: Vec<(Leaf, Option<Expr>)>, tokens: &BTreeMap<String, Leaf>, run: bool) {
+    pub(crate) fn sync_derived(&mut self, doc: Tree<'_>, diff: Vec<(Leaf, Option<std::sync::Arc<Expr>>)>, tokens: &BTreeMap<String, Leaf>, run: bool) {
         if diff.is_empty() {
             return;
         }
@@ -1484,13 +1506,11 @@ impl Reactive {
         let mut primed: BTreeSet<CellId> = BTreeSet::new();
         let mut made: Vec<CellId> = Vec::new();
         for leaf in changed {
-            let want: Option<Expr> = self
-                .derived
-                .get(&leaf)
-                .cloned()
-                .or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
+            let want: Option<std::sync::Arc<Expr>> = self.derived.get(&leaf).cloned().or_else(|| {
+                doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned().map(std::sync::Arc::new)).flatten()
+            });
             match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
-                (Some(old), Some(e)) if **old == e => {}
+                (Some(old), Some(e)) if **old == *e => {}
                 (_, Some(e)) => {
                     self.set_cell(doc, leaf, e, tokens);
                     made.push(CellId::Leaf(leaf));
@@ -1549,9 +1569,11 @@ impl Reactive {
         self.cells_by_key.clear();
         // Stored bindings, then the derived bindings seeded by Stage 2
         // `DerivedBindingMakers` (derived takes precedence over stored).
-        let derived: Vec<(Leaf, Expr)> = self.derived.iter().map(|(l, e)| (*l, e.clone())).collect();
+        let derived: Vec<(Leaf, std::sync::Arc<Expr>)> = self.derived.iter().map(|(l, e)| (*l, e.clone())).collect();
         let tokens = crate::palette::leaves(doc);
-        for (leaf, expr) in doc.bound_slots().chain(derived.iter().map(|(l, e)| (*l, e))) {
+        let stored: Vec<(Leaf, std::sync::Arc<Expr>)> = doc.bound_slots().map(|(l, e)| (l, std::sync::Arc::new(e.clone()))).collect();
+        for (leaf, shared) in stored.into_iter().chain(derived) {
+            let expr = shared.as_ref();
             let mut deps = expr.deps();
             for n in expr.tokens() {
                 self.token_readers_by.entry(n).or_default().insert(leaf);
@@ -1565,7 +1587,7 @@ impl Reactive {
             self.nodes.insert(
                 leaf,
                 BoundNode {
-                    expr: std::sync::Arc::new(expr.clone()),
+                    expr: shared,
                     deps,
                     ctx,
                     tracks,
@@ -1705,13 +1727,11 @@ impl Reactive {
         let mut rebuilt: BTreeSet<Leaf> = BTreeSet::new();
 
         for leaf in look {
-            let want: Option<Expr> = self
-                .derived
-                .get(&leaf)
-                .cloned()
-                .or_else(|| doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned()).flatten());
+            let want: Option<std::sync::Arc<Expr>> = self.derived.get(&leaf).cloned().or_else(|| {
+                doc.is_live(leaf.node).then(|| doc.leaf(leaf.node, leaf.path).and_then(Slot::expr).cloned().map(std::sync::Arc::new)).flatten()
+            });
             match (self.nodes.get(&leaf).map(|n| &n.expr), want) {
-                (Some(old), Some(e)) if **old == e => {}
+                (Some(old), Some(e)) if **old == *e => {}
                 (_, Some(e)) => {
                     self.set_cell(doc, leaf, e, tokens);
                     primed.insert(CellId::Leaf(leaf));
@@ -1743,7 +1763,7 @@ impl Reactive {
             };
             let (ctx, tracks, has_declared, rec_keys) = resolve_cell_structure(doc, leaf, &expr, tokens);
             if ctx != old_ctx {
-                self.set_cell(doc, leaf, (*expr).clone(), tokens);
+                self.set_cell(doc, leaf, expr, tokens);
                 primed.insert(CellId::Leaf(leaf));
             } else {
                 let mut tracks_changed = false;
@@ -1895,7 +1915,7 @@ impl Reactive {
     }
 
     /// Make or replace the cell for `leaf`, reading `expr`.
-    fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: Expr, tokens: &BTreeMap<String, Leaf>) {
+    fn set_cell(&mut self, doc: Tree<'_>, leaf: Leaf, expr: std::sync::Arc<Expr>, tokens: &BTreeMap<String, Leaf>) {
         self.drop_cell(leaf);
         self.structure += 1;
         let mut deps = expr.deps();
@@ -1914,7 +1934,7 @@ impl Reactive {
         self.nodes.insert(
             leaf,
             BoundNode {
-                expr: std::sync::Arc::new(expr),
+                expr,
                 deps,
                 ctx,
                 tracks,

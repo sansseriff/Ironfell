@@ -292,8 +292,14 @@ and owner-level demand reuses what `EN-8b` built.*
   `sync_gate`; a pull rests again everything it woke; an owner made outside demand rests;
   a native whose outputs span owners never rests. Rooted natives (layout, pins, repeats,
   components, islands) run in hidden owners from what their cells held and catch up when
-  the owner wakes: a resting page's derived structure lags its values, and a reference to
-  a repeat item made since does not wake the page (open decision, handoff `EN-8c`). Host commands that bake values they cannot list beforehand read
+  the owner wakes: a resting page's derived structure lags its values. **Pull on ask**
+  (decided 2026-11-25): whatever asks about it brings it up to date. A binding's read of a
+  derived node that does not exist pulls what makes it (its authored instance or repeat,
+  `StoreCore::pull_makers`); a gesture commit does the same for what it previews; a panel
+  that lists a page (Layers) pulls it; the inspector pulls the node it shows; narrative
+  value marks read through `Store::current`. A panel shows what it read when it last
+  asked; re-asking when that moves, and observing a page while a narrative block that
+  shows a value running on time is in view, are not built. Host commands that bake values they cannot list beforehand read
   through `Store::current` (Convert to Path, the inspector's scrub).
 - **The rule is checked, not just the transitions.** Under `IRON_OWNER_CHECK=1`,
   `check_demand` asserts at every `advance` that the kept demand equals a fresh decision,

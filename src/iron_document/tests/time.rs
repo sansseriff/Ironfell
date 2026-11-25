@@ -380,3 +380,18 @@ fn an_unrelated_link_leaves_a_paused_hidden_clip_target_alone() {
     store.apply(tx("refer to the clip", vec![Op::Link { rel: Relation { id, from: rb, to: clip, rel: RelKind::References, data: BTreeMap::new() } }])).unwrap();
     assert_eq!(x_of(&store, rh), 10., "still held after a link at the running clip");
 }
+
+/// Council round 3 of EN-8c: a clip on a shown `on_demand` page follows the
+/// playhead (free-running.md §2: playback needs no free-running source).
+/// Before, clips followed the clocks, and an `on_demand` page's are held.
+#[test]
+fn a_clip_on_a_shown_on_demand_page_follows_a_scrub() {
+    let (mut store, [a, _, _, ra, _, _], _) = three_pages();
+    store.apply(tx("on demand", vec![Op::Set { id: a, path: path("composition.run"), slot: Slot::Const(Value::Enum("on_demand".into())) }])).unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [-1000., -1000., 2000., 2000.], zoom: 1. });
+    store.advance(0.);
+    store.set_time(1.);
+    store.advance(0.1);
+    assert_eq!(x_of(&store, ra), 20., "scrubbed to 1 s, between keys 10 and 30");
+}

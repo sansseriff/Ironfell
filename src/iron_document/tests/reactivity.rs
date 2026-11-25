@@ -2171,3 +2171,73 @@ fn a_transaction_naming_an_item_of_a_resting_page_sees_its_current_items() {
     let second = NodeId::item(n["$g"], "1", n["$c"]).unwrap();
     assert!(store.apply(tx("second", vec![Op::Set { id: second, path: x, slot: Slot::Const(Value::Number(30.0)) }])).is_err(), "the second item is gone");
 }
+
+/// Council round 3 of EN-8c: a shown page that reads one value of a hidden
+/// page does not run the entities that hidden page pictures. Before, the
+/// read brought the hidden page into the clock closure and its figures took
+/// their entities with it.
+#[test]
+fn reading_a_hidden_page_does_not_run_what_it_pictures() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit><definition id="$def" name="d"/>
+        <model name="model"><entity id="$e" instance.def="$def"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/></entity></model>
+        <composition id="$h" name="hidden" dims="2d"><rect id="$fig" w="1" h="1"/><rect id="$label" x="7" w="1" h="1"/></composition>
+        <composition id="$s" name="shown" dims="2d"><rect id="$r" x="{= $label.transform2d.x}" w="1" h="1"/></composition></edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("make", plan.ops)).unwrap();
+    let n = plan.aliases;
+    let id = store.authored().next_relation_id();
+    store.apply(tx("figure", vec![Op::Link { rel: Relation { id, from: n["$fig"], to: n["$e"], rel: RelKind::Figures, data: BTreeMap::new() } }])).unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$s"], rect: [0., 0., 100., 100.], zoom: 1. });
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value"));
+    store.advance(0.0);
+    let before = acc(&store);
+    store.advance(0.1);
+    store.advance(0.2);
+    assert_eq!(acc(&store), before);
+    assert_eq!(store.resolved(n["$r"], path("transform2d.x")), Some(Value::Number(7.0)), "the read itself is current");
+}
+
+/// Council round 3 of EN-8c: an edit plan that makes a page and edits an
+/// item a resting page's repeat makes in the same plan succeeds, as where
+/// everything is observed. Before, the new page made the plan's clone
+/// decide demand, rest the hidden page, and miss the item.
+#[test]
+fn an_edit_plan_making_a_page_and_editing_a_new_item_succeeds() {
+    let mut store = Store::new();
+    let plan = edit::plan(&store, r#"<edit><let id="$k" name="k" value="1"/><composition id="$a" name="a" dims="2d"/>
+      <composition id="$b" name="b" dims="2d"><group id="$g" repeat.count="{= $k}"><rect id="$r" w="10" h="10"/></group></composition></edit>"#, None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("make", plan.ops)).unwrap();
+    let n = plan.aliases;
+    let item = NodeId::item(n["$g"], "1", n["$r"]).unwrap();
+    let xml = format!(r#"<edit><composition id="$new" name="new" dims="2d"/>
+      <set id="{}" path="let.value" value="2"/><table in="{}">A</table><set id="{item}" x="30"/></edit>"#, n["$k"], n["$a"]);
+    assert!(edit::plan(&store, &xml, None).is_ok(), "everything observed: the plan is good");
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$a"], rect: [0., 0., 100., 100.], zoom: 1. });
+    store.advance(0.0);
+    let planned = edit::plan(&store, &xml, None);
+    assert!(planned.is_ok(), "{}", planned.err().unwrap().message());
+}
+
+/// Council round 3 of EN-8c: an ask inside an ask (store code reading
+/// through `current` within another `current`) leaves the pulling to the
+/// outer one, which reads what the page now places. Before, the inner ask
+/// took the outer one's record and the outer read stayed stale.
+#[cfg(not(feature = "differential"))]
+#[test]
+fn an_ask_inside_an_ask_reads_current_values() {
+    let (mut store, n) = resting_bench();
+    set_let(&mut store, n["$k"], 4.0);
+    let x = store.current(|s| {
+        let before_inner = s.resolved(n["$r2"], path("transform2d.x"));
+        s.current(|_| ());
+        before_inner
+    });
+    assert_eq!(x, Some(Value::Number(40.0)));
+}

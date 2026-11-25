@@ -624,7 +624,11 @@ impl OwnerIndex {
         // Propagate forward from active readers to the owners they read (and from
         // active compositions to the entities they picture).
         while let Some(owner) = queue.pop_front() {
+            // What a composition pictures runs with it only where it is
+            // seen: on an open path or run always, never one reached only
+            // because something reads it (council round 3 of EN-8c).
             if let Owner::Composition(c) = owner
+                && (demand || open.contains(&c) || self.run_always.contains(&c))
                 && let Some(entities) = self.figures_of_comp.get(&c)
             {
                 for &e in entities {

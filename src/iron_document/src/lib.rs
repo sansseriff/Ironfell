@@ -622,11 +622,12 @@ pub struct StoreCore {
     /// The owners constraint clusters hold in demand, until clusters or
     /// owners change.
     held_owners: Option<Vec<clocks::Owner>>,
-    /// Inside `reconcile_rest`: a settle it runs does not reconcile again.
-    reconciling: bool,
     /// How many live settles are running: only the outermost reconciles
     /// rest, never one nested in another's stages.
     settle_depth: u32,
+    /// An edit plan's `scratch` clone: everything in it is evaluated, and
+    /// demand is never decided (nothing rests while it plans).
+    planning: bool,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// Each drawn repeat/conditional's settled inputs (`each`, `count`, `key`,
     /// `when.is`, `max`, `enter_ms`, `exit_ms`), compared before doing work.
@@ -778,8 +779,8 @@ impl StoreCore {
             demand_dirty: false,
             to_place: self.to_place.clone(),
             held_owners: self.held_owners.clone(),
-            reconciling: false,
             settle_depth: 0,
+            planning: true,
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
             repeat_dirty: self.repeat_dirty.clone(),
@@ -955,8 +956,8 @@ impl StoreCore {
             demand_dirty: true,
             to_place: BTreeSet::new(),
             held_owners: None,
-            reconciling: false,
             settle_depth: 0,
+            planning: false,
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -3318,6 +3319,10 @@ impl StoreCore {
     /// host's whole-document commands, `EN-9`), when every hidden owner
     /// rests again.
     fn sync_demand(&mut self) {
+        // An edit plan's clone evaluates everything (`scratch`).
+        if self.planning {
+            return;
+        }
         self.sync_cross();
         self.demand_dirty = false;
         let doc = Tree::of(&self.docs);
@@ -3338,6 +3343,8 @@ impl StoreCore {
             (Some(_), None) => {
                 let woke = self.reactive.wake_all(doc);
                 self.demand = None;
+                let all: Vec<NodeId> = self.owner_index.clip_targets.keys().copied().filter(|&c| !self.running_clips.contains(&c)).collect();
+                self.run_clips(all, false);
                 if woke {
                     self.settle(SettleMode::Live { clusters: true });
                 }
@@ -3349,13 +3356,42 @@ impl StoreCore {
         };
         let rest_cells: Vec<graph::CellId> = rest.iter().flat_map(|&o| self.cells_of_owner(o)).collect();
         let wake_cells: Vec<graph::CellId> = wake.iter().flat_map(|&o| self.cells_of_owner(o)).collect();
+        // Clips follow what is shown, not what runs on time: one is sampled
+        // at the playhead while a page in demand holds a target of it, an
+        // `on_demand` page's too (free-running.md §2: playback needs no
+        // source).
+        let woken_clips: Vec<NodeId> = wake.iter().filter_map(|o| self.owner_index.clips_by_owner.get(o)).flat_map(|cs| cs.keys().copied()).filter(|c| !self.running_clips.contains(c)).collect();
+        let held = next.as_ref().map(|d| {
+            let rested = rest.iter().filter_map(|o| self.owner_index.clips_by_owner.get(o)).flat_map(|cs| cs.keys().copied());
+            let mut gone: BTreeSet<NodeId> = rested.filter(|&c| !self.owner_index.clip_is_active(c, d)).collect();
+            if self.demand.is_none() {
+                gone.extend(self.running_clips.iter().copied().filter(|&c| !self.owner_index.clip_is_active(c, d)));
+            }
+            gone
+        });
         self.demand = next;
+        if let Some(held) = held {
+            for c in &held {
+                self.running_clips.remove(c);
+            }
+            self.run_clips(woken_clips, !held.is_empty());
+        }
         self.reactive.rest(rest_cells);
         let woke = self.reactive.wake_cells(Tree::of(&self.docs), wake_cells);
         let placing = std::mem::take(&mut self.to_place);
         if self.place(placing) || woke {
             self.settle(SettleMode::Live { clusters: true });
         }
+    }
+
+    /// Start sampling `clips` at the playhead (and recompute what clips
+    /// animate when any started or `changed`).
+    fn run_clips(&mut self, clips: Vec<NodeId>, changed: bool) {
+        self.running_clips.extend(clips.iter().copied());
+        if changed || !clips.is_empty() {
+            self.recompute_animated();
+        }
+        self.sample_clip_subset(&clips);
     }
 
     /// Bring the owner index and the cross-owner read graph up to date with
@@ -3577,7 +3613,8 @@ impl StoreCore {
     /// run (a run more than the reference would make moves what reads a
     /// later stage of the derivation, a repeat counting a placement).
     fn settle_reads(&mut self) -> bool {
-        let made = self.pull_missing();
+        let missing = self.reactive.take_missing();
+        let made = self.pull_owners(missing);
         let escaped = self.reactive.take_escaped();
         if escaped.is_empty() {
             return made;
@@ -3591,11 +3628,6 @@ impl StoreCore {
     /// repeat on a resting page: the page's structure may lag its values,
     /// so what makes that node is brought up to date (engine spec §4.1,
     /// pull on ask). Whether anything was.
-    fn pull_missing(&mut self) -> bool {
-        let missing = self.reactive.take_missing();
-        self.pull_owners(missing)
-    }
-
     /// Pull on ask (engine spec §4.1): bring up to date the resting owners
     /// of `ids`, whole, without waking them. A node that does not exist
     /// counts as its authored instance or repeat's. An owner, not a cone:
@@ -3610,7 +3642,7 @@ impl StoreCore {
             .into_iter()
             .filter_map(|n| if doc.is_live(n) { Some(n) } else { n.expanded_root().filter(|&r| doc.is_live(r)) })
             .map(|n| self.owner_index.owner_of(doc, n))
-            .filter(|o| *o != clocks::Owner::Free && !demand.contains(o))
+            .filter(|o| !demand.contains(o))
             .collect();
         if owners.is_empty() {
             return false;
@@ -3625,6 +3657,10 @@ impl StoreCore {
     /// command that bakes values it cannot list beforehand, such as Convert
     /// to Path baking its readers).
     pub fn current<T>(&mut self, mut f: impl FnMut(&mut Self) -> T) -> T {
+        // Inside another ask: that one pulls what this reads, and runs again.
+        if self.reactive.is_asking() {
+            return f(self);
+        }
         if self.settle_reads() {
             self.settle(SettleMode::Live { clusters: true });
         }
@@ -3758,7 +3794,7 @@ impl StoreCore {
     /// changed what is shown); otherwise only when a cross-owner read came
     /// or went. Costs the owners in demand, never the hidden document.
     fn reconcile_rest(&mut self, decide: bool) {
-        if self.reconciling {
+        if self.settle_depth > 0 {
             return;
         }
         let cross = self.sync_cross();
@@ -3766,7 +3802,8 @@ impl StoreCore {
         if self.demand.is_none() && !self.demand_dirty {
             return;
         }
-        self.reconciling = true;
+        // What it settles is one of its stages: that settle reconciles nothing.
+        self.settle_depth += 1;
         if decide || cross || self.demand_dirty {
             self.sync_demand();
         } else if !self.to_place.is_empty() {
@@ -3775,7 +3812,7 @@ impl StoreCore {
                 self.settle(SettleMode::Live { clusters: true });
             }
         }
-        self.reconciling = false;
+        self.settle_depth -= 1;
     }
 
     /// The machine player revisits the instances an edit touched, and every
@@ -3947,7 +3984,7 @@ impl StoreCore {
         }
         if !d.clips.is_empty() {
             for clip in d.clips {
-                let want = self.owner_index.clip_targets.contains_key(&clip) && (self.observe_all || !self.gate_initialized || self.owner_index.clip_is_active(clip, &self.active_owners));
+                let want = self.owner_index.clip_targets.contains_key(&clip) && self.demand.as_ref().is_none_or(|d| self.owner_index.clip_is_active(clip, d));
                 if want {
                     self.running_clips.insert(clip);
                 } else {
@@ -4041,14 +4078,9 @@ impl StoreCore {
             self.queries.touch(query_deps);
         }
         let cross_changed = self.sync_cross();
-        if cross_changed || self.demand_dirty || self.gate_dirty || self.gate_mode_switched || !self.gate_initialized || !self.new_owners.is_empty() {
-            self.sync_demand();
-        } else if !self.to_place.is_empty() {
-            let placing = std::mem::take(&mut self.to_place);
-            if self.place(placing) {
-                self.settle(SettleMode::Live { clusters: true });
-            }
-        }
+        let decide = cross_changed || self.gate_dirty || self.gate_mode_switched || !self.gate_initialized || !self.new_owners.is_empty();
+        self.demand_dirty |= decide;
+        self.reconcile_rest(decide);
         if self.gate_initialized && !self.gate_dirty && !self.gate_mode_switched && !cross_changed && self.new_owners.is_empty() {
             return;
         }
@@ -4061,8 +4093,6 @@ impl StoreCore {
                     self.owner_index.trace_owner.keys().copied().collect(),
                     self.owner_index.acc_owner.keys().copied().collect(),
                 );
-                self.running_clips = self.owner_index.clip_targets.keys().copied().collect();
-                self.recompute_animated();
                 self.reactive.set_watched_leaves(self.owner_index.live_queries.iter().flat_map(|&q| query::Queries::input_leaves(q)).collect());
                 self.active_owners.clear();
             }
@@ -4088,7 +4118,6 @@ impl StoreCore {
             }
             self.running_steps.0.clear();
             self.running_steps.1.clear();
-            self.running_clips.clear();
             for &o in &next_active {
                 if let Some(ts) = self.owner_index.traces_by_owner.get(&o) {
                     self.running_steps.0.extend(ts.iter().copied());
@@ -4096,11 +4125,7 @@ impl StoreCore {
                 if let Some(accs) = self.owner_index.accs_by_owner.get(&o) {
                     self.running_steps.1.extend(accs.iter().copied());
                 }
-                if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
-                    self.running_clips.extend(cs.keys().copied());
-                }
             }
-            self.recompute_animated();
             let mut watched: BTreeSet<Leaf> = self.owner_index.live_queries.iter().flat_map(|&q| query::Queries::input_leaves(q)).collect();
             for (&t, &o) in &self.owner_index.trace_owner {
                 if !next_active.contains(&o) {
@@ -4113,8 +4138,6 @@ impl StoreCore {
             self.gate_mode_switched = false;
             self.new_owners.clear();
             self.gate_initialized = true;
-            let clips: Vec<NodeId> = self.running_clips.iter().copied().collect();
-            self.sample_clip_subset(&clips);
             return;
         }
 
@@ -4130,8 +4153,6 @@ impl StoreCore {
             }
         }
 
-        let mut newly_running_clips: Vec<NodeId> = Vec::new();
-        let mut clips_changed = false;
         for &o in &resumed {
             if let Some(k) = o.clock_key() {
                 self.clocks.resume(k, now);
@@ -4149,14 +4170,6 @@ impl StoreCore {
             }
             if let Some(es) = self.owner_index.entities_by_owner.get(&o) {
                 self.machines_dirty.extend(es.iter().copied());
-            }
-            if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
-                for &c in cs.keys() {
-                    if self.running_clips.insert(c) {
-                        newly_running_clips.push(c);
-                        clips_changed = true;
-                    }
-                }
             }
         }
         for &o in &paused {
@@ -4179,22 +4192,9 @@ impl StoreCore {
             if let Some(es) = self.owner_index.entities_by_owner.get(&o) {
                 self.machines_dirty.extend(es.iter().copied());
             }
-            if let Some(cs) = self.owner_index.clips_by_owner.get(&o) {
-                for &c in cs.keys() {
-                    if !self.owner_index.clip_is_active(c, &next_active) && self.running_clips.remove(&c) {
-                        clips_changed = true;
-                    }
-                }
-            }
-        }
-        if clips_changed {
-            self.recompute_animated();
         }
         self.active_owners = next_active;
         self.gate_dirty = false;
-        if !newly_running_clips.is_empty() {
-            self.sample_clip_subset(&newly_running_clips);
-        }
     }
 
     /// How many times `advance`'s gate decided which clocks to pause, rather

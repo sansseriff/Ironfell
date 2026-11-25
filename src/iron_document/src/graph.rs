@@ -1178,6 +1178,11 @@ impl Reactive {
         }
     }
 
+    /// Whether something is asking (`asking`).
+    pub(crate) fn is_asking(&self) -> bool {
+        self.escaped.asking.load(std::sync::atomic::Ordering::Relaxed) > 0
+    }
+
     /// The nodes read while asking since the last take.
     pub(crate) fn take_asked(&self) -> BTreeSet<NodeId> {
         std::mem::take(&mut *self.escaped.asked.lock().expect("asked lock"))

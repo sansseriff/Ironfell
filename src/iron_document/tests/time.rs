@@ -358,7 +358,7 @@ fn a_running_clip_gaining_a_target_keeps_its_new_composition_live() {
 /// any relation edit resampled every clip at the current time.
 #[test]
 fn an_unrelated_link_leaves_a_paused_hidden_clip_target_alone() {
-    let (mut store, [a, _, _, ra, rb, rh], _) = three_pages();
+    let (mut store, [a, _, _, ra, rb, rh], rels) = three_pages();
     store.advance(0.);
     assert_eq!(x_of(&store, rh), 10.);
     store.set_observe_all(false);
@@ -372,4 +372,11 @@ fn an_unrelated_link_leaves_a_paused_hidden_clip_target_alone() {
     let id = store.authored().next_relation_id();
     store.apply(tx("refer", vec![Op::Link { rel: Relation { id, from: ra, to: rb, rel: RelKind::References, data: BTreeMap::new() } }])).unwrap();
     assert_eq!(x_of(&store, rh), 10., "still held after an unrelated link");
+    // Nor does a link that is not `Animates` at the running clip itself
+    // (council review of EN-8c: any relation at a clip resampled every
+    // clip, the paused one included).
+    let clip = store.tree().relation(rels[0]).unwrap().from;
+    let id = store.authored().next_relation_id();
+    store.apply(tx("refer to the clip", vec![Op::Link { rel: Relation { id, from: rb, to: clip, rel: RelKind::References, data: BTreeMap::new() } }])).unwrap();
+    assert_eq!(x_of(&store, rh), 10., "still held after a link at the running clip");
 }

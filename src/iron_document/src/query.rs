@@ -141,6 +141,11 @@ impl Queries {
         (out, due)
     }
 
+    /// The queries the next advance visits.
+    pub fn to_visit(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.dirty.iter().chain(&self.waiting).copied()
+    }
+
     /// Visit `nodes` at the next advance.
     pub fn touch(&mut self, nodes: impl IntoIterator<Item = NodeId>) {
         self.dirty.extend(nodes);

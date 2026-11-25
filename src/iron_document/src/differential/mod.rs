@@ -407,6 +407,10 @@ impl Store {
         self.call("advance_queries", |s| s.advance_queries(now))
     }
 
+    pub fn pull_nodes(&mut self, nodes: &[NodeId]) {
+        self.call("pull_nodes", |s| s.pull_nodes(nodes))
+    }
+
     pub fn resolve_query(&mut self, node: NodeId, seq: u64, result: Result<Value, String>) -> bool {
         self.call("resolve_query", |s| s.resolve_query(node, seq, result.clone()))
     }

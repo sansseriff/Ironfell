@@ -650,6 +650,10 @@ fn observed_script(seed: u64, steps: usize) -> usize {
     let back = seed % 2 == 0;
     let viewer = |w: &mut World| {
         let back = if back { r#"<rect in="$c" id="$back" name="back" x="{= $v3.transform2d.x * 2}" y="{= $v1.transform2d.x}" w="4" h="4"/>"# } else { "" };
+        // A second page, not run always, that the sheet's random content
+        // moves to and from: it rests while hidden (council review of
+        // EN-8c: nothing random ever rested).
+        w.edit(r#"<composition id="$d" name="annex" dims="2d"/>"#).unwrap();
         w.edit(&[
             r#"<let id="$pick" name="pick" value="0"/>
             <composition id="$v" name="viewer" dims="2d">
@@ -677,7 +681,7 @@ fn observed_script(seed: u64, steps: usize) -> usize {
     }
     let mut coin = Rng(seed ^ 0x0b5e_47ed);
     some.store.set_observe_all(false);
-    let (c, v, pick) = (some.names["$c"], some.names["$v"], some.names["$pick"]);
+    let (c, v, pick, d) = (some.names["$c"], some.names["$v"], some.names["$pick"], some.names["$d"]);
     let (pa, ps) = (all.store.register_producer("viewer"), some.store.register_producer("viewer"));
     let mut watching: Vec<ObserverId> = Vec::new();
     let mut shown: Vec<NodeId> = Vec::new();
@@ -704,6 +708,26 @@ fn observed_script(seed: u64, steps: usize) -> usize {
     for i in 0..steps {
         step(&mut all);
         step(&mut some);
+        if coin.chance(30) {
+            // One of the sheet's or the annex's own children moves to the
+            // other page, with what it holds and what reads it.
+            let doc = all.store.tree();
+            // Not what runs on time: a hidden page's clock pauses by design
+            // (the gate's exception above), so a trace, an accumulator, a
+            // clip, an entity it pictures or a fading repeat would differ.
+            let timed = |m: NodeId| {
+                doc.facets_of(m).any(|f| matches!(f.kind(), FacetKind::Trace | FacetKind::Accumulate))
+                    || doc.relations_from(m).chain(doc.relations_to(m)).any(|r| matches!(r.rel, RelKind::Figures | RelKind::Animates))
+                    || ["repeat.enter_ms", "repeat.exit_ms", "when.enter_ms", "when.exit_ms"].iter().any(|p| doc.leaf(m, path(p)).is_some_and(|s| s.constant().and_then(|v| v.as_f64()).unwrap_or(1.0) > 0.0))
+            };
+            let movable = |n: NodeId| !n.is_expanded() && !n.is_session() && Some(n) != all.names.get("$back").copied() && !std::iter::once(n).chain(doc.descendants(n)).any(timed);
+            let kids: Vec<(NodeId, NodeId)> = [(c, d), (d, c)].into_iter().flat_map(|(from, to)| doc.children(from).iter().copied().filter(|&n| movable(n)).map(|n| (n, to)).collect::<Vec<_>>()).collect();
+            if let Some(&(n, to)) = kids.get(coin.below(kids.len().max(1))) {
+                let mv = vec![Op::Reparent { id: n, parent: Some(to), order: OrderKey::first() }];
+                let (a, b) = (all.store.apply(tx("move page", mv.clone())).is_ok(), some.store.apply(tx("move page", mv)).is_ok());
+                assert_eq!(a, b, "seed {seed}, step {i}: the same move outcome");
+            }
+        }
         if coin.chance(50) {
             // Not the viewer's own pictures nor `$back`: a picture placed by
             // what reads its own placement is a loop through layout, which
@@ -735,7 +759,7 @@ fn observed_script(seed: u64, steps: usize) -> usize {
             for id in watching.drain(..) {
                 some.store.unobserve(id);
             }
-            shown = [vec![], vec![c], vec![v], vec![c, v]][coin.below(4)].clone();
+            shown = [vec![], vec![c], vec![v], vec![c, v], vec![d], vec![v, d]][coin.below(6)].clone();
             for &comp in &shown {
                 watching.push(some.store.observe(Interest::Region { composition: comp, rect: [0.0, 0.0, 1000.0, 1000.0], zoom: 1.0 }));
             }

@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// the phase expected to stop it.
 const SCALING: &[(&str, &str, &str)] = &[
     ("constant edit", "allocations", "DS-7"),
+    ("cross-owner read", "allocations", "DS-7"),
+    ("cross-owner read", "store.clusters", "DS-3a"),
     ("constant edit", "store.clusters", "DS-3a"),
     ("edit plan", "graph.unneeded", "EN-9: scratch() wakes every resting cell of its clone"),
     ("edit plan", "allocations", "DS-7"),
@@ -58,6 +60,8 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("theme", "bytes", "DS-3a"),
     ("undo and redo", "allocations", "DS-7"),
     ("undo and redo", "store.clusters", "DS-3a"),
+    ("unrelated relation edit", "allocations", "DS-7"),
+    ("unrelated relation edit", "store.clusters", "DS-3a"),
     ("walk (canary)", "allocations", "canary: must always grow"),
     ("walk (canary)", "bytes", "canary: must always grow"),
     ("walk (canary)", "descendants", "canary: must always grow"),
@@ -345,6 +349,25 @@ fn operations() -> Vec<Operation> {
             assert!(fired.is_some(), "the button's action wrote");
             c.frame();
             c.apply("n", vec![Op::Set { id: c.n, path: path("let.value"), slot: Slot::Const(Value::Number(3.0)) }]);
+            c.frame();
+        }),
+        // A shown binding that reads a hidden page brings that page into
+        // demand and lets it rest again (council review of EN-8c).
+        op("cross-owner read", |c| {
+            let read = iron_document::Expr::parse(&format!("{}.transform2d.x + 1", c.quiet_r)).unwrap();
+            c.apply("read", vec![Op::Set { id: c.r, path: path("transform2d.x"), slot: Slot::Bound(read) }]);
+            c.frame();
+            assert_eq!(c.store.resolved(c.r, path("transform2d.x")), Some(Value::Number(11.0)));
+            c.apply("unread", vec![Op::Set { id: c.r, path: path("transform2d.x"), slot: Slot::Const(Value::Number(100.0)) }]);
+            c.frame();
+        }),
+        // A link that is not `Animates` resamples no clip.
+        op("unrelated relation edit", |c| {
+            let id = c.store.authored().next_relation_id();
+            let rel = iron_document::document::Relation { id, from: c.r, to: c.button, rel: iron_document::document::RelKind::References, data: BTreeMap::new() };
+            c.apply("link", vec![Op::Link { rel }]);
+            c.frame();
+            c.apply("unlink", vec![Op::Unlink { id }]);
             c.frame();
         }),
         op("edit plan", |c| {

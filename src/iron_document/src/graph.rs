@@ -98,7 +98,7 @@ pub struct Signal {
 }
 
 /// A cell of the graph (reactive-engine.md §5.1; handoff §4.10): what the
-/// pass queues, orders by height, and decides necessity for. A `Leaf` cell
+/// pass queues, orders by height, and rests with its owner. A `Leaf` cell
 /// is a Formula, a binding's expression on that leaf (`BoundNode`); a
 /// `Native` cell is an engine computation (`Native`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -624,10 +624,6 @@ pub struct Reactive {
     input_changed_at: BTreeMap<InputKey, u64>,
     /// Epoch when a `structure::Key` watched by `key_readers` was last touched.
     key_changed_at: HashMap<crate::structure::Key, u64>,
-    /// Fast guard: `false` when no resting (`unneeded`) cell has had any input,
-    /// key, or `must_run` touched since entering `unneeded`, so `wake_cells`
-    /// and `relax` skip scanning `self.unneeded` completely (`EN-8a`).
-    unneeded_may_be_behind: bool,
     /// The signals connections and anchors derive, maintained incrementally
     /// by Stage 2 `DerivedBindingMakers` (EN-2c).
     derived: Counted<BTreeMap<Leaf, Expr>, GRAPH_DERIVED>,
@@ -656,10 +652,16 @@ pub struct Reactive {
     /// (§8.9). The host's reads are not recorded: what it draws of a hidden
     /// composition may be stale.
     escaped: Escaped,
+    /// While a pull runs: every cell it took out of `unneeded`, its tracked
+    /// reads' wakes included, to rest again after it (`pull`).
+    pulled: Option<BTreeSet<CellId>>,
+    /// Cells a tracked read or a new cell's read woke outside a pull, for
+    /// the store to rest or keep awake with their owner (`take_woke`).
+    woke: BTreeSet<CellId>,
     /// The native cells, by key.
     natives: Counted<BTreeMap<NativeKey, NativeCell>, GRAPH_NATIVES>,
     /// Each leaf a native may write, to its native: a read of it is a read
-    /// of that cell, for heights, priming and necessity.
+    /// of that cell, for heights and priming.
     owned: Counted<BTreeMap<Leaf, NativeKey>, GRAPH_OWNED>,
     /// The leaves each native holds a claim on.
     claims: Counted<BTreeMap<NativeKey, BTreeSet<Leaf>>, GRAPH_CLAIMS>,
@@ -825,30 +827,7 @@ impl Reactive {
     }
 
     fn stamp_leaf(&mut self, leaf: Leaf, ep: u64) {
-        let mut tracked = false;
-        if let Some(ds) = self.dependents.get(&leaf) {
-            tracked = true;
-            if !self.unneeded.is_empty() && !self.unneeded_may_be_behind {
-                if ds.len() > 8 || ds.iter().any(|c| self.unneeded.contains(c)) {
-                    self.unneeded_may_be_behind = true;
-                }
-            }
-        }
-        if let Some(ns) = self.base_readers.get(&leaf) {
-            tracked = true;
-            if !self.unneeded.is_empty() && !self.unneeded_may_be_behind {
-                if ns.len() > 8 || ns.iter().any(|k| self.unneeded.contains(&CellId::Native(*k))) {
-                    self.unneeded_may_be_behind = true;
-                }
-            }
-        }
-        if let Some(&k) = self.owned.get(&leaf) {
-            tracked = true;
-            if !self.unneeded.is_empty() && !self.unneeded_may_be_behind && self.unneeded.contains(&CellId::Native(k)) {
-                self.unneeded_may_be_behind = true;
-            }
-        }
-        if tracked {
+        if self.dependents.contains_key(&leaf) || self.base_readers.contains_key(&leaf) || self.owned.contains_key(&leaf) {
             self.leaf_changed_at.insert(leaf, ep);
         }
     }
@@ -903,9 +882,6 @@ impl Reactive {
                     n.must_run = true;
                 }
             }
-        }
-        if !self.unneeded.is_empty() && self.unneeded.contains(&c) {
-            self.unneeded_may_be_behind = true;
         }
     }
 
@@ -1011,9 +987,6 @@ impl Reactive {
     /// demand from epoch version stamps (diagnostics/tests only; never called
     /// on the hot frame path).
     pub fn stale_count(&self) -> usize {
-        if !self.unneeded_may_be_behind {
-            return 0;
-        }
         self.unneeded.iter().filter(|&&c| self.behind(c)).count()
     }
 
@@ -1057,28 +1030,43 @@ impl Reactive {
     /// Let `cells` rest: the store's owner-level demand no longer reaches
     /// them (`EN-8c`). Natives that always run (`rooted`) never rest.
     pub(crate) fn rest(&mut self, cells: impl IntoIterator<Item = CellId>) {
-        let mut any = false;
         for c in cells {
             let always = matches!(c, CellId::Native(k) if self.natives.get(&k).is_some_and(|n| n.rooted));
-            if self.exists(c) && !always && self.unneeded.insert(c) {
-                any = true;
+            if self.exists(c) && !always {
+                self.unneeded.insert(c);
             }
         }
-        if any {
-            self.unneeded_may_be_behind = true;
-        }
+    }
+
+    /// Under the differential harness: the resting cells, which of
+    /// `cells` can rest (not a rooted native), and whether edge changes or
+    /// wakes wait for the store to take them (`Store::check_demand`).
+    #[cfg(feature = "differential")]
+    pub(crate) fn resting_state(&self, cells: Vec<CellId>) -> (&BTreeSet<CellId>, BTreeSet<CellId>, bool) {
+        let can_rest = cells.into_iter().filter(|&c| self.exists(c) && !matches!(c, CellId::Native(k) if self.natives.get(&k).is_some_and(|n| n.rooted))).collect();
+        (&self.unneeded, can_rest, !self.edge_changed_cells.is_empty() || self.edges_rebuilt || !self.woke.is_empty())
+    }
+
+    /// Under the differential harness: awake cells that read a resting one,
+    /// which owner-level demand never leaves (`Store::check_demand`).
+    /// Rooted natives are not counted: they keep a hidden composition laid
+    /// out and its repeats made, from what its cells held when it rested,
+    /// and run again when it wakes.
+    #[cfg(feature = "differential")]
+    pub(crate) fn awake_reading_resting(&self) -> Vec<(CellId, CellId)> {
+        let cells = self.nodes.keys().map(|&l| CellId::Leaf(l)).chain(self.natives.iter().filter(|(_, n)| !n.rooted).map(|(&k, _)| CellId::Native(k)));
+        cells.filter(|c| !self.unneeded.contains(c)).flat_map(|c| self.reads_of(c).into_iter().filter(|d| self.unneeded.contains(d)).map(move |d| (c, d)).collect::<Vec<_>>()).collect()
     }
 
     /// Wake `cells` (those of owners demand reaches again), evaluating the
     /// ones whose inputs moved while they rested. Whether it evaluated
     /// anything.
     pub(crate) fn wake_cells(&mut self, doc: Tree<'_>, cells: impl IntoIterator<Item = CellId>) -> bool {
-        let behind_possible = self.unneeded_may_be_behind;
         let woken: BTreeSet<CellId> = cells.into_iter().filter(|c| self.unneeded.remove(c)).collect();
-        if self.unneeded.is_empty() {
-            self.unneeded_may_be_behind = false;
+        if let Some(pulled) = &mut self.pulled {
+            pulled.extend(woken.iter().copied());
         }
-        if woken.is_empty() || !behind_possible {
+        if woken.is_empty() {
             return false;
         }
         let wake = self.collect_stale_wake(&woken);
@@ -1097,8 +1085,8 @@ impl Reactive {
         self.wake_cells(doc, all)
     }
 
-    /// The leaf cells of `nodes`, and the natives that write only them: what
-    /// rests with the owner `nodes` make up.
+    /// The leaf cells of `nodes`, and the natives that belong only to them
+    /// (`cell_nodes`): what rests with the owner `nodes` make up.
     pub(crate) fn cells_of(&self, nodes: &BTreeSet<NodeId>) -> Vec<CellId> {
         let mut out: Vec<CellId> = Vec::new();
         let mut natives: BTreeSet<NativeKey> = BTreeSet::new();
@@ -1107,23 +1095,27 @@ impl Reactive {
             natives.extend(self.owned.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).map(|(_, k)| *k));
         }
         for k in natives {
-            if let Some(n) = self.natives.get(&k) {
-                let outputs = n.rule.outputs();
-                if !outputs.is_empty() && outputs.iter().all(|o| nodes.contains(&o.node)) {
-                    out.push(CellId::Native(k));
-                }
+            let of = self.cell_nodes(CellId::Native(k));
+            if !of.is_empty() && of.iter().all(|n| nodes.contains(n)) {
+                out.push(CellId::Native(k));
             }
         }
         out
     }
 
-    /// The node a cell belongs to, for its owner: a leaf's node, a native's
-    /// first output's.
-    pub(crate) fn node_of(&self, cell: CellId) -> Option<NodeId> {
+    /// The nodes a cell belongs to, for its owner: a leaf's node, a
+    /// native's outputs'.
+    pub(crate) fn cell_nodes(&self, cell: CellId) -> Vec<NodeId> {
         match cell {
-            CellId::Leaf(l) => Some(l.node),
-            CellId::Native(k) => self.natives.get(&k).and_then(|n| n.rule.outputs().first().map(|o| o.node)),
+            CellId::Leaf(l) => vec![l.node],
+            CellId::Native(k) => self.natives.get(&k).map(|n| n.rule.outputs().iter().map(|o| o.node).collect()).unwrap_or_default(),
         }
+    }
+
+    /// The cells woken outside a pull and an owner's wake since the last
+    /// take (`woke`).
+    pub(crate) fn take_woke(&mut self) -> BTreeSet<CellId> {
+        std::mem::take(&mut self.woke)
     }
 
     /// The unneeded cells read from outside the graph since the last take.
@@ -1135,9 +1127,6 @@ impl Reactive {
     /// it or an unneeded cell upstream of it has an input, key, or `must_run`
     /// flag newer than its `verified_at`.
     fn behind(&self, cell: CellId) -> bool {
-        if !self.unneeded_may_be_behind {
-            return false;
-        }
         let mut stack = vec![cell];
         let mut seen = BTreeSet::new();
         while let Some(c) = stack.pop() {
@@ -1162,36 +1151,34 @@ impl Reactive {
         }
     }
 
-    /// Make `leaves` and what they read needed, bringing the stale ones up
-    /// to date: something outside the graph read them (`take_escaped`).
-    /// They rest again when their owner next leaves demand (no pinning).
-    /// Whether anything was brought up to date, so that what read them
-    /// may have read an old value.
+    /// Bring `leaves` and what they read up to date if they rest:
+    /// something outside the graph read them (`take_escaped`). Whether
+    /// anything was brought up to date, so that what read them may have
+    /// read an old value.
     pub(crate) fn need(&mut self, doc: Tree<'_>, leaves: &BTreeSet<Leaf>) -> bool {
         let cells: Vec<CellId> = leaves.iter().filter_map(|l| self.cell_of(*l)).collect();
         self.pull(doc, cells)
     }
 
-    /// Pull `cells` and every resting cell they read, bringing the behind
-    /// ones up to date. Whether anything was evaluated.
+    /// Bring `cells` and every resting cell they read up to date, and let
+    /// them rest again: a pull never keeps a hidden owner's cells running
+    /// (council review of EN-8c). Whether anything was evaluated.
     pub(crate) fn pull(&mut self, doc: Tree<'_>, cells: Vec<CellId>) -> bool {
-        let wake = self.wake_closure(cells);
-        if wake.is_empty() {
-            return false;
+        self.pulled = Some(BTreeSet::new());
+        let (wake, _) = self.wake_taken(cells);
+        if !wake.is_empty() {
+            let dirty = self.readers(&wake);
+            self.evaluate(doc, &dirty, &wake);
         }
-        let dirty = self.readers(&wake);
-        self.evaluate(doc, &dirty, &wake);
-        true
+        let pulled = self.pulled.take().unwrap_or_default();
+        self.rest(pulled);
+        !wake.is_empty()
     }
 
     /// Take `from` and every unneeded cell it reads, directly or through
-    /// others, out of `unneeded`; return the behind roots among them.
-    fn wake_closure(&mut self, from: impl IntoIterator<Item = CellId>) -> BTreeSet<CellId> {
-        self.wake_counted(from).0
-    }
-
-    /// `wake_closure`, and how many cells it took out of `unneeded`.
-    fn wake_counted(&mut self, from: impl IntoIterator<Item = CellId>) -> (BTreeSet<CellId>, usize) {
+    /// others, out of `unneeded`: the behind roots among them, and all of
+    /// them.
+    fn wake_taken(&mut self, from: impl IntoIterator<Item = CellId>) -> (BTreeSet<CellId>, BTreeSet<CellId>) {
         let mut stack: Vec<CellId> = from.into_iter().collect();
         let mut taken: BTreeSet<CellId> = BTreeSet::new();
         while let Some(c) = stack.pop() {
@@ -1201,9 +1188,15 @@ impl Reactive {
             taken.insert(c);
             stack.extend(self.reads_of(c));
         }
-        let count = taken.len();
+        self.pulled.as_mut().unwrap_or(&mut self.woke).extend(taken.iter().copied());
         let wake = self.collect_stale_wake(&taken);
-        (wake, count)
+        (wake, taken)
+    }
+
+    /// `wake_taken`, and how many cells it took out of `unneeded`.
+    fn wake_counted(&mut self, from: impl IntoIterator<Item = CellId>) -> (BTreeSet<CellId>, usize) {
+        let (wake, taken) = self.wake_taken(from);
+        (wake, taken.len())
     }
 
     /// `from` (needed live cells) and every needed cell that reads them,
@@ -1495,7 +1488,6 @@ impl Reactive {
         // Everything is evaluated below; the store rests hidden owners
         // again (`take_edge_changes` reports the rebuild).
         self.unneeded.clear();
-        self.unneeded_may_be_behind = false;
         self.bump_epoch();
         self.leaf_changed_at.clear();
         self.key_changed_at.clear();
@@ -1611,9 +1603,6 @@ impl Reactive {
             }
             if let Some(ks) = self.key_readers.get(&key) {
                 self.key_changed_at.insert(key, ep);
-                if !self.unneeded.is_empty() && !self.unneeded_may_be_behind && (ks.len() > 8 || ks.iter().any(|k| self.unneeded.contains(&CellId::Native(*k)))) {
-                    self.unneeded_may_be_behind = true;
-                }
                 self.pending.extend(ks.iter().map(|k| CellId::Native(*k)).filter(|c| !self.unneeded.contains(c)));
             }
             if let Some(cs) = self.cells_by_key.get(&key) {
@@ -1851,6 +1840,9 @@ impl Reactive {
         }
         if reached.is_empty() {
             return;
+        }
+        if self.pulled.is_none() {
+            self.woke.extend(reached.iter().copied());
         }
         self.wake_cells(doc, reached);
     }
@@ -3041,13 +3033,6 @@ impl Reactive {
                 self.inputs.remove(&key);
             }
         }
-        if !self.unneeded.is_empty()
-            && !self.unneeded_may_be_behind
-            && let Some(ns) = self.input_readers.get(&key)
-            && (ns.len() > 8 || ns.iter().any(|k| self.unneeded.contains(&CellId::Native(*k))))
-        {
-            self.unneeded_may_be_behind = true;
-        }
         let primed: BTreeSet<CellId> = self
             .input_readers
             .get(&key)
@@ -3095,9 +3080,6 @@ impl Reactive {
             let cells: Vec<CellId> = ks.iter().map(|k| CellId::Native(*k)).collect();
             let ep = self.bump_epoch();
             self.key_changed_at.insert(key, ep);
-            if !self.unneeded.is_empty() && !self.unneeded_may_be_behind && cells.iter().any(|c| self.unneeded.contains(c)) {
-                self.unneeded_may_be_behind = true;
-            }
             self.pending.extend(cells.into_iter().filter(|c| !self.unneeded.contains(c)));
         }
     }

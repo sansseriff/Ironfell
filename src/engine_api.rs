@@ -1234,10 +1234,10 @@ pub fn document_to_path(app: &mut WorkerApp, node: String, force: bool) -> Strin
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
-    // Readers of its size keep their current value: current, not stale.
-    store.0.pull_nodes(&[id]);
+    // What it bakes (its outline, its readers' values) is current, not
+    // stale: the readers may rest in other compositions.
     let ty = store.0.tree().live(id).map(|n| n.ty.name()).unwrap_or("");
-    let conversion = match iron_document::shape::to_path(&store.0, id) {
+    let conversion = match store.0.current(|s| iron_document::shape::to_path(s, id)) {
         Ok(c) => c,
         Err(e) => return serde_json::json!({"ok": false, "error": e}).to_string(),
     };
@@ -1891,7 +1891,8 @@ pub fn document_inspect_scrub(app: &mut WorkerApp, node: String, leaf: String, p
                             color[3] = value.clamp(0.0, 1.0) as f32;
                             Value::Color(color)
                         } else { Value::Number(value) };
-                        let resolved = iron_document::handle::resolve_target(store.0.tree(), store.0.reactive(), iron_document::Leaf { node: id, path }, next);
+                        // Through a binding to its source, as that is now.
+                        let resolved = store.0.current(|s| iron_document::handle::resolve_target(s.tree(), s.reactive(), iron_document::Leaf { node: id, path }, next.clone()));
                         let (target, next) = match resolved { Ok(v) => v, Err(error) => { store.0.cancel_gesture(); return Err(error); } };
                         if let Some(prior) = writes.insert(target, next.clone()) && prior != next {
                             store.0.cancel_gesture();

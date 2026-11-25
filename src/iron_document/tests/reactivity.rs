@@ -1864,3 +1864,108 @@ fn undoing_a_move_into_a_new_hidden_composition_frees_what_moved() {
     }
     assert!(acc(&store) > paused + 4.0, "moved back to model space: Free, running ({paused} → {})", acc(&store));
 }
+
+/// Council review of EN-8c: a bound rect moved from a hidden group into a
+/// shown one, while its old group moves into the shown composition in the
+/// same transaction, wakes with its new owner, in the frame of the move.
+/// Before, whether a move changed owner was judged from the final tree,
+/// where both parents are in the shown composition, and what moved was
+/// placed only at the next advance.
+#[test]
+fn a_rect_moved_out_of_a_group_that_moves_too_wakes_where_it_lands() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$t" name="t" value="0"/>
+        <composition id="$a" name="a" dims="2d"><group id="$h" name="h"/></composition>
+        <composition id="$b" name="b" dims="2d"><group id="$g" name="g"><rect id="$r" name="r" x="{= $t + 1}" y="0" w="1" h="1"/></group></composition>"#,
+    );
+    let at = BTreeMap::from([(Leaf { node: n["$t"], path: path("let.value") }, Value::Number(10.0))]);
+    store.publish(p, at.clone());
+    all.publish(p, at);
+    let x = Leaf { node: n["$r"], path: path("transform2d.x") };
+    assert!(store.reactive().is_stale(x), "hidden, r rests");
+    let moves = vec![
+        Op::Reparent { id: n["$r"], parent: Some(n["$h"]), order: OrderKey::first() },
+        Op::Reparent { id: n["$g"], parent: Some(n["$a"]), order: OrderKey::first() },
+    ];
+    store.apply(tx("moves", moves.clone())).unwrap();
+    all.apply(tx("moves", moves)).unwrap();
+    // In the frame of the move, before any advance.
+    assert!(!store.reactive().is_stale(x), "shown, r is current");
+    assert_eq!(store.resolved(x.node, x.path), Some(Value::Number(11.0)));
+    assert_eq!(store.resolved(x.node, x.path), all.resolved(x.node, x.path));
+}
+
+/// Council review of EN-8c: a query in a hidden composition asks with its
+/// input as it is now. Before, the request was made from the resting
+/// input's old value.
+#[test]
+fn a_hidden_query_asks_with_its_current_input() {
+    let (mut store, _, p, n) = split(
+        r#"<let id="$k" name="k" value="1"/>
+        <composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+        <composition id="$h" name="h" dims="2d"><query id="$q" name="q" model="sim" input="{= $k * 1}" debounce="0"/></composition>"#,
+    );
+    store.advance(0.0);
+    store.publish(p, BTreeMap::from([(Leaf { node: n["$k"], path: path("let.value") }, Value::Number(11.0))]));
+    let (h, q) = (n["$h"], n["$q"]);
+    assert!(store.reactive().is_stale(Leaf { node: q, path: path("query.input") }), "hidden, the input rests");
+    let plan = edit::plan(&store, &format!(r#"<edit><text in="{h}" name="reader" content="{{= fmt({q}.query.value)}}"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("reader", plan.ops)).unwrap();
+    let due = store.advance_queries(1.0);
+    assert_eq!(due.len(), 1, "read, the query asks");
+    assert_eq!(query::to_plain(&due[0].input), serde_json::json!(11.0));
+}
+
+/// Council review of EN-8c: what a pull brings up to date, and what is made
+/// in a hidden composition, rests with its owner afterwards. Before, both
+/// stayed awake, evaluated on every publish, until their owner was shown
+/// and hidden again.
+#[test]
+fn pulled_and_new_cells_of_a_hidden_composition_rest() {
+    let (mut store, t, a, b, rects) = two_tabs();
+    let p = store.register_producer("host");
+    let at = |v: f64| BTreeMap::from([(Leaf { node: t, path: path("let.value") }, Value::Number(v))]);
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    store.publish(p, at(1.0));
+    store.pull_nodes(&[rects[1]]);
+    assert_eq!(store.resolved(rects[1], path("transform2d.x")), Some(Value::Number(2.0)), "pulled, p1 is current");
+    let spent = |store: &mut Store, v: f64| {
+        let before = store.reactive().evaluations;
+        store.publish(p, at(v));
+        store.reactive().evaluations - before
+    };
+    assert_eq!(spent(&mut store, 2.0), 1, "only the shown rect, after a pull");
+    let plan = edit::plan(&store, &format!(r#"<edit><let id="$tt" name="tt" value="0"/><rect in="{b}" name="new" x="{{= {t}.let.value + 9}}" y="0" w="1" h="1"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("new", plan.ops)).unwrap();
+    store.advance(0.0);
+    assert_eq!(spent(&mut store, 3.0), 1, "only the shown rect, after a rect made in b");
+}
+
+/// Council review of EN-8c: a constraint made on a hidden page is solved
+/// from its operands' values as they are now. A pin's operand sits in a
+/// group whose bound `x` moved while the page rested.
+#[test]
+fn a_pin_made_on_a_hidden_page_solves_from_current_values() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$t" name="t" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+        <composition id="$h" name="h" dims="2d"><group id="$g" name="g" x="{= $t * 1}" y="0"><rect id="$r" name="r" x="0" y="0" w="5" h="5"/></group></composition>"#,
+    );
+    let at = BTreeMap::from([(Leaf { node: n["$t"], path: path("let.value") }, Value::Number(10.0))]);
+    store.publish(p, at.clone());
+    all.publish(p, at);
+    let h = n["$h"];
+    for s in [&mut store, &mut all] {
+        let plan = edit::plan(s, &format!(r#"<edit><constraint in="{h}" id="$p" name="p" kind="pin" value="0"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
+        let mut data = BTreeMap::new();
+        data.insert("role".to_owned(), Value::Str("a".into()));
+        data.insert("anchor".to_owned(), Value::Vec2([0.0, 0.0]));
+        data.insert("at".to_owned(), Value::Vec2([15.0, 0.0]));
+        let link = Op::Link { rel: Relation { id: s.authored().next_relation_id(), from: plan.aliases["$p"], to: n["$r"], rel: RelKind::Constrains, data } };
+        s.apply(tx("pin", plan.ops.into_iter().chain([link]).collect())).unwrap_or_else(|e| panic!("{e:?}"));
+    }
+    let x = |s: &Store| s.tree().leaf(n["$r"], path("transform2d.x")).and_then(|s| s.constant().cloned());
+    assert_eq!(x(&all), Some(Value::Number(5.0)), "pinned at 15 in the world, in a group at 10");
+    assert_eq!(x(&store), x(&all));
+}

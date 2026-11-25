@@ -616,8 +616,9 @@ pub struct StoreCore {
     /// Whether demand must be decided again: clusters changed, or every
     /// cell was woken.
     demand_dirty: bool,
-    /// Cells that moved owner since demand was last decided.
-    moved_cells: BTreeSet<graph::CellId>,
+    /// Cells to rest or wake with their owner: they moved owner, or were
+    /// made or read anew, since they were last placed.
+    to_place: BTreeSet<graph::CellId>,
     /// The owners constraint clusters hold in demand, until clusters or
     /// owners change.
     held_owners: Option<Vec<clocks::Owner>>,
@@ -704,7 +705,7 @@ impl StoreCore {
         let mut reactive = self.reactive.clone();
         reactive.clear_previews(Tree::of(&docs));
         // A plan reads every cell exact (`EN-9`: pull only what it reads).
-        let relaxed = reactive.wake_all(Tree::of(&docs));
+        let woke = reactive.wake_all(Tree::of(&docs));
         let mut scratch = StoreCore {
             docs,
             owners: self.owners.clone(),
@@ -767,7 +768,7 @@ impl StoreCore {
             owner_makers: self.owner_makers.clone(),
             demand: self.demand.clone(),
             demand_dirty: self.demand_dirty,
-            moved_cells: self.moved_cells.clone(),
+            to_place: self.to_place.clone(),
             held_owners: self.held_owners.clone(),
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
@@ -805,7 +806,7 @@ impl StoreCore {
         } else {
             scratch.reactive.glide = None;
         }
-        if relaxed {
+        if woke {
             scratch.settle(SettleMode::Live { clusters: true });
         } else if glided {
             scratch.reactive.flush(Tree::of(&scratch.docs));
@@ -942,7 +943,7 @@ impl StoreCore {
             owner_makers: PerRootMakers::default(),
             demand: None,
             demand_dirty: true,
-            moved_cells: BTreeSet::new(),
+            to_place: BTreeSet::new(),
             held_owners: None,
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
@@ -2057,11 +2058,6 @@ impl StoreCore {
     /// undo never see it, and it is never saved. All or nothing: an error
     /// rolls back the ops already applied.
     pub fn apply_session(&mut self, ops: Vec<Op>) -> Result<(), ApplyError> {
-        // A binding checked for cycles needs every edge as it is now; a
-        // constant written (the playhead each frame) reads nothing.
-        if !ops.iter().all(|op| matches!(op, Op::Set { slot: Slot::Const(_), .. })) {
-            self.exact_all();
-        }
         let stamp = self.docs.authored.version();
         let mut undo: Vec<Op> = Vec::new();
         // A failure part-way puts the document back exactly, through the
@@ -3157,6 +3153,12 @@ impl StoreCore {
         self.sync_gate(now);
         let woken = self.take_woken(FacetKind::Query);
         self.queries.touch(woken);
+        // A request is made from its inputs as they are now: a query in a
+        // resting owner pulls them first (council review of EN-8c).
+        let inputs: BTreeSet<Leaf> = self.queries.to_visit().flat_map(query::Queries::input_leaves).collect();
+        if self.reactive.need(Tree::of(&self.docs), &inputs) {
+            self.settle(SettleMode::Live { clusters: true });
+        }
         let (values, due) = {
             let reactive = &self.reactive;
             let doc = Tree::of(&self.docs);
@@ -3290,8 +3292,10 @@ impl StoreCore {
     /// of constraint clusters (they write the document, so saved content
     /// never depends on the viewport). Owners leaving it rest; owners
     /// entering it wake, bringing their behind cells up to date. Costs the
-    /// owners that changed, never the hidden document (except switching out
-    /// of observing everything, once).
+    /// owners that changed, never the hidden document, except after every
+    /// cell was woken (leaving observe-all, or `exact_all`: export and the
+    /// host's whole-document commands, `EN-9`), when every hidden owner
+    /// rests again.
     fn sync_demand(&mut self) {
         self.sync_cross();
         self.demand_dirty = false;
@@ -3319,15 +3323,16 @@ impl StoreCore {
                 return;
             }
             (None, Some(d)) => (owners_all(self).into_iter().filter(|o| !d.contains(o)).collect(), Vec::new()),
-            (Some(old), Some(new)) => (old.difference(new).copied().collect(), new.difference(old).copied().collect()),
+            // An owner made outside demand rests from the start.
+            (Some(old), Some(new)) => (old.difference(new).chain(self.new_owners.iter().filter(|o| !new.contains(o))).copied().collect(), new.difference(old).copied().collect()),
         };
         let rest_cells: Vec<graph::CellId> = rest.iter().flat_map(|&o| self.cells_of_owner(o)).collect();
         let wake_cells: Vec<graph::CellId> = wake.iter().flat_map(|&o| self.cells_of_owner(o)).collect();
         self.demand = next;
         self.reactive.rest(rest_cells);
         let woke = self.reactive.wake_cells(Tree::of(&self.docs), wake_cells);
-        let moved = std::mem::take(&mut self.moved_cells);
-        if self.place_moved(moved) || woke {
+        let placing = std::mem::take(&mut self.to_place);
+        if self.place(placing) || woke {
             self.settle(SettleMode::Live { clusters: true });
         }
     }
@@ -3342,9 +3347,13 @@ impl StoreCore {
         if !moved.is_empty() {
             // What moved may be what a cluster solves.
             self.held_owners = None;
+            self.demand_dirty = true;
         }
-        edge_cells.extend(moved.iter().copied());
-        self.moved_cells.extend(moved);
+        edge_cells.extend(moved);
+        // A cell made in, moved to, or woken by a read in a resting owner
+        // rests with it.
+        self.to_place.extend(edge_cells.iter().copied());
+        self.to_place.extend(self.reactive.take_woke());
         if rebuilt {
             // A rebuild woke every cell.
             self.demand = None;
@@ -3373,18 +3382,20 @@ impl StoreCore {
         self.reactive.cells_of(&nodes)
     }
 
-    /// Cells that moved owner (a reparent, an entity pictured or not): they
-    /// rest or wake with their new owner.
-    fn place_moved(&mut self, cells: BTreeSet<graph::CellId>) -> bool {
+    /// Cells that moved owner (a reparent, an entity pictured or not) or
+    /// are new: they rest or wake with their owner.
+    fn place(&mut self, cells: BTreeSet<graph::CellId>) -> bool {
         let Some(demand) = &self.demand else { return false };
         let doc = Tree::of(&self.docs);
         let (mut rest, mut wake) = (Vec::new(), Vec::new());
         for c in cells {
-            let Some(n) = self.reactive.node_of(c).filter(|&n| doc.is_live(n)) else { continue };
-            if demand.contains(&self.owner_index.owner_of(doc, n)) {
-                wake.push(c);
-            } else {
-                rest.push(c);
+            // A native writing to more than one owner rests with none
+            // (`cells_of`).
+            let owners: BTreeSet<clocks::Owner> = self.reactive.cell_nodes(c).into_iter().filter(|&n| doc.is_live(n)).map(|n| self.owner_index.owner_of(doc, n)).collect();
+            match owners.first() {
+                None => {}
+                Some(o) if owners.len() == 1 && !demand.contains(o) => rest.push(c),
+                Some(_) => wake.push(c),
             }
         }
         self.reactive.rest(rest);
@@ -3409,8 +3420,7 @@ impl StoreCore {
     }
 
     /// Bring every resting cell up to date: export, and the store's rare
-    /// fallbacks (a binding checked for cycles, reads that keep reaching
-    /// further). Hidden owners rest again at the next demand decision.
+    /// fallback (reads that keep reaching further). Hidden owners rest again at the next demand decision.
     pub fn exact_all(&mut self) {
         if self.reactive.wake_all(Tree::of(&self.docs)) {
             self.settle(SettleMode::Live { clusters: true });
@@ -3440,9 +3450,11 @@ impl StoreCore {
                         return;
                     }
                 }
-                // Reads that keep reaching further: derive from an exact graph.
+                // Reads that keep reaching further: derive from an exact
+                // graph; hidden owners rest again at the next demand decision.
                 self.reactive.wake_all(Tree::of(&self.docs));
                 self.demand = None;
+                self.demand_dirty = true;
                 self.settle_pass(clusters);
             }
             SettleMode::Transaction | SettleMode::Undo | SettleMode::Replay => {
@@ -3525,9 +3537,8 @@ impl StoreCore {
         out
     }
 
-    /// Make needed the cells read from outside the graph while nothing
-    /// needed them, bringing them up to date (reactive-engine.md §8.9): they
-    /// stay needed from now on. Whether one held an old value when it was
+    /// Bring the resting cells read from outside the graph up to date
+    /// (reactive-engine.md §8.9); they rest again. Whether one held an old value when it was
     /// read (a tracked read inside the graph may have woken it since), so
     /// that what read it runs again; one that was current costs no second
     /// run (a run more than the reference would make moves what reads a
@@ -3544,8 +3555,10 @@ impl StoreCore {
 
     /// Run `f`, which computes from values without changing the document,
     /// on values up to date: if it read a stale cell, it runs again once
-    /// that cell is current (a handle's target, an action's writes).
-    fn current<T>(&mut self, mut f: impl FnMut(&mut Self) -> T) -> T {
+    /// that cell is current (a handle's target, an action's writes, a host
+    /// command that bakes values it cannot list beforehand, such as Convert
+    /// to Path baking its readers).
+    pub fn current<T>(&mut self, mut f: impl FnMut(&mut Self) -> T) -> T {
         if self.settle_reads() {
             self.settle(SettleMode::Live { clusters: true });
         }
@@ -3639,33 +3652,24 @@ impl StoreCore {
     /// whose cells' cross-owner reads are reconciled.
     fn sync_owners(&mut self, ops: &[Op], inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
         self.note_machine_ops(ops, inverse, views);
-        // Moved subtrees: their cells may read across a different owner now.
-        let mut moved: BTreeMap<NodeId, (Option<NodeId>, Option<NodeId>)> = BTreeMap::new();
-        for op in ops {
-            if let Op::Reparent { id, parent, .. } = op {
-                moved.entry(*id).or_insert((None, None)).1 = *parent;
-            }
-        }
-        for op in inverse {
-            if let Op::Reparent { id, parent, .. } = op {
-                moved.entry(*id).or_insert((None, None)).0 = *parent;
-            }
-        }
-        for &(id, old_p, new_p) in views.map(|v| v.moved.as_slice()).unwrap_or_default() {
-            if old_p != new_p {
-                moved.insert(id, (Some(old_p), Some(new_p)));
-            }
-        }
+        // Moved subtrees: their cells may have a different owner, and read
+        // across a different one, now. Whether the owner changed is not
+        // judged from the final tree: a parent moved in the same
+        // transaction changes the answer (council review of EN-8c).
+        let doc = Tree::of(&self.docs);
+        let moved: BTreeSet<NodeId> = ops
+            .iter()
+            .chain(inverse)
+            .filter_map(|op| match op {
+                Op::Reparent { id, .. } => Some(*id),
+                _ => None,
+            })
+            .chain(views.map(|v| v.moved.as_slice()).unwrap_or_default().iter().filter(|m| m.1 != m.2).map(|m| m.0))
+            .filter(|&id| doc.is_live(id))
+            .collect();
         if !moved.is_empty() {
-            let doc = Tree::of(&self.docs);
-            let comp_ty = TypeId::lookup("composition").expect("registered");
-            let in_comp = |p: Option<NodeId>| p.and_then(|p| doc.root_of(p)).filter(|&r| doc.live(r).is_some_and(|n| n.ty == comp_ty));
             let mut sub: Vec<NodeId> = Vec::new();
-            for (id, (old_p, new_p)) in moved {
-                // Within one composition the owner cannot change.
-                if !doc.is_live(id) || (in_comp(old_p).is_some() && in_comp(old_p) == in_comp(new_p)) {
-                    continue;
-                }
+            for id in moved {
                 sub.push(id);
                 sub.extend(doc.descendants(id));
             }
@@ -3673,6 +3677,21 @@ impl StoreCore {
         }
         self.sync_owner_makers();
         self.check_owner_index();
+        // What moved, was made or now reads across rests or wakes with its
+        // owner before the change returns: the frame of the change shows it
+        // current (council review of EN-8c).
+        let cross = self.sync_cross();
+        self.gate_dirty |= cross;
+        if self.demand.is_some() || self.demand_dirty {
+            if cross || self.demand_dirty {
+                self.sync_demand();
+            } else if !self.to_place.is_empty() {
+                let placing = std::mem::take(&mut self.to_place);
+                if self.place(placing) {
+                    self.settle(SettleMode::Live { clusters: true });
+                }
+            }
+        }
     }
 
     /// The machine player revisits the instances an edit touched, and every
@@ -3882,6 +3901,45 @@ impl StoreCore {
     #[cfg(not(feature = "differential"))]
     fn check_owner_index(&self) {}
 
+    /// Under the differential harness with `IRON_OWNER_CHECK=1`, once
+    /// demand is decided and no edge change waits: demand is what a fresh
+    /// decision gives, the resting cells are exactly the cells of the
+    /// owners it leaves out, and no awake cell reads a resting one (council
+    /// review of EN-8c: rest state kept by transitions drifted from it).
+    #[cfg(feature = "differential")]
+    fn check_demand(&self) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) || !self.owner_makers.init || self.demand_dirty || !self.to_place.is_empty() || !self.owner_dirty_cells.is_empty() {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let Some(demand) = &self.demand else {
+            let (resting, _, _) = self.reactive.resting_state(Vec::new());
+            assert!(resting.is_empty(), "nothing rests while everything is evaluated: {resting:?}");
+            return;
+        };
+        let out: Vec<clocks::Owner> = self.owner_index.compositions.iter().map(|&c| clocks::Owner::Composition(c)).chain(self.owner_index.pictured_by.keys().map(|&e| clocks::Owner::Entity(e))).filter(|o| !demand.contains(o)).collect();
+        let (resting, expected, edges_pending) = self.reactive.resting_state(out.iter().flat_map(|&o| self.cells_of_owner(o)).collect());
+        if edges_pending {
+            return;
+        }
+        let held: BTreeSet<clocks::Owner> = self.clusters.list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).filter(|&n| doc.is_live(n)).map(|n| self.owner_index.owner_of(doc, n)).collect();
+        let fresh = self.owner_index.compute_active(doc, &self.observed_compositions(), &held.into_iter().collect::<Vec<_>>(), true);
+        assert_eq!(demand, &fresh, "demand kept differs from a fresh decision");
+        let awake: Vec<_> = expected.difference(resting).collect();
+        let woken: Vec<_> = resting.difference(&expected).collect();
+        let what = |c: &&graph::CellId| match c {
+            graph::CellId::Leaf(l) => format!("{l} {:?} owner {:?}", doc.leaf(l.node, l.path).map(|s| s.expr().is_some()), self.owner_index.owner_of(doc, l.node)),
+            graph::CellId::Native(k) => format!("native {k:?}"),
+        };
+        assert!(awake.is_empty() && woken.is_empty(), "rest state differs from demand: awake outside demand {:?}, resting inside it {:?}", awake.iter().map(what).collect::<Vec<_>>(), woken.iter().map(what).collect::<Vec<_>>());
+        let reads = self.reactive.awake_reading_resting();
+        assert!(reads.is_empty(), "awake cells read resting ones: {:?}", reads.iter().map(|(c, d)| (what(&c), what(&d))).collect::<Vec<_>>());
+    }
+
+    #[cfg(not(feature = "differential"))]
+    fn check_demand(&self) {}
+
     /// Incremental owner-level visibility & clock gate (`EN-8b`, replacing
     /// `Store::gate` + `Store::paused` + `Clocks::gated`).
     /// Runs in O(1) when nothing cross-owner or observer-related changed, and
@@ -3893,8 +3951,13 @@ impl StoreCore {
             self.queries.touch(query_deps);
         }
         let cross_changed = self.sync_cross();
-        if cross_changed || self.demand_dirty || self.gate_dirty || self.gate_mode_switched || !self.gate_initialized || !self.new_owners.is_empty() || !self.moved_cells.is_empty() {
+        if cross_changed || self.demand_dirty || self.gate_dirty || self.gate_mode_switched || !self.gate_initialized || !self.new_owners.is_empty() {
             self.sync_demand();
+        } else if !self.to_place.is_empty() {
+            let placing = std::mem::take(&mut self.to_place);
+            if self.place(placing) {
+                self.settle(SettleMode::Live { clusters: true });
+            }
         }
         if self.gate_initialized && !self.gate_dirty && !self.gate_mode_switched && !cross_changed && self.new_owners.is_empty() {
             return;
@@ -4060,6 +4123,7 @@ impl StoreCore {
     /// and whether anything changed.
     pub fn advance(&mut self, now: f64) -> Advanced {
         self.sync_gate(now);
+        self.check_demand();
         let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
         // What they read of resting cells is pulled, and they run again.
         let read = self.settle_reads();
@@ -4855,11 +4919,11 @@ impl StoreCore {
                 doc.node(*n).is_some_and(|x| x.ty == clip_ty || x.ty == key_ty)
                     || self.owner_index.animates_on_target.contains_key(n)
             }
-            // Relation keys come with `Relations` of both ends, and every
-            // `Animates` starts at a clip: only a clip's relations resample
-            // (a deleted clip is still in the owner index here).
-            structure::Key::Relation(_) => false,
-            structure::Key::Relations(n) => doc.node(*n).is_some_and(|x| x.ty == clip_ty) || self.owner_index.clip_targets.contains_key(n),
+            // An `Animates` link made, or one gone (its target's relations
+            // changed while the index still holds it): never another link
+            // at a clip (council review of EN-8c).
+            structure::Key::Relation(r) => doc.relation(*r).is_some_and(|r| r.rel == RelKind::Animates),
+            structure::Key::Relations(n) => self.owner_index.animates_on_target.get(n).is_some_and(|rs| rs.iter().any(|&r| doc.relation(r).is_none())),
             structure::Key::In(_, ty) => *ty == clip_ty || *ty == key_ty,
             structure::Key::With(_, f) => matches!(f, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
             structure::Key::Roots | structure::Key::LetsIn(_) | structure::Key::Wiring(_) => false,

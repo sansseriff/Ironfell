@@ -272,7 +272,7 @@ and owner-level demand reuses what `EN-8b` built.*
   brings that cell's behind cone up to date, leaves it resting, and re-runs the reader
   (`current`). Inputs are pulled before side effects are committed (query sequence
   numbers, stepper integration, action emits). A read of a resting cell outside a recording
-  scope is a `debug_assert!`.
+  scope is a `debug_assert!` (not built; `check_demand` covers the rule instead).
 - **No `exact()` / `relax()` / `ROOTED`.** Transactions, `scratch()`, `apply_session`,
   `fire_at` and the host no longer make every cell exact; only export and unscoped
   whole-document views call `exact_all()`. `ROOTED`'s 29 facet kinds go: state that runs
@@ -285,6 +285,21 @@ and owner-level demand reuses what `EN-8b` built.*
   `wake_cells` / `pull`, `Store::pull_nodes` for host commands, `exact_all()` for export
   and unscoped views. Still whole-document: `scratch()` wakes every resting cell of its
   clone for an edit plan (`EN-9`).
+- **Placement (council review of `EN-8c`).** Rest state is kept by transitions, so every
+  path that wakes or makes a cell outside an owner's own wake must hand it back: cells
+  that moved owner, were made, or were woken by a tracked read or a new cell's read are
+  placed with their owner (`StoreCore::place`) at the end of the transaction and in
+  `sync_gate`; a pull rests again everything it woke; an owner made outside demand rests;
+  a native whose outputs span owners never rests. Rooted natives (layout, pins, repeats,
+  components, islands) run in hidden owners from what their cells held and catch up when
+  the owner wakes: a resting page's derived structure lags its values, and a reference to
+  a repeat item made since does not wake the page (open decision, handoff `EN-8c`). Host commands that bake values they cannot list beforehand read
+  through `Store::current` (Convert to Path, the inspector's scrub).
+- **The rule is checked, not just the transitions.** Under `IRON_OWNER_CHECK=1`,
+  `check_demand` asserts at every `advance` that the kept demand equals a fresh decision,
+  that the resting cells are exactly the cells of the owners outside it, and that no awake
+  cell (rooted natives aside) reads a resting one. The partial-observation differential
+  script moves random content to and from a page that rests.
 - **Local pass scheduling** (`EN-8a`, done): ranks are computed over the dirty cone only
   (`compute_local_ranks`, `raise_queued`); no global heights.
 

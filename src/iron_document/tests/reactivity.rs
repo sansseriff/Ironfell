@@ -1969,3 +1969,62 @@ fn a_pin_made_on_a_hidden_page_solves_from_current_values() {
     assert_eq!(x(&all), Some(Value::Number(5.0)), "pinned at 15 in the world, in a group at 10");
     assert_eq!(x(&store), x(&all));
 }
+
+/// Council review of EN-8c: an entity's simulation pauses when the only
+/// composition picturing it is `on_demand` (free-running.md §2: what is seen
+/// only through it is paused). Before, only accumulators directly in the
+/// composition were held, so a pictured entity kept stepping.
+#[test]
+fn an_entity_pictured_only_on_demand_holds_still() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit><definition id="$def" name="d"/>
+        <model name="model"><entity id="$e" instance.def="$def"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/></entity></model>
+        <composition id="$shown" name="shown" dims="2d" run="on_demand"><rect id="$fig" w="1" h="1"/></composition></edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("make", plan.ops)).unwrap();
+    let n = plan.aliases;
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$shown"], rect: [0., 0., 100., 100.], zoom: 1. });
+    let id = store.authored().next_relation_id();
+    store.apply(tx("figure", vec![Op::Link { rel: Relation { id, from: n["$fig"], to: n["$e"], rel: RelKind::Figures, data: BTreeMap::new() } }])).unwrap();
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value"));
+    store.advance(0.0);
+    let before = acc(&store);
+    store.advance(0.1);
+    store.advance(0.2);
+    assert_eq!(acc(&store), before, "pictured only on demand: paused");
+    // Run as usual, the same picture lets it step.
+    store.apply(tx("auto", vec![Op::Set { id: n["$shown"], path: path("composition.run"), slot: Slot::Const(Value::Enum("auto".into())) }])).unwrap();
+    store.advance(0.3);
+    store.advance(0.4);
+    assert_ne!(acc(&store), before, "pictured on an open path: running");
+}
+
+/// Council review of EN-8c, pull on ask: a shown binding that reads, by id,
+/// an item a hidden page's repeat has not made yet (its count moved while
+/// the page rested) brings that repeat up to date and reads the item.
+/// Before, it read its fallback until the page was shown.
+#[test]
+fn a_reference_to_an_item_a_hidden_repeat_has_not_made_brings_it_up_to_date() {
+    let (mut store, mut all, p, n) = split(
+        r#"<let id="$n" name="n" value="2"/><let id="$pick" name="pick" value="0"/>
+        <composition id="$a" name="a" dims="2d"><rect id="$v" name="v" x="{= deref($pick, 'transform2d.x', -1)}" y="0" w="1" h="1"/></composition>
+        <composition id="$b" name="b" dims="2d"><group id="$g" name="g" repeat.count="{= $n.let.value}"><rect id="$c" name="cell" x="{= $g.repeat.item * 10 + 5}" y="0" w="1" h="1"/></group></composition>"#,
+    );
+    let third = NodeId::item(n["$g"], "2", n["$c"]).unwrap();
+    let count = vec![Op::Set { id: n["$n"], path: path("let.value"), slot: Slot::Const(Value::Number(3.0)) }];
+    store.apply(tx("count", count.clone())).unwrap();
+    all.apply(tx("count", count)).unwrap();
+    let items = |s: &Store| s.tree().children(n["$g"]).len();
+    assert_eq!((items(&all), items(&store)), (4, 3), "hidden, b's repeat still holds two items (and its template)");
+    let pick = BTreeMap::from([(Leaf { node: n["$pick"], path: path("let.value") }, Value::Ref(third))]);
+    store.publish(p, pick.clone());
+    all.publish(p, pick);
+    let x = |s: &Store| s.resolved(n["$v"], path("transform2d.x"));
+    assert_eq!(x(&all), Some(Value::Number(25.0)));
+    assert_eq!(x(&store), x(&all), "asked for, the third item is made");
+}

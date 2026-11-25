@@ -1363,10 +1363,15 @@ pub fn document_selection(app: &mut WorkerApp) -> String {
 
 pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     use iron_document::Handle;
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
+    // What the inspector shows of a node on a hidden page is current: only
+    // that node and what it reads are brought up to date (engine spec §4.1).
+    if let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() {
+        store.0.pull_nodes(&[id]);
+    }
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else {
         return "null".into();
     };
-    let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
     let doc = store.0.tree();
     // A timeline's key diamond or clip bar (session glyphs) inspects the key
     // or clip it projects: a selected key shows its time, value and easing.
@@ -2016,6 +2021,13 @@ pub fn document_compositions(app: &mut WorkerApp) -> String {
 /// "dims", "rows", "total"}`.
 pub fn document_layers(app: &mut WorkerApp, source: String, open_json: String) -> String {
     let fail = |e: String| serde_json::json!({"ok": false, "error": e}).to_string();
+    // A page listed is a page asked about: its repeats and conditionals are
+    // made from its values as they are now, even while it rests.
+    if let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>()
+        && let Some(c) = find_composition(store.0.tree(), &source)
+    {
+        store.0.pull_nodes(&[c]);
+    }
     let Some(store) = app.world().get_resource::<crate::document_bridge::DocumentStore>() else { return fail("no store".into()) };
     let doc = store.0.tree();
     let Some(c) = find_composition(doc, &source) else { return fail(format!("no composition {source:?}")) };
@@ -2593,24 +2605,22 @@ pub fn narrative_values(app: &mut WorkerApp, source: String) -> String {
         let n = narrative_source(store, &source)?;
         let mut values = serde_json::Map::new();
         let mut errors = serde_json::Map::new();
-        for (b, c) in narrative::blocks(store.tree(), n) {
-            let _ = b;
-            for m in c.marks.iter().filter(|m| m.kind == "value") {
-                let Some(key) = narrative::value_expr(m) else { continue };
-                if values.contains_key(&key) || errors.contains_key(&key) {
-                    continue;
+        let keys: Vec<String> = narrative::blocks(store.tree(), n).into_iter().flat_map(|(_, c)| c.marks.into_iter().filter(|m| m.kind == "value").filter_map(|m| narrative::value_expr(&m))).collect();
+        for key in keys {
+            if values.contains_key(&key) || errors.contains_key(&key) {
+                continue;
+            }
+            // What a mark shows is current, from a hidden page too: only
+            // what it reads is brought up to date (engine spec §4.1).
+            let result = iron_document::Expr::parse(&key)
+                .map_err(|e| e.to_string())
+                .and_then(|e| store.current(|s| e.eval(&|l| s.resolved(l.node, l.path))).map_err(|e| e.to_string()));
+            match result {
+                Ok(v) => {
+                    values.insert(key, serde_json::json!(v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())));
                 }
-                let result = Some(key.clone())
-                    .ok_or_else(|| "no target".to_owned())
-                    .and_then(|e| iron_document::Expr::parse(&e).map_err(|e| e.to_string()))
-                    .and_then(|e| e.eval(&|l| store.resolved(l.node, l.path)).map_err(|e| e.to_string()));
-                match result {
-                    Ok(v) => {
-                        values.insert(key, serde_json::json!(v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())));
-                    }
-                    Err(e) => {
-                        errors.insert(key, serde_json::json!(e));
-                    }
+                Err(e) => {
+                    errors.insert(key, serde_json::json!(e));
                 }
             }
         }

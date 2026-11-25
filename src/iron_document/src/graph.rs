@@ -658,6 +658,9 @@ pub struct Reactive {
     /// Cells a tracked read or a new cell's read woke outside a pull, for
     /// the store to rest or keep awake with their owner (`take_woke`).
     woke: BTreeSet<CellId>,
+    /// Derived nodes a binding read that do not exist: a resting page's
+    /// repeat may not have made them yet (`take_missing`).
+    missing: BTreeSet<NodeId>,
     /// The native cells, by key.
     natives: Counted<BTreeMap<NativeKey, NativeCell>, GRAPH_NATIVES>,
     /// Each leaf a native may write, to its native: a read of it is a read
@@ -1110,6 +1113,12 @@ impl Reactive {
             CellId::Leaf(l) => vec![l.node],
             CellId::Native(k) => self.natives.get(&k).map(|n| n.rule.outputs().iter().map(|o| o.node).collect()).unwrap_or_default(),
         }
+    }
+
+    /// The derived nodes bindings read that did not exist, since the last
+    /// take (`missing`).
+    pub(crate) fn take_missing(&mut self) -> BTreeSet<NodeId> {
+        std::mem::take(&mut self.missing)
     }
 
     /// The cells woken outside a pull and an owner's wake since the last
@@ -2374,6 +2383,7 @@ impl Reactive {
                 let reads: std::cell::RefCell<BTreeSet<Leaf>> = Default::default();
                 // Unneeded cells a tracked read reached: needed from now on.
                 let reached: std::cell::RefCell<BTreeSet<CellId>> = Default::default();
+                let missing: std::cell::RefCell<BTreeSet<NodeId>> = Default::default();
                 let result = {
                     let unneeded = &self.unneeded;
                     let gesture_preview = &self.gesture_preview;
@@ -2392,6 +2402,9 @@ impl Reactive {
                             && unneeded.contains(&c)
                         {
                             reached.borrow_mut().insert(c);
+                        }
+                        if l.node.is_expanded() && !unneeded.is_empty() && !doc.is_live(l.node) {
+                            missing.borrow_mut().insert(l.node);
                         }
                         if errors.contains_key(&l) && !gesture_preview.contains_key(&l) && !live_solve_preview.contains_key(&l) {
                             if upstream.get().is_none() {
@@ -2430,6 +2443,7 @@ impl Reactive {
                         (Ok(v), _) => Ok(v),
                     }
                 };
+                self.missing.extend(missing.into_inner());
                 // A tracked read reached a cell nothing needed: it and what it
                 // reads are needed now. The stale ones among them are evaluated
                 // first and this binding after them, before what it read is

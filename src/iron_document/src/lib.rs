@@ -1959,6 +1959,13 @@ impl StoreCore {
     ) -> Option<Result<Applied, Vec<ApplyError>>> {
         // The gesture's own commit: taken first, so `apply` neither suspends
         // its previews nor finds it in conflict with itself.
+        // What it previews on a resting page may no longer exist there: that
+        // page's repeats are made from its values as they are now first, and
+        // a preview of an item that went is dropped with it.
+        let previewed: Vec<NodeId> = self.reactive.gesture_preview().keys().chain(self.reactive.live_solve_preview().keys()).map(|l| l.node).collect();
+        if self.pull_makers(previewed) {
+            self.settle(SettleMode::Live { clusters: true });
+        }
         let gesture = self.gesture.take();
         if let Some(g) = &gesture {
             self.ended = Some((g.id, GestureStatus::Committed));
@@ -3544,13 +3551,44 @@ impl StoreCore {
     /// run (a run more than the reference would make moves what reads a
     /// later stage of the derivation, a repeat counting a placement).
     fn settle_reads(&mut self) -> bool {
+        let made = self.pull_missing();
         let escaped = self.reactive.take_escaped();
         if escaped.is_empty() {
-            return false;
+            return made;
         }
         let old = escaped.values().any(|&old| old);
         self.reactive.need(Tree::of(&self.docs), &escaped.into_keys().collect());
-        old
+        old || made
+    }
+
+    /// A binding read a derived node that does not exist, of an instance or
+    /// repeat on a resting page: the page's structure may lag its values,
+    /// so what makes that node is brought up to date (engine spec §4.1,
+    /// pull on ask). Whether anything was.
+    fn pull_missing(&mut self) -> bool {
+        let missing = self.reactive.take_missing();
+        self.pull_makers(missing)
+    }
+
+    /// Bring up to date what makes the derived nodes among `ids` (their
+    /// authored instance or repeat and its subtree) when it rests, so
+    /// whether they exist is current: a read of one that does not exist, or
+    /// a gesture committing to one (pull on ask, engine spec §4.1). Whether
+    /// anything was.
+    fn pull_makers(&mut self, ids: impl IntoIterator<Item = NodeId>) -> bool {
+        let Some(demand) = &self.demand else { return false };
+        let doc = Tree::of(&self.docs);
+        let roots: BTreeSet<NodeId> = ids.into_iter().filter_map(NodeId::expanded_root).filter(|&r| doc.is_live(r) && !demand.contains(&self.owner_index.owner_of(doc, r))).collect();
+        if roots.is_empty() {
+            return false;
+        }
+        let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
+        for r in roots {
+            nodes.insert(r);
+            nodes.extend(doc.descendants(r));
+        }
+        let cells = self.reactive.cells_of(&nodes);
+        self.reactive.pull(Tree::of(&self.docs), cells)
     }
 
     /// Run `f`, which computes from values without changing the document,

@@ -242,58 +242,62 @@ explicitly isolated:
 changed, and what is shown — never on hidden compositions, hidden entities, or unrelated
 nodes elsewhere. (Excluded: load, save, export, whole-document queries, undo memory.)
 
-### 4.1 Local need counts and scoped pulls (`EN-8`)
+### 4.1 Owner-level demand and pull on read (`EN-8a`..`EN-8c`)
 
-- **Exact need-count invariant:** Maintain `leaf_need: Map<Leaf, u32>`, counting distinct
-  `(needed reader, channel)` demand edges targeting each leaf. A cell's `need` equals the
-  sum of `leaf_need` over its outputs/reservations plus its separately owned hold tokens
-  (`observe_all`, observers, Stage 4 document-writer holds, and scoped `pull`/`current`
-  holds).
-- **Separate demand from scheduling edges (no false cycles, no stale promotions):**
-  - If `L` is bound, demand and scheduling both target `binding(L)` (never a reserving
-    native, preventing false cycles when a bound leaf inside a stack is read by layout).
-  - If `L` is unbound, **demand** targets *every* native reserving `L` (both the active
-    claimant and waiting producers, so waiting requests are never stale on promotion),
-    while **scheduling/value edges** follow only the active claimant.
-  - When a binding or reservation changes, `retarget(L, old, new)` transfers `leaf_need(L)`
-    atomically.
-  - `Cx::settled` reads add demand to the owning layout native (and `Reactive::settled`
-    must not bypass the read recorder on its glide-target fast path); dynamic `Wiring`
-    reads (e.g. `transitive_deps` over a sleeping `deref`) pull freshness before returning.
-- **Eager makers & permanent Stage 4 writer holds:** Stage 2 makers remain eager (structure-only,
-  so hidden makers cannot leave stale reservations that block moved nodes). Stage 4 writers
-  that mutate `Document` (constraint clusters and their input cones) stay held permanently
-  so saved content never depends on viewport observation. `LayoutNative`s are un-rooted in
-  `EN-8` and held per shown composition.
-- **Needed-only stale propagation:** Dependents are partitioned into needed vs. unneeded.
-  Value/key changes push only to needed readers. On `0 → 1`, increments apply immediately,
-  the waking set is re-heighted and evaluated unconditionally (history natives must be
-  idempotent for equal `(inputs, clock)` so waking never steps them); `1 → 0` decrements
-  batch to the end of the pass to avoid flapping.
-- **No `exact()` / `relax()`:** Reading a need-0 cell outside a `current` scope becomes a
-  `debug_assert!` (`pinned` and `escaped`-forever deleted). Store operations (`run`,
-  `scratch()`, `edit::plan`, `post_apply`, `advance`, `engine_api.rs`) use `Store::pull(leaves)`
-  or scoped `current(|s| …)` holds — always pulling/validating inputs **before** committing
-  side effects (query seq bumps, stepper integration, action emits) and recording structural
-  view reads as well as leaf reads. `query::is_read` counts needed subscribers/holds only.
-  Only export and unscoped whole-document views call `exact_all()`.
-- **Heights on the accepted needed DAG:** Replace `compute_heights` (including in `evaluate`
-  and `raise`'s fallback) with local DAG maintenance on needed edges only: validate
-  acyclicity against the post-removal edge set before committing an edge, recompute
-  `1 + max(input heights)` in the affected reader cone (stopping where unchanged, preventing
-  unbounded drift on edge reversals), and use a single queue-rekey path for both bindings
-  and natives.
+*Revised 2026-11-24 after the council review (handoff §6). The earlier design here, exact
+per-leaf need counts with separate demand and scheduling edges and `retarget`, is
+dropped: both reviewers judged its bookkeeping the kind that attracts hardening passes,
+and owner-level demand reuses what `EN-8b` built.*
 
-### 4.2 Composition-graph visibility gate and retiring `ROOTED` (`EN-9`)
+- **Staleness is per cell, demand is per owner.** Epoch stamps (`EN-8a`) let any resting
+  cell say whether it is behind its inputs, so no stored set is needed for correctness.
+  Whether a cell is *needed* is a rule over its owner, not a stored `unneeded` set:
+  `needed(cell) = observe_all || demand.contains(owner(cell))`. A leaf cell's owner is its
+  node's; a native's is its root's.
+- **The demand set** is the closure, over cross-owner reads (`read_by`) and `Figures`, of:
+  the `Free` owner; every shown composition (`on_demand` or not: what is shown is
+  evaluated, even when its clock holds); `run = always` compositions; and the owners of
+  constraint clusters (Stage 4 writers to `Document::solved`, so saved content never
+  depends on the viewport). The clock-active set (`compute_active`) is the same traversal
+  minus the `on_demand` compositions it holds. Because demand is per owner, a hidden layout
+  that has not yet claimed its leaves, a waiting producer, or a sleeping `deref` needs no
+  per-edge demand rule: its owner is in demand or it is not.
+- **Entering and leaving demand.** An owner entering the demand set brings its behind cells
+  up to date (a walk of that owner's cells, so showing a page costs that page). An owner
+  leaving it simply rests; propagation skips cells that are not needed and the stamps
+  remember what moved.
+- **Pull on read, no pinning.** Store code that reads outside the graph (layout helpers,
+  handles, actions, edit planning on `scratch()`, the binding-cycle check, `post_apply`)
+  runs under the existing read recorder. A read of a resting cell is recorded; the store
+  brings that cell's behind cone up to date, leaves it resting, and re-runs the reader
+  (`current`). Inputs are pulled before side effects are committed (query sequence
+  numbers, stepper integration, action emits). A read of a resting cell outside a recording
+  scope is a `debug_assert!`.
+- **No `exact()` / `relax()` / `ROOTED`.** Transactions, `scratch()`, `apply_session`,
+  `fire_at` and the host no longer make every cell exact; only export and unscoped
+  whole-document views call `exact_all()`. `ROOTED`'s 29 facet kinds go: state that runs
+  on time already runs only in clock-active owners (`EN-8b`), cross-owner reads keep their
+  sources in demand, store reads pull, and constraint clusters hold their owners.
+- **No bridge cone in the first cut.** One cross-owner read keeps the whole source owner in
+  demand. A scaling row in which a shown page reads one value from a hidden page shows the
+  cost; a cone of only the cells read is added only if that row grows.
+- **Local pass scheduling** (`EN-8a`, done): ranks are computed over the dirty cone only
+  (`compute_local_ranks`, `raise_queued`); no global heights.
 
-- Each node's **owner** (composition, nearest pictured entity, or free) is cached and
-  re-keyed on reparent/`Figures` edits.
-- Cross-owner graph edges maintain reference counts on `(owner A, owner B)`.
+### 4.2 Owner index and the visibility gate (`EN-8b`, `EN-8c.0`)
+
+- Each node's **owner** is its composition, else its nearest pictured entity, else `Free`.
+- **The owner index is derived per root, not classified from ops** (`EN-8c.0`). A
+  `RootRuntime` summary per top-level root (run mode; traces, accumulators, queries and
+  entities with their entity-ancestor chains; outgoing `Figures` and `Animates`) is made
+  from scratch by a per-root maker with recorded structural reads. The global maps are
+  the sum of the summaries: re-making a root subtracts its old summary and adds the new
+  one, and the runtime systems take the same differences. `IRON_OWNER_CHECK` compares the
+  sum with a full rebuild.
+- Cross-owner graph edges keep reference counts on `(owner A, owner B)`, updated from the
+  cells whose reads changed.
 - Running status is a small traversal over `(A, B)` from shown compositions, `run = always`
   compositions, and the free owner, emitting only the delta to `Clocks`.
-- `ROOTED`'s 29-kind global list is retired: non-session `let`s and plain `args` are
-  unrooted; repeats/conditionals are rooted only in running owners; clips and machines
-  publish only for running owners; captures observe what they draw.
 
 ### 4.3 Host-side scaling (`EN-10`)
 

@@ -27,7 +27,7 @@ use crate::expr::{Expr, Leaf};
 use crate::facet::FacetKind;
 use crate::value::Slot;
 use crate::value::Value;
-use crate::work::{Counted, GRAPH_BASE_READERS, GRAPH_CANDIDATES, GRAPH_CLAIMS, GRAPH_DEPENDENTS, GRAPH_DERIVED, GRAPH_HELD, GRAPH_NATIVES, GRAPH_NODES, GRAPH_OWNED, GRAPH_RESOLVED, GRAPH_RUNTIME, GRAPH_UNNEEDED};
+use crate::work::{Counted, GRAPH_BASE_READERS, GRAPH_CLAIMS, GRAPH_DEPENDENTS, GRAPH_DERIVED, GRAPH_HELD, GRAPH_NATIVES, GRAPH_NODES, GRAPH_OWNED, GRAPH_RESOLVED, GRAPH_RUNTIME, GRAPH_UNNEEDED};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Who publishes a runtime signal. Three producers are built in; a host
@@ -625,7 +625,7 @@ pub struct Reactive {
     /// Epoch when a `structure::Key` watched by `key_readers` was last touched.
     key_changed_at: HashMap<crate::structure::Key, u64>,
     /// Fast guard: `false` when no resting (`unneeded`) cell has had any input,
-    /// key, or `must_run` touched since entering `unneeded`, so `set_unneeded`
+    /// key, or `must_run` touched since entering `unneeded`, so `wake_cells`
     /// and `relax` skip scanning `self.unneeded` completely (`EN-8a`).
     unneeded_may_be_behind: bool,
     /// The signals connections and anchors derive, maintained incrementally
@@ -642,31 +642,20 @@ pub struct Reactive {
     /// Bindings that failed on a tracked-read cycle or did not settle,
     /// retried when an edge is removed (`self.edge_gone`).
     blocked: BTreeSet<CellId>,
-    /// Cells nothing observed needs (reactive-engine.md §8.2, §8.3): when
-    /// what they read changes they are not evaluated; epoch stamps track
-    /// staleness until they are needed again (`EN-8a`).
-    /// Closed downwards: whatever reads a cell outside it is outside it too,
-    /// so a needed cell never reads an out-of-date one. The store sets it
-    /// (`set_unneeded`); empty while everything is observed.
+    /// Resting cells (engine spec §4.1, `EN-8c`): the cells of owners no
+    /// demand reaches. When what they read changes they are not evaluated;
+    /// epoch stamps track staleness until they are needed again (`EN-8a`).
+    /// The store rests and wakes them a whole owner at a time (`rest`,
+    /// `wake_cells`); owner-level demand is closed over cross-owner reads, so a
+    /// needed cell never reads a resting one except through a tracked read
+    /// that wakes it (`need_what_reads_reach`). Empty while everything is
+    /// observed.
     unneeded: Counted<BTreeSet<CellId>, GRAPH_UNNEEDED>,
-    /// Whether necessity is out of date: `unneeded` was emptied for
-    /// exactness (a transaction, a structure change), or a tracked read
-    /// left a cell only it had made needed, since the store last set it.
-    relaxed: bool,
-    /// Unneeded cells the store read from outside the graph (`read`, while
-    /// `recording`): it makes them needed (`need`) and they stay so (§8.9's
-    /// read of a stale cell brings it up to date). Layout, the network's
-    /// solver, handles and the machine player read cells the graph's edges
-    /// do not show. The host's reads are not recorded: what it draws of a
-    /// hidden composition may be stale.
+    /// Resting cells the store read from outside the graph (`read`, while
+    /// `recording`): the store pulls them (`need`), bringing them up to date
+    /// (§8.9). The host's reads are not recorded: what it draws of a hidden
+    /// composition may be stale.
     escaped: Escaped,
-    /// Cells read from outside the graph while unneeded: needed whenever
-    /// the store decides necessity, until the next rebuild.
-    pinned: BTreeSet<CellId>,
-    /// The cells that could be unneeded (those of hidden nodes not rooted)
-    /// as the store last decided: when a tracked read leaves one, it may
-    /// be unneeded now, and the store decides necessity again.
-    candidates: Counted<BTreeSet<CellId>, GRAPH_CANDIDATES>,
     /// The native cells, by key.
     natives: Counted<BTreeMap<NativeKey, NativeCell>, GRAPH_NATIVES>,
     /// Each leaf a native may write, to its native: a read of it is a read
@@ -1028,36 +1017,6 @@ impl Reactive {
         self.unneeded.iter().filter(|&&c| self.behind(c)).count()
     }
 
-    /// The cells of `nodes` nothing needs: those of nodes not `rooted`
-    /// (state, and what the store reads besides drawing, §8.3) that no cell
-    /// outside the set reads, directly or through others.
-    pub(crate) fn necessity(&mut self, nodes: &BTreeSet<NodeId>, rooted: &dyn Fn(NodeId) -> bool) -> BTreeSet<CellId> {
-        let mut candidates: BTreeSet<CellId> = BTreeSet::new();
-        for &n in nodes {
-            if !rooted(n) {
-                candidates.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).map(CellId::Leaf));
-            }
-        }
-        // A native nothing roots is a candidate when every node it writes is.
-        for (k, n) in &self.natives {
-            let outputs = n.rule.outputs();
-            if !n.rooted && !outputs.is_empty() && outputs.iter().all(|o| nodes.contains(&o.node) && !rooted(o.node)) {
-                candidates.insert(CellId::Native(*k));
-            }
-        }
-        let mut stack: Vec<CellId> = candidates.iter().filter(|c| self.pinned.contains(c) || self.readers_of(**c).any(|d| !candidates.contains(&d))).copied().collect();
-        let mut needed: BTreeSet<CellId> = BTreeSet::new();
-        while let Some(c) = stack.pop() {
-            if !needed.insert(c) {
-                continue;
-            }
-            stack.extend(self.reads_of(c).into_iter().filter(|d| candidates.contains(d) && !needed.contains(d)));
-        }
-        self.candidates = candidates.clone().into();
-        candidates.retain(|l| !needed.contains(l));
-        candidates
-    }
-
     /// Given a set `woken` of cells that just left `self.unneeded` (closed
     /// upwards against remaining `unneeded`), identify the directly-behind
     /// roots `wake_primed`, mark every provably clean cell verified at
@@ -1095,23 +1054,32 @@ impl Reactive {
         wake_primed
     }
 
-    /// Make `unneeded` the cells nothing needs, evaluating any newly-needed
-    /// cells whose inputs moved since `verified_at`. Whether it evaluated
-    /// anything.
-    pub(crate) fn set_unneeded(&mut self, doc: Tree<'_>, unneeded: BTreeSet<CellId>) -> bool {
-        self.relaxed = false;
-        let pending_parked = !self.pending.is_empty() && self.pending.iter().any(|c| unneeded.contains(c));
-        if !self.unneeded_may_be_behind {
-            self.unneeded = unneeded.into();
-            self.unneeded_may_be_behind = pending_parked;
-            return false;
+    /// Let `cells` rest: the store's owner-level demand no longer reaches
+    /// them (`EN-8c`). Natives that always run (`rooted`) never rest.
+    pub(crate) fn rest(&mut self, cells: impl IntoIterator<Item = CellId>) {
+        let mut any = false;
+        for c in cells {
+            let always = matches!(c, CellId::Native(k) if self.natives.get(&k).is_some_and(|n| n.rooted));
+            if self.exists(c) && !always && self.unneeded.insert(c) {
+                any = true;
+            }
         }
-        let woken: BTreeSet<CellId> = self.unneeded.iter().filter(|c| !unneeded.contains(c)).copied().collect();
-        self.unneeded = unneeded.into();
+        if any {
+            self.unneeded_may_be_behind = true;
+        }
+    }
+
+    /// Wake `cells` (those of owners demand reaches again), evaluating the
+    /// ones whose inputs moved while they rested. Whether it evaluated
+    /// anything.
+    pub(crate) fn wake_cells(&mut self, doc: Tree<'_>, cells: impl IntoIterator<Item = CellId>) -> bool {
+        let behind_possible = self.unneeded_may_be_behind;
+        let woken: BTreeSet<CellId> = cells.into_iter().filter(|c| self.unneeded.remove(c)).collect();
         if self.unneeded.is_empty() {
             self.unneeded_may_be_behind = false;
-        } else if pending_parked {
-            self.unneeded_may_be_behind = true;
+        }
+        if woken.is_empty() || !behind_possible {
+            return false;
         }
         let wake = self.collect_stale_wake(&woken);
         if wake.is_empty() {
@@ -1120,6 +1088,42 @@ impl Reactive {
         let dirty = self.readers(&wake);
         self.evaluate(doc, &dirty, &wake);
         true
+    }
+
+    /// Wake every resting cell: what export and the store's rare fallbacks
+    /// read from (`Store::exact_all`).
+    pub(crate) fn wake_all(&mut self, doc: Tree<'_>) -> bool {
+        let all: Vec<CellId> = self.unneeded.iter().copied().collect();
+        self.wake_cells(doc, all)
+    }
+
+    /// The leaf cells of `nodes`, and the natives that write only them: what
+    /// rests with the owner `nodes` make up.
+    pub(crate) fn cells_of(&self, nodes: &BTreeSet<NodeId>) -> Vec<CellId> {
+        let mut out: Vec<CellId> = Vec::new();
+        let mut natives: BTreeSet<NativeKey> = BTreeSet::new();
+        for &n in nodes {
+            out.extend(self.nodes.range(first_leaf(n)..).map(|(l, _)| *l).take_while(|l| l.node == n).map(CellId::Leaf));
+            natives.extend(self.owned.range(first_leaf(n)..).take_while(|(l, _)| l.node == n).map(|(_, k)| *k));
+        }
+        for k in natives {
+            if let Some(n) = self.natives.get(&k) {
+                let outputs = n.rule.outputs();
+                if !outputs.is_empty() && outputs.iter().all(|o| nodes.contains(&o.node)) {
+                    out.push(CellId::Native(k));
+                }
+            }
+        }
+        out
+    }
+
+    /// The node a cell belongs to, for its owner: a leaf's node, a native's
+    /// first output's.
+    pub(crate) fn node_of(&self, cell: CellId) -> Option<NodeId> {
+        match cell {
+            CellId::Leaf(l) => Some(l.node),
+            CellId::Native(k) => self.natives.get(&k).and_then(|n| n.rule.outputs().first().map(|o| o.node)),
+        }
     }
 
     /// The unneeded cells read from outside the graph since the last take.
@@ -1160,12 +1164,17 @@ impl Reactive {
 
     /// Make `leaves` and what they read needed, bringing the stale ones up
     /// to date: something outside the graph read them (`take_escaped`).
-    /// They stay needed when the store decides necessity again (`pinned`).
+    /// They rest again when their owner next leaves demand (no pinning).
     /// Whether anything was brought up to date, so that what read them
     /// may have read an old value.
     pub(crate) fn need(&mut self, doc: Tree<'_>, leaves: &BTreeSet<Leaf>) -> bool {
         let cells: Vec<CellId> = leaves.iter().filter_map(|l| self.cell_of(*l)).collect();
-        self.pinned.extend(cells.iter().filter(|c| self.unneeded.contains(c)));
+        self.pull(doc, cells)
+    }
+
+    /// Pull `cells` and every resting cell they read, bringing the behind
+    /// ones up to date. Whether anything was evaluated.
+    pub(crate) fn pull(&mut self, doc: Tree<'_>, cells: Vec<CellId>) -> bool {
         let wake = self.wake_closure(cells);
         if wake.is_empty() {
             return false;
@@ -1195,23 +1204,6 @@ impl Reactive {
         let count = taken.len();
         let wake = self.collect_stale_wake(&taken);
         (wake, count)
-    }
-
-    /// Need every cell again, bringing the stale ones up to date: what a
-    /// transaction and a structure change start from, so that what they
-    /// read and write is exact. Whether it evaluated anything.
-    pub(crate) fn relax(&mut self, doc: Tree<'_>) -> bool {
-        if self.unneeded.is_empty() {
-            return false;
-        }
-        let evaluated = self.set_unneeded(doc, BTreeSet::new());
-        self.relaxed = true;
-        evaluated
-    }
-
-    /// Whether `relax` emptied `unneeded` since the store last set it.
-    pub(crate) fn relaxed(&self) -> bool {
-        self.relaxed
     }
 
     /// `from` (needed live cells) and every needed cell that reads them,
@@ -1500,14 +1492,10 @@ impl Reactive {
     /// Rebuild the structure from the document and evaluate every binding.
     /// Called on initial load, after `set_initial_derived` populates `self.derived`.
     pub fn rebuild(&mut self, doc: Tree<'_>) {
-        // Everything is evaluated below.
-        if !self.unneeded.is_empty() {
-            self.unneeded.clear();
-            self.unneeded_may_be_behind = false;
-            self.relaxed = true;
-        }
-        self.pinned.clear();
-        self.candidates.clear();
+        // Everything is evaluated below; the store rests hidden owners
+        // again (`take_edge_changes` reports the rebuild).
+        self.unneeded.clear();
+        self.unneeded_may_be_behind = false;
         self.bump_epoch();
         self.leaf_changed_at.clear();
         self.key_changed_at.clear();
@@ -1864,8 +1852,7 @@ impl Reactive {
         if reached.is_empty() {
             return;
         }
-        let keep: BTreeSet<CellId> = self.unneeded.difference(&reached).copied().collect();
-        self.set_unneeded(doc, keep);
+        self.wake_cells(doc, reached);
     }
 
     /// Make or replace the cell for `leaf`, reading `expr`.
@@ -1941,8 +1928,6 @@ impl Reactive {
         }
         self.blocked.remove(&cell);
         self.unneeded.remove(&cell);
-        self.pinned.remove(&cell);
-        self.candidates.remove(&cell);
     }
 
     /// The values of `changed` leaves moved (a constant was set, or the
@@ -2529,13 +2514,6 @@ impl Reactive {
                                     }
                                 }
                                 edge_removed = true;
-                                // It may have been needed only for this read.
-                                if let Some(g) = self.cell_of(*gone)
-                                    && self.candidates.contains(&g)
-                                    && !self.unneeded.contains(&g)
-                                {
-                                    self.relaxed = true;
-                                }
                             }
                             if tracked != old {
                                 self.prime_key(crate::structure::Key::Wiring(leaf));
@@ -2738,12 +2716,6 @@ impl Reactive {
                 }
             }
             *pass.edge_removed = true;
-            if let Some(g) = self.cell_of(*gone)
-                && self.candidates.contains(&g)
-                && !self.unneeded.contains(&g)
-            {
-                self.relaxed = true;
-            }
         }
         for new in reads.difference(&old) {
             self.note_dep_edge(*new, cell);
@@ -3458,8 +3430,6 @@ impl Reactive {
             }
             self.blocked.remove(&cell);
             self.unneeded.remove(&cell);
-            self.pinned.remove(&cell);
-            self.candidates.remove(&cell);
             self.native_problems.remove(k);
             for i in &old.inputs {
                 if let Some(ns) = self.input_readers.get_mut(i) {
@@ -3878,10 +3848,9 @@ mod tests {
         let (mut s, n) = doc(r#"<rect id="$a" w="1" h="1"/><rect id="$b" w="1" h="1"/>"#);
         let (a, b) = (n["$a"], n["$b"]);
         let runs = native(&mut s, 0, vec![leaf(a, "size.w")], vec![leaf(b, "size.h")], Mode::Sum, false);
-        let doc = Tree::of(&s.docs);
-        let unneeded = s.reactive.necessity(&BTreeSet::from([b]), &|_| false);
+        let unneeded: BTreeSet<CellId> = s.reactive.cells_of(&BTreeSet::from([b])).into_iter().collect();
         assert!(unneeded.contains(&CellId::Native(NativeKey::Test(b, 0))));
-        s.reactive.set_unneeded(doc, unneeded);
+        s.reactive.rest(unneeded);
         let r0 = runs.load(Ordering::SeqCst);
         s.reactive.preview(Tree::of(&s.docs), leaf(a, "size.w"), Value::Number(4.0));
         assert_eq!(runs.load(Ordering::SeqCst), r0, "not run while nothing needs it");
@@ -3891,8 +3860,8 @@ mod tests {
         assert_eq!(num(&s, leaf(b, "size.h")), Some(4.0));
         // A rooted one runs regardless.
         let rooted = native(&mut s, 1, vec![leaf(a, "size.w")], vec![leaf(b, "size.w")], Mode::Sum, true);
-        let unneeded = s.reactive.necessity(&BTreeSet::from([b]), &|_| false);
-        assert!(!unneeded.contains(&CellId::Native(NativeKey::Test(b, 1))));
+        s.reactive.rest(s.reactive.cells_of(&BTreeSet::from([b])));
+        assert!(!s.reactive.unneeded.contains(&CellId::Native(NativeKey::Test(b, 1))), "a rooted native never rests");
         let _ = rooted;
     }
 
@@ -4064,9 +4033,9 @@ mod tests {
                <rect id="$indep" w="{= $other.size.w + 1}" h="1"/>"#,
         );
         let (src, other, clamp, down, indep) = (n["$src"], n["$other"], n["$clamp"], n["$down"], n["$indep"]);
-        let unneeded = s.reactive.necessity(&BTreeSet::from([clamp, down, indep]), &|_| false);
+        let unneeded: BTreeSet<CellId> = s.reactive.cells_of(&BTreeSet::from([clamp, down, indep])).into_iter().collect();
         assert_eq!(unneeded.len(), 3);
-        s.reactive.set_unneeded(Tree::of(&s.docs), unneeded.clone());
+        s.reactive.rest(unneeded.clone());
 
         // Move `src` within the cutoff threshold (1 -> 2, clamp still 0); leave `other` untouched.
         let e0 = s.reactive.evaluations;
@@ -4078,15 +4047,15 @@ mod tests {
 
         // Waking all three evaluates ONLY `clamp` (equality cutoff skips `down`, clean stamps skip `indep`).
         let e1 = s.reactive.evaluations;
-        s.reactive.set_unneeded(Tree::of(&s.docs), BTreeSet::new());
+        s.reactive.wake_all(Tree::of(&s.docs));
         assert_eq!(s.reactive.evaluations - e1, 1, "only clamp ran; down cut off and indep was clean");
         assert_eq!(num(&s, leaf(down, "size.w")), Some(5.0));
 
         // Now move `src` across the threshold while resting -> waking evaluates both `clamp` and `down`, still not `indep`.
-        s.reactive.set_unneeded(Tree::of(&s.docs), unneeded);
+        s.reactive.rest(unneeded);
         s.reactive.preview(Tree::of(&s.docs), leaf(src, "size.w"), Value::Number(20.0));
         let e2 = s.reactive.evaluations;
-        s.reactive.set_unneeded(Tree::of(&s.docs), BTreeSet::new());
+        s.reactive.wake_all(Tree::of(&s.docs));
         assert_eq!(s.reactive.evaluations - e2, 2, "clamp and down ran; indep still clean");
         assert_eq!(num(&s, leaf(down, "size.w")), Some(6.0));
         assert_eq!(num(&s, leaf(indep, "size.w")), Some(2.0));
@@ -4127,16 +4096,16 @@ mod tests {
         assert_eq!(num(&s, out), Some(0.0));
 
         // Park the native in `unneeded`, then bump `InputKey::Fonts`.
-        let unneeded = s.reactive.necessity(&BTreeSet::from([a]), &|_| false);
+        let unneeded: BTreeSet<CellId> = s.reactive.cells_of(&BTreeSet::from([a])).into_iter().collect();
         assert!(unneeded.contains(&CellId::Native(k)));
-        s.reactive.set_unneeded(Tree::of(&s.docs), unneeded);
+        s.reactive.rest(unneeded);
         let r0 = runs.load(Ordering::SeqCst);
         s.reactive.set_input(Tree::of(&s.docs), InputKey::Fonts, Some(Arc::new(7u64)));
         assert_eq!(runs.load(Ordering::SeqCst), r0, "resting native does not run on input change");
         assert!(s.reactive.is_stale(out));
 
         // Waking sees `input_changed_at > verified_at` and updates the output.
-        s.reactive.set_unneeded(Tree::of(&s.docs), BTreeSet::new());
+        s.reactive.wake_all(Tree::of(&s.docs));
         assert_eq!(runs.load(Ordering::SeqCst) - r0, 1);
         assert_eq!(num(&s, out), Some(7.0));
         assert!(!s.reactive.is_stale(out));

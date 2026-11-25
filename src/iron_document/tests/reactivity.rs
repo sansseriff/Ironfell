@@ -1011,14 +1011,19 @@ fn an_unobserved_compositions_pictures_cost_no_evaluations() {
             assert_eq!(store.resolved(l.node, l.path), all.resolved(l.node, l.path), "{l}");
         }
     }
-    // Now a is hidden; a transaction makes every cell exact before it runs.
+    // Now a is hidden. A transaction on b costs b, not a (engine spec §4.1,
+    // `EN-8c`: no transaction makes every cell exact): a rests, stale, until
+    // it is shown again.
     store.publish(p, at(4.0));
     all.publish(p, at(4.0));
     assert!(store.reactive().is_stale(leaves(rects[0])[0]));
     let plan = edit::plan(&store, &format!(r#"<edit><rect in="{b}" name="q" x="1" y="1" w="1" h="1"/></edit>"#), None).unwrap_or_else(|f| panic!("{}", f.message()));
     store.apply(tx("q", plan.ops)).unwrap();
-    assert_eq!(store.resolved(rects[0], path("transform2d.x")), Some(Value::Number(8.0)));
-    // And the next frame leaves a resting again.
+    assert!(store.reactive().is_stale(leaves(rects[0])[0]), "a still rests after b's transaction");
+    let shown_a = store.observe(Interest::Region { composition: a, rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    assert_eq!(store.resolved(rects[0], path("transform2d.x")), Some(Value::Number(8.0)), "shown, a is brought up to date");
+    // And hidden again, a rests.
+    store.unobserve(shown_a);
     store.advance(0.0);
     let before = store.reactive().evaluations;
     store.publish(p, at(5.0));

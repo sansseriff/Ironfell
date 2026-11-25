@@ -591,9 +591,12 @@ impl OwnerIndex {
         topology_changed
     }
 
-    /// Compute the active owner set in O(|active| + |cross-owner edges out of active|).
-    /// Matches `Store::paused()`'s exact semantics without scanning hidden compositions.
-    pub(crate) fn compute_active(&self, doc: Tree<'_>, observed: &[NodeId]) -> BTreeSet<Owner> {
+    /// Compute the active owner set in O(|active| + |cross-owner edges out of active|),
+    /// never scanning hidden compositions. Without `demand`, the owners whose clocks
+    /// run. With it, the owners whose cells are evaluated (`EN-8c`): every shown
+    /// composition counts, `on_demand` or not (what is shown is evaluated even while
+    /// its clock holds), and `held` owners seed it too.
+    pub(crate) fn compute_active(&self, doc: Tree<'_>, observed: &[NodeId], held: &[Owner], demand: bool) -> BTreeSet<Owner> {
         let mut active: BTreeSet<Owner> = BTreeSet::new();
         let mut queue: VecDeque<Owner> = VecDeque::new();
 
@@ -603,7 +606,7 @@ impl OwnerIndex {
 
         // Shown compositions, excluding `on_demand` compositions holding an accumulator.
         let shown = composition::shown(doc, observed);
-        let shown_holding: BTreeSet<NodeId> = shown.iter().copied().filter(|c| self.comp_accumulators.contains_key(c)).collect();
+        let shown_holding: BTreeSet<NodeId> = if demand { BTreeSet::new() } else { shown.iter().copied().filter(|c| self.comp_accumulators.contains_key(c)).collect() };
         let open_running = if shown_holding.is_empty() {
             BTreeSet::new()
         } else {
@@ -618,9 +621,16 @@ impl OwnerIndex {
             }
         }
 
-        // `run = always` compositions keep running while hidden (PT-1.3).
+        // `run = always` compositions keep running while hidden (PT-1.3),
+        // and what runs is evaluated: their steppers, items and machines
+        // read their own cells.
         for &c in &self.run_always {
             let o = Owner::Composition(c);
+            if active.insert(o) {
+                queue.push_back(o);
+            }
+        }
+        for &o in held {
             if active.insert(o) {
                 queue.push_back(o);
             }

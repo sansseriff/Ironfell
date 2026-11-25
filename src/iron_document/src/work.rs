@@ -56,7 +56,7 @@ thread_local! {
 }
 
 /// The large maps `Counted` wraps, by the name a report gives them.
-pub const MAP_NAMES: [&str; 24] = [
+pub const MAP_NAMES: [&str; 23] = [
     "graph.nodes",
     "graph.dependents",
     "graph.natives",
@@ -68,7 +68,6 @@ pub const MAP_NAMES: [&str; 24] = [
     "graph.base_readers",
     "graph.derived",
     "graph.resolved",
-    "graph.candidates",
     "store.presence",
     "store.item_memo",
     "store.repeats",
@@ -95,19 +94,18 @@ pub const GRAPH_CLAIMS: usize = 7;
 pub const GRAPH_BASE_READERS: usize = 8;
 pub const GRAPH_DERIVED: usize = 9;
 pub const GRAPH_RESOLVED: usize = 10;
-pub const GRAPH_CANDIDATES: usize = 11;
-pub const STORE_PRESENCE: usize = 12;
-pub const STORE_ITEM_MEMO: usize = 13;
-pub const STORE_REPEATS: usize = 14;
-pub const STORE_OBSERVERS: usize = 15;
-pub const STORE_CLUSTERS: usize = 16;
-pub const MACHINES: usize = 17;
-pub const STEPS: usize = 18;
-pub const QUERIES: usize = 19;
-pub const CLOCKS: usize = 20;
+pub const STORE_PRESENCE: usize = 11;
+pub const STORE_ITEM_MEMO: usize = 12;
+pub const STORE_REPEATS: usize = 13;
+pub const STORE_OBSERVERS: usize = 14;
+pub const STORE_CLUSTERS: usize = 15;
+pub const MACHINES: usize = 16;
+pub const STEPS: usize = 17;
+pub const QUERIES: usize = 18;
+pub const CLOCKS: usize = 19;
 /// The readers of one leaf or native, as a pass visits them (`Readers`).
-pub const GRAPH_READERS: usize = 22;
-pub const PRODUCER_PUBLISHED: usize = 23;
+pub const GRAPH_READERS: usize = 21;
+pub const PRODUCER_PUBLISHED: usize = 22;
 
 /// Count `n` units of work at `site`.
 #[inline(always)]

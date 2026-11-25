@@ -643,28 +643,36 @@ fn shown_value(s: &Store, n: NodeId, leaf: LeafPath) -> Result<Option<Value>, St
 fn observed_script(seed: u64, steps: usize) -> usize {
     // A second composition whose pictures read the sheet's through a
     // reference a host producer moves (a tracked read across
-    // compositions), lay out by what they read, and a sheet picture that
-    // reads them back.
+    // compositions), lay out by what they read, and, in half the seeds, a
+    // sheet picture that reads them back. A read back keeps the viewer in
+    // demand while the sheet is (owner-level demand, `EN-8c`), so only the
+    // other half leave the viewer resting while hidden.
+    let back = seed % 2 == 0;
     let viewer = |w: &mut World| {
-        w.edit(
+        let back = if back { r#"<rect in="$c" id="$back" name="back" x="{= $v3.transform2d.x * 2}" y="{= $v1.transform2d.x}" w="4" h="4"/>"# } else { "" };
+        w.edit(&[
             r#"<let id="$pick" name="pick" value="0"/>
             <composition id="$v" name="viewer" dims="2d">
               <rect id="$v1" name="v1" x="{= deref($pick, 'transform2d.x', -1)}" y="{= deref($pick, 'transform2d.y', -1)}" w="{= deref($pick, 'size.w', 1)}" h="10"/>
               <group name="vg" x="0" y="40" layout.mode="stack_x" layout.gap="2"><rect name="v2" w="{= $v1.transform2d.y + 1}" h="5"/><rect id="$v3" name="v3" w="5" h="5"/></group>
-            </composition>
-            <rect in="$c" id="$back" name="back" x="{= $v3.transform2d.x * 2}" y="{= $v1.transform2d.x}" w="4" h="4"/>"#,
-        )
+            </composition>"#,
+            back,
+        ]
+        .concat())
         .unwrap();
     };
     let (mut all, mut some) = (build(seed), build(seed));
     viewer(&mut all);
     viewer(&mut some);
     // §8.8 is about necessity: with the gate's pause (reactive-engine.md
-    // §10.1, a deliberate exception) overridden, what is observed changes
-    // nothing that is shown. The script's undo must not take the override
-    // back, so the setup is not undoable.
+    // §10.1, a deliberate exception) overridden on the sheet, whose random
+    // content may run on time, what is observed changes nothing that is
+    // shown. A running owner is evaluated (engine spec §4.1, `EN-8c`), so
+    // the viewer, which holds nothing that runs on time, keeps its clock's
+    // pause and rests while hidden. The script's undo must not take the
+    // override back, so the setup is not undoable.
     for w in [&mut all, &mut some] {
-        w.edit(r#"<set id="$c" composition.run="always"/><set id="$v" composition.run="always"/>"#).unwrap();
+        w.edit(r#"<set id="$c" composition.run="always"/>"#).unwrap();
         w.store.clear_history();
     }
     let mut coin = Rng(seed ^ 0x0b5e_47ed);
@@ -700,7 +708,7 @@ fn observed_script(seed: u64, steps: usize) -> usize {
             // Not the viewer's own pictures nor `$back`: a picture placed by
             // what reads its own placement is a loop through layout, which
             // moves each time layout runs (outside §8.8).
-            let own: BTreeSet<NodeId> = std::iter::once(v).chain(all.store.tree().descendants(v)).chain([all.names["$back"]]).collect();
+            let own: BTreeSet<NodeId> = std::iter::once(v).chain(all.store.tree().descendants(v)).chain(all.names.get("$back").copied()).collect();
             let targets: Vec<NodeId> = all.live_nodes().into_iter().filter(|&n| !own.contains(&n) && all.store.tree().get::<facet::Transform2d>(n).is_some()).collect();
             // Moved by a producer, or previewed (a gesture's path to layout
             // and the solver, outside a transaction).

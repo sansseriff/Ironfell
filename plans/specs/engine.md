@@ -301,7 +301,15 @@ and owner-level demand reuses what `EN-8b` built.*
   does not exist counts as its instance's or repeat's); a transaction, for the derived
   nodes its ops name; a gesture commit; a panel that lists a page (Layers). Demand is
   decided at the end of every transaction, inside its net view window, and at the end of
-  the outermost live settle when a cross-owner read changed. A panel shows what it read when it last
+  the outermost live settle when a cross-owner read changed (`reconcile_rest`, which
+  `sync_gate` also calls).
+- **Clips follow demand, clocks follow the open path** (council round 3). A clip is
+  sampled at the playhead while a page in demand holds one of its targets, an
+  `on_demand` page's too: playback needs no free-running source (free-running.md §2).
+  Traces, accumulators and machines run only where an open path or a `run = always`
+  composition reaches them; a composition reached only because something reads it runs
+  what it reads, not what it pictures. An edit plan's `scratch()` clone never decides
+  demand (`planning`): everything in it is evaluated. A panel shows what it read when it last
   asked; re-asking when that moves, and observing a page while a narrative block that
   shows a value running on time is in view, are not built. Host commands that bake values they cannot list beforehand read
   through `Store::current` (Convert to Path, the inspector's scrub).

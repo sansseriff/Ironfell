@@ -49,6 +49,16 @@ never per frame, so it may walk the whole document. Each owner gets:
 
 Put it beside the existing inspect APIs in `engine_api.rs`, as JSON.
 
+**0. A log both platforms can read.** Today warnings and errors go to the browser
+console (Bevy's `LogPlugin` installs tracing-wasm, in the engine worker) and to the
+terminal natively; panics reach the console through `console_error_panic_hook`. There
+is no in-app log and no settings menu. Add a small `tracing` layer that keeps the last
+few hundred WARN/ERROR events (time, target, message, a node id when the message names
+one) in a bounded buffer in the engine, expose it through the engine API both hosts
+already call, and show it in a Log view (copy button, filter by target). Rare engine
+cases that are accepted rather than fixed log under one target (`demand`), so they
+can be found there and in the console.
+
 **2. The invariant as a button.** Ship `check_demand`'s comparison in normal
 builds behind a call (`Store::verify_demand() -> Vec<String>`), not an
 assertion. The diagnostic view runs it on request and shows any mismatch in

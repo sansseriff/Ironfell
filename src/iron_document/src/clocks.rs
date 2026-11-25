@@ -240,8 +240,6 @@ pub(crate) struct OwnerIndex {
     pub(crate) compositions: BTreeSet<NodeId>,
     /// Live compositions with `composition.run == always`.
     pub(crate) run_always: BTreeSet<NodeId>,
-    /// Live compositions containing at least one live `Accumulate` node.
-    pub(crate) comp_accumulators: BTreeMap<NodeId, BTreeSet<NodeId>>,
 
     /// `entity -> { compositions picturing it via live RelKind::Figures }`.
     pub(crate) pictured_by: BTreeMap<NodeId, BTreeSet<NodeId>>,
@@ -348,17 +346,6 @@ impl OwnerIndex {
                 continue;
             }
             move_member(&mut self.accs_by_owner, &mut self.acc_owner, n, now);
-            if let Some(Owner::Composition(c)) = was
-                && let Some(set) = self.comp_accumulators.get_mut(&c)
-            {
-                set.remove(&n);
-                if set.is_empty() {
-                    self.comp_accumulators.remove(&c);
-                }
-            }
-            if let Some(Owner::Composition(c)) = now {
-                self.comp_accumulators.entry(c).or_default().insert(n);
-            }
             d.gate = true;
             d.accs.push((n, now));
         }
@@ -452,7 +439,6 @@ impl OwnerIndex {
     pub(crate) fn same_runtime(&self, other: &OwnerIndex) -> bool {
         self.compositions == other.compositions
             && self.run_always == other.run_always
-            && self.comp_accumulators == other.comp_accumulators
             && self.pictured_by == other.pictured_by
             && self.figures_of_comp == other.figures_of_comp
             && self.traces_by_owner == other.traces_by_owner
@@ -604,15 +590,15 @@ impl OwnerIndex {
         active.insert(Owner::Free);
         queue.push_back(Owner::Free);
 
-        // Shown compositions, excluding those holding an accumulator that no
-        // open path reaches (an `on_demand` one, or one seen only through
-        // one). What an `on_demand` composition is the only window onto
-        // pauses (free-running.md §2), so an entity's clock runs only when a
-        // composition on an open path, or one run always, pictures it.
+        // Shown compositions; for clocks, only those an open path reaches.
+        // What an `on_demand` composition is the only window onto pauses
+        // (free-running.md §2): its own steppers, and what it pictures or
+        // reads, run only when a composition on an open path, or one run
+        // always, reaches them too.
         let shown = composition::shown(doc, observed);
         let open = if demand { BTreeSet::new() } else { composition::reach(doc, observed, &shown).running };
         for c in shown {
-            if demand || open.contains(&c) || !self.comp_accumulators.contains_key(&c) {
+            if demand || open.contains(&c) {
                 let o = Owner::Composition(c);
                 if active.insert(o) {
                     queue.push_back(o);
@@ -639,7 +625,6 @@ impl OwnerIndex {
         // active compositions to the entities they picture).
         while let Some(owner) = queue.pop_front() {
             if let Owner::Composition(c) = owner
-                && (demand || open.contains(&c) || self.run_always.contains(&c))
                 && let Some(entities) = self.figures_of_comp.get(&c)
             {
                 for &e in entities {

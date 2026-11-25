@@ -715,11 +715,16 @@ struct Escaped {
     /// upstream of it.
     read: std::sync::Mutex<BTreeMap<Leaf, bool>>,
     depth: std::sync::atomic::AtomicUsize,
+    /// While something asks (`Store::current`): every node it read, resting
+    /// or not, so the store brings their resting owners up to date.
+    asked: std::sync::Mutex<BTreeSet<NodeId>>,
+    asking: std::sync::atomic::AtomicUsize,
 }
 
 impl Clone for Escaped {
     fn clone(&self) -> Self {
-        Self { read: std::sync::Mutex::new(self.read.lock().expect("escaped lock").clone()), depth: std::sync::atomic::AtomicUsize::new(self.depth.load(std::sync::atomic::Ordering::Relaxed)) }
+        let n = |a: &std::sync::atomic::AtomicUsize| std::sync::atomic::AtomicUsize::new(a.load(std::sync::atomic::Ordering::Relaxed));
+        Self { read: std::sync::Mutex::new(self.read.lock().expect("escaped lock").clone()), depth: n(&self.depth), asked: std::sync::Mutex::new(self.asked.lock().expect("asked lock").clone()), asking: n(&self.asking) }
     }
 }
 
@@ -802,6 +807,9 @@ impl Reactive {
     /// Value of any leaf as a reader sees it: the gesture overlay first, then
     /// the resolved value of a binding, then the authored constant.
     pub fn read(&self, doc: Tree<'_>, leaf: Leaf) -> Option<Value> {
+        if self.escaped.asking.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+            self.escaped.asked.lock().expect("asked lock").insert(leaf.node);
+        }
         if !self.unneeded.is_empty()
             && self.escaped.depth.load(std::sync::atomic::Ordering::Relaxed) > 0
             && let Some(c) = self.cell_of(leaf)
@@ -1050,15 +1058,25 @@ impl Reactive {
         (&self.unneeded, can_rest, !self.edge_changed_cells.is_empty() || self.edges_rebuilt || !self.woke.is_empty())
     }
 
-    /// Under the differential harness: awake cells that read a resting one,
-    /// which owner-level demand never leaves (`Store::check_demand`).
-    /// Rooted natives are not counted: they keep a hidden composition laid
-    /// out and its repeats made, from what its cells held when it rested,
-    /// and run again when it wakes.
+    /// Under the differential harness: where a cell lives, for its owner —
+    /// its nodes (`cell_nodes`) and, for a native, the node its key names
+    /// (a layout that publishes nothing still lays out that root).
     #[cfg(feature = "differential")]
-    pub(crate) fn awake_reading_resting(&self) -> Vec<(CellId, CellId)> {
-        let cells = self.nodes.keys().map(|&l| CellId::Leaf(l)).chain(self.natives.iter().filter(|(_, n)| !n.rooted).map(|(&k, _)| CellId::Native(k)));
-        cells.filter(|c| !self.unneeded.contains(c)).flat_map(|c| self.reads_of(c).into_iter().filter(|d| self.unneeded.contains(d)).map(move |d| (c, d)).collect::<Vec<_>>()).collect()
+    pub(crate) fn cell_home(&self, c: CellId) -> Vec<NodeId> {
+        let mut out = self.cell_nodes(c);
+        if let CellId::Native(k) = c {
+            out.push(k.node());
+        }
+        out
+    }
+
+    /// Under the differential harness: awake cells that read a resting one,
+    /// each with whether it is a rooted native (`Store::check_demand`).
+    #[cfg(feature = "differential")]
+    pub(crate) fn awake_reading_resting(&self) -> Vec<(CellId, CellId, bool)> {
+        let cells = self.nodes.keys().map(|&l| CellId::Leaf(l)).chain(self.natives.keys().map(|&k| CellId::Native(k)));
+        let rooted = |c: CellId| matches!(c, CellId::Native(k) if self.natives.get(&k).is_some_and(|n| n.rooted));
+        cells.filter(|c| !self.unneeded.contains(c)).flat_map(|c| self.reads_of(c).into_iter().filter(|d| self.unneeded.contains(d)).map(move |d| (c, d, rooted(c))).collect::<Vec<_>>()).collect()
     }
 
     /// Wake `cells` (those of owners demand reaches again), evaluating the
@@ -1148,6 +1166,21 @@ impl Reactive {
             stack.extend(self.reads_of(c));
         }
         false
+    }
+
+    /// Start (`true`) or end recording every node read: something asks
+    /// (`Store::current`). Nests.
+    pub(crate) fn asking(&self, on: bool) {
+        if on {
+            self.escaped.asking.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.escaped.asking.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// The nodes read while asking since the last take.
+    pub(crate) fn take_asked(&self) -> BTreeSet<NodeId> {
+        std::mem::take(&mut *self.escaped.asked.lock().expect("asked lock"))
     }
 
     /// Start (`true`) or end recording reads of unneeded cells: the store's

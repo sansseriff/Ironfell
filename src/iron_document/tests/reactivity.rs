@@ -2028,3 +2028,146 @@ fn a_reference_to_an_item_a_hidden_repeat_has_not_made_brings_it_up_to_date() {
     assert_eq!(x(&all), Some(Value::Number(25.0)));
     assert_eq!(x(&store), x(&all), "asked for, the third item is made");
 }
+
+/// Council round 2 of EN-8c: a page with a stacked group and a repeat whose
+/// count is set while it rests (page `b`; `a` is shown).
+fn resting_bench() -> (Store, BTreeMap<String, NodeId>) {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit><let id="$n" name="n" value="2"/><let id="$k" name="k" value="1"/>
+        <composition id="$a" name="a" dims="2d"/>
+        <composition id="$b" name="b" dims="2d"><group id="$g" name="g" repeat.count="{= $n.let.value}"><rect id="$c" name="cell" x="17" y="0" w="1" h="1"/></group>
+          <group id="$s" x="0" y="50" layout.mode="stack_x" layout.gap="0"><rect id="$r1" w="{= $k * 10}" h="10"/><rect id="$r2" w="10" h="10"/></group></composition></edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("bench", plan.ops)).unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: plan.aliases["$a"], rect: [0., 0., 100., 100.], zoom: 1. });
+    store.advance(0.0);
+    (store, plan.aliases)
+}
+
+fn set_let(store: &mut Store, n: NodeId, v: f64) {
+    store.apply(tx("set", vec![Op::Set { id: n, path: path("let.value"), slot: Slot::Const(Value::Number(v)) }])).unwrap();
+}
+
+/// Pull on ask by page: asking about a node on a resting page (the
+/// inspector, a host command) brings that page up to date, so an item its
+/// repeat should have made exists, one it should have dropped is gone, and
+/// what its layout places is current. Before, only the node's own cone was
+/// pulled: the repeat and the layout run from the page's resting cells.
+#[test]
+fn asking_about_a_node_on_a_resting_page_brings_the_page_up_to_date() {
+    let (mut store, n) = resting_bench();
+    let third = NodeId::item(n["$g"], "2", n["$c"]).unwrap();
+    let second = NodeId::item(n["$g"], "1", n["$c"]).unwrap();
+    set_let(&mut store, n["$n"], 3.0);
+    assert!(!store.tree().is_live(third), "resting, b's repeat has two items");
+    store.pull_nodes(&[third]);
+    assert!(store.tree().is_live(third), "asked for, the third item is made");
+    set_let(&mut store, n["$n"], 1.0);
+    store.pull_nodes(&[second]);
+    assert!(!store.tree().is_live(second), "asked for, the second item is gone");
+    set_let(&mut store, n["$k"], 4.0);
+    store.pull_nodes(&[n["$r2"]]);
+    assert_eq!(store.resolved(n["$r2"], path("transform2d.x")), Some(Value::Number(40.0)), "the stack places r2 after r1's new width");
+}
+
+/// A transaction that moves a resting page's repeat onto a shown page and
+/// adds a template child its count (0) never copies reports no item made or
+/// gone. Before, the wake ran after the transaction's net view delta
+/// closed, so the copy made and dropped showed as both.
+#[test]
+fn waking_what_a_transaction_moved_stays_inside_its_net_delta() {
+    let (mut store, n) = resting_bench();
+    set_let(&mut store, n["$n"], 0.0);
+    store.take_changes();
+    let mut plan = edit::plan(&store, &format!(r#"<edit><rect in="{}" id="$new" x="20" y="0" w="1" h="1"/></edit>"#, n["$g"]), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    plan.ops.push(Op::Reparent { id: n["$g"], parent: Some(n["$a"]), order: OrderKey::first() });
+    store.apply(tx("move", plan.ops)).unwrap();
+    let changes = store.take_changes();
+    let item = NodeId::item(n["$g"], "0", plan.aliases["$new"]).unwrap();
+    assert!(!store.tree().is_live(item));
+    assert!(!changes.created.contains(&item) && !changes.removed.iter().any(|(id, _)| *id == item), "made and dropped in one transaction: neither");
+}
+
+/// Demand is decided at the end of every transaction: a page set to run
+/// always, or newly embedded in a shown one, is current in the frame of
+/// the change, not at the next advance.
+#[test]
+fn a_page_newly_run_always_or_embedded_is_current_at_once() {
+    for embed in [false, true] {
+        let (mut store, n) = resting_bench();
+        set_let(&mut store, n["$k"], 4.0);
+        if embed {
+            let plan = edit::plan(&store, &format!(r#"<edit><embed in="{}" source="{}" x="0" y="0" w="100" h="100"/></edit>"#, n["$a"], n["$b"]), None).unwrap_or_else(|f| panic!("{}", f.message()));
+            store.apply(tx("embed", plan.ops)).unwrap();
+        } else {
+            store.apply(tx("always", vec![Op::Set { id: n["$b"], path: path("composition.run"), slot: Slot::Const(Value::Enum("always".into())) }])).unwrap();
+        }
+        assert_eq!(store.resolved(n["$r1"], path("size.w")), Some(Value::Number(40.0)), "embed {embed}: b is current at once");
+    }
+}
+
+/// A shown binding that reads an item a resting repeat should have dropped
+/// reads its fallback in the frame of the publish that points it there.
+#[test]
+fn a_reference_to_an_item_a_resting_repeat_dropped_reads_the_fallback_at_once() {
+    let (mut store, n) = resting_bench();
+    let plan = edit::plan(&store, &format!(r#"<edit><let id="$pick" name="pick" value="0"/><rect in="{}" id="$v" x="{{= deref($pick, 'transform2d.x', -1)}}" w="1" h="1"/></edit>"#, n["$a"]), None).unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("reader", plan.ops)).unwrap();
+    set_let(&mut store, n["$n"], 1.0);
+    let second = NodeId::item(n["$g"], "1", n["$c"]).unwrap();
+    assert!(store.tree().is_live(second), "resting, b's repeat still has the second item");
+    let p = store.register_producer("host");
+    store.publish(p, BTreeMap::from([(Leaf { node: plan.aliases["$pick"], path: path("let.value") }, Value::Ref(second))]));
+    assert_eq!(store.resolved(plan.aliases["$v"], path("transform2d.x")), Some(Value::Number(-1.0)));
+}
+
+/// An `on_demand` composition's bindings do not run what they read on
+/// time: the entity its figure reads holds still (free-running.md §2).
+/// Before, the composition still seeded the clock closure, which reached
+/// the entity through the read.
+#[test]
+fn an_on_demand_figure_reading_an_entity_does_not_run_it() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit><definition id="$def" name="d"/>
+        <model name="model"><entity id="$e" instance.def="$def"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/></entity></model>
+        <composition id="$shown" name="shown" dims="2d" run="on_demand"><rect id="$fig" x="{= $acc.accumulate.value}" w="1" h="1"/></composition></edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("make", plan.ops)).unwrap();
+    let n = plan.aliases;
+    let id = store.authored().next_relation_id();
+    store.apply(tx("figure", vec![Op::Link { rel: Relation { id, from: n["$fig"], to: n["$e"], rel: RelKind::Figures, data: BTreeMap::new() } }])).unwrap();
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$shown"], rect: [0., 0., 100., 100.], zoom: 1. });
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value"));
+    store.advance(0.0);
+    let before = acc(&store);
+    store.advance(0.1);
+    store.advance(0.2);
+    assert_eq!(acc(&store), before);
+}
+
+/// A transaction that names an item of a resting page asks about it (the
+/// agent's pattern: set a count on one page, then edit an item on a hidden
+/// one): the item exists, or not, as where everything is observed. Before,
+/// a set on an item the count had just made failed as a bad id, and one on
+/// an item it had just dropped succeeded.
+#[test]
+fn a_transaction_naming_an_item_of_a_resting_page_sees_its_current_items() {
+    let (mut store, n) = resting_bench();
+    let x = path("transform2d.x");
+    set_let(&mut store, n["$n"], 3.0);
+    let third = NodeId::item(n["$g"], "2", n["$c"]).unwrap();
+    store.apply(tx("third", vec![Op::Set { id: third, path: x, slot: Slot::Const(Value::Number(30.0)) }])).unwrap_or_else(|e| panic!("the third item exists: {e:?}"));
+    set_let(&mut store, n["$n"], 1.0);
+    let second = NodeId::item(n["$g"], "1", n["$c"]).unwrap();
+    assert!(store.apply(tx("second", vec![Op::Set { id: second, path: x, slot: Slot::Const(Value::Number(30.0)) }])).is_err(), "the second item is gone");
+}

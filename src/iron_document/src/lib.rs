@@ -570,7 +570,7 @@ pub struct StoreCore {
     /// Currently active owners as last decided by `sync_gate` (`EN-8b`).
     active_owners: BTreeSet<clocks::Owner>,
     /// Whether `sync_gate` must recompute `active_owners` (observers, embeds,
-    /// `composition.run`, `Figures`, or `comp_accumulators` changed).
+    /// `composition.run`, `Figures`, or accumulators changed).
     gate_dirty: bool,
     /// True after `set_observe_all` flips so `sync_gate` does a mode-switch sync.
     gate_mode_switched: bool,
@@ -622,6 +622,11 @@ pub struct StoreCore {
     /// The owners constraint clusters hold in demand, until clusters or
     /// owners change.
     held_owners: Option<Vec<clocks::Owner>>,
+    /// Inside `reconcile_rest`: a settle it runs does not reconcile again.
+    reconciling: bool,
+    /// How many live settles are running: only the outermost reconciles
+    /// rest, never one nested in another's stages.
+    settle_depth: u32,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// Each drawn repeat/conditional's settled inputs (`each`, `count`, `key`,
     /// `when.is`, `max`, `enter_ms`, `exit_ms`), compared before doing work.
@@ -766,10 +771,15 @@ impl StoreCore {
             derived_makers: self.derived_makers.clone(),
             repeat_makers: self.repeat_makers.clone(),
             owner_makers: self.owner_makers.clone(),
-            demand: self.demand.clone(),
-            demand_dirty: self.demand_dirty,
+            // Every cell of the clone was woken: nothing rests in it, and
+            // nothing is rested again while it plans (`EN-9`: pull only what
+            // a plan reads).
+            demand: None,
+            demand_dirty: false,
             to_place: self.to_place.clone(),
             held_owners: self.held_owners.clone(),
+            reconciling: false,
+            settle_depth: 0,
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
             repeat_dirty: self.repeat_dirty.clone(),
@@ -945,6 +955,8 @@ impl StoreCore {
             demand_dirty: true,
             to_place: BTreeSet::new(),
             held_owners: None,
+            reconciling: false,
+            settle_depth: 0,
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -1962,8 +1974,9 @@ impl StoreCore {
         // What it previews on a resting page may no longer exist there: that
         // page's repeats are made from its values as they are now first, and
         // a preview of an item that went is dropped with it.
-        let previewed: Vec<NodeId> = self.reactive.gesture_preview().keys().chain(self.reactive.live_solve_preview().keys()).map(|l| l.node).collect();
-        if self.pull_makers(previewed) {
+        let mut asked: Vec<NodeId> = self.reactive.gesture_preview().keys().chain(self.reactive.live_solve_preview().keys()).map(|l| l.node).collect();
+        asked.extend(self.gesture.iter().flat_map(|g| g.nodes.iter().copied()));
+        if self.pull_owners(asked) {
             self.settle(SettleMode::Live { clusters: true });
         }
         let gesture = self.gesture.take();
@@ -2106,6 +2119,7 @@ impl StoreCore {
         // owner makers then see its keys.
         self.sync_touched(true);
         self.sync_owners(&ops, &undo, None);
+        self.reconcile_rest(false);
         self.session_version += 1;
         if self.sync_clock() {
             self.settle(SettleMode::Live { clusters: true });
@@ -3409,19 +3423,12 @@ impl StoreCore {
         self.reactive.wake_cells(Tree::of(&self.docs), wake)
     }
 
-    /// Bring `nodes`, their descendants and what they read up to date if
-    /// they rest (engine spec §4.1, `EN-8c`): what a host command that
-    /// authors from those nodes' values reads first. They rest again when
-    /// their owner next leaves demand.
+    /// Bring the pages `nodes` are on up to date if they rest (pull on ask,
+    /// engine spec §4.1): what a host command that authors from those
+    /// nodes, or a panel that shows them, reads first. A node that does not
+    /// exist counts as its instance or repeat's. They rest again at once.
     pub fn pull_nodes(&mut self, nodes: &[NodeId]) {
-        let doc = Tree::of(&self.docs);
-        let mut set: BTreeSet<NodeId> = BTreeSet::new();
-        for &n in nodes.iter().filter(|&&n| doc.is_live(n)) {
-            set.insert(n);
-            set.extend(doc.descendants(n));
-        }
-        let cells = self.reactive.cells_of(&set);
-        if self.reactive.pull(Tree::of(&self.docs), cells) {
+        if self.pull_owners(nodes.iter().copied()) {
             self.settle(SettleMode::Live { clusters: true });
         }
     }
@@ -3450,24 +3457,33 @@ impl StoreCore {
                 }
             }
             SettleMode::Live { clusters } => {
-                self.settle_reads();
-                for _ in 0..4 {
-                    self.settle_pass(clusters);
-                    if !self.settle_reads() {
-                        return;
-                    }
+                self.settle_depth += 1;
+                self.settle_live(clusters);
+                self.settle_depth -= 1;
+                if self.settle_depth == 0 {
+                    self.reconcile_rest(false);
                 }
-                // Reads that keep reaching further: derive from an exact
-                // graph; hidden owners rest again at the next demand decision.
-                self.reactive.wake_all(Tree::of(&self.docs));
-                self.demand = None;
-                self.demand_dirty = true;
-                self.settle_pass(clusters);
             }
             SettleMode::Transaction | SettleMode::Undo | SettleMode::Replay => {
                 debug_assert!(false, "use settle_tx for transaction modes");
             }
         }
+    }
+
+    fn settle_live(&mut self, clusters: bool) {
+        self.settle_reads();
+        for _ in 0..4 {
+            self.settle_pass(clusters);
+            if !self.settle_reads() {
+                return;
+            }
+        }
+        // Reads that keep reaching further: derive from an exact graph;
+        // hidden owners rest again at the next demand decision.
+        self.reactive.wake_all(Tree::of(&self.docs));
+        self.demand = None;
+        self.demand_dirty = true;
+        self.settle_pass(clusters);
     }
 
     fn settle_pass(&mut self, clusters: bool) {
@@ -3492,6 +3508,9 @@ impl StoreCore {
         edited_copy_leaves: BTreeSet<Leaf>,
         copy_drivers: &[solve::Driver],
     ) -> Option<SolverSummary> {
+        // Its live settles are stages of the transaction: rest is reconciled
+        // once, below, inside the net window.
+        self.settle_depth += 1;
         let summary = match mode {
             SettleMode::Transaction => {
                 // Authored edits targeting a copy (directly or via override/
@@ -3527,11 +3546,18 @@ impl StoreCore {
         // `after_transaction` and `post_apply` settle so transient repeat items
         // (e.g. grown on authored values and shrunk by persisted solves) cancel
         // cleanly before reaching `GeometryRevisions`, `EmbedTopology`, and `Changes`.
+        self.settle_depth -= 1;
+        // Owners and demand first, inside the window: what the transaction
+        // moved onto a shown page wakes in its frame, and what that settles
+        // is part of the same net delta (council review of EN-8c).
+        self.sync_owners(&tx.ops, full_inverse, None);
+        self.reconcile_rest(true);
+        self.check_demand();
         let net = self.docs.views.finish_net();
         *expanded = net;
         self.geometry.note_views(expanded);
         self.sync_embed_topology(&tx.ops, full_inverse, Some(expanded));
-        self.sync_owners(&tx.ops, full_inverse, Some(expanded));
+        self.sync_owners(&[], &[], Some(expanded));
         summary
     }
 
@@ -3567,27 +3593,29 @@ impl StoreCore {
     /// pull on ask). Whether anything was.
     fn pull_missing(&mut self) -> bool {
         let missing = self.reactive.take_missing();
-        self.pull_makers(missing)
+        self.pull_owners(missing)
     }
 
-    /// Bring up to date what makes the derived nodes among `ids` (their
-    /// authored instance or repeat and its subtree) when it rests, so
-    /// whether they exist is current: a read of one that does not exist, or
-    /// a gesture committing to one (pull on ask, engine spec §4.1). Whether
-    /// anything was.
-    fn pull_makers(&mut self, ids: impl IntoIterator<Item = NodeId>) -> bool {
+    /// Pull on ask (engine spec §4.1): bring up to date the resting owners
+    /// of `ids`, whole, without waking them. A node that does not exist
+    /// counts as its authored instance or repeat's. An owner, not a cone:
+    /// its rooted natives (layout, repeats) run from its cells, so what
+    /// they made (a stack's placement, a repeat's items, whether an item
+    /// exists at all) is current only once those are. Whether anything was
+    /// brought up to date.
+    fn pull_owners(&mut self, ids: impl IntoIterator<Item = NodeId>) -> bool {
         let Some(demand) = &self.demand else { return false };
         let doc = Tree::of(&self.docs);
-        let roots: BTreeSet<NodeId> = ids.into_iter().filter_map(NodeId::expanded_root).filter(|&r| doc.is_live(r) && !demand.contains(&self.owner_index.owner_of(doc, r))).collect();
-        if roots.is_empty() {
+        let owners: BTreeSet<clocks::Owner> = ids
+            .into_iter()
+            .filter_map(|n| if doc.is_live(n) { Some(n) } else { n.expanded_root().filter(|&r| doc.is_live(r)) })
+            .map(|n| self.owner_index.owner_of(doc, n))
+            .filter(|o| *o != clocks::Owner::Free && !demand.contains(o))
+            .collect();
+        if owners.is_empty() {
             return false;
         }
-        let mut nodes: BTreeSet<NodeId> = BTreeSet::new();
-        for r in roots {
-            nodes.insert(r);
-            nodes.extend(doc.descendants(r));
-        }
-        let cells = self.reactive.cells_of(&nodes);
+        let cells: Vec<graph::CellId> = owners.into_iter().flat_map(|o| self.cells_of_owner(o)).collect();
         self.reactive.pull(Tree::of(&self.docs), cells)
     }
 
@@ -3601,8 +3629,14 @@ impl StoreCore {
             self.settle(SettleMode::Live { clusters: true });
         }
         for _ in 0..4 {
+            self.reactive.asking(true);
             let out = self.recorded(&mut f);
-            if !self.settle_reads() {
+            self.reactive.asking(false);
+            // What it read on a resting page is brought up to date there
+            // (pull on ask), and it runs again on what that made.
+            let asked = self.reactive.take_asked();
+            let pulled = self.pull_owners(asked);
+            if !self.settle_reads() && !pulled {
                 return out;
             }
             self.settle(SettleMode::Live { clusters: true });
@@ -3715,21 +3749,33 @@ impl StoreCore {
         }
         self.sync_owner_makers();
         self.check_owner_index();
-        // What moved, was made or now reads across rests or wakes with its
-        // owner before the change returns: the frame of the change shows it
-        // current (council review of EN-8c).
+    }
+
+    /// What moved, was made, or now reads across rests or wakes with its
+    /// owner before a change returns, so the frame of the change shows it
+    /// current (council review of EN-8c). `decide`: decide demand afresh
+    /// (the end of a transaction: run modes, embeds and observers may have
+    /// changed what is shown); otherwise only when a cross-owner read came
+    /// or went. Costs the owners in demand, never the hidden document.
+    fn reconcile_rest(&mut self, decide: bool) {
+        if self.reconciling {
+            return;
+        }
         let cross = self.sync_cross();
         self.gate_dirty |= cross;
-        if self.demand.is_some() || self.demand_dirty {
-            if cross || self.demand_dirty {
-                self.sync_demand();
-            } else if !self.to_place.is_empty() {
-                let placing = std::mem::take(&mut self.to_place);
-                if self.place(placing) {
-                    self.settle(SettleMode::Live { clusters: true });
-                }
+        if self.demand.is_none() && !self.demand_dirty {
+            return;
+        }
+        self.reconciling = true;
+        if decide || cross || self.demand_dirty {
+            self.sync_demand();
+        } else if !self.to_place.is_empty() {
+            let placing = std::mem::take(&mut self.to_place);
+            if self.place(placing) {
+                self.settle(SettleMode::Live { clusters: true });
             }
         }
+        self.reconciling = false;
     }
 
     /// The machine player revisits the instances an edit touched, and every
@@ -3830,7 +3876,9 @@ impl StoreCore {
     /// What a change of the owner index asks of steps, queries, machines,
     /// clips and clocks.
     fn apply_owner_diff(&mut self, d: clocks::RuntimeDiff) {
+        // What is shown or run may differ: demand is decided again too.
         self.gate_dirty |= d.gate;
+        self.demand_dirty |= d.gate;
         for o in d.gone_owners {
             if let Some(k) = o.clock_key() {
                 self.clocks.forget(k);
@@ -3971,8 +4019,12 @@ impl StoreCore {
             graph::CellId::Native(k) => format!("native {k:?}"),
         };
         assert!(awake.is_empty() && woken.is_empty(), "rest state differs from demand: awake outside demand {:?}, resting inside it {:?}", awake.iter().map(what).collect::<Vec<_>>(), woken.iter().map(what).collect::<Vec<_>>());
-        let reads = self.reactive.awake_reading_resting();
-        assert!(reads.is_empty(), "awake cells read resting ones: {:?}", reads.iter().map(|(c, d)| (what(&c), what(&d))).collect::<Vec<_>>());
+        // A rooted native (layout, repeats) of a resting page runs from what
+        // its cells held when it rested; one of a page in demand never reads
+        // a resting cell.
+        let in_demand = |c: graph::CellId| self.reactive.cell_home(c).into_iter().filter(|&n| doc.is_live(n)).any(|n| demand.contains(&self.owner_index.owner_of(doc, n)));
+        let reads: Vec<_> = self.reactive.awake_reading_resting().into_iter().filter(|&(c, _, rooted)| !rooted || in_demand(c)).collect();
+        assert!(reads.is_empty(), "awake cells read resting ones: {:?}", reads.iter().map(|(c, d, _)| (what(&c), what(&d))).collect::<Vec<_>>());
     }
 
     #[cfg(not(feature = "differential"))]
@@ -5257,6 +5309,7 @@ impl StoreCore {
         self.docs.cyclic_embeds = Some(self.embed_topology.cyclic_embeds().clone());
         if !changed.is_empty() {
             self.gate_dirty = true;
+            self.demand_dirty = true;
         }
         for c in changed {
             self.geometry.note_shaped(c);
@@ -5697,6 +5750,27 @@ impl StoreCore {
     /// document with its journal open (reactive-engine handoff §4.3).
     /// `history`: the ops are a recorded transaction's (undo, redo, replay).
     fn run(&mut self, input: TransactionInput, history: bool) -> Result<Run, Vec<ApplyError>> {
+        // An op naming a derived node on a resting page asks about it: that
+        // page's repeats are made from its values as they are now, so the
+        // node exists (or not) as it does where everything is observed
+        // (pull on ask, engine spec §4.1).
+        let named: Vec<NodeId> = input
+            .ops
+            .iter()
+            .flat_map(|op| match op {
+                Op::Create { parent, .. } => vec![*parent],
+                Op::Delete { id } | Op::Set { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Reorder { id, .. } => vec![Some(*id)],
+                Op::Reparent { id, parent, .. } => vec![Some(*id), *parent],
+                Op::Link { rel } => vec![Some(rel.from), Some(rel.to)],
+                Op::Unlink { .. } => vec![],
+                Op::Solve { leaf, .. } => vec![Some(leaf.node)],
+            })
+            .flatten()
+            .filter(|n| n.is_expanded())
+            .collect();
+        if self.pull_owners(named) {
+            self.settle(SettleMode::Live { clusters: true });
+        }
         let mut input = input;
         // Capture copy leaves edited before `expand::translate` turns them
         // into overrides/args, so `settle_tx` clears their `Document::solved`

@@ -45,7 +45,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `BACKENDS=webgl2 build.sh`, warm, after a source change | ~45 s (cargo ~25 s) |
 | ⏱ `build.sh` (both backends), warm | ~1–1.5 min (1m 04s, 2026-11-04; ~55 s after a `web_ffi.rs` edit, 2026-11-06) |
 | ⏱ `build.sh` after a dependency or feature change | ~3.5 min |
-| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10; 1m 27s, 2026-11-18): the document crate rebuilds everything above it |
+| ⏱ `build.sh` after an `iron_document` change | ~1.5–4.5 min (3m 40s, 3m 23s, 4m 18s, 2026-11-08; 1m 15s, 2026-11-09; 2m 30s, 1m 36s, 2026-11-10; 1m 27s, 2026-11-18; 1m 36s, 1m 37s, 2026-11-25; 3m 20s beside a release test build): the document crate rebuilds everything above it |
 | ⏱ `BACKENDS=webgl2 build.sh`, first build in a worktree seeded from the main checkout's `target/` (`setup-worktree.sh`) | ~2–2.5 min (2m 18s: only the 7 workspace crates compile, 2026-11-13). A different `RUSTFLAGS` from the main checkout's build recompiles everything |
 | `PROFILE=wasm-bench build.sh` (both backends) after an `iron_document` change, warm | ~1 min (1m 04s, 2026-11-21) |
 | ⏱ `build.sh` cold | ~3–5 min (5m 21s for agent-vision, 2026-11-09; 5m 08s in a fresh T3 worktree: webgpu 2m 56s, webgl2 2m 12s, 2026-11-06; 3m 00s in a fresh T3 worktree, 2026-11-12) |
@@ -59,7 +59,7 @@ message asks for confirmations); check in before any other step marked ⏱ (over
 | `cargo test -p iron_document --features differential --target aarch64-apple-darwin` (or `--features structure-oracle` with `IRON_OWNER_CHECK=1`): the full suite through the differential facade | ~25 s of tests warm with `IRON_ATOMICITY=1 IRON_OWNER_CHECK=1`, 541 tests (25.3 s, 2026-11-25, `EN-17`: the snapshot asked every live node for context reads and hover listeners, and the path registry's lock was contended across the random scripts' threads; it had reached 212 s). `differential_random::two_hundred_random_scripts` and `observing_part_of_the_time` are most of it; the other ~535 tests take ~6 s. A rebuild after an `iron_document` change adds ~40 s |
 | `cargo test -p iron_document --release --features differential --target aarch64-apple-darwin --test suite differential_random::ten_thousand -- --ignored` | ~4.5 min (4m 33s, 2026-11-18) |
 | ⏱ `differential_random` `ten_thousand_random_scripts` (release, `--features differential`, `--ignored`) | ~5–6 min (359 s, then 296 s, on 10 threads, 2026-11-16) |
-| ⏱ `differential_random::observing_part_of_the_time_over_a_thousand_seeds` (release, `--features differential`, `--ignored`): §8.8 over 1,000 seeds, one test so one thread | ~9 min (537 s at load average 16, 2026-11-20) |
+| ⏱ `differential_random::observing_part_of_the_time_over_a_thousand_seeds` (release, `--features differential`, `--ignored`, `IRON_OWNER_CHECK=1`): §8.8 over 1,000 seeds | ~3–4 min of tests after a ~2 min release build (185 s to seed 634, 2026-11-25, after `EN-17`; 537 s at load average 16, 2026-11-20). Seed 634 fails by design (a `deref` cycle's message); `IRON_SEED_FROM=635` runs the rest |
 | `cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference`: the host reference (reactive-engine handoff §4.1, task 6) | ~50 s warm (48 s, 2026-11-16) |
 | `layout.txt` | ~35 s |
 | `contexts.txt` | ~35 s |

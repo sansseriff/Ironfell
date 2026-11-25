@@ -1546,7 +1546,27 @@ impl StoreCore {
     /// Sample every clip and publish what they drive: after the
     /// structure changed (a clip, a key or a link made or gone).
     fn resample(&mut self) {
-        let sample = time::sample(Tree::of(&self.docs), self.time);
+        let doc = Tree::of(&self.docs);
+        // With demand decided, a clip that does not run (its page paused)
+        // keeps what it gave, as its page does (`EN-9`): only what no clip
+        // drives any more is withdrawn. Before the gate decides, every clip runs.
+        let sample = if self.observe_all || !self.gate_initialized {
+            time::sample(doc, self.time)
+        } else {
+            let clip_ty = TypeId::lookup("clip").expect("registered");
+            let paused: Vec<NodeId> = doc.nodes_of_type(clip_ty).filter(|c| !self.running_clips.contains(c)).collect();
+            let held = time::sample_clips(doc, self.time, paused.iter().copied());
+            let running = time::sample_clips(doc, self.time, self.running_clips.iter().copied());
+            let mut values = running.values;
+            for leaf in held.targets {
+                if let Some(s) = self.reactive.signal(leaf).filter(|s| s.producer == ProducerId::CLIPS) {
+                    values.entry(leaf).or_insert_with(|| s.value.clone());
+                }
+            }
+            let mut errors = running.errors;
+            errors.extend(paused.iter().filter_map(|c| self.time_errors.get(c).map(|e| (*c, e.clone()))));
+            time::Sample { values, errors, targets: Default::default() }
+        };
         self.time_errors = sample.errors;
         self.reactive.publish(Tree::of(&self.docs), ProducerId::CLIPS, sample.values);
     }

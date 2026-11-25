@@ -381,6 +381,33 @@ fn an_unrelated_link_leaves_a_paused_hidden_clip_target_alone() {
     assert_eq!(x_of(&store, rh), 10., "still held after a link at the running clip");
 }
 
+/// `EN-9`: an `Animates` link made or gone resamples the running clips
+/// only, so a paused hidden target keeps its value, and a target no clip
+/// drives any more goes back to its own. Before, any clip structure edit
+/// sampled every clip at the current time, the paused one included.
+#[test]
+fn an_animates_edit_leaves_a_paused_hidden_clip_target_alone() {
+    let (mut store, [a, _, _, ra, rb, rh], rels) = three_pages();
+    store.advance(0.);
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [-1000., -1000., 2000., 2000.], zoom: 1. });
+    let clock = store.ensure_clock().unwrap();
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.playing"), slot: Slot::Const(Value::Bool(true)) }]).unwrap();
+    store.advance(0.);
+    store.advance(1.);
+    let played = x_of(&store, ra);
+    assert!(played > 10., "the shown target follows playback");
+    assert_eq!(x_of(&store, rh), 10., "the hidden one holds");
+    let clip = store.tree().relation(rels[0]).unwrap().from;
+    let id = store.authored().next_relation_id();
+    store.apply(tx("animate rb too", vec![Op::Link { rel: Relation { id, from: clip, to: rb, rel: RelKind::Animates, data: BTreeMap::new() } }])).unwrap();
+    assert_eq!(x_of(&store, rh), 10., "still held after an Animates link at the running clip");
+    assert_eq!(x_of(&store, ra), played, "the running clip's target where it was");
+    store.apply(tx("stop animating ra", vec![Op::Unlink { id: rels[0] }])).unwrap();
+    assert_eq!(x_of(&store, ra), 0., "a target no clip drives goes back to its own value");
+    assert_eq!(x_of(&store, rh), 10., "and the paused one still holds");
+}
+
 /// Council round 3 of EN-8c: a clip on a shown `on_demand` page follows the
 /// playhead (free-running.md §2: playback needs no free-running source).
 /// Before, clips followed the clocks, and an `on_demand` page's are held.

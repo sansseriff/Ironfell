@@ -291,3 +291,85 @@ fn layout_outranks_a_clip_on_a_laid_out_child_edited_or_loaded() {
     loaded.set_time(1.0);
     check(&loaded, "loaded");
 }
+
+/// Two shown compositions and a hidden one, a rect in each, and two clips
+/// on the timeline, one animating the first shown rect and one the hidden
+/// rect, each from x=10 at 0 s to x=30 at 2 s.
+fn three_pages() -> (Store, [NodeId; 6], Vec<RelationId>) {
+    let mut store = Store::new();
+    let ids = store.authored().next_ids(13);
+    let [a, b, hidden, ra, rb, rh, timeline, c, k0, k1, d, k2, k3] = ids[..] else { unreachable!() };
+    let rels = store.authored().next_relation_ids(3);
+    let create = |id, name, parent, facets| Op::Create { id, ty: ty(name), parent, order: OrderKey::first(), facets };
+    let rel = |i: usize, from, to| Op::Link { rel: Relation { id: rels[i], from, to, rel: RelKind::Animates, data: BTreeMap::new() } };
+    let key = |t, v| Key { t: num(t), value: num(v), ..Key::default() }.wrap();
+    let clip = Clip { prop: Slot::Const(Value::Str("transform2d.x".into())), ..Clip::default() }.wrap();
+    let name = |x: &str| facet::Name { text: Slot::Const(Value::Str(x.into())), ..Default::default() }.wrap();
+    let comp = facet::Composition { dims: Slot::Const(Value::Enum("2d".into())), ..Default::default() }.wrap();
+    let rect = || vec![Transform2d::default().wrap(), Size::default().wrap()];
+    store
+        .apply(tx("make", vec![
+            create(a, "composition", None, vec![comp.clone(), name("a")]),
+            create(b, "composition", None, vec![comp.clone(), name("b")]),
+            create(hidden, "composition", None, vec![comp, name("hidden")]),
+            create(ra, "rect", Some(a), rect()),
+            create(rb, "rect", Some(b), rect()),
+            create(rh, "rect", Some(hidden), rect()),
+            create(timeline, "timeline", None, vec![]),
+            create(c, "clip", Some(timeline), vec![clip.clone(), Timing::default().wrap()]),
+            create(k0, "key", Some(c), vec![key(0., 10.)]),
+            create(k1, "key", Some(c), vec![key(2., 30.)]),
+            create(d, "clip", Some(timeline), vec![clip, Timing::default().wrap()]),
+            create(k2, "key", Some(d), vec![key(0., 10.)]),
+            create(k3, "key", Some(d), vec![key(2., 30.)]),
+            rel(0, c, ra),
+            rel(1, d, rh),
+        ]))
+        .unwrap();
+    store.ensure_clock().unwrap();
+    (store, [a, b, hidden, ra, rb, rh], rels)
+}
+
+/// EN-8c.0 (council 2026-11-24): a running clip that gains a target in
+/// another shown composition keeps that composition live too. Before, the
+/// compositions it animates were recomputed only when the set of running
+/// clips changed.
+#[test]
+fn a_running_clip_gaining_a_target_keeps_its_new_composition_live() {
+    let (mut store, [a, b, _, _, rb, _], rels) = three_pages();
+    let c = store.tree().relations().find(|r| r.id == rels[0]).unwrap().from;
+    store.set_observe_all(false);
+    for comp in [a, b] {
+        store.observe(Interest::Region { composition: comp, rect: [-1000., -1000., 2000., 2000.], zoom: 1. });
+    }
+    let clock = store.ensure_clock().unwrap();
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.playing"), slot: Slot::Const(Value::Bool(true)) }]).unwrap();
+    store.advance(0.0);
+    let live = store.advance(0.1).wake.live;
+    assert!(live.contains(&a) && !live.contains(&b), "only a is animated: {live:?}");
+    store.apply(tx("target b", vec![Op::Link { rel: Relation { id: rels[2], from: c, to: rb, rel: RelKind::Animates, data: BTreeMap::new() } }])).unwrap();
+    store.advance(0.2);
+    let live = store.advance(0.3).wake.live;
+    assert!(live.contains(&b), "b is animated now: {live:?}");
+}
+
+/// EN-8c.0: a relation between two shown rects is no clip structure, so it
+/// resamples no clip, and a paused hidden target keeps its value. Before,
+/// any relation edit resampled every clip at the current time.
+#[test]
+fn an_unrelated_link_leaves_a_paused_hidden_clip_target_alone() {
+    let (mut store, [a, _, _, ra, rb, rh], _) = three_pages();
+    store.advance(0.);
+    assert_eq!(x_of(&store, rh), 10.);
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: a, rect: [-1000., -1000., 2000., 2000.], zoom: 1. });
+    let clock = store.ensure_clock().unwrap();
+    store.apply_session(vec![Op::Set { id: clock, path: path("clock.playing"), slot: Slot::Const(Value::Bool(true)) }]).unwrap();
+    store.advance(0.);
+    store.advance(1.);
+    assert!(x_of(&store, ra) > 10., "the shown target follows playback");
+    assert_eq!(x_of(&store, rh), 10., "the hidden one holds");
+    let id = store.authored().next_relation_id();
+    store.apply(tx("refer", vec![Op::Link { rel: Relation { id, from: ra, to: rb, rel: RelKind::References, data: BTreeMap::new() } }])).unwrap();
+    assert_eq!(x_of(&store, rh), 10., "still held after an unrelated link");
+}

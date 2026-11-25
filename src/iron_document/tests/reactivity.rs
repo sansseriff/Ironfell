@@ -1757,3 +1757,105 @@ fn unpicturing_an_entity_transitions_its_owner_to_free() {
     }
     assert!((acc(&store) - free_val).abs() < 1e-6, "re-pictured in hidden $b: paused again");
 }
+
+/// EN-8c.0 (council 2026-11-24): switching a shown composition that holds an
+/// accumulator from Auto to On Demand stops it at once. Before, the owner
+/// index noticed only changes into or out of `always`, so it kept stepping.
+#[test]
+fn a_shown_composition_switched_to_on_demand_stops_its_accumulator() {
+    let (mut store, _, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d">
+          <accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/>
+        </composition>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+    for k in 0..=5 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > 4.0, "shown and auto: running");
+    store.apply(tx("on demand", vec![Op::Set { id: n["$a"], path: path("composition.run"), slot: Slot::Const(Value::Enum("on_demand".into())) }])).unwrap();
+    store.advance(0.6);
+    let held = acc(&store);
+    for k in 7..=12 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!((acc(&store) - held).abs() < 1e-9, "on demand: holds ({held} → {})", acc(&store));
+}
+
+/// EN-8c.0: a `Figures` link made and unmade in one transaction leaves its
+/// entity unpictured, so it stays `Free` and keeps stepping. Before, the
+/// owner index applied the removal first and the link after it.
+#[test]
+fn a_figures_link_made_and_unmade_in_one_transaction_leaves_the_entity_free() {
+    let mut store = Store::new();
+    let plan = edit::plan(
+        &store,
+        r#"<edit>
+          <definition id="$def" name="d"/>
+          <model name="model">
+            <entity id="$e" name="e" instance.def="$def">
+              <accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/>
+            </entity>
+          </model>
+          <composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+          <composition id="$b" name="b" dims="2d"><rect id="$fig" x="0" y="0" w="1" h="1"/></composition>
+        </edit>"#,
+        None,
+    )
+    .unwrap_or_else(|f| panic!("{}", f.message()));
+    store.apply(tx("setup", plan.ops)).unwrap();
+    let n = plan.aliases;
+    store.set_observe_all(false);
+    store.observe(Interest::Region { composition: n["$a"], rect: [0.0, 0.0, 100.0, 100.0], zoom: 1.0 });
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+    for k in 0..=5 {
+        store.advance(k as f64 * 0.1);
+    }
+    let before = acc(&store);
+    assert!(before > 4.0, "unpictured: Free, running ({before})");
+    let id = store.authored().next_relation_id();
+    let rel = Relation { id, from: n["$fig"], to: n["$e"], rel: RelKind::Figures, data: BTreeMap::new() };
+    store.apply(tx("link and unlink", vec![Op::Link { rel }, Op::Unlink { id }])).unwrap();
+    for k in 6..=11 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > before + 4.0, "still Free, still running ({})", acc(&store));
+}
+
+/// EN-8c.0: undoing a move of a group into a new hidden composition deletes
+/// that composition and moves the group back to model space, where it is
+/// `Free` and runs. Before, the old owner was read from the tree after the
+/// undo, where the deleted composition no longer existed, so the group's
+/// accumulator stayed paused under a dead owner.
+#[test]
+fn undoing_a_move_into_a_new_hidden_composition_frees_what_moved() {
+    let (mut store, _, _, n) = split(
+        r#"<composition id="$a" name="a" dims="2d"><rect x="0" y="0" w="1" h="1"/></composition>
+        <group id="$s" name="s"><accumulate id="$acc" initial="0" next="{= $acc + $acc.accumulate.dt * 10}"/></group>"#,
+    );
+    let acc = |s: &Store| s.resolved(n["$acc"], path("accumulate.value")).and_then(|v| v.as_f64()).unwrap();
+    for k in 0..=5 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > 4.0, "in model space: Free, running");
+    let c = store.authored().next_id();
+    let comp = Composition { dims: Slot::Const(Value::Enum("2d".into())), ..Default::default() }.wrap();
+    let name = Name { text: Slot::Const(Value::Str("c".into())), ..Default::default() }.wrap();
+    store
+        .apply(tx("move into new", vec![
+            Op::Create { id: c, ty: ty("composition"), parent: None, order: OrderKey::first(), facets: vec![comp, name] },
+            Op::Reparent { id: n["$s"], parent: Some(c), order: OrderKey::first() },
+        ]))
+        .unwrap();
+    store.advance(0.6);
+    let paused = acc(&store);
+    for k in 7..=10 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!((acc(&store) - paused).abs() < 1e-9, "in the hidden new composition: paused");
+    store.undo(1).unwrap().unwrap();
+    for k in 11..=17 {
+        store.advance(k as f64 * 0.1);
+    }
+    assert!(acc(&store) > paused + 4.0, "moved back to model space: Free, running ({paused} → {})", acc(&store));
+}

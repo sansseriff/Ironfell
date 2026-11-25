@@ -647,6 +647,8 @@ pub struct StoreCore {
     network_makers: PerRootMakers<port::RootNetwork>,
     derived_makers: PerRootMakers<BTreeMap<Leaf, Expr>>,
     repeat_makers: PerRootMakers<BTreeSet<NodeId>>,
+    /// Per-root runtime summaries the owner index is the sum of (`EN-8c.0`).
+    owner_makers: PerRootMakers<clocks::RootRuntime>,
     glide_nodes: BTreeMap<NodeId, Vec<NodeId>>,
     /// Each drawn repeat/conditional's settled inputs (`each`, `count`, `key`,
     /// `when.is`, `max`, `enter_ms`, `exit_ms`), compared before doing work.
@@ -790,6 +792,7 @@ impl StoreCore {
             network_makers: self.network_makers.clone(),
             derived_makers: self.derived_makers.clone(),
             repeat_makers: self.repeat_makers.clone(),
+            owner_makers: self.owner_makers.clone(),
             glide_nodes: self.glide_nodes.clone(),
             repeat_inputs: self.repeat_inputs.clone(),
             repeat_dirty: self.repeat_dirty.clone(),
@@ -960,6 +963,7 @@ impl StoreCore {
             network_makers: PerRootMakers::default(),
             derived_makers: PerRootMakers::default(),
             repeat_makers: PerRootMakers::default(),
+            owner_makers: PerRootMakers::default(),
             glide_nodes: BTreeMap::new(),
             session_state: BTreeMap::new(),
             emitted: Vec::new(),
@@ -2111,10 +2115,11 @@ impl StoreCore {
         self.note_changes(ops.iter(), &undo, None);
         self.geometry.note_ops(ops.iter());
         self.sync_embed_topology(&ops, &undo, None);
-        self.sync_owners(&ops, &undo, None);
         // Single recorded-read sync handles both structural and constant
-        // session edits and marks moved session leaves for the host.
+        // session edits and marks moved session leaves for the host; the
+        // owner makers then see its keys.
         self.sync_touched(true);
+        self.sync_owners(&ops, &undo, None);
         self.session_version += 1;
         if self.sync_clock() {
             self.settle(SettleMode::Live { clusters: true });
@@ -3530,7 +3535,18 @@ impl StoreCore {
     /// One-time full build of `owner_index` and incremental player caches on
     /// `StoreCore::new` / `StoreCore::load` (`EN-8b`).
     fn rebuild_owners(&mut self) {
-        self.owner_index.rebuild(Tree::of(&self.docs), &self.reactive);
+        self.owner_makers = PerRootMakers::default();
+        self.owner_makers.init = true;
+        let roots: Vec<NodeId> = Tree::of(&self.docs).roots().to_vec();
+        let mut all = clocks::RootRuntime::default();
+        for r in roots {
+            let rt = self.make_root_runtime(r);
+            all.extend(&rt);
+            self.owner_makers.per_root.insert(r, rt);
+        }
+        self.owner_index = clocks::OwnerIndex::default();
+        let _ = self.owner_index.apply(&clocks::RootRuntime::default(), &all);
+        self.owner_index.rebuild_cross_reads(Tree::of(&self.docs), &self.reactive);
         let _ = self.reactive.take_edge_changes();
         let _ = self.reactive.take_query_dep_changed();
         self.reactive.set_watched_nodes(self.owner_index.entity_owner.keys().copied().collect());
@@ -3552,495 +3568,262 @@ impl StoreCore {
         self.gate_mode_switched = false;
     }
 
-    /// Incrementally maintain `owner_index`, `running_steps`, `running_clips`,
-    /// `queries`, `machines`, and `reactive` watches from committed ops and
-    /// net `ViewDelta` without scanning the document (`EN-8b`).
+    /// Keep `owner_index` and the runtime systems current after a commit
+    /// (`EN-8c.0`): the owner index is re-made per touched root from its
+    /// recorded structural reads (`sync_owner_makers`); ops are read only
+    /// for what the machine player must revisit and for moved subtrees,
+    /// whose cells' cross-owner reads are reconciled.
     fn sync_owners(&mut self, ops: &[Op], inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
-        let comp_ty = TypeId::lookup("composition").expect("registered");
-        let entity_ty = TypeId::lookup("entity").expect("registered");
-        let clip_ty = TypeId::lookup("clip").expect("registered");
-        let def_ty = TypeId::lookup("definition").expect("registered");
-        let machine_ty = TypeId::lookup("machine").expect("registered");
-        let state_ty = TypeId::lookup("state").expect("registered");
-        let transition_ty = TypeId::lookup("transition").expect("registered");
-        let tween_ty = TypeId::lookup("tween").expect("registered");
-        let channel_ty = TypeId::lookup("channel").expect("registered");
-
-        let is_machine_def_ty = |t: TypeId| {
-            t == def_ty || t == machine_ty || t == state_ty || t == transition_ty || t == tween_ty || t == channel_ty
-        };
-
-        let mut touched_nodes: BTreeSet<NodeId> = BTreeSet::new();
-        let mut reparent_old_parent: BTreeMap<NodeId, Option<NodeId>> = BTreeMap::new();
-        let mut reparent_new_parent: BTreeMap<NodeId, Option<NodeId>> = BTreeMap::new();
-        let mut added_rels: Vec<Relation> = Vec::new();
-        let mut removed_rel_ids: Vec<RelationId> = Vec::new();
-        let mut entity_leaf_touched: BTreeSet<NodeId> = BTreeSet::new();
-
+        self.note_machine_ops(ops, inverse, views);
+        // Moved subtrees: their cells may read across a different owner now.
+        let mut moved: BTreeMap<NodeId, (Option<NodeId>, Option<NodeId>)> = BTreeMap::new();
         for op in ops {
-            match op {
-                Op::Create { id, ty, .. } => {
-                    touched_nodes.insert(*id);
-                    if is_machine_def_ty(*ty) {
-                        self.machines_full = true;
-                    }
-                }
-                Op::Delete { id } => {
-                    touched_nodes.insert(*id);
-                }
-                Op::Reparent { id, parent, .. } => {
-                    touched_nodes.insert(*id);
-                    reparent_new_parent.insert(*id, *parent);
-                }
-                Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
-                    touched_nodes.insert(*id);
-                }
-                Op::Set { id, path, .. } => {
-                    if path.facet == FacetKind::Composition && path.field == "run" {
-                        touched_nodes.insert(*id);
-                    }
-                    entity_leaf_touched.insert(*id);
-                }
-                Op::Link { rel } => {
-                    if matches!(rel.rel, RelKind::Figures | RelKind::Animates) {
-                        added_rels.push(rel.clone());
-                    }
-                }
-                Op::Unlink { id } => {
-                    removed_rel_ids.push(*id);
-                }
-                Op::Reorder { .. } | Op::Solve { .. } => {}
+            if let Op::Reparent { id, parent, .. } = op {
+                moved.entry(*id).or_insert((None, None)).1 = *parent;
             }
         }
         for op in inverse {
+            if let Op::Reparent { id, parent, .. } = op {
+                moved.entry(*id).or_insert((None, None)).0 = *parent;
+            }
+        }
+        for &(id, old_p, new_p) in views.map(|v| v.moved.as_slice()).unwrap_or_default() {
+            if old_p != new_p {
+                moved.insert(id, (Some(old_p), Some(new_p)));
+            }
+        }
+        if !moved.is_empty() {
+            let doc = Tree::of(&self.docs);
+            let comp_ty = TypeId::lookup("composition").expect("registered");
+            let in_comp = |p: Option<NodeId>| p.and_then(|p| doc.root_of(p)).filter(|&r| doc.live(r).is_some_and(|n| n.ty == comp_ty));
+            let mut sub: Vec<NodeId> = Vec::new();
+            for (id, (old_p, new_p)) in moved {
+                // Within one composition the owner cannot change.
+                if !doc.is_live(id) || (in_comp(old_p).is_some() && in_comp(old_p) == in_comp(new_p)) {
+                    continue;
+                }
+                sub.push(id);
+                sub.extend(doc.descendants(id));
+            }
+            self.reactive.cells_for_nodes(&sub, &mut self.owner_dirty_cells);
+        }
+        self.sync_owner_makers();
+        self.check_owner_index();
+    }
+
+    /// The machine player revisits the instances an edit touched, and every
+    /// instance after a definition or machine changed (`EN-9` narrows the
+    /// latter).
+    fn note_machine_ops(&mut self, ops: &[Op], inverse: &[Op], views: Option<&engine::views::ViewDelta>) {
+        let names = ["definition", "machine", "state", "transition", "tween", "channel"];
+        let mdef: Vec<TypeId> = names.iter().map(|n| TypeId::lookup(n).expect("registered")).collect();
+        let entity_ty = TypeId::lookup("entity").expect("registered");
+        let mut touched: BTreeSet<NodeId> = BTreeSet::new();
+        for op in ops.iter().chain(inverse) {
             match op {
                 Op::Create { id, ty, .. } => {
-                    touched_nodes.insert(*id);
-                    if is_machine_def_ty(*ty) {
-                        self.machines_full = true;
-                    }
+                    self.machines_full |= mdef.contains(ty);
+                    touched.insert(*id);
                 }
-                Op::Reparent { id, parent, .. } => {
-                    reparent_old_parent.entry(*id).or_insert(*parent);
+                Op::Delete { id } | Op::Reparent { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } => {
+                    touched.insert(*id);
                 }
-                Op::Link { rel } => {
-                    // `Op::Link` in `inverse` means `rel` was removed (via `Unlink` or cascading `Delete`).
-                    if matches!(rel.rel, RelKind::Figures | RelKind::Animates) {
-                        removed_rel_ids.push(rel.id);
-                    }
-                }
-                Op::Unlink { id } => {
-                    // `Op::Unlink` in `inverse` means `id` was added (already in `added_rels`).
-                    let _ = id;
-                }
-                Op::Delete { id } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } => {
-                    touched_nodes.insert(*id);
-                }
-                Op::Set { id, path, .. } => {
-                    if path.facet == FacetKind::Composition && path.field == "run" {
-                        touched_nodes.insert(*id);
-                    }
-                }
-                Op::Reorder { .. } | Op::Solve { .. } => {}
+                Op::Link { .. } | Op::Unlink { .. } | Op::Reorder { .. } | Op::Solve { .. } => {}
             }
         }
-
-        let mut moved_views: Vec<(NodeId, NodeId, NodeId)> = Vec::new();
         if let Some(vd) = views {
             for &(id, _, _, ty) in vd.created.iter().chain(&vd.removed) {
-                touched_nodes.insert(id);
-                if is_machine_def_ty(ty) {
-                    self.machines_full = true;
-                }
+                self.machines_full |= mdef.contains(&ty);
+                touched.insert(id);
             }
-            for &(id, old_p, new_p) in &vd.moved {
-                touched_nodes.insert(id);
-                if old_p != new_p {
-                    moved_views.push((id, old_p, new_p));
+            touched.extend(vd.moved.iter().map(|m| m.0).chain(vd.facet_shaped.iter().copied()));
+        }
+        let doc = Tree::of(&self.docs);
+        for id in touched {
+            match doc.ty_of(id) {
+                Some(ty) if mdef.contains(&ty) => self.machines_full = true,
+                Some(ty) if ty == entity_ty => {
+                    self.machines_dirty.insert(id);
                 }
+                _ => {}
             }
-            for &id in &vd.facet_shaped {
-                touched_nodes.insert(id);
-            }
-            for r in &vd.rels_removed {
-                if matches!(r.rel, RelKind::Figures | RelKind::Animates) {
-                    removed_rel_ids.push(r.id);
-                }
-            }
-            for r in &vd.rels_added {
-                if matches!(r.rel, RelKind::Figures | RelKind::Animates) {
-                    added_rels.push(r.clone());
-                }
+            if let Some((owner, _)) = id.expanded_parts()
+                && doc.ty_of(owner) == Some(entity_ty)
+            {
+                self.machines_dirty.insert(owner);
             }
         }
+    }
 
-        // Check whether any `Op::Set` touched a machine definition node or an entity.
-        {
+    /// `root`'s runtime summary, made through a recording `Tree`, and the
+    /// keys that re-make it.
+    fn make_root_runtime(&mut self, root: NodeId) -> clocks::RootRuntime {
+        let rec = structure::Recorder::default();
+        let rt = clocks::root_runtime(Tree::of(&self.docs).recording(&rec), root);
+        let mut keys = rec.into_inner();
+        if !rt.compositions.is_empty() {
+            // The run mode is read as a constant; a set notes its leaf.
+            keys.push(structure::Key::Leaf(Leaf { node: root, path: "composition.run".parse().expect("declared leaf") }));
+        }
+        *self.owner_makers.runs_of.entry(root).or_insert(0) += 1;
+        self.owner_makers.set_keys(root, keys);
+        rt
+    }
+
+    /// Re-make the roots whose recorded reads were touched, and apply the
+    /// difference to the owner index and the runtime systems.
+    fn sync_owner_makers(&mut self) {
+        if !self.owner_makers.init {
+            return;
+        }
+        if self.owner_makers.roots_dirty {
+            self.owner_makers.roots_dirty = false;
+            let current: BTreeSet<NodeId> = Tree::of(&self.docs).roots().iter().copied().collect();
+            let m = &mut self.owner_makers;
+            m.dirty.extend(m.per_root.keys().copied().filter(|r| !current.contains(r)));
+            m.dirty.extend(current.iter().copied().filter(|r| !m.per_root.contains_key(r)));
+        }
+        if self.owner_makers.dirty.is_empty() {
+            return;
+        }
+        let dirty = std::mem::take(&mut self.owner_makers.dirty);
+        let (mut old, mut new) = (clocks::RootRuntime::default(), clocks::RootRuntime::default());
+        for root in dirty {
+            if let Some(o) = self.owner_makers.per_root.remove(&root) {
+                old.extend(&o);
+            }
+            if Tree::of(&self.docs).live(root).is_some_and(|n| n.parent.is_none()) {
+                let rt = self.make_root_runtime(root);
+                new.extend(&rt);
+                self.owner_makers.per_root.insert(root, rt);
+            } else {
+                self.owner_makers.unindex(root);
+            }
+        }
+        if old != new {
+            let d = self.owner_index.apply(&old, &new);
+            self.apply_owner_diff(d);
+        }
+    }
+
+    /// What a change of the owner index asks of steps, queries, machines,
+    /// clips and clocks.
+    fn apply_owner_diff(&mut self, d: clocks::RuntimeDiff) {
+        self.gate_dirty |= d.gate;
+        for o in d.gone_owners {
+            if let Some(k) = o.clock_key() {
+                self.clocks.forget(k);
+            }
+            self.active_owners.remove(&o);
+        }
+        self.new_owners.extend(d.new_owners);
+        if !d.reowned.is_empty() {
             let doc = Tree::of(&self.docs);
-            for id in entity_leaf_touched {
-                if let Some(ty) = doc.ty_of(id) {
-                    if is_machine_def_ty(ty) {
-                        self.machines_full = true;
-                    } else if ty == entity_ty {
-                        self.machines_dirty.insert(id);
-                    }
+            let mut sub: Vec<NodeId> = Vec::new();
+            for e in d.reowned.into_iter().filter(|&e| doc.is_live(e)) {
+                sub.push(e);
+                sub.extend(doc.descendants(e));
+            }
+            self.reactive.cells_for_nodes(&sub, &mut self.owner_dirty_cells);
+        }
+        let (mut steps_gone, mut queries_gone, mut machines_gone) = (Vec::new(), Vec::new(), Vec::new());
+        for (n, o) in d.traces {
+            match o {
+                Some(o) if self.is_owner_active(o) => {
+                    self.running_steps.0.insert(n);
+                    clocks::trace_input_leaves(n).into_iter().for_each(|l| self.reactive.unwatch_leaf(l));
                 }
-                if let Some((owner, _)) = id.expanded_parts()
-                    && doc.ty_of(owner) == Some(entity_ty)
-                {
-                    self.machines_dirty.insert(owner);
+                Some(_) => {
+                    self.running_steps.0.remove(&n);
+                    clocks::trace_input_leaves(n).into_iter().for_each(|l| self.reactive.watch_leaf(l));
+                }
+                None => {
+                    self.running_steps.0.remove(&n);
+                    clocks::trace_input_leaves(n).into_iter().for_each(|l| self.reactive.unwatch_leaf(l));
+                    steps_gone.extend(self.steps.forget(n));
                 }
             }
         }
-
-        // 1. Update live compositions and `run_always`.
-        {
-            let doc = Tree::of(&self.docs);
-            for &id in &touched_nodes {
-                let is_live_comp = doc.live(id).is_some_and(|n| n.ty == comp_ty);
-                if is_live_comp {
-                    if self.owner_index.compositions.insert(id) {
-                        self.new_owners.insert(clocks::Owner::Composition(id));
-                        self.gate_dirty = true;
-                    }
-                    let always = composition::run_mode(doc, id) == composition::RunMode::Always;
-                    let was = self.owner_index.run_always.contains(&id);
-                    if always != was {
-                        if always {
-                            self.owner_index.run_always.insert(id);
-                        } else {
-                            self.owner_index.run_always.remove(&id);
-                        }
-                        self.gate_dirty = true;
-                    }
-                } else if self.owner_index.compositions.remove(&id) {
-                    self.owner_index.run_always.remove(&id);
-                    self.owner_index.comp_accumulators.remove(&id);
-                    self.clocks.forget(id);
-                    self.active_owners.remove(&clocks::Owner::Composition(id));
-                    self.gate_dirty = true;
+        for (n, o) in d.accs {
+            match o {
+                Some(o) if self.is_owner_active(o) => {
+                    self.running_steps.1.insert(n);
+                }
+                Some(_) => {
+                    self.running_steps.1.remove(&n);
+                }
+                None => {
+                    self.running_steps.1.remove(&n);
+                    steps_gone.extend(self.steps.forget(n));
                 }
             }
         }
-
-        // 2. Update `Figures` relations & track subtrees whose `Owner` changed.
-        let mut owner_changed_subtrees: Vec<NodeId> = Vec::new();
-        let mut affected_clips: BTreeSet<NodeId> = BTreeSet::new();
-        for rid in &removed_rel_ids {
-            let (changed, unpictured) = self.owner_index.remove_figure_rel(*rid);
-            if changed {
-                self.gate_dirty = true;
-            }
-            if let Some(e) = unpictured {
-                self.clocks.forget(e);
-                self.active_owners.remove(&clocks::Owner::Entity(e));
-                if Tree::of(&self.docs).is_live(e) {
-                    owner_changed_subtrees.push(e);
-                }
-            }
-            if let Some(clip) = self.owner_index.remove_animates_rel(*rid) {
-                affected_clips.insert(clip);
-            }
+        for q in d.queries_added {
+            query::Queries::input_leaves(q).into_iter().for_each(|l| self.reactive.watch_leaf(l));
+            self.queries.touch([q]);
         }
-        {
-            let doc = Tree::of(&self.docs);
-            for rel in &added_rels {
-                if !doc.is_live(rel.from) || !doc.is_live(rel.to) {
-                    continue;
-                }
-                match rel.rel {
-                    RelKind::Figures => {
-                        if let Some(comp) = composition::composition_of(doc, rel.from) {
-                            let became_pictured = self.owner_index.add_figure_rel(rel.id, comp, rel.to);
-                            self.gate_dirty = true;
-                            if became_pictured {
-                                self.new_owners.insert(clocks::Owner::Entity(rel.to));
-                                owner_changed_subtrees.push(rel.to);
-                            }
-                        }
-                    }
-                    RelKind::Animates => {
-                        if doc.ty_of(rel.from) == Some(clip_ty) {
-                            let o = self.owner_index.owner_of(doc, rel.to);
-                            self.owner_index.add_animates_rel(rel.id, rel.from, rel.to, o);
-                            affected_clips.insert(rel.from);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+        for q in d.queries_gone {
+            query::Queries::input_leaves(q).into_iter().for_each(|l| self.reactive.unwatch_leaf(l));
+            queries_gone.extend(self.queries.forget(q));
         }
-
-        // 3. Detect cross-owner reparents (intra-composition reparents stay O(1)!).
-        {
-            let doc = Tree::of(&self.docs);
-            for (id, new_p) in reparent_new_parent {
-                if !doc.is_live(id) {
-                    continue;
-                }
-                let old_o = reparent_old_parent.get(&id).copied().flatten().map_or(clocks::Owner::Free, |p| self.owner_index.owner_of(doc, p));
-                let new_o = new_p.map_or(clocks::Owner::Free, |p| self.owner_index.owner_of(doc, p));
-                if old_o != new_o {
-                    owner_changed_subtrees.push(id);
-                }
-            }
-            for (id, old_p, new_p) in moved_views {
-                if !doc.is_live(id) {
-                    continue;
-                }
-                if self.owner_index.owner_of(doc, old_p) != self.owner_index.owner_of(doc, new_p) {
-                    owner_changed_subtrees.push(id);
-                }
-            }
-        }
-
-        // 4. Re-owner any subtree that actually moved between owners (or became pictured/unpictured).
-        if !owner_changed_subtrees.is_empty() {
-            let doc = Tree::of(&self.docs);
-            let mut sub_nodes: Vec<NodeId> = Vec::new();
-            for root in owner_changed_subtrees {
-                if doc.is_live(root) {
-                    sub_nodes.push(root);
-                    sub_nodes.extend(doc.descendants(root));
-                }
-            }
-            self.reactive.cells_for_nodes(&sub_nodes, &mut self.owner_dirty_cells);
-            for &n in &sub_nodes {
-                touched_nodes.insert(n);
-                // Refresh any `Figures` relation originating from `n`.
-                let figs: Vec<(RelationId, NodeId)> = doc
-                    .relations_from(n)
-                    .filter(|r| r.rel == RelKind::Figures && doc.is_live(r.to))
-                    .map(|r| (r.id, r.to))
-                    .collect();
-                for (rid, entity) in figs {
-                    let (changed, unpictured) = self.owner_index.remove_figure_rel(rid);
-                    if changed {
-                        self.gate_dirty = true;
-                    }
-                    if let Some(e) = unpictured {
-                        self.clocks.forget(e);
-                        self.active_owners.remove(&clocks::Owner::Entity(e));
-                    }
-                    if let Some(comp) = composition::composition_of(doc, n) {
-                        let became = self.owner_index.add_figure_rel(rid, comp, entity);
-                        self.gate_dirty = true;
-                        if became {
-                            self.new_owners.insert(clocks::Owner::Entity(entity));
-                        }
-                    }
-                }
-                // Refresh any `Animates` relation targeting `n`.
-                if let Some(rids) = self.owner_index.animates_on_target.get(&n).cloned() {
-                    let new_o = self.owner_index.owner_of(doc, n);
-                    for rid in rids {
-                        if let Some(&(clip, target, old_o)) = self.owner_index.clip_rels.get(&rid)
-                            && old_o != new_o
-                        {
-                            self.owner_index.add_animates_rel(rid, clip, target, new_o);
-                            affected_clips.insert(clip);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 5. Reconcile affected clips in `running_clips` / `animated`.
-        if !affected_clips.is_empty() {
-            let mut clips_changed = false;
-            for clip in affected_clips {
-                let want = self.owner_index.clip_targets.contains_key(&clip)
-                    && (self.observe_all || !self.gate_initialized || self.owner_index.clip_is_active(clip, &self.active_owners));
-                if want {
-                    clips_changed |= self.running_clips.insert(clip);
-                } else {
-                    clips_changed |= self.running_clips.remove(&clip);
-                }
-            }
-            if clips_changed {
-                self.recompute_animated();
-            }
-        }
-
-        // 6. Reconcile runtime nodes (`Trace`, `Accumulate`, `Query`, `entity`) for `touched_nodes`.
-        let mut steps_gone: Vec<Leaf> = Vec::new();
-        let mut queries_gone: Vec<Leaf> = Vec::new();
-        let mut machines_gone: Vec<Leaf> = Vec::new();
-        for n in touched_nodes {
-            let (is_live, has_trace, has_acc, has_query, is_entity, is_mdef, owner) = {
-                let doc = Tree::of(&self.docs);
-                let live = doc.live(n);
-                let ty = live.as_ref().map(|x| x.ty);
-                let has_trace = live.is_some() && doc.has(n, FacetKind::Trace);
-                let has_acc = live.is_some() && doc.has(n, FacetKind::Accumulate);
-                let has_query = live.is_some() && doc.has(n, FacetKind::Query);
-                let is_entity = ty == Some(entity_ty);
-                let is_mdef = ty.is_some_and(is_machine_def_ty);
-                let owner = if live.is_some() && (has_trace || has_acc || is_entity) {
-                    Some(self.owner_index.owner_of(doc, n))
-                } else {
-                    None
-                };
-                (live.is_some(), has_trace, has_acc, has_query, is_entity, is_mdef, owner)
-            };
-            if is_mdef {
-                self.machines_full = true;
-            }
-            // Trace
-            if has_trace {
-                let o = owner.expect("live owner");
-                let prev = self.owner_index.trace_owner.insert(n, o);
-                if prev != Some(o) {
-                    if let Some(old_o) = prev
-                        && let Some(set) = self.owner_index.traces_by_owner.get_mut(&old_o)
-                    {
-                        set.remove(&n);
-                        if set.is_empty() {
-                            self.owner_index.traces_by_owner.remove(&old_o);
-                        }
-                    }
-                    self.owner_index.traces_by_owner.entry(o).or_default().insert(n);
-                    if self.is_owner_active(o) {
-                        self.running_steps.0.insert(n);
-                        for l in clocks::trace_input_leaves(n) {
-                            self.reactive.unwatch_leaf(l);
-                        }
-                    } else {
-                        self.running_steps.0.remove(&n);
-                        for l in clocks::trace_input_leaves(n) {
-                            self.reactive.watch_leaf(l);
-                        }
-                    }
-                }
-            } else if let Some(old_o) = self.owner_index.trace_owner.remove(&n) {
-                if let Some(set) = self.owner_index.traces_by_owner.get_mut(&old_o) {
-                    set.remove(&n);
-                    if set.is_empty() {
-                        self.owner_index.traces_by_owner.remove(&old_o);
-                    }
-                }
-                self.running_steps.0.remove(&n);
-                for l in clocks::trace_input_leaves(n) {
-                    self.reactive.unwatch_leaf(l);
-                }
-                steps_gone.extend(self.steps.forget(n));
-            }
-            // Accumulate
-            if has_acc {
-                let o = owner.expect("live owner");
-                let prev = self.owner_index.acc_owner.insert(n, o);
-                if prev != Some(o) {
-                    if let Some(old_o) = prev {
-                        if let Some(set) = self.owner_index.accs_by_owner.get_mut(&old_o) {
-                            set.remove(&n);
-                            if set.is_empty() {
-                                self.owner_index.accs_by_owner.remove(&old_o);
-                            }
-                        }
-                        if let clocks::Owner::Composition(c) = old_o
-                            && let Some(set) = self.owner_index.comp_accumulators.get_mut(&c)
-                        {
-                            set.remove(&n);
-                            if set.is_empty() {
-                                self.owner_index.comp_accumulators.remove(&c);
-                                self.gate_dirty = true;
-                            }
-                        }
-                    }
-                    self.owner_index.accs_by_owner.entry(o).or_default().insert(n);
-                    if let clocks::Owner::Composition(c) = o {
-                        let entry = self.owner_index.comp_accumulators.entry(c).or_default();
-                        let was_empty = entry.is_empty();
-                        entry.insert(n);
-                        if was_empty {
-                            self.gate_dirty = true;
-                        }
-                    }
-                    if self.is_owner_active(o) {
-                        self.running_steps.1.insert(n);
-                    } else {
-                        self.running_steps.1.remove(&n);
-                    }
-                }
-            } else if let Some(old_o) = self.owner_index.acc_owner.remove(&n) {
-                if let Some(set) = self.owner_index.accs_by_owner.get_mut(&old_o) {
-                    set.remove(&n);
-                    if set.is_empty() {
-                        self.owner_index.accs_by_owner.remove(&old_o);
-                    }
-                }
-                if let clocks::Owner::Composition(c) = old_o
-                    && let Some(set) = self.owner_index.comp_accumulators.get_mut(&c)
-                {
-                    set.remove(&n);
-                    if set.is_empty() {
-                        self.owner_index.comp_accumulators.remove(&c);
-                        self.gate_dirty = true;
-                    }
-                }
-                self.running_steps.1.remove(&n);
-                steps_gone.extend(self.steps.forget(n));
-            }
-            // Query
-            if has_query {
-                if self.owner_index.live_queries.insert(n) {
-                    for l in query::Queries::input_leaves(n) {
-                        self.reactive.watch_leaf(l);
-                    }
-                    self.queries.touch([n]);
-                }
-            } else if self.owner_index.live_queries.remove(&n) {
-                for l in query::Queries::input_leaves(n) {
-                    self.reactive.unwatch_leaf(l);
-                }
-                queries_gone.extend(self.queries.forget(n));
-            }
-            // Entity (for machines)
-            if is_live && is_entity {
-                let o = owner.expect("live owner");
-                let prev = self.owner_index.entity_owner.insert(n, o);
-                if prev != Some(o) {
-                    if let Some(old_o) = prev
-                        && let Some(set) = self.owner_index.entities_by_owner.get_mut(&old_o)
-                    {
-                        set.remove(&n);
-                        if set.is_empty() {
-                            self.owner_index.entities_by_owner.remove(&old_o);
-                        }
-                    }
-                    self.owner_index.entities_by_owner.entry(o).or_default().insert(n);
-                    self.reactive.watch_node(n);
-                }
+        for (n, o) in d.entities {
+            if o.is_some() {
+                self.reactive.watch_node(n);
                 self.machines_dirty.insert(n);
-            } else if let Some(old_o) = self.owner_index.entity_owner.remove(&n) {
-                if let Some(set) = self.owner_index.entities_by_owner.get_mut(&old_o) {
-                    set.remove(&n);
-                    if set.is_empty() {
-                        self.owner_index.entities_by_owner.remove(&old_o);
-                    }
-                }
+            } else {
                 self.reactive.unwatch_node(n);
                 self.machines_dirty.remove(&n);
                 machines_gone.extend(self.machines.forget(n));
             }
         }
-
-        if !steps_gone.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::STEPS, BTreeMap::new(), &steps_gone);
+        if !d.clips.is_empty() {
+            for clip in d.clips {
+                let want = self.owner_index.clip_targets.contains_key(&clip) && (self.observe_all || !self.gate_initialized || self.owner_index.clip_is_active(clip, &self.active_owners));
+                if want {
+                    self.running_clips.insert(clip);
+                } else {
+                    self.running_clips.remove(&clip);
+                }
+            }
+            // A clip's targets may span other compositions now, whether or
+            // not the running set changed.
+            self.recompute_animated();
         }
-        if !queries_gone.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::QUERIES, BTreeMap::new(), &queries_gone);
-        }
-        if !machines_gone.is_empty() {
-            self.reactive.publish_delta(Tree::of(&self.docs), ProducerId::MACHINES, BTreeMap::new(), &machines_gone);
+        for (producer, gone) in [(ProducerId::STEPS, steps_gone), (ProducerId::QUERIES, queries_gone), (ProducerId::MACHINES, machines_gone)] {
+            if !gone.is_empty() {
+                self.reactive.publish_delta(Tree::of(&self.docs), producer, BTreeMap::new(), &gone);
+            }
         }
     }
+
+    /// Under the differential harness with `IRON_OWNER_CHECK=1`: the owner
+    /// index kept per root matches one built from scratch.
+    #[cfg(feature = "differential")]
+    fn check_owner_index(&self) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        // Before the first build (`rebuild_owners`) there is nothing to check.
+        if !*ON.get_or_init(|| std::env::var_os("IRON_OWNER_CHECK").is_some()) || !self.owner_makers.init {
+            return;
+        }
+        let doc = Tree::of(&self.docs);
+        let mut all = clocks::RootRuntime::default();
+        for &r in doc.roots() {
+            all.extend(&clocks::root_runtime(doc, r));
+        }
+        let mut fresh = clocks::OwnerIndex::default();
+        let _ = fresh.apply(&clocks::RootRuntime::default(), &all);
+        assert!(self.owner_index.same_runtime(&fresh), "owner index kept per root differs from a fresh build:\nkept {:#?}\nfresh {:#?}", self.owner_index, fresh);
+    }
+
+    #[cfg(not(feature = "differential"))]
+    fn check_owner_index(&self) {}
 
     /// Incremental owner-level visibility & clock gate (`EN-8b`, replacing
     /// `Store::gate` + `Store::paused` + `Clocks::gated`).
     /// Runs in O(1) when nothing cross-owner or observer-related changed, and
     /// in O(|active| + |cross-owner edges| + |delta|) when active owners shift.
     fn sync_gate(&mut self, now: f64) {
+        self.sync_owner_makers();
         let query_deps = self.reactive.take_query_dep_changed();
         if !query_deps.is_empty() {
             self.queries.touch(query_deps);
@@ -5015,7 +4798,11 @@ impl StoreCore {
                 doc.node(*n).is_some_and(|x| x.ty == clip_ty || x.ty == key_ty)
                     || self.owner_index.animates_on_target.contains_key(n)
             }
-            structure::Key::Relation(_) | structure::Key::Relations(_) => true,
+            // Relation keys come with `Relations` of both ends, and every
+            // `Animates` starts at a clip: only a clip's relations resample
+            // (a deleted clip is still in the owner index here).
+            structure::Key::Relation(_) => false,
+            structure::Key::Relations(n) => doc.node(*n).is_some_and(|x| x.ty == clip_ty) || self.owner_index.clip_targets.contains_key(n),
             structure::Key::In(_, ty) => *ty == clip_ty || *ty == key_ty,
             structure::Key::With(_, f) => matches!(f, FacetKind::Clip | FacetKind::Key | FacetKind::Timing | FacetKind::Track),
             structure::Key::Roots | structure::Key::LetsIn(_) | structure::Key::Wiring(_) => false,
@@ -5028,6 +4815,7 @@ impl StoreCore {
             self.network_makers.note_touched(&keys);
             self.derived_makers.note_touched(&keys);
             self.repeat_makers.note_touched(&keys);
+            self.owner_makers.note_touched(&keys);
         }
         let changed_tokens = self.sync_theme_maker();
         self.sync_contexts(false);

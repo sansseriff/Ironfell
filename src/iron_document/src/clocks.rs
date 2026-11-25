@@ -102,9 +102,138 @@ impl Clocks {
     }
 }
 
-/// Incremental owner & runtime-node index + cross-owner reactive read graph
-/// (`EN-8b`, replacing `Store::paused`, `Clocks::gated`, `Reactive::reader_nodes`,
-/// `Docs::reshaped`, `Reactive::wired`, and `op::reshapes`).
+/// What one top-level root holds that runs on time or decides who owns what
+/// (`EN-8c.0`). A per-root maker makes it from scratch through a recording
+/// `Tree` (`root_runtime`), and `OwnerIndex` is the sum of every root's: no
+/// op is classified to keep it current, and a re-made root's old summary is
+/// subtracted exactly as it was added.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RootRuntime {
+    /// The root, if it is a live composition, and its run mode.
+    pub(crate) compositions: BTreeMap<NodeId, RunMode>,
+    pub(crate) traces: BTreeMap<NodeId, Owner>,
+    pub(crate) accs: BTreeMap<NodeId, Owner>,
+    pub(crate) queries: BTreeSet<NodeId>,
+    pub(crate) entities: BTreeMap<NodeId, Owner>,
+    /// Entities under the root that live `Figures` picture, and the
+    /// compositions picturing each.
+    pub(crate) pictured: BTreeMap<NodeId, BTreeSet<NodeId>>,
+    /// `Animates` from live clips under the root: clip, target, and the
+    /// target's owner.
+    pub(crate) animates: BTreeMap<RelationId, (NodeId, NodeId, Owner)>,
+}
+
+impl RootRuntime {
+    pub(crate) fn extend(&mut self, o: &RootRuntime) {
+        self.compositions.extend(o.compositions.iter().map(|(k, v)| (*k, *v)));
+        self.traces.extend(o.traces.iter().map(|(k, v)| (*k, *v)));
+        self.accs.extend(o.accs.iter().map(|(k, v)| (*k, *v)));
+        self.queries.extend(o.queries.iter().copied());
+        self.entities.extend(o.entities.iter().map(|(k, v)| (*k, *v)));
+        self.pictured.extend(o.pictured.iter().map(|(k, v)| (*k, v.clone())));
+        self.animates.extend(o.animates.iter().map(|(k, v)| (*k, *v)));
+    }
+}
+
+/// Whether live `Figures` from a node in a composition picture `n`.
+fn pictured_in(doc: Tree<'_>, n: NodeId) -> BTreeSet<NodeId> {
+    doc.relations_to(n)
+        .filter(|r| r.rel == RelKind::Figures && r.to == n && doc.is_live(r.from))
+        .filter_map(|r| composition::composition_of(doc, r.from))
+        .collect()
+}
+
+/// `n`'s owner, read through `doc` so a recording tree notes what decides it:
+/// its composition root, else its nearest pictured ancestor, else `Free`.
+fn owner_through(doc: Tree<'_>, n: NodeId) -> Owner {
+    let comp_ty = TypeId::lookup("composition").expect("registered");
+    let mut chain: Vec<NodeId> = Vec::new();
+    let mut top = None;
+    let mut cur = Some(n);
+    while let Some(x) = cur.and_then(|c| doc.live(c)) {
+        chain.push(x.id);
+        top = Some(x.ty);
+        cur = x.parent;
+    }
+    if top == Some(comp_ty) {
+        return Owner::Composition(*chain.last().expect("a live node"));
+    }
+    for &a in &chain {
+        if doc.live(a).is_some_and(|x| x.ty == comp_ty) {
+            return Owner::Composition(a);
+        }
+        if !pictured_in(doc, a).is_empty() {
+            return Owner::Entity(a);
+        }
+    }
+    Owner::Free
+}
+
+/// `root`'s summary, read only through `doc` (a recording `Tree` in the
+/// maker, a plain one in the check).
+pub(crate) fn root_runtime(doc: Tree<'_>, root: NodeId) -> RootRuntime {
+    let ty = |n: &str| TypeId::lookup(n).expect("registered");
+    let (comp_ty, entity_ty, clip_ty) = (ty("composition"), ty("entity"), ty("clip"));
+    let mut out = RootRuntime::default();
+    let Some(r) = doc.live(root) else { return out };
+    if r.parent.is_some() {
+        return out;
+    }
+    let comp = r.ty == comp_ty;
+    if comp {
+        out.compositions.insert(root, composition::run_mode(doc, root));
+    }
+    let owner = |n: NodeId| if comp { Owner::Composition(root) } else { owner_through(doc, n) };
+    for n in doc.nodes_with_in(root, FacetKind::Trace).into_iter().filter(|&n| doc.is_live(n)) {
+        out.traces.insert(n, owner(n));
+    }
+    for n in doc.nodes_with_in(root, FacetKind::Accumulate).into_iter().filter(|&n| doc.is_live(n)) {
+        out.accs.insert(n, owner(n));
+    }
+    out.queries.extend(doc.nodes_with_in(root, FacetKind::Query).into_iter().filter(|&n| doc.is_live(n)));
+    for e in doc.nodes_of_type_in(root, entity_ty).into_iter().filter(|&n| doc.is_live(n)) {
+        out.entities.insert(e, owner(e));
+        let by = pictured_in(doc, e);
+        if !by.is_empty() {
+            out.pictured.insert(e, by);
+        }
+    }
+    for c in doc.nodes_of_type_in(root, clip_ty).into_iter().filter(|&n| doc.is_live(n)) {
+        let rels: Vec<(RelationId, NodeId)> = doc.relations_from(c).filter(|r| r.rel == RelKind::Animates && r.from == c).map(|r| (r.id, r.to)).collect();
+        for (rid, t) in rels {
+            if doc.is_live(t) {
+                out.animates.insert(rid, (c, t, owner_through(doc, t)));
+            }
+        }
+    }
+    out
+}
+
+/// What a change of the owner index asks of the runtime systems.
+#[derive(Default)]
+pub(crate) struct RuntimeDiff {
+    /// Traces, accumulators and entities that appeared or changed owner
+    /// (`Some`), or are gone (`None`).
+    pub(crate) traces: Vec<(NodeId, Option<Owner>)>,
+    pub(crate) accs: Vec<(NodeId, Option<Owner>)>,
+    pub(crate) entities: Vec<(NodeId, Option<Owner>)>,
+    pub(crate) queries_added: Vec<NodeId>,
+    pub(crate) queries_gone: Vec<NodeId>,
+    /// Clips whose targets changed.
+    pub(crate) clips: BTreeSet<NodeId>,
+    /// What decides the active set changed: compositions, run modes,
+    /// compositions holding accumulators, `Figures`.
+    pub(crate) gate: bool,
+    pub(crate) new_owners: Vec<Owner>,
+    pub(crate) gone_owners: Vec<Owner>,
+    /// Entities that became or stopped being pictured: their subtrees
+    /// changed owner.
+    pub(crate) reowned: Vec<NodeId>,
+}
+
+/// The owner and runtime-node index (`EN-8b`), kept as the sum of every
+/// root's `RootRuntime` (`EN-8c.0`), plus the cross-owner reactive read
+/// graph, which follows the cells whose reads changed.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OwnerIndex {
     /// Every live composition root.
@@ -118,10 +247,6 @@ pub(crate) struct OwnerIndex {
     pub(crate) pictured_by: BTreeMap<NodeId, BTreeSet<NodeId>>,
     /// `composition -> { entities it pictures via live RelKind::Figures }`.
     pub(crate) figures_of_comp: BTreeMap<NodeId, BTreeSet<NodeId>>,
-    /// Per-relation record for live `RelKind::Figures` from a composition.
-    pub(crate) figure_rels: BTreeMap<RelationId, (NodeId, NodeId)>,
-    /// Multiplicity of live `Figures` relations for each `(comp, entity)` pair.
-    figure_edge_counts: BTreeMap<(NodeId, NodeId), usize>,
 
     /// Per-owner live `Trace` nodes and reverse owner lookup.
     pub(crate) traces_by_owner: BTreeMap<Owner, BTreeSet<NodeId>>,
@@ -135,13 +260,10 @@ pub(crate) struct OwnerIndex {
     pub(crate) entities_by_owner: BTreeMap<Owner, BTreeSet<NodeId>>,
     pub(crate) entity_owner: HashMap<NodeId, Owner>,
 
-    /// Per-owner clips (`owner -> { clip -> target_edge_count }`),
-    /// reverse `clip -> { owner -> target_edge_count }`,
-    /// per-relation `Animates` record `(clip, target, target_owner)`,
-    /// and `target_node -> { Animates RelationId }`.
+    /// Per-owner clips (`owner -> { clip -> target_edge_count }`), reverse
+    /// `clip -> { owner -> target_edge_count }`, and `target -> { Animates }`.
     pub(crate) clips_by_owner: BTreeMap<Owner, BTreeMap<NodeId, usize>>,
     pub(crate) clip_targets: BTreeMap<NodeId, BTreeMap<Owner, usize>>,
-    pub(crate) clip_rels: BTreeMap<RelationId, (NodeId, NodeId, Owner)>,
     pub(crate) animates_on_target: HashMap<NodeId, BTreeSet<RelationId>>,
 
     /// Cross-owner reactive edges per cell: only cells with >= 1 cross-owner
@@ -153,64 +275,196 @@ pub(crate) struct OwnerIndex {
     read_by: BTreeMap<Owner, BTreeMap<Owner, usize>>,
 }
 
-impl OwnerIndex {
-    /// One-time full build on `StoreCore::new` / `StoreCore::load`.
-    pub(crate) fn rebuild(&mut self, doc: Tree<'_>, reactive: &Reactive) {
-        *self = Self::default();
-        let comp_ty = TypeId::lookup("composition").expect("registered");
-        let entity_ty = TypeId::lookup("entity").expect("registered");
-        let clip_ty = TypeId::lookup("clip").expect("registered");
+fn move_member(by_owner: &mut BTreeMap<Owner, BTreeSet<NodeId>>, of: &mut HashMap<NodeId, Owner>, n: NodeId, to: Option<Owner>) {
+    if let Some(old) = of.remove(&n)
+        && let Some(set) = by_owner.get_mut(&old)
+    {
+        set.remove(&n);
+        if set.is_empty() {
+            by_owner.remove(&old);
+        }
+    }
+    if let Some(o) = to {
+        of.insert(n, o);
+        by_owner.entry(o).or_default().insert(n);
+    }
+}
 
-        for c in composition::compositions(doc) {
-            self.compositions.insert(c);
-            if composition::run_mode(doc, c) == RunMode::Always {
-                self.run_always.insert(c);
+fn keys<V>(a: &BTreeMap<NodeId, V>, b: &BTreeMap<NodeId, V>) -> BTreeSet<NodeId> {
+    a.keys().chain(b.keys()).copied().collect()
+}
+
+fn count(map: &mut BTreeMap<NodeId, usize>, k: NodeId, up: bool) {
+    let c = map.entry(k).or_insert(0);
+    if up {
+        *c += 1;
+    } else {
+        *c -= 1;
+        if *c == 0 {
+            map.remove(&k);
+        }
+    }
+}
+
+impl OwnerIndex {
+    /// Replace `old` (what the re-made roots contributed) with `new` (what
+    /// they contribute now), and say what the runtime systems must do.
+    pub(crate) fn apply(&mut self, old: &RootRuntime, new: &RootRuntime) -> RuntimeDiff {
+        let mut d = RuntimeDiff::default();
+        for c in keys(&old.compositions, &new.compositions) {
+            let (was, now) = (old.compositions.get(&c), new.compositions.get(&c));
+            if was == now {
+                continue;
+            }
+            d.gate = true;
+            match now {
+                Some(m) => {
+                    if self.compositions.insert(c) {
+                        d.new_owners.push(Owner::Composition(c));
+                    }
+                    if *m == RunMode::Always {
+                        self.run_always.insert(c);
+                    } else {
+                        self.run_always.remove(&c);
+                    }
+                }
+                None => {
+                    self.compositions.remove(&c);
+                    self.run_always.remove(&c);
+                    d.gone_owners.push(Owner::Composition(c));
+                }
             }
         }
-        // Index live `Figures` relations first so `owner_of` knows all pictured entities.
-        let fig_rels: Vec<(RelationId, NodeId, NodeId)> = doc
-            .relations()
-            .filter(|r| r.rel == RelKind::Figures && doc.is_live(r.from) && doc.is_live(r.to))
-            .filter_map(|r| Some((r.id, composition::composition_of(doc, r.from)?, r.to)))
-            .collect();
-        for (rid, comp, entity) in fig_rels {
-            self.add_figure_rel(rid, comp, entity);
+        for n in keys(&old.traces, &new.traces) {
+            let now = new.traces.get(&n).copied();
+            if old.traces.get(&n).copied() != now {
+                move_member(&mut self.traces_by_owner, &mut self.trace_owner, n, now);
+                d.traces.push((n, now));
+            }
         }
-
-        let traces: Vec<NodeId> = doc.nodes_with(FacetKind::Trace).filter(|&n| doc.is_live(n)).collect();
-        for n in traces {
-            let o = self.owner_of(doc, n);
-            self.trace_owner.insert(n, o);
-            self.traces_by_owner.entry(o).or_default().insert(n);
-        }
-        let accs: Vec<NodeId> = doc.nodes_with(FacetKind::Accumulate).filter(|&n| doc.is_live(n)).collect();
-        for n in accs {
-            let o = self.owner_of(doc, n);
-            self.acc_owner.insert(n, o);
-            self.accs_by_owner.entry(o).or_default().insert(n);
-            if let Owner::Composition(c) = o {
+        for n in keys(&old.accs, &new.accs) {
+            let (was, now) = (old.accs.get(&n).copied(), new.accs.get(&n).copied());
+            if was == now {
+                continue;
+            }
+            move_member(&mut self.accs_by_owner, &mut self.acc_owner, n, now);
+            if let Some(Owner::Composition(c)) = was
+                && let Some(set) = self.comp_accumulators.get_mut(&c)
+            {
+                set.remove(&n);
+                if set.is_empty() {
+                    self.comp_accumulators.remove(&c);
+                }
+            }
+            if let Some(Owner::Composition(c)) = now {
                 self.comp_accumulators.entry(c).or_default().insert(n);
             }
+            d.gate = true;
+            d.accs.push((n, now));
         }
-        self.live_queries.extend(doc.nodes_with(FacetKind::Query).filter(|&n| doc.is_live(n)));
-        let entities: Vec<NodeId> = doc.nodes_of_type(entity_ty).filter(|&n| doc.is_live(n)).collect();
-        for e in entities {
-            let o = self.owner_of(doc, e);
-            self.entity_owner.insert(e, o);
-            self.entities_by_owner.entry(o).or_default().insert(e);
+        for n in keys(&old.entities, &new.entities) {
+            let now = new.entities.get(&n).copied();
+            if old.entities.get(&n).copied() != now {
+                move_member(&mut self.entities_by_owner, &mut self.entity_owner, n, now);
+                d.entities.push((n, now));
+            }
         }
-        let anim_rels: Vec<(RelationId, NodeId, NodeId)> = doc
-            .relations()
-            .filter(|r| r.rel == RelKind::Animates && doc.is_live(r.from) && doc.is_live(r.to))
-            .filter(|r| doc.ty_of(r.from) == Some(clip_ty))
-            .map(|r| (r.id, r.from, r.to))
-            .collect();
-        for (rid, clip, target) in anim_rels {
-            let o = self.owner_of(doc, target);
-            self.add_animates_rel(rid, clip, target, o);
+        for &q in old.queries.difference(&new.queries) {
+            self.live_queries.remove(&q);
+            d.queries_gone.push(q);
         }
-        let _ = comp_ty;
-        self.rebuild_cross_reads(doc, reactive);
+        for &q in new.queries.difference(&old.queries) {
+            self.live_queries.insert(q);
+            d.queries_added.push(q);
+        }
+        let empty = BTreeSet::new();
+        for e in keys(&old.pictured, &new.pictured) {
+            let (was, now) = (old.pictured.get(&e).unwrap_or(&empty), new.pictured.get(&e).unwrap_or(&empty));
+            if was == now {
+                continue;
+            }
+            d.gate = true;
+            for c in was.difference(now) {
+                if let Some(es) = self.figures_of_comp.get_mut(c) {
+                    es.remove(&e);
+                    if es.is_empty() {
+                        self.figures_of_comp.remove(c);
+                    }
+                }
+            }
+            for &c in now.difference(was) {
+                self.figures_of_comp.entry(c).or_default().insert(e);
+            }
+            if now.is_empty() {
+                self.pictured_by.remove(&e);
+                d.gone_owners.push(Owner::Entity(e));
+                d.reowned.push(e);
+            } else {
+                self.pictured_by.insert(e, now.clone());
+                if was.is_empty() {
+                    d.new_owners.push(Owner::Entity(e));
+                    d.reowned.push(e);
+                }
+            }
+        }
+        let rels: BTreeSet<RelationId> = old.animates.keys().chain(new.animates.keys()).copied().collect();
+        for rid in rels {
+            let (was, now) = (old.animates.get(&rid), new.animates.get(&rid));
+            if was == now {
+                continue;
+            }
+            for (&(clip, target, owner), up) in was.map(|w| (w, false)).into_iter().chain(now.map(|n| (n, true))) {
+                count(self.clips_by_owner.entry(owner).or_default(), clip, up);
+                if self.clips_by_owner.get(&owner).is_some_and(BTreeMap::is_empty) {
+                    self.clips_by_owner.remove(&owner);
+                }
+                let by_owner = self.clip_targets.entry(clip).or_default();
+                let c = by_owner.entry(owner).or_insert(0);
+                if up {
+                    *c += 1;
+                } else {
+                    *c -= 1;
+                    if *c == 0 {
+                        by_owner.remove(&owner);
+                    }
+                }
+                if by_owner.is_empty() {
+                    self.clip_targets.remove(&clip);
+                }
+                let on = self.animates_on_target.entry(target).or_default();
+                if up {
+                    on.insert(rid);
+                } else {
+                    on.remove(&rid);
+                }
+                if on.is_empty() {
+                    self.animates_on_target.remove(&target);
+                }
+                d.clips.insert(clip);
+            }
+        }
+        d
+    }
+
+    /// Whether the runtime part (everything but the cross-owner reads) is
+    /// the same as `other`'s: `IRON_OWNER_CHECK` against a fresh build.
+    #[cfg(feature = "differential")]
+    pub(crate) fn same_runtime(&self, other: &OwnerIndex) -> bool {
+        self.compositions == other.compositions
+            && self.run_always == other.run_always
+            && self.comp_accumulators == other.comp_accumulators
+            && self.pictured_by == other.pictured_by
+            && self.figures_of_comp == other.figures_of_comp
+            && self.traces_by_owner == other.traces_by_owner
+            && self.trace_owner == other.trace_owner
+            && self.accs_by_owner == other.accs_by_owner
+            && self.acc_owner == other.acc_owner
+            && self.live_queries == other.live_queries
+            && self.entities_by_owner == other.entities_by_owner
+            && self.entity_owner == other.entity_owner
+            && self.clips_by_owner == other.clips_by_owner
+            && self.clip_targets == other.clip_targets
+            && self.animates_on_target == other.animates_on_target
     }
 
     /// O(1) ownership lookup for a live node (via `root_of` for compositions,
@@ -242,98 +496,6 @@ impl OwnerIndex {
     /// entities). Used only on the `observe_all: true -> false` mode switch.
     pub(crate) fn all_clock_keys(&self) -> Vec<NodeId> {
         self.compositions.iter().chain(self.pictured_by.keys()).copied().collect()
-    }
-
-    /// Add one live `Figures` relation `(comp -> entity)`. Returns `true` if
-    /// `entity` just became pictured (owner changed `Free -> Entity(entity)`).
-    pub(crate) fn add_figure_rel(&mut self, rid: RelationId, comp: NodeId, entity: NodeId) -> bool {
-        if self.figure_rels.get(&rid) == Some(&(comp, entity)) {
-            return false;
-        }
-        let _ = self.remove_figure_rel(rid);
-        self.figure_rels.insert(rid, (comp, entity));
-        let cnt = self.figure_edge_counts.entry((comp, entity)).or_insert(0);
-        *cnt += 1;
-        if *cnt == 1 {
-            let became_pictured = !self.pictured_by.contains_key(&entity);
-            self.pictured_by.entry(entity).or_default().insert(comp);
-            self.figures_of_comp.entry(comp).or_default().insert(entity);
-            return became_pictured;
-        }
-        false
-    }
-
-    /// Remove a tracked `Figures` relation `rid`. Returns `(changed, unpictured_entity)`
-    /// where `unpictured_entity` is `Some(e)` if `e` has no remaining compositions picturing it.
-    pub(crate) fn remove_figure_rel(&mut self, rid: RelationId) -> (bool, Option<NodeId>) {
-        let Some((comp, entity)) = self.figure_rels.remove(&rid) else {
-            return (false, None);
-        };
-        let mut unpictured = None;
-        if let Some(cnt) = self.figure_edge_counts.get_mut(&(comp, entity)) {
-            *cnt -= 1;
-            if *cnt == 0 {
-                self.figure_edge_counts.remove(&(comp, entity));
-                if let Some(cs) = self.pictured_by.get_mut(&entity) {
-                    cs.remove(&comp);
-                    if cs.is_empty() {
-                        self.pictured_by.remove(&entity);
-                        unpictured = Some(entity);
-                    }
-                }
-                if let Some(es) = self.figures_of_comp.get_mut(&comp) {
-                    es.remove(&entity);
-                    if es.is_empty() {
-                        self.figures_of_comp.remove(&comp);
-                    }
-                }
-            }
-        }
-        (true, unpictured)
-    }
-
-    pub(crate) fn add_animates_rel(&mut self, rid: RelationId, clip: NodeId, target: NodeId, owner: Owner) {
-        if self.clip_rels.get(&rid) == Some(&(clip, target, owner)) {
-            return;
-        }
-        let _ = self.remove_animates_rel(rid);
-        self.clip_rels.insert(rid, (clip, target, owner));
-        self.animates_on_target.entry(target).or_default().insert(rid);
-        *self.clips_by_owner.entry(owner).or_default().entry(clip).or_insert(0) += 1;
-        *self.clip_targets.entry(clip).or_default().entry(owner).or_insert(0) += 1;
-    }
-
-    pub(crate) fn remove_animates_rel(&mut self, rid: RelationId) -> Option<NodeId> {
-        let (clip, target, owner) = self.clip_rels.remove(&rid)?;
-        if let Some(set) = self.animates_on_target.get_mut(&target) {
-            set.remove(&rid);
-            if set.is_empty() {
-                self.animates_on_target.remove(&target);
-            }
-        }
-        if let Some(map) = self.clips_by_owner.get_mut(&owner) {
-            if let Some(cnt) = map.get_mut(&clip) {
-                *cnt -= 1;
-                if *cnt == 0 {
-                    map.remove(&clip);
-                }
-            }
-            if map.is_empty() {
-                self.clips_by_owner.remove(&owner);
-            }
-        }
-        if let Some(map) = self.clip_targets.get_mut(&clip) {
-            if let Some(cnt) = map.get_mut(&owner) {
-                *cnt -= 1;
-                if *cnt == 0 {
-                    map.remove(&owner);
-                }
-            }
-            if map.is_empty() {
-                self.clip_targets.remove(&clip);
-            }
-        }
-        Some(clip)
     }
 
     /// Whether clip `c` animates at least one target whose owner is active.

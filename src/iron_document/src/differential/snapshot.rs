@@ -287,7 +287,7 @@ fn context_reads(s: &StoreCore, doc: Tree<'_>) -> Vec<(NodeId, Vec<(String, Opti
             at = doc.node(n).and_then(|x| x.parent);
         }
     }
-    figures.into_iter().map(|n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect()
+    figures.into_iter().filter(|&n| doc.is_live(n)).map(|n| (n, s.context_reads(n))).filter(|(_, r)| !r.is_empty()).collect()
 }
 
 /// `Store::hover_listeners` of every live node that has any, from the

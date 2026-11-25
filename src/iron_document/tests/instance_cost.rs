@@ -199,13 +199,22 @@ fn memory_by_part() {
         freed.push(("rest of the store", last - LIVE.load(Ordering::Relaxed)));
         freed
     };
+    let registry = |sizes: (usize, usize, usize, usize)| sizes.0 as f64;
+    let before = registry(iron_document::id::registry_sizes());
     let small = parts(100);
+    let mid = registry(iron_document::id::registry_sizes());
     let large = parts(700);
+    let after = registry(iron_document::id::registry_sizes());
     let mut total = 0.0;
     for ((part, a), (_, b)) in small.iter().zip(&large) {
         let per = (b - a) as f64 / 600.0 / 1024.0;
         total += per;
         println!("{per:8.1} KiB/meter  {part}");
     }
-    println!("{total:8.1} KiB/meter  total");
+    println!("{total:8.1} KiB/meter  total dropped with the store");
+    // The process-wide path registry is never freed (`id.rs`): the paths the
+    // 600 meters the second store has beyond the first's added (a new store
+    // gives the same ids, so its first hundred reuse the first's paths).
+    // Run this test alone, or the registry starts warm.
+    println!("{:8.1} paths/meter  interned, never freed ({before} at start, {mid} after 100 meters)", (after - mid) / 600.0);
 }

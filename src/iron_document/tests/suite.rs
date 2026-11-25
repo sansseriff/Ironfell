@@ -33,6 +33,7 @@ mod gestures;
 mod handles;
 mod id_growth;
 mod id_order;
+mod id_registry;
 mod latency;
 mod layers;
 mod machine_authoring;

@@ -249,7 +249,7 @@ pub(crate) struct VirtualViews {
     /// Optional multi-wave net delta capture: first-before snapshot + depth per
     /// touched `top_owner` across a transaction / `settle_repeats` sequence.
     net_before: Option<BTreeMap<NodeId, (OwnerUndo, usize)>>,
-    template_diffs: TemplateDiffs,
+    pub(crate) template_diffs: TemplateDiffs,
 }
 
 impl VirtualViews {
@@ -1008,35 +1008,42 @@ impl VirtualViews {
     }
 }
 
-/// Collect ONLY changed node snapshots between old and new piece views/items.
-/// When a piece survives with the exact same `Arc<Template>` and `limit`, only
-/// the union of `old.sparse_facets ∪ new.sparse_facets ∪ old.extra_facets ∪ new.extra_facets`
-/// node indices is visited (O(|sparse|), never walking `0..limit`).
-#[allow(clippy::too_many_arguments)]
 /// What a definition edit changed in its template (`Template::changed_nodes`),
 /// by the old and new template's revision: every instance of the definition
 /// gets the same pair, so it is worked out once, not once per instance (`EN-17`).
+/// `off` in the differential reference (`full_views`), which walks every
+/// node of a view whose template changed, so it checks this shortcut rather
+/// than sharing it (council review of `EN-17`).
 #[derive(Clone, Default)]
-pub(crate) struct TemplateDiffs(HashMap<(u64, u64), Option<Arc<[usize]>>>);
+pub(crate) struct TemplateDiffs {
+    diffs: HashMap<(u64, u64), Option<Arc<[usize]>>>,
+    pub(crate) off: bool,
+}
 
 impl TemplateDiffs {
     /// The template nodes whose facets differ, when `old` and `new` have the
     /// same nodes; `None` when they are not two revisions of one shape.
     fn get(&mut self, old: &Arc<Template>, new: &Arc<Template>) -> Option<Arc<[usize]>> {
-        if Arc::ptr_eq(old, new) {
+        if Arc::ptr_eq(old, new) || self.off {
             return None;
         }
         let diff = || old.changed_nodes(new).map(Arc::from);
         if old.rev == 0 || new.rev == 0 {
             return diff();
         }
-        if self.0.len() > 64 {
-            self.0.clear();
+        if self.diffs.len() > 64 {
+            self.diffs.clear();
         }
-        self.0.entry((old.rev, new.rev)).or_insert_with(diff).clone()
+        self.diffs.entry((old.rev, new.rev)).or_insert_with(diff).clone()
     }
 }
 
+/// Collect ONLY changed node snapshots between old and new piece views/items.
+/// When a piece survives with the exact same `Arc<Template>` and `limit`, only
+/// the union of `old.sparse_facets ∪ new.sparse_facets ∪ old.extra_facets ∪ new.extra_facets`
+/// node indices is visited (O(|sparse|), never walking `0..limit`); with a
+/// new template of the same shape, those and the indices it changed.
+#[allow(clippy::too_many_arguments)]
 fn collect_changed_nodes<'a>(
     old_view_list: &'a [Arc<View>],
     new_view_list: &'a [Arc<View>],

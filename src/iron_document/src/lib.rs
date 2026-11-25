@@ -2354,6 +2354,7 @@ impl StoreCore {
                     let full = false;
                     if full {
                         self.owners.clear_templates();
+                        self.docs.views.template_diffs.off = true;
                         let (vd, d) = self.owners.sync_all(&mut self.docs, &self.repeats);
                         (vd, d.expect("sync_all returns delta"))
                     } else {
@@ -5873,6 +5874,7 @@ impl StoreCore {
             let full = false;
             let (vd, delta) = if full {
                 self.owners.clear_templates();
+                docs.views.template_diffs.off = true;
                 self.owners.sync_all(docs, &self.repeats)
             } else {
                 self.owners.sync_dirty(docs, &self.repeats)

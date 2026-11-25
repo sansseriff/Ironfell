@@ -62,6 +62,8 @@ mod paths {
     /// slots below `LEN` are written once and never change, so they are
     /// read without a lock (every read of an expanded node asks).
     const BUCKETS: usize = 40;
+    /// The owner of a path of one step: no authored or expanded id is this.
+    const NO_OWNER: u64 = u64::MAX;
     type Bucket = Box<[[AtomicU64; 3]]>;
     static META: [OnceLock<Bucket>; BUCKETS] = [const { OnceLock::new() }; BUCKETS];
     static LEN: AtomicUsize = AtomicUsize::new(0);
@@ -87,7 +89,7 @@ mod paths {
         if let Some(&slot) = r.slots.get(&(owner, local)) {
             return slot;
         }
-        let root = if owner & EXPANDED != 0 { parts(owner & !EXPANDED).map_or(owner, |p| p.2) } else if owner == 0 { local } else { owner };
+        let root = if owner == NO_OWNER { local } else if owner & EXPANDED != 0 { parts(owner & !EXPANDED).map_or(owner, |p| p.2) } else { owner };
         let slot = LEN.load(Ordering::Relaxed) as u64;
         let (b, i) = place(slot);
         let bucket = META[b].get_or_init(|| (0..1usize << b).map(|_| [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)]).collect());
@@ -102,8 +104,8 @@ mod paths {
     /// The slot for `path`, giving it one the first time it is seen.
     pub fn intern(path: &[u64]) -> u64 {
         match path {
-            [] => step(0, 0),
-            [only] => step(0, *only),
+            [] => step(NO_OWNER, NO_OWNER),
+            [only] => step(NO_OWNER, *only),
             [first, rest @ ..] => {
                 let mut owner = *first;
                 let mut slot = 0;
@@ -117,7 +119,7 @@ mod paths {
     }
 
     /// `(owner_raw, local_raw, root_raw)` for `slot`, with no lock and no
-    /// allocation; the owner is 0 for a path of one step.
+    /// allocation; the owner is `NO_OWNER` for a path of one step.
     fn entry(slot: u64) -> Option<(u64, u64, u64)> {
         if slot as usize >= LEN.load(Ordering::Acquire) {
             return None;
@@ -132,8 +134,8 @@ mod paths {
         let n = LEN.load(Ordering::Acquire);
         let mut depth: Vec<usize> = Vec::with_capacity(n);
         for slot in 0..n as u64 {
-            let (owner, _, _) = entry(slot).expect("interned");
-            let d = if owner & EXPANDED != 0 { depth[(owner & !EXPANDED) as usize] + 1 } else if owner == 0 { 1 } else { 2 };
+            let (owner, local, _) = entry(slot).expect("interned");
+            let d = if owner == NO_OWNER { usize::from(local != NO_OWNER) } else if owner & EXPANDED != 0 { depth[(owner & !EXPANDED) as usize] + 1 } else { 2 };
             depth.push(d);
         }
         (n, depth.iter().sum())
@@ -142,13 +144,16 @@ mod paths {
     /// The path a slot holds.
     pub fn path(slot: u64) -> Option<Vec<u64>> {
         let (mut owner, local, _) = entry(slot)?;
+        if local == NO_OWNER {
+            return Some(Vec::new());
+        }
         let mut out = vec![local];
-        while owner & EXPANDED != 0 {
+        while owner != NO_OWNER && owner & EXPANDED != 0 {
             let (o, l, _) = entry(owner & !EXPANDED)?;
             out.push(l);
             owner = o;
         }
-        if owner != 0 {
+        if owner != NO_OWNER {
             out.push(owner);
         }
         out.reverse();
@@ -158,7 +163,7 @@ mod paths {
     /// `(owner_raw, local_raw, root_raw)` for `slot`, `None` for a path of
     /// one step.
     pub fn parts(slot: u64) -> Option<(u64, u64, u64)> {
-        entry(slot).filter(|p| p.0 != 0)
+        entry(slot).filter(|p| p.0 != NO_OWNER)
     }
 }
 

@@ -24,44 +24,19 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Each (operation, count) that still grows with the hidden document, and
 /// the phase expected to stop it.
 const SCALING: &[(&str, &str, &str)] = &[
-    ("constant edit", "allocations", "DS-7"),
-    ("cross-owner read", "allocations", "DS-7"),
-    ("cross-owner read", "store.clusters", "DS-3a"),
-    ("constant edit", "store.clusters", "DS-3a"),
-    ("edit plan", "graph.unneeded", "EN-9: scratch() wakes every resting cell of its clone"),
+    ("edit plan", "graph.unneeded", "EN-9: scratch() clones the store and wakes its clone (the same order as the clone)"),
     ("edit plan", "allocations", "DS-7"),
     ("edit plan", "bytes", "DS-7"),
     ("edit plan", "graph.readers", "DS-4a"),
-    ("edit plan", "store.clusters", "DS-3a"),
-    ("fire", "allocations", "DS-7"),
     ("fire", "nodes_of_type", "DS-3b"),
-    ("fire", "store.clusters", "DS-3a"),
-    ("hidden-page edit", "allocations", "DS-7"),
-    ("hidden-page edit", "store.clusters", "DS-3a"),
-    ("let made", "graph.unneeded", "EN-9: scratch() wakes every resting cell of its clone"),
+    ("let made", "graph.unneeded", "EN-9: scratch() clones the store and wakes its clone (the same order as the clone)"),
     ("let made", "allocations", "DS-7"),
     ("let made", "bytes", "DS-7"),
-    ("let made", "store.clusters", "DS-3a"),
-    ("paste", "allocations", "DS-7"),
-    ("paste", "bytes", "DS-7"),
-    ("paste", "nodes_of_type", "DS-3b"),
-    ("paste", "roots", "DS-3b"),
-    ("paste", "store.clusters", "DS-3a"),
-    ("rejected edit", "allocations", "DS-7"),
-    ("rejected edit", "store.clusters", "DS-3a"),
-    ("reparent", "allocations", "DS-7"),
-    ("reparent", "store.clusters", "DS-4a"),
     ("save (canary)", "allocations", "canary: must always grow"),
     ("save (canary)", "bytes", "canary: must always grow"),
     ("save (canary)", "relations", "canary: must always grow"),
-    ("structural edit", "allocations", "DS-7"),
-    ("structural edit", "store.clusters", "DS-4a"),
     ("theme", "allocations", "DS-3a"),
     ("theme", "bytes", "DS-3a"),
-    ("undo and redo", "allocations", "DS-7"),
-    ("undo and redo", "store.clusters", "DS-3a"),
-    ("unrelated relation edit", "allocations", "DS-7"),
-    ("unrelated relation edit", "store.clusters", "DS-3a"),
     ("walk (canary)", "allocations", "canary: must always grow"),
     ("walk (canary)", "bytes", "canary: must always grow"),
     ("walk (canary)", "descendants", "canary: must always grow"),
@@ -501,11 +476,16 @@ fn trace_one_count() {
     (o.teardown)(&mut c);
     c.settle();
     (o.setup)(&mut c);
-    iron_document::work::trace(Box::leak(count.into_boxed_str()));
+    let allocations = count == "allocations";
+    if allocations {
+        crate::alloc_count::trace();
+    } else {
+        iron_document::work::trace(Box::leak(count.into_boxed_str()));
+    }
     (o.run)(&mut c);
-    let mut stacks: Vec<(String, u64)> = iron_document::work::take_trace().into_iter().collect();
+    let mut stacks: Vec<(String, u64)> = if allocations { crate::alloc_count::take_trace().into_iter().collect() } else { iron_document::work::take_trace().into_iter().collect() };
     stacks.sort_by(|a, b| b.1.cmp(&a.1));
-    for (stack, n) in stacks.iter().take(15) {
+    for (stack, n) in stacks.iter().take(if allocations { 60 } else { 15 }) {
         println!("{n:>8}  {stack}");
     }
 }

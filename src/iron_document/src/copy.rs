@@ -116,15 +116,32 @@ fn type_name(doc: Tree<'_>, id: NodeId) -> &'static str {
     doc.node(id).map(|n| n.ty.name()).unwrap_or("")
 }
 
-/// Every live node in preorder: painter order.
-fn preorder(doc: Tree<'_>) -> BTreeMap<NodeId, usize> {
-    let mut out = BTreeMap::new();
-    let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
-    while let Some(id) = stack.pop() {
-        out.insert(id, out.len());
-        stack.extend(doc.children(id).iter().rev().copied());
+/// Where `id` sits in preorder (painter order), as its place among its
+/// siblings at each level from the top: sorting by it sorts by preorder
+/// without walking the document (`EN-9`).
+fn preorder_key(doc: Tree<'_>, id: NodeId) -> Vec<usize> {
+    let mut key = Vec::new();
+    let mut at = id;
+    loop {
+        let parent = doc.node(at).and_then(|n| n.parent);
+        let siblings = match parent {
+            Some(p) => doc.children(p),
+            None => std::borrow::Cow::Borrowed(doc.roots()),
+        };
+        key.push(siblings.iter().position(|&s| s == at).unwrap_or(usize::MAX));
+        match parent {
+            Some(p) => at = p,
+            None => break,
+        }
     }
-    out
+    key.reverse();
+    key
+}
+
+/// The top-level node of type `name`, found by type, not by a pass over
+/// the roots (`EN-9`).
+fn top_of_type(doc: Tree<'_>, name: &str) -> Option<NodeId> {
+    doc.nodes_of_type(ty(name)).find(|&r| doc.live(r).is_some_and(|n| n.parent.is_none()))
 }
 
 /// Copy `roots` (and what belongs with them) out of `store`. Roots inside
@@ -132,13 +149,12 @@ fn preorder(doc: Tree<'_>) -> BTreeMap<NodeId, usize> {
 /// nothing is left.
 pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fragment, String> {
     let doc = store.tree();
-    let order = preorder(doc);
     let mut roots: Vec<NodeId> = roots
         .iter()
         .copied()
         .filter(|&r| doc.live(r).is_some_and(|n| copyable(n.ty.name())))
         .collect();
-    roots.sort_by_key(|r| order.get(r).copied().unwrap_or(usize::MAX));
+    roots.sort_by_cached_key(|&r| preorder_key(doc, r));
     roots.dedup();
     let all = roots.clone();
     roots.retain(|&r| !all.iter().any(|&o| o != r && doc.is_ancestor(o, r)));
@@ -173,8 +189,21 @@ pub fn fragment(store: &StoreCore, roots: &[NodeId], origin: &str) -> Result<Fra
     // along; one with an end outside stays behind (and a constraint inside
     // the set that reaches out is left out of it).
     let ends_of = |id: NodeId, rel: RelKind| -> Vec<NodeId> { doc.relations_from(id).filter(|r| r.rel == rel).map(|r| r.to).collect() };
+    // Found from the copied nodes' relations (and their instances' derived
+    // nodes'), not by a pass over every one in the document (`EN-9`).
+    // Each kind from the set as the kinds before it left it: a clip of a
+    // connection that came along comes too.
     for (kind, rel) in [("connection", RelKind::Connects), ("constraint", RelKind::Constrains), ("clip", RelKind::Animates)] {
-        for c in doc.nodes_of_type(ty(kind)).collect::<Vec<_>>() {
+        // The copied nodes and, under each, the nodes an instance derives
+        // (each walked once, from its nearest copied ancestor).
+        let mut ended: BTreeSet<NodeId> = BTreeSet::new();
+        for &n in &set {
+            let derived = doc.children(n).iter().copied().filter(|c| c.is_expanded()).flat_map(|c| std::iter::once(c).chain(doc.descendants(c))).collect::<Vec<_>>();
+            for m in std::iter::once(n).chain(derived) {
+                ended.extend(doc.relations_to(m).filter(|r| r.rel == rel).map(|r| r.from));
+            }
+        }
+        for c in ended.into_iter().filter(|&c| type_name(doc, c) == kind) {
             let ends = ends_of(c, rel);
             let inside = ends.iter().filter(|e| within(&set, **e)).count();
             if ends.is_empty() || inside == 0 {
@@ -325,7 +354,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
         create.extend(frag.doc.descendants(r));
     }
     // Definitions an SVG import brought go in the library, made if missing.
-    let library = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "library");
+    let library = top_of_type(doc, "library");
     let needs_library = library.is_none() && frag.extras.iter().any(|&e| type_name(Tree::authored_only(&frag.doc), e) == "definition");
     let mut ids = doc.next_ids(create.len() + usize::from(needs_library));
     let made_library = needs_library.then(|| ids.remove(0));
@@ -465,7 +494,7 @@ pub fn paste(store: &StoreCore, frag: &Fragment, place: &Placement, here: &str) 
 /// and figures a new linked entity in the model.
 fn mains_to_instances(doc: Tree<'_>, ops: &mut Vec<Op>) {
     use crate::facet::{Args, Instance, LeafStruct, Name};
-    let Some(model) = doc.roots().iter().copied().find(|&r| type_name(doc, r) == "model") else { return };
+    let Some(model) = top_of_type(doc, "model") else { return };
     let mut next = ops
         .iter()
         .filter_map(|op| match op {
@@ -485,7 +514,9 @@ fn mains_to_instances(doc: Tree<'_>, ops: &mut Vec<Op>) {
         .max()
         .unwrap_or(0)
         .max(doc.next_relation_id().raw());
-    let mut entity_order = doc.children(model).iter().filter_map(|&c| doc.live(c)).map(|n| n.order.clone()).max();
+    // The model's last entity's key, found once a main is pasted (children
+    // are in key order), not every entity's (`EN-9`).
+    let mut entity_order: Option<Option<OrderKey>> = None;
     let mut extra = Vec::new();
     let mut made: Vec<NodeId> = Vec::new();
     for op in ops.iter_mut() {
@@ -523,8 +554,9 @@ fn mains_to_instances(doc: Tree<'_>, ops: &mut Vec<Op>) {
         }
         let mut n = Name::default();
         n.text = Slot::Const(Value::Str(name.unwrap_or_default()));
-        let order = entity_order.as_ref().map_or_else(OrderKey::first, OrderKey::after);
-        entity_order = Some(order.clone());
+        let last = entity_order.get_or_insert_with(|| doc.children(model).iter().rev().find_map(|&c| doc.live(c)).map(|n| n.order.clone()));
+        let order = last.as_ref().map_or_else(OrderKey::first, OrderKey::after);
+        *last = Some(order.clone());
         extra.push(Op::Create { id: entity, ty: TypeId::lookup("entity").expect("registered"), parent: Some(model), order, facets: vec![inst.wrap(), args.wrap(), n.wrap()] });
         extra.push(Op::Link { rel: Relation { id: crate::id::RelationId::from_raw(next_rel), from: *id, to: entity, rel: RelKind::Figures, data: BTreeMap::new() } });
         next_rel += 1;

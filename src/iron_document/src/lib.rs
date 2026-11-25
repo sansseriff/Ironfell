@@ -2803,12 +2803,43 @@ impl StoreCore {
     /// pose, as the cluster's watching native last read it. Read from the
     /// document and the pose, never remembered from a solve.
     fn cluster_problems(&self) -> Vec<expand::Problem> {
-        let mut out: Vec<expand::Problem> = self.clusters.problems.iter().map(|(id, message)| expand::Problem { node: *id, kind: "constraint", message: message.clone() }).collect();
-        for c in self.clusters.list.iter().filter(|c| !self.clusters.failed.contains(&c.key())) {
-            let Some(v) = self.reactive.native_extra(graph::NativeKey::Cluster(c.key())).and_then(|e| e.downcast_ref::<solve::Violated>()) else { continue };
-            out.extend(v.0.iter().map(|(id, r)| expand::Problem { node: *id, kind: "constraint", message: format!("constraint {id} of cluster {} doesn't hold here (residual {r:.3e}): its cluster could not be solved", c.id) }));
+        self.cluster_problems_where(|_| true)
+    }
+
+    /// The nodes `cluster_problems` names, without writing its messages: what
+    /// a transaction compares against (`EN-9`).
+    fn cluster_problem_nodes(&self) -> BTreeSet<NodeId> {
+        let mut out: BTreeSet<NodeId> = self.clusters.problems.iter().map(|(id, _)| *id).collect();
+        for (_, _, v) in self.violated_clusters() {
+            out.extend(v.0.iter().map(|(id, _)| *id));
         }
         out
+    }
+
+    /// `cluster_problems` of the nodes `keep` keeps: only theirs are written.
+    fn cluster_problems_where(&self, keep: impl Fn(NodeId) -> bool) -> Vec<expand::Problem> {
+        let mut out: Vec<expand::Problem> = self.clusters.problems.iter().filter(|(id, _)| keep(*id)).map(|(id, message)| expand::Problem { node: *id, kind: "constraint", message: message.clone() }).collect();
+        for (_, c, v) in self.violated_clusters() {
+            out.extend(v.0.iter().filter(|(id, _)| keep(*id)).map(|(id, r)| expand::Problem { node: *id, kind: "constraint", message: format!("constraint {id} of cluster {} doesn't hold here (residual {r:.3e}): its cluster could not be solved", c.id) }));
+        }
+        out
+    }
+
+    /// The clusters whose watcher found a constraint that does not hold, in
+    /// solve order: only those, not every cluster (`EN-9`).
+    fn violated_clusters(&self) -> Vec<(usize, &solve::Cluster, &solve::Violated)> {
+        let mut violated: Vec<(usize, &solve::Cluster, &solve::Violated)> = self
+            .reactive
+            .violated()
+            .filter_map(|k| {
+                let graph::NativeKey::Cluster(key) = k else { return None };
+                let &at = self.clusters.at.get(&key)?;
+                let v = self.reactive.native_extra(k)?.downcast_ref::<solve::Violated>()?;
+                (!self.clusters.failed.contains(&key)).then(|| (at, &self.clusters.list[at], v))
+            })
+            .collect();
+        violated.sort_by_key(|(at, ..)| *at);
+        violated
     }
 
     /// Recompute what the store derives after every change: structure, the
@@ -5471,7 +5502,7 @@ impl StoreCore {
         // The constraints' problems before, so the reply names those this
         // transaction brought (review of DS-7: after `after_transaction` it
         // was too late to see the grouping's).
-        let problems_before: Vec<(NodeId, String)> = self.cluster_problems().into_iter().map(|p| (p.node, p.message)).collect();
+        let troubled = self.cluster_problem_nodes();
         let Run { mut tx, mut expanded, mut full_inverse, problems, shared, rollback, edited_copy_leaves, copy_drivers } = self.run(input, false)?;
         if let Some(found) = problems {
             self.store_found(found);
@@ -5489,8 +5520,7 @@ impl StoreCore {
         // was in trouble already.
         // By node: a constraint already in trouble whose residual moved is
         // not news (review of DS-7, Opus).
-        let troubled: BTreeSet<NodeId> = problems_before.iter().map(|(n, _)| *n).collect();
-        let new: Vec<solve::SolverProblem> = self.cluster_problems().into_iter().filter(|p| !troubled.contains(&p.node)).map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
+        let new: Vec<solve::SolverProblem> = self.cluster_problems_where(|n| !troubled.contains(&n)).into_iter().map(|p| solve::SolverProblem { node: p.node, message: p.message }).collect();
         if !new.is_empty() || solver.as_ref().is_some_and(|s| !s.problems.is_empty()) {
             let s = solver.get_or_insert_with(SolverSummary::default);
             s.problems.retain(|p| !troubled.contains(&p.node));

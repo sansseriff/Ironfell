@@ -663,6 +663,10 @@ pub struct Reactive {
     missing: BTreeSet<NodeId>,
     /// The native cells, by key.
     natives: Counted<BTreeMap<NativeKey, NativeCell>, GRAPH_NATIVES>,
+    /// The cluster natives whose last run found a constraint that does not
+    /// hold (`solve::Violated`, not empty): what `Store::cluster_problems`
+    /// visits, rather than every cluster (`EN-9`).
+    violated: BTreeSet<NativeKey>,
     /// Each leaf a native may write, to its native: a read of it is a read
     /// of that cell, for heights and priming.
     owned: Counted<BTreeMap<Leaf, NativeKey>, GRAPH_OWNED>,
@@ -2877,6 +2881,11 @@ impl Reactive {
                 self.blocked.remove(&cell);
                 self.native_problems.remove(&k);
                 changed.extend(self.claim(doc, k, values));
+                if extra.as_ref().is_some_and(|h| h.0.downcast_ref::<crate::solve::Violated>().is_some_and(|v| !v.0.is_empty())) {
+                    self.violated.insert(k);
+                } else {
+                    self.violated.remove(&k);
+                }
                 self.natives.get_mut(&k).expect("native").extra = extra;
                 for l in marks {
                     let v = self.read(doc, l).unwrap_or(Value::Str(String::new()));
@@ -3129,6 +3138,11 @@ impl Reactive {
     /// added, replaced, removed, or finishes running.
     pub(crate) fn components_rev(&self) -> u64 {
         self.components_rev
+    }
+
+    /// The cluster natives whose last run found a violated constraint.
+    pub(crate) fn violated(&self) -> impl Iterator<Item = NativeKey> + '_ {
+        self.violated.iter().copied()
     }
 
     /// What native `k` handed the store at its last run.
@@ -3415,6 +3429,7 @@ impl Reactive {
         }
         for (k, new) in &batch {
             let Some(old) = self.natives.remove(k) else { continue };
+            self.violated.remove(k);
             let cell = CellId::Native(*k);
             self.edge_changed_cells.insert(cell);
             if new.is_none()

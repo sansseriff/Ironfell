@@ -311,6 +311,16 @@ pub fn scope_log(app: &mut WorkerApp, since: u64) -> Result<String, String> {
     Ok(serde_json::json!({"pending": false, "scope": scope, "version": version, "gap": gap, "ndjson": ndjson, "count": count}).to_string())
 }
 
+/// Every node id a command's arguments name, at any depth: what it acts on.
+fn named_nodes(args: &serde_json::Value) -> Vec<iron_document::NodeId> {
+    match args {
+        serde_json::Value::String(s) => s.parse().into_iter().collect(),
+        serde_json::Value::Array(xs) => xs.iter().flat_map(named_nodes).collect(),
+        serde_json::Value::Object(m) => m.values().flat_map(named_nodes).collect(),
+        _ => Vec::new(),
+    }
+}
+
 pub fn document_view(app: &mut WorkerApp, query_json: String) -> Result<String, String> {
     let query: iron_document::ViewQuery =
         serde_json::from_str(&query_json).map_err(|e| String::from(&e.to_string()))?;
@@ -319,9 +329,9 @@ pub fn document_view(app: &mut WorkerApp, query_json: String) -> Result<String, 
         .get_resource_mut::<crate::document_bridge::DocumentStore>()
         .ok_or_else(|| String::from("document bridge not installed"))?;
     // The agent reads to write back: what it sees of a hidden composition
-    // is current (reactive-engine.md §8.9).
-    store.0.exact_all();
-    store.0.view(&query).map_err(|e| String::from(&e.to_string()))
+    // is current (reactive-engine.md §8.9). Only the pages it reads are
+    // brought up to date (`EN-9`).
+    store.0.current(|s| s.view(&query)).map_err(|e| String::from(&e.to_string()))
 }
 
 pub fn document_apply(app: &mut WorkerApp, transaction_json: String, expect_version: u32) -> String {
@@ -589,7 +599,8 @@ pub fn document_author(app: &mut WorkerApp, verb: String, args: String) -> Strin
         let picked_point = app.world().get_resource::<crate::bevy_app::select::PathEdit>().and_then(|e| e.lone_point()).map(|p| p.to_string());
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         // A command authors from values: current ones, not stale (§8.9).
-        store.0.exact_all();
+        // The pages of the nodes it names are brought up to date (`EN-9`).
+        store.0.pull_nodes(&named_nodes(&a));
         let doc = store.0.tree();
         if verb == "attachment_info" {
             let target = id("target")?;
@@ -887,7 +898,8 @@ pub fn document_table(app: &mut WorkerApp, spec: String) -> String {
         let err = |es: Vec<iron_document::op::ApplyError>| es.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
         let mut store = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>().ok_or("document bridge not installed")?;
         // A command authors from values: current ones, not stale (§8.9).
-        store.0.exact_all();
+        // The pages of the nodes it names are brought up to date (`EN-9`).
+        store.0.pull_nodes(&named_nodes(&v));
         if let Some(t) = id_of("id")? {
             let mut ops = table::replace_ops(&store.0, t, &rows)?;
             if let Some(h) = v.get("header").and_then(|h| h.as_u64()) {
@@ -1184,7 +1196,8 @@ pub fn document_link(app: &mut WorkerApp, a: String, b: String, keep: String, ac
         return serde_json::json!({"ok": false, "error": "document bridge not installed"}).to_string();
     };
     // A command authors from values: current ones, not stale (§8.9).
-    store.0.exact_all();
+    // The pages of what it links are brought up to date (`EN-9`).
+    store.0.pull_nodes(&[a, b].into_iter().chain(keep).collect::<Vec<_>>());
     let result = match store.0.link(a, b, keep, actor) {
         Err(LinkError::Question(q)) => serde_json::json!({"ok": false, "question": q}),
         Err(e @ LinkError::AlreadyLinked(entity)) => serde_json::json!({"ok": false, "error": e.to_string(), "entity": entity.to_string()}),
@@ -1259,8 +1272,6 @@ pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
     let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
         return serde_json::json!({"ok": false, "error": "no document"}).to_string();
     };
-    // A file handed to the user: a hidden composition's values current.
-    store.0.exact_all();
     let doc = store.0.tree();
     let name_of = |c: iron_document::NodeId| doc.get::<iron_document::facet::Name>(c).and_then(|n| n.text.constant().and_then(|v| v.as_str().map(str::to_owned)));
     let scope = if scope == "selection" {
@@ -1279,7 +1290,9 @@ pub fn document_export_svg(app: &mut WorkerApp, scope: String) -> String {
             None => return serde_json::json!({"ok": false, "error": format!("no composition named {scope:?}")}).to_string(),
         }
     };
-    match iron_svg::export(&store.0, &scope) {
+    // A file handed to the user: what it draws is current, pulled page by
+    // page as the export reads it (`EN-9`).
+    match store.0.current(|s| iron_svg::export(s, &scope)) {
         Ok(out) => serde_json::json!({"ok": true, "svg": out.svg, "cuts": out.cuts}).to_string(),
         Err(e) => serde_json::json!({"ok": false, "error": e}).to_string(),
     }

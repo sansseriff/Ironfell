@@ -2053,6 +2053,22 @@ fn set_let(store: &mut Store, n: NodeId, v: f64) {
     store.apply(tx("set", vec![Op::Set { id: n, path: path("let.value"), slot: Slot::Const(Value::Number(v)) }])).unwrap();
 }
 
+/// The agent's view of a resting page, read through `Store::current`
+/// (`EN-9`: in place of waking the whole document), shows what the page
+/// would show if it were shown: the item its repeat now makes and where its
+/// layout now places r2.
+#[cfg(not(feature = "differential"))]
+#[test]
+fn the_agent_s_view_of_a_resting_page_is_current() {
+    let (mut store, n) = resting_bench();
+    set_let(&mut store, n["$n"], 3.0);
+    set_let(&mut store, n["$k"], 4.0);
+    let query = ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(n["$b"]), fidelity: Fidelity::Full, depth: None };
+    let view = store.current(|s| s.view(&query)).unwrap();
+    assert!(view.contains(r#"copies="3""#), "the repeat makes three items:\n{view}");
+    assert!(view.contains(&format!(r#"id="{}" x="40""#, n["$r2"])), "r2 sits after r1's new width:\n{view}");
+}
+
 /// Pull on ask by page: asking about a node on a resting page (the
 /// inspector, a host command) brings that page up to date, so an item its
 /// repeat should have made exists, one it should have dropped is gone, and

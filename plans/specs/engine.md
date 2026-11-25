@@ -293,11 +293,15 @@ and owner-level demand reuses what `EN-8b` built.*
   a native whose outputs span owners never rests. Rooted natives (layout, pins, repeats,
   components, islands) run in hidden owners from what their cells held and catch up when
   the owner wakes: a resting page's derived structure lags its values. **Pull on ask**
-  (decided 2026-11-25): whatever asks about it brings it up to date. A binding's read of a
-  derived node that does not exist pulls what makes it (its authored instance or repeat,
-  `StoreCore::pull_makers`); a gesture commit does the same for what it previews; a panel
-  that lists a page (Layers) pulls it; the inspector pulls the node it shows; narrative
-  value marks read through `Store::current`. A panel shows what it read when it last
+  (decided 2026-11-25): whatever asks about a resting page brings that page up to date,
+  whole (`StoreCore::pull_owners`: the page is the unit of demand, and its rooted natives
+  run from all its cells), without waking it. Askers: a binding's read of a derived node
+  that does not exist; `Store::current` (every node it reads: narrative marks, Convert to
+  Path, handles, actions); `Store::pull_nodes` (the inspector, host commands; a node that
+  does not exist counts as its instance's or repeat's); a transaction, for the derived
+  nodes its ops name; a gesture commit; a panel that lists a page (Layers). Demand is
+  decided at the end of every transaction, inside its net view window, and at the end of
+  the outermost live settle when a cross-owner read changed. A panel shows what it read when it last
   asked; re-asking when that moves, and observing a page while a narrative block that
   shows a value running on time is in view, are not built. Host commands that bake values they cannot list beforehand read
   through `Store::current` (Convert to Path, the inspector's scrub).

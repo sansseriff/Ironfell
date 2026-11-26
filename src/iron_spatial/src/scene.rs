@@ -99,7 +99,8 @@ fn numbering(doc: Tree<'_>, roots: &[NodeId]) -> BTreeMap<NodeId, u32> {
 
 /// The loose 2D roots.
 fn loose_roots(doc: Tree<'_>) -> Vec<NodeId> {
-    doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !NOT_LOOSE.contains(&n.ty.name()))).collect()
+    let except: Vec<TypeId> = NOT_LOOSE.iter().filter_map(|t| TypeId::lookup(t)).collect();
+    doc.roots_except(&except)
 }
 
 /// Insert `id` into a sorted list once.
@@ -167,6 +168,11 @@ pub struct Scene {
     shown_roots: BTreeMap<NodeId, Option<NodeId>>,
     /// 3D embeds by the camera they look through, for aspect changes.
     camera_embeds: BTreeMap<NodeId, Vec<NodeId>>,
+    /// `shown_roots` the other way: what `rebuild_root` clears, found
+    /// without a pass over every embed (`EN-10`).
+    shown_in: BTreeMap<Option<NodeId>, BTreeSet<NodeId>>,
+    /// The `shown_by` and `camera_embeds` lists each embed is in.
+    listed: BTreeMap<NodeId, (Option<NodeId>, Option<NodeId>)>,
     built: bool,
     /// Bumped by every update that changed anything.
     pub generation: u64,
@@ -373,14 +379,15 @@ impl Scene {
             return;
         }
         // The roots structure changed under, each rebuilt whole; one that
-        // went away, or a template (references elsewhere hold its union and
-        // order), rebuilds everything.
+        // went away rebuilds everything. A template is rebuilt as a
+        // composition is, and the references showing it follow its union
+        // (`settle`, `EN-10`).
         let doc = store.tree();
         let roots: BTreeSet<Option<NodeId>> = changes.shaped.iter().filter_map(|n| match n {
             Some(n) => root_of(doc, *n),
             None => Some(None),
         }).collect();
-        if roots.iter().flatten().any(|&r| !doc.is_live(r) || is_type(doc, r, "template")) {
+        if roots.iter().flatten().any(|&r| !doc.is_live(r)) {
             self.rebuild(store);
             return;
         }
@@ -683,26 +690,23 @@ impl Scene {
             self.scopes.remove(&scope_of(*id));
         }
         // Also clear empty unframed embeds/references that belonged to `root`.
-        let gone_shown: Vec<NodeId> = self.shown_roots.iter().filter(|&(_, &r)| r == root).map(|(&id, _)| id).collect();
-        for id in gone_shown {
-            self.shown_roots.remove(&id);
-            gone_set.insert(id);
+        gone_set.extend(self.shown_in.remove(&root).unwrap_or_default());
+        for &id in &gone_set {
+            self.unlist(id);
+            if let Ok(pos) = self.embeds.binary_search(&id) {
+                self.embeds.remove(pos);
+            }
         }
-        for list in self.shown_by.values_mut().chain(self.camera_embeds.values_mut()) {
-            list.retain(|e| !gone_set.contains(e));
-        }
-        self.shown_by.retain(|_, l| !l.is_empty());
-        self.camera_embeds.retain(|_, l| !l.is_empty());
-        self.embeds.retain(|e| !gone_set.contains(e));
         // The root's own scope starts again from its last union, so what
         // shows it follows only if that changed.
         let union = self.scopes.remove(&root).and_then(|s| s.union);
+        let template = root.is_some_and(|r| is_type(doc, r, "template"));
         let kids = match root {
-            Some(c) if composition::dims(doc, c) == Some(Dims::Two) => doc.children(c).to_vec(),
+            Some(c) if template || composition::dims(doc, c) == Some(Dims::Two) => doc.children(c).to_vec(),
             Some(_) => Vec::new(),
             None => loose_roots(doc),
         };
-        let shown = root.is_none() || !kids.is_empty() || root.is_some_and(|c| composition::dims(doc, c) == Some(Dims::Two));
+        let shown = root.is_none() || template || !kids.is_empty() || root.is_some_and(|c| composition::dims(doc, c) == Some(Dims::Two));
         if shown {
             self.scopes.insert(root, Scope { union, ..Default::default() });
         }
@@ -761,8 +765,7 @@ impl Scene {
         let affine = affine_of(store.local_affine(id));
         let ty = node.ty.name();
         if let Some(template) = iron_document::expand::reference_template(doc, id) {
-            add_sorted(self.shown_by.entry(template).or_default(), id);
-            self.shown_roots.insert(id, root);
+            self.show(id, template, root);
             // Its template is indexed and settled already (`rebuild`); one
             // with nothing in it indexes nothing, like an empty group.
             let Some(u) = self.scopes.get(&scope_of(template)).and_then(|s| s.union) else { return false };
@@ -772,13 +775,13 @@ impl Scene {
         if ty == "embed" {
             let kind = match composition::embedded(doc, id) {
                 Some(source) if composition::dims(doc, source) == Some(Dims::Two) => {
-                    add_sorted(self.shown_by.entry(source).or_default(), id);
-                    self.shown_roots.insert(id, root);
+                    self.show(id, source, root);
                     Some((Kind::Embed2d { source, framed: doc.get::<iron_document::facet::Frame>(id).is_some() }, Bounds::transformed(Rect::ZERO, affine, EMBED_PAD, 0.0)))
                 }
                 _ => store.local_bounds(id).map(|lb| {
                     if let Some(cam) = composition::embed_camera(doc, id) {
                         add_sorted(self.camera_embeds.entry(cam).or_default(), id);
+                        self.listed.entry(id).or_default().1 = Some(cam);
                     }
                     (Kind::Leaf, Bounds::of_local(&lb, affine))
                 }),
@@ -819,6 +822,37 @@ impl Scene {
         // Its entry's bounds come from `settle`, once the scope commits.
         self.insert(id, scope, root, Kind::Group, affine, Bounds::transformed(Rect::ZERO, Affine::IDENTITY, 0.0, 0.0), ord, doc);
         true
+    }
+
+    /// `id` shows `source`'s content, and is indexed under `root`.
+    fn show(&mut self, id: NodeId, source: NodeId, root: Option<NodeId>) {
+        add_sorted(self.shown_by.entry(source).or_default(), id);
+        if let Some(was) = self.shown_roots.insert(id, root)
+            && let Some(ids) = self.shown_in.get_mut(&was)
+        {
+            ids.remove(&id);
+        }
+        self.shown_in.entry(root).or_default().insert(id);
+        self.listed.entry(id).or_default().0 = Some(source);
+    }
+
+    /// Take `id` out of the `shown_by` and `camera_embeds` lists it is in.
+    fn unlist(&mut self, id: NodeId) {
+        if let Some(root) = self.shown_roots.remove(&id)
+            && let Some(ids) = self.shown_in.get_mut(&root)
+        {
+            ids.remove(&id);
+        }
+        let Some((source, camera)) = self.listed.remove(&id) else { return };
+        for (map, key) in [(&mut self.shown_by, source), (&mut self.camera_embeds, camera)] {
+            let Some(key) = key else { continue };
+            if let Some(list) = map.get_mut(&key) {
+                list.retain(|&e| e != id);
+                if list.is_empty() {
+                    map.remove(&key);
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

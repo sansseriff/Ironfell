@@ -828,6 +828,29 @@ impl<'a> Tree<'a> {
         self.doc.roots()
     }
 
+    /// The live roots whose type is not in `except`, in root order, from
+    /// the document's index of roots by type rather than a pass over the
+    /// roots (`EN-10`): what is outside every page.
+    pub fn roots_except(self, except: &[crate::TypeId]) -> Vec<NodeId> {
+        self.note(crate::structure::Key::Roots);
+        let mut out: Vec<NodeId> = self.doc.roots_by_type().filter(|(t, _)| !except.contains(t)).flat_map(|(_, ids)| ids.iter().copied()).collect();
+        out.sort_by_cached_key(|&id| (self.doc.node(id).map(|n| n.order.clone()), id));
+        crate::work::visit(crate::work::Site::Roots, out.len());
+        out
+    }
+
+    /// The live roots named `name`, in id order, from the document's index
+    /// rather than a pass over the roots (`EN-10`).
+    pub fn roots_named(self, name: &str) -> Vec<NodeId> {
+        self.note(crate::structure::Key::Roots);
+        let found: Vec<NodeId> = self.doc.roots_named(name).collect();
+        crate::work::visit(crate::work::Site::Roots, found.len());
+        for &r in &found {
+            self.note(crate::structure::Key::Facet(r, crate::FacetKind::Name));
+        }
+        found
+    }
+
     /// O(1) top-level root containing live node `id` (authored or expanded),
     /// via `ScopedIndexes::root_of`. Unkeyed — used only by internal indexes.
     pub(crate) fn root_of(self, id: NodeId) -> Option<NodeId> {

@@ -2067,10 +2067,17 @@ mod tests {
             store.cancel_gesture();
             let edit = time(&mut store, "edit", &mut |s, k| { s.apply(tx("x", vec![Op::Set { id: r, path: x, slot: Slot::Const(Value::Number(200.0 + k as f64)) }])).unwrap(); let t = tick(); s.advance(t); });
             let structural_edit = time(&mut store, "structural_edit", &mut |s, k| { s.apply(tx("n", vec![Op::Set { id: n, path: let_value, slot: Slot::Const(Value::Number(if k % 2 == 0 { 4.0 } else { 3.0 })) }])).unwrap(); let t = tick(); s.advance(t); });
+            // What still copies or scans the document per event (`EN-10`'s
+            // accepted rows): an agent's edit plan, a placement, a theme switch.
+            let edit_plan = time(&mut store, "edit plan", &mut |s, k| {
+                let xml = format!(r#"<edit><set id="{r}" x="{}"/></edit>"#, 300 + k % 2);
+                iron_document::edit::plan(s, &xml, None).unwrap_or_else(|f| panic!("{}", f.message()));
+            });
+            let theme = time(&mut store, "theme", &mut |s, k| { s.set_theme(k % 2 == 0); let t = tick(); s.advance(t); });
             crate::document_bridge::clock::set(&mut store, &[("loop_in", Value::Number(0.0)), ("loop_out", Value::Number(4.0)), ("playing", Value::Bool(true))]).unwrap();
             let playing = time(&mut store, "playing", &mut |s, _| { let t = tick(); s.advance(t); });
             println!(
-                "+{extra} copies, {} live nodes: idle {idle:.3}  drag {drag:.3}  structural preview {structural:.3}  constant edit {edit:.3}  structural edit {structural_edit:.3}  playing {playing:.3} ms (p50)",
+                "+{extra} copies, {} live nodes: idle {idle:.3}  drag {drag:.3}  structural preview {structural:.3}  constant edit {edit:.3}  structural edit {structural_edit:.3}  playing {playing:.3}  edit plan {edit_plan:.3}  theme {theme:.3} ms (p50)",
                 store.tree().live_nodes().count()
             );
         }

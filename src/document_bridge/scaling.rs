@@ -22,28 +22,25 @@ use iron_document::{Actor, Interest, LeafPath, NodeId, Op, Slot, Store, Transact
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Each (operation, count) that still grows with the hidden document, and
-/// the phase expected to stop it.
+/// why: a canary, or a cost accepted at `EN-10` with its measured size.
 const SCALING: &[(&str, &str, &str)] = &[
-    ("edit plan", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("edit plan", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("edit plan", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("edit plan", "graph.readers", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("fire", "nodes_of_type", "EN-9: an on.node may name any node, so listeners are found by type"),
-    ("place instance", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("place instance", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("place instance", "graph.readers", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("place instance", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("let made", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("let made", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
-    ("let made", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("edit plan", "graph.unneeded", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("edit plan", "allocations", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("edit plan", "bytes", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("edit plan", "graph.readers", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("fire", "nodes_of_type", "accepted (EN-10): an on.node may name any node, so a click finds listeners by type (per event, not per frame)"),
+    ("place instance", "allocations", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("place instance", "bytes", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("place instance", "graph.readers", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("place instance", "graph.unneeded", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("let made", "graph.unneeded", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("let made", "allocations", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
+    ("let made", "bytes", "accepted (EN-10): an edit plan works on scratch(), an isolated copy of the store, woken (3.6 ms at +0, 26 ms at +6 copies: document_scaling_time)"),
     ("save (canary)", "allocations", "canary: must always grow"),
     ("save (canary)", "bytes", "canary: must always grow"),
     ("save (canary)", "relations", "canary: must always grow"),
-    ("template structure edit", "allocations", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
-    ("template structure edit", "bytes", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
-    ("template structure edit", "roots", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
-    ("theme", "allocations", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
-    ("theme", "bytes", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
+    ("theme", "allocations", "accepted (EN-10): a theme switch rechecks every cell reading a colour token, hidden ones too (0.14 ms at +0, 0.24 ms at +6)"),
+    ("theme", "bytes", "accepted (EN-10): a theme switch rechecks every cell reading a colour token, hidden ones too (0.14 ms at +0, 0.24 ms at +6)"),
     ("walk (canary)", "allocations", "canary: must always grow"),
     ("walk (canary)", "bytes", "canary: must always grow"),
     ("walk (canary)", "descendants", "canary: must always grow"),
@@ -97,7 +94,7 @@ struct Ctx {
     /// The host (`EN-10`): the bridge's own systems in a headless world,
     /// run after every frame, so what the host does per operation is
     /// measured with the store's.
-    host: (bevy::prelude::World, bevy::ecs::system::SystemId, bevy::ecs::system::SystemId),
+    host: (bevy::prelude::World, Vec<bevy::ecs::system::SystemId>),
 }
 
 /// The shown page's own component: a channel, a machine that poses it, and
@@ -117,11 +114,9 @@ impl Ctx {
     fn frame(&mut self) -> bool {
         self.now += 1.0 / 60.0;
         let changed = self.store.advance(self.now).changed;
-        let (world, sync, spatial) = &mut self.host;
+        let (world, systems) = &mut self.host;
         world.insert_resource(super::DocumentStore(std::mem::replace(&mut self.store, Store::new())));
-        world.run_system(*sync).expect("sync_document");
-        world.flush();
-        world.run_system(*spatial).expect("prepare_spatial");
+        super::host_reference::run_frame(world, systems);
         self.store = world.remove_resource::<super::DocumentStore>().expect("the store").0;
         changed
     }
@@ -187,7 +182,10 @@ fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
     store.set_observe_all(false);
     store.set_motion(true);
     store.observe(everything(perf["$c"]));
-    let host = super::host_reference::headless(Store::new());
+    let mut host = super::host_reference::headless(Store::new());
+    // The viewer names its page, as the shell's view panels do: resolved
+    // every frame (`panel_views::resolve`, `EN-10`).
+    host.0.resource_mut::<crate::panels::Panels>().upsert(crate::panels::VIEWER_PANEL, crate::panels::COMPOSITION_PANEL, "perf", crate::panels::PanelRect { x: 0.0, y: 0.0, w: 800.0, h: 600.0 });
     let mut ctx = Ctx {
         host,
         store,
@@ -208,6 +206,8 @@ fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
         card_panel: card.named["panel"],
     };
     ctx.settle();
+    let shown = ctx.host.0.resource::<super::PanelViews>().0.iter().map(|v| v.composition).collect::<Vec<_>>();
+    assert_eq!(shown, vec![Some(ctx.perf)], "the viewer resolves its page by name");
     ctx
 }
 

@@ -396,7 +396,7 @@ pub fn library_ops(first: NodeId, order: OrderKey) -> Vec<Op> {
 /// them, as the timeline regenerates in its palette (timeline_view.rs).
 pub fn library_theme_ops(doc: Tree<'_>, light: bool) -> Vec<Op> {
     let (fill, edge, ink) = library_colours(light);
-    let Some(&lib) = doc.roots().iter().find(|&&r| r.is_session() && doc.get::<Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(LIBRARY)) else {
+    let Some(lib) = doc.roots_named(LIBRARY).into_iter().find(|r| r.is_session()) else {
         return Vec::new();
     };
     let mut ops = Vec::new();

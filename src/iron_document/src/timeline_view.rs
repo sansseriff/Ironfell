@@ -187,7 +187,7 @@ fn number(store: &StoreCore, id: NodeId, facet: FacetKind, field: &str) -> Optio
 /// The session's timeline composition, if it has been built.
 pub fn find(store: &StoreCore) -> Option<NodeId> {
     let doc = store.tree();
-    doc.roots().iter().copied().find(|&r| r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == "composition") && name_of(store, r).as_deref() == Some(TIMELINE))
+    doc.roots_named(TIMELINE).into_iter().find(|&r| r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == "composition"))
 }
 
 /// Tick spacing: the smallest of 1, 2, 5 × 10ⁿ s at least `TICK_PX` apart.

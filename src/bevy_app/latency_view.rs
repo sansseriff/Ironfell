@@ -27,11 +27,7 @@ pub(super) fn draw(
     mut followers: Query<(Entity, &LatencyFollower, &mut DisplayList, &mut VectorView)>,
 ) {
     let doc = store.0.tree();
-    let latency = doc.roots().iter().copied().find(|&r| {
-        r.is_session()
-            && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str())
-                == Some(iron_document::standard::LATENCY)
-    });
+    let latency = doc.roots_named(iron_document::standard::LATENCY).into_iter().find(|r| r.is_session());
     let panels: HashMap<&str, _> = match latency {
         Some(c) => views.showing(c).map(|v| (v.panel.as_str(), v)).collect(),
         None => HashMap::default(),

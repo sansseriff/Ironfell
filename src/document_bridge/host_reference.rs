@@ -20,8 +20,7 @@ use iron_document::{Actor, Value};
 /// A headless host: the bridge's resources and systems, nothing drawn.
 struct Host {
     world: World,
-    sync: SystemId,
-    spatial: SystemId,
+    systems: Vec<SystemId>,
     steps: usize,
 }
 
@@ -128,7 +127,10 @@ fn rebuild(store: Store, modes: &Modes) -> (Store, Derived, iron_spatial::Scene)
 
 /// A headless host's world holding `store`: the bridge's resources and its
 /// two systems, nothing drawn (also the scaling probe's host, `EN-10`).
-pub(super) fn headless(store: Store) -> (World, SystemId, SystemId) {
+/// The bridge's per-frame systems in a world of their own, in the order the
+/// app runs them: panel views resolved, the document synced, the spatial
+/// scene prepared.
+pub(super) fn headless(store: Store) -> (World, Vec<SystemId>) {
     let mut world = mesh_world();
     world.insert_resource(DocumentStore(store));
     world.init_resource::<crate::host_events::HostEvents>();
@@ -150,15 +152,28 @@ pub(super) fn headless(store: Store) -> (World, SystemId, SystemId) {
     world.init_resource::<LatencyRequested>();
     world.init_resource::<SpatialScene>();
     world.init_resource::<ChangeInbox>();
+    world.init_resource::<crate::panels::Panels>();
+    world.init_resource::<super::ViewCameras>();
+    world.init_resource::<super::PanelViews>();
+    world.insert_resource(crate::Dpr(1.0));
+    let views = world.register_system(super::panel_views::resolve_panel_views);
     let sync = world.register_system(sync_document);
     let spatial = world.register_system(spatial::prepare_spatial);
-    (world, sync, spatial)
+    (world, vec![views, sync, spatial])
+}
+
+/// One frame of [`headless`]'s systems.
+pub(super) fn run_frame(world: &mut World, systems: &[SystemId]) {
+    for &s in systems {
+        world.run_system(s).expect("a bridge system");
+        world.flush();
+    }
 }
 
 impl Host {
     fn new() -> Host {
-        let (world, sync, spatial) = headless(Store::new());
-        let mut host = Host { world, sync, spatial, steps: 0 };
+        let (world, systems) = headless(Store::new());
+        let mut host = Host { world, systems, steps: 0 };
         host.frame("start");
         host
     }
@@ -177,9 +192,7 @@ impl Host {
 
     /// One frame of the bridge, then the comparison with a rebuilt host.
     fn frame(&mut self, step: &str) {
-        self.world.run_system(self.sync).expect("sync_document");
-        self.world.flush();
-        self.world.run_system(self.spatial).expect("prepare_spatial");
+        run_frame(&mut self.world, &self.systems);
         self.steps += 1;
         let incremental = derived(&self.world);
         let store = std::mem::replace(&mut self.store().0, Store::new());
@@ -334,6 +347,41 @@ fn host_reference_follows_derived_structure() {
     for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {
         host.world.resource_mut::<HistoryRequests>().0.push(op);
         host.frame("history");
+    }
+    // A template's structure edited, where another template references it
+    // and an instance shows both: only the templates involved and what
+    // shows them are indexed again (`EN-10`).
+    host.apply(
+        "nested definitions",
+        &format!(
+            r#"<library name="probe library">
+              <definition id="$inner" name="inner"><template notation="free"><rect name="inner rect" w="5" h="5"/></template></definition>
+              <definition id="$outer" name="outer"><template notation="free"><rect name="outer rect" w="8" h="8"/><use name="ref" instance.def="$inner" instance.mode="linked" notation="free" x="30" y="0"/></template></definition>
+            </library>
+            <place def="$outer" in="{c}" x="0" y="500"/>"#
+        ),
+    );
+    let inner = {
+        let doc = host.world.resource::<DocumentStore>().0.tree();
+        let rect = doc.roots().iter().flat_map(|&r| doc.descendants(r)).find(|&d| !d.is_expanded() && doc.get::<iron_document::facet::Name>(d).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) == Some("inner rect")).unwrap();
+        doc.live(rect).and_then(|n| n.parent).unwrap()
+    };
+    let added = host.world.resource::<DocumentStore>().0.authored().next_id();
+    let mut size = iron_document::facet::Size::default();
+    size.w = iron_document::Slot::Const(Value::Number(40.0));
+    size.h = iron_document::Slot::Const(Value::Number(40.0));
+    let mut at = iron_document::facet::Transform2d::default();
+    at.x = iron_document::Slot::Const(Value::Number(-20.0));
+    use iron_document::LeafStruct;
+    host.world.resource_mut::<PendingTransactions>().push("grow the inner template", Actor::Human, vec![Op::Create { id: added, ty: iron_document::TypeId::lookup("rect").unwrap(), parent: Some(inner), order: iron_document::OrderKey::first(), facets: vec![at.wrap(), size.wrap()] }]);
+    host.frame("grow the inner template");
+    host.world.resource_mut::<PendingTransactions>().push("move the added rect", Actor::Human, vec![Op::Set { id: added, path: path("transform2d.x"), slot: iron_document::Slot::Const(Value::Number(60.0)) }]);
+    host.frame("move the added rect");
+    host.world.resource_mut::<PendingTransactions>().push("shrink the inner template", Actor::Human, vec![Op::Delete { id: added }]);
+    host.frame("shrink the inner template");
+    for op in [HistoryOp::Undo, HistoryOp::Undo, HistoryOp::Redo] {
+        host.world.resource_mut::<HistoryRequests>().0.push(op);
+        host.frame("template history");
     }
     assert!(host.steps > 30, "{} steps", host.steps);
 }

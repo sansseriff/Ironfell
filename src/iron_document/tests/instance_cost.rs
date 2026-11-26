@@ -178,10 +178,12 @@ fn memory_per_meter() {
 
 /// Where `memory_per_meter`'s bytes live (`EN-17`): the store at 100 and at
 /// 700 meters dropped one part at a time (`Store::drop_in_parts`), each
-/// part's bytes per meter beyond the first hundred.
+/// part's bytes per meter beyond the first hundred. Not under
+/// `differential`, whose `Store` is two stores.
 ///   cargo test -p iron_document --release --target aarch64-apple-darwin --test instance_cost memory_by_part -- --ignored --nocapture --test-threads=1
 #[test]
 #[ignore]
+#[cfg(not(feature = "differential"))]
 fn memory_by_part() {
     let parts = |count: usize| {
         let (mut store, comp) = desk();

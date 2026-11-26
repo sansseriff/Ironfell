@@ -425,7 +425,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen, mut inbox, mut spatial, mut session_pages): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>, ResMut<ChangeInbox>, ResMut<SpatialScene>, Local<BTreeMap<&'static str, NodeId>>),
+    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen, mut inbox, mut spatial): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>, ResMut<ChangeInbox>, ResMut<SpatialScene>),
 ) {
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
@@ -435,21 +435,9 @@ pub(crate) fn sync_document(
     if store.0.dark() == light {
         store.0.set_theme(!light);
     }
-    // A session page by name, remembered once found, so a frame does not
-    // pass over every root to find it (`EN-10`).
-    let mut session_named = |doc: Tree<'_>, name: &'static str| -> bool {
-        let named = |r: NodeId| r.is_session() && doc.is_live(r) && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name);
-        if session_pages.get(name).is_some_and(|&r| named(r)) {
-            return true;
-        }
-        match doc.roots().iter().copied().find(|&r| named(r)) {
-            Some(r) => {
-                session_pages.insert(name, r);
-                true
-            }
-            None => false,
-        }
-    };
+    // A session page by name, from the document's index of root names
+    // (`EN-10`).
+    let session_named = |doc: Tree<'_>, name: &str| doc.roots_named(name).iter().any(|r| r.is_session());
     let build_latency = latency.0 && !session_named(store.0.tree(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && timeline.as_ref().is_none_or(|(_, p)| p.light == light)

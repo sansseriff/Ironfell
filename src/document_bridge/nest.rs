@@ -73,7 +73,7 @@ pub fn panel_roots(doc: Tree<'_>, view: &PanelView) -> Vec<NodeId> {
 /// composition.
 pub fn loose_roots(doc: Tree<'_>) -> Vec<NodeId> {
     let structural = ["composition", "model", "library", "timeline", "session", "narrative"].map(|t| TypeId::lookup(t).expect("registered"));
-    doc.roots().iter().copied().filter(|&r| doc.live(r).is_some_and(|n| !structural.contains(&n.ty))).collect()
+    doc.roots_except(&structural)
 }
 
 /// Where a changed node draws, for deciding which panels rebuild

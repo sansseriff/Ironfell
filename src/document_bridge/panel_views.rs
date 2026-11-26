@@ -17,7 +17,6 @@ use super::DocumentStore;
 use crate::panels::{COMPOSITION_PANEL, PanelRect, Panels, VIEWER_PANEL};
 use bevy::prelude::*;
 use iron_document::composition::{self, Dims};
-use iron_document::facet::Name as DocName;
 use iron_document::NodeId;
 use std::collections::BTreeMap;
 
@@ -165,18 +164,24 @@ pub const INSPECT: &str = "inspect:";
 /// Which composition a spec names: a node id, a composition's name, or
 /// (empty) the first composition with matching dimensions — 2D unless the
 /// document has only 3D ones.
-fn resolve(doc: Tree<'_>, spec: &str) -> Option<NodeId> {
-    let all = composition::compositions(doc);
+/// `last` is what the panel showed for the same spec the frame before.
+fn resolve(doc: Tree<'_>, spec: &str, last: Option<NodeId>) -> Option<NodeId> {
+    let is_composition = |c: NodeId| doc.live(c).is_some_and(|n| n.parent.is_none() && n.ty.name() == "composition");
     if spec.is_empty() {
+        // The first 2D composition, kept while it stays one, so a frame
+        // does not pass over the roots (`EN-10`).
+        if let Some(c) = last.filter(|&c| is_composition(c) && composition::dims(doc, c) == Some(Dims::Two)) {
+            return Some(c);
+        }
+        let all = composition::compositions(doc);
         return all.iter().copied().find(|&c| composition::dims(doc, c) == Some(Dims::Two)).or_else(|| all.first().copied());
     }
-    // Ids need their `#`: bare base 62 would read most names as ids.
+    // Ids need their `#`: bare base 62 would read most names as ids. A
+    // name is looked up in the document's index of root names (`EN-10`).
     if spec.starts_with('#') {
-        return spec.parse::<NodeId>().ok().filter(|id| all.contains(id));
+        return spec.parse::<NodeId>().ok().filter(|&id| is_composition(id));
     }
-    all.into_iter().find(|&c| {
-        doc.get::<DocName>(c).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(spec)
-    })
+    doc.roots_named(spec).into_iter().filter(|&c| is_composition(c)).min_by_key(|&c| doc.live(c).map(|n| (n.order.clone(), c)))
 }
 
 /// Resolve every composition panel against the current document. Writes the
@@ -189,6 +194,7 @@ pub(crate) fn resolve_panel_views(
     dpr: Res<crate::Dpr>,
     mut layers: ResMut<CompositionLayers>,
     mut views: ResMut<PanelViews>,
+    mut first: Local<std::collections::BTreeMap<String, NodeId>>,
 ) {
     let doc = store.0.tree();
     let mut next: Vec<PanelView> = panels
@@ -201,7 +207,11 @@ pub(crate) fn resolve_panel_views(
                 Some(o) => panels.get(o).map_or("", |q| q.composition.as_str()),
                 None => p.composition.as_str(),
             };
-            let composition = resolve(doc, shown);
+            let composition = resolve(doc, shown, first.get(id).copied().filter(|_| shown.is_empty()));
+            match composition.filter(|_| shown.is_empty()) {
+                Some(c) => first.insert(id.clone(), c),
+                None => first.remove(id),
+            };
             let dims = composition.and_then(|c| composition::dims(doc, c)).unwrap_or(Dims::Two);
             PanelView {
                 panel: id.clone(),

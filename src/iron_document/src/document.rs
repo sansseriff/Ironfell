@@ -158,6 +158,14 @@ pub struct Document {
     by_facet: BTreeMap<FacetKind, BTreeSet<NodeId>>,
     by_source: BTreeMap<NodeId, BTreeSet<RelationId>>,
     by_target: BTreeMap<NodeId, BTreeSet<RelationId>>,
+    /// Live roots by their constant name, and each one's name: how a panel
+    /// naming its page, or a session page, is found without a pass over
+    /// the roots (`EN-10`).
+    root_names: BTreeMap<String, BTreeSet<NodeId>>,
+    root_name_of: BTreeMap<NodeId, String>,
+    /// Live roots by type: what is outside every page (`loose`) without a
+    /// pass over the roots (`EN-10`).
+    root_types: BTreeMap<TypeId, BTreeSet<NodeId>>,
 
     /// Persisted solver poses on derived copies (`Op::Solve`, EN-12):
     /// saved, journaled, cleared on authored edit or when no constraint
@@ -348,6 +356,47 @@ impl Document {
     pub fn roots(&self) -> &[NodeId] {
         crate::work::visit(crate::work::Site::Roots, self.roots.len());
         &self.roots
+    }
+
+    /// The live roots named `name` (a constant `name.text`), in id order.
+    pub fn roots_named(&self, name: &str) -> impl Iterator<Item = NodeId> + '_ {
+        self.root_names.get(name).into_iter().flatten().copied()
+    }
+
+    /// The live roots of each type, in id order.
+    pub fn roots_by_type(&self) -> impl Iterator<Item = (TypeId, &BTreeSet<NodeId>)> + '_ {
+        self.root_types.iter().map(|(t, ids)| (*t, ids))
+    }
+
+    /// Bring `root_names` up to date for `id`: in it while `id` is a root
+    /// in the root list with a constant name.
+    fn renote_root(&mut self, id: NodeId) {
+        if let Some(old) = self.root_name_of.remove(&id)
+            && let Some(ids) = self.root_names.get_mut(&old)
+        {
+            ids.remove(&id);
+            if ids.is_empty() {
+                self.root_names.remove(&old);
+            }
+        }
+        for (ty, ids) in self.root_types.iter_mut() {
+            if ids.remove(&id) {
+                if ids.is_empty() {
+                    let ty = *ty;
+                    self.root_types.remove(&ty);
+                }
+                break;
+            }
+        }
+        let Some(n) = self.nodes.get(&id).filter(|n| n.is_live() && n.parent.is_none()) else { return };
+        let nodes = &self.nodes;
+        if self.roots.binary_search_by(|&c| (&nodes[&c].order, c).cmp(&(&n.order, id))).is_err() {
+            return;
+        }
+        self.root_types.entry(n.ty).or_default().insert(id);
+        let Some(name) = self.get::<crate::facet::Name>(id).and_then(|x| x.text.constant()).and_then(|v| v.as_str()).map(str::to_owned) else { return };
+        self.root_names.entry(name.clone()).or_default().insert(id);
+        self.root_name_of.insert(id, name);
     }
 
     /// The last root in root order, without visiting the others.
@@ -630,8 +679,19 @@ impl Document {
         // store puts its own state back (structure-in-the-graph.md §3.3).
         self.touched.keys.clear();
         let journal = self.journal.0.take().expect("no journal to roll back");
+        let mut renote = BTreeSet::new();
         for r in journal.recs.into_iter().rev() {
+            match &r {
+                Rec::Placed(None, pos) => renote.extend(self.roots.get(*pos).copied()),
+                Rec::Unplaced(None, _, id) | Rec::Facet(FacetKind::Name, id, _) | Rec::Node(id, _) => {
+                    renote.insert(*id);
+                }
+                _ => {}
+            }
             self.undo(r);
+        }
+        for id in renote {
+            self.renote_root(id);
         }
         // Invariants are checked over both documents together, by
         // `Docs::rollback`: a copy's parent is in the other one.
@@ -958,6 +1018,9 @@ impl Document {
         if self.is_live(id) {
             self.facet_index_insert(kind, id);
         }
+        if kind == FacetKind::Name {
+            self.renote_root(id);
+        }
         self.touched.on = on;
     }
 
@@ -979,6 +1042,9 @@ impl Document {
             self.rec(Rec::Facet(kind, id, Some(c.clone())));
         }
         self.facet_index_remove(kind, id);
+        if kind == FacetKind::Name {
+            self.renote_root(id);
+        }
         self.touched.on = on;
         Some(c)
     }
@@ -1017,24 +1083,11 @@ impl Document {
         }
         self.touched.note(crate::structure::Key::Facet(id, path.facet));
         self.touched.note(crate::structure::Key::Leaf(Leaf { node: id, path }));
+        if path.facet == FacetKind::Name {
+            self.renote_root(id);
+        }
         self.touched.on = on;
         Some(Ok(old))
-    }
-
-    /// The facet to change in place. While a journal is open it is recorded
-    /// first, since what the caller writes through `&mut` cannot be seen.
-    #[cfg(test)]
-    pub(crate) fn facet_mut(
-        &mut self,
-        id: NodeId,
-        kind: FacetKind,
-    ) -> Option<&mut Facet> {
-        self.touched.note(crate::structure::Key::Facet(id, kind));
-        if self.recording() {
-            let before = self.facets.get(&kind)?.get(&id)?.clone();
-            self.rec(Rec::Facet(kind, id, Some(before)));
-        }
-        self.facets.get_mut(&kind)?.get_mut(&id)
     }
 
     pub(crate) fn insert_relation(&mut self, r: Relation) {
@@ -1115,6 +1168,9 @@ impl Document {
             None => self.touched.note(crate::structure::Key::Roots),
         }
         self.rec(Rec::Placed(parent, pos));
+        if parent.is_none() {
+            self.renote_root(id);
+        }
     }
 
     fn unplace(&mut self, id: NodeId) {
@@ -1133,6 +1189,9 @@ impl Document {
                 None => self.touched.note(crate::structure::Key::Roots),
             }
             self.rec(Rec::Unplaced(parent, pos, id));
+            if parent.is_none() {
+                self.renote_root(id);
+            }
         }
     }
 
@@ -1201,6 +1260,9 @@ impl Document {
         self.by_facet.clear();
         self.by_source.clear();
         self.by_target.clear();
+        self.root_names.clear();
+        self.root_name_of.clear();
+        self.root_types.clear();
         let live: Vec<NodeId> = self
             .nodes
             .values()
@@ -1240,6 +1302,29 @@ impl Document {
     /// The invariants, with `parent_live` answering for parents: a copy
     /// kept apart has its owner in the other document (`Tree::check_invariants`).
     pub(crate) fn check_invariants_over(&self, parent_live: &dyn Fn(NodeId) -> bool) -> Result<(), String> {
+        let mut names: BTreeMap<NodeId, String> = BTreeMap::new();
+        for &r in &self.roots {
+            if let Some(name) = self.get::<crate::facet::Name>(r).and_then(|x| x.text.constant()).and_then(|v| v.as_str()) {
+                names.insert(r, name.to_owned());
+            }
+        }
+        if names != self.root_name_of {
+            return Err(format!("root names {:?}, indexed {:?}", names, self.root_name_of));
+        }
+        let mut by_name: BTreeMap<String, BTreeSet<NodeId>> = BTreeMap::new();
+        for (&r, name) in &names {
+            by_name.entry(name.clone()).or_default().insert(r);
+        }
+        if by_name != self.root_names {
+            return Err("root names index out of step".into());
+        }
+        let mut by_type: BTreeMap<TypeId, BTreeSet<NodeId>> = BTreeMap::new();
+        for &r in &self.roots {
+            by_type.entry(self.nodes[&r].ty).or_default().insert(r);
+        }
+        if by_type != self.root_types {
+            return Err(format!("roots by type {by_type:?}, indexed {:?}", self.root_types));
+        }
         for n in self.nodes.values() {
             if n.is_live() {
                 let container: &[NodeId] = match n.parent {
@@ -1430,10 +1515,9 @@ mod journal_tests {
                 }
             }
             8 => {
-                if let Some(id) = rng.pick(&doc.nodes.keys().copied().collect::<Vec<_>>())
-                    && let Some(f) = doc.facet_mut(id, FacetKind::Name)
-                {
-                    f.set("text", Slot::Const(Value::Str(format!("set{}", rng.below(5))))).unwrap();
+                if let Some(id) = rng.pick(&doc.nodes.keys().copied().collect::<Vec<_>>()) {
+                    let text = LeafPath::new(FacetKind::Name, "text").unwrap();
+                    doc.set_leaf(id, text, Slot::Const(Value::Str(format!("set{}", rng.below(5)))));
                 }
             }
             9 => {
@@ -1552,7 +1636,7 @@ mod journal_tests {
         for i in 0..3 {
             doc.set_order(a, OrderKey::after(&doc.nodes[&b].order.clone()));
             doc.set_order(b, OrderKey::after(&doc.nodes[&a].order.clone()));
-            doc.facet_mut(a, FacetKind::Name).unwrap().set("text", Slot::Const(Value::Str(format!("x{i}")))).unwrap();
+            doc.set_leaf(a, LeafPath::new(FacetKind::Name, "text").unwrap(), Slot::Const(Value::Str(format!("x{i}")))).unwrap().unwrap();
         }
         doc.set_parent(b, Some(a), OrderKey::first());
         doc.tombstone(b, Version(2));

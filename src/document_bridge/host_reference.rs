@@ -5,9 +5,9 @@
 //! `prepare_spatial`, step by step through a script, keeping its derived
 //! state incrementally as the app does. After every step the same state is
 //! rebuilt from scratch from the store (`materialize::reconcile` over every
-//! live node, the paint order, a new spatial scene), and the two must be
+//! live node, a new spatial scene), and the two must be
 //! equal: the drawables, which nodes have entities and what those carry,
-//! the paint order and the spatial index. Compared by document `NodeId`,
+//! and the spatial index. Compared by document `NodeId`,
 //! geometry and content, never by entity or asset handle.
 //!
 //!   cargo test -p ironfell --lib --features native --target aarch64-apple-darwin host_reference
@@ -38,7 +38,6 @@ fn mesh_world() -> World {
 #[derive(Debug, PartialEq)]
 struct Derived {
     drawables: BTreeMap<NodeId, Doc2d>,
-    paint_index: BTreeMap<NodeId, u32>,
     /// Each node with an entity, and what the entity carries.
     entities: BTreeMap<NodeId, Carried>,
 }
@@ -85,7 +84,6 @@ fn derived(world: &World) -> Derived {
     }
     Derived {
         drawables: world.resource::<Drawables>().0.iter().map(|(k, v)| (*k, v.clone())).collect(),
-        paint_index: map.ids().filter_map(|id| Some((id, map.paint_index(id)?))).collect(),
         entities,
     }
 }
@@ -102,7 +100,7 @@ fn first_difference(a: &Derived, b: &Derived) -> Option<String> {
         }
         b.iter().find(|(k, _)| !a.contains_key(k)).map(|(k, y)| format!("{what} {k}: only the rebuilt host has {y:?}"))
     }
-    map("drawable", &a.drawables, &b.drawables).or_else(|| map("paint index", &a.paint_index, &b.paint_index)).or_else(|| map("entity", &a.entities, &b.entities))
+    map("drawable", &a.drawables, &b.drawables).or_else(|| map("entity", &a.entities, &b.entities))
 }
 
 /// The host's state rebuilt from scratch from `store`, in a world of its own.
@@ -117,7 +115,6 @@ fn rebuild(store: Store, modes: &Modes) -> (Store, Derived, iron_spatial::Scene)
         .run_system_once(|store: Res<DocumentStore>, mut map: ResMut<NodeMap>, mut layers: ResMut<CompositionLayers>, mut commands: Commands, assets: Res<MeshAssets>, mut drawables: ResMut<Drawables>, modes: Res<Modes>| {
             let all: BTreeSet<NodeId> = store.0.tree().live_nodes().map(|n| n.id).collect();
             materialize::reconcile(&store.0, &all, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
-            map.paint_index = paint_order(&store.0);
         })
         .expect("rebuild");
     world.flush();
@@ -129,31 +126,38 @@ fn rebuild(store: Store, modes: &Modes) -> (Store, Derived, iron_spatial::Scene)
     (store, derived, scene)
 }
 
+/// A headless host's world holding `store`: the bridge's resources and its
+/// two systems, nothing drawn (also the scaling probe's host, `EN-10`).
+pub(super) fn headless(store: Store) -> (World, SystemId, SystemId) {
+    let mut world = mesh_world();
+    world.insert_resource(DocumentStore(store));
+    world.init_resource::<crate::host_events::HostEvents>();
+    world.init_resource::<PendingTransactions>();
+    world.init_resource::<HistoryRequests>();
+    world.init_resource::<PendingLoad>();
+    world.init_resource::<GestureRequests>();
+    world.init_resource::<SyncedVersion>();
+    world.init_resource::<NodeMap>();
+    world.init_resource::<DocumentChanges>();
+    world.init_resource::<GeometryRevision>();
+    world.init_resource::<CompositionLayers>();
+    world.init_resource::<Time>();
+    world.init_resource::<DocumentOrigin>();
+    world.init_resource::<Drawables>();
+    world.init_resource::<Modes>();
+    world.init_resource::<ui::UiChanges>();
+    world.insert_resource(ClearColor(crate::bevy_app::CANVAS_LIGHT));
+    world.init_resource::<LatencyRequested>();
+    world.init_resource::<SpatialScene>();
+    world.init_resource::<ChangeInbox>();
+    let sync = world.register_system(sync_document);
+    let spatial = world.register_system(spatial::prepare_spatial);
+    (world, sync, spatial)
+}
+
 impl Host {
     fn new() -> Host {
-        let mut world = mesh_world();
-        world.insert_resource(DocumentStore(Store::new()));
-        world.init_resource::<crate::host_events::HostEvents>();
-        world.init_resource::<PendingTransactions>();
-        world.init_resource::<HistoryRequests>();
-        world.init_resource::<PendingLoad>();
-        world.init_resource::<GestureRequests>();
-        world.init_resource::<SyncedVersion>();
-        world.init_resource::<NodeMap>();
-        world.init_resource::<DocumentChanges>();
-        world.init_resource::<GeometryRevision>();
-        world.init_resource::<CompositionLayers>();
-        world.init_resource::<Time>();
-        world.init_resource::<DocumentOrigin>();
-        world.init_resource::<Drawables>();
-        world.init_resource::<Modes>();
-        world.init_resource::<ui::UiChanges>();
-        world.insert_resource(ClearColor(crate::bevy_app::CANVAS_LIGHT));
-        world.init_resource::<LatencyRequested>();
-        world.init_resource::<SpatialScene>();
-        world.init_resource::<ChangeInbox>();
-        let sync = world.register_system(sync_document);
-        let spatial = world.register_system(spatial::prepare_spatial);
+        let (world, sync, spatial) = headless(Store::new());
         let mut host = Host { world, sync, spatial, steps: 0 };
         host.frame("start");
         host

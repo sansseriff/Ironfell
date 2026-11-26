@@ -533,9 +533,15 @@ fn context_fault(doc: Tree<'_>, def: NodeId, node: NodeId, expr: &Expr) -> Resul
 
 pub fn check_context(doc: Tree<'_>, node: NodeId) -> Result<(), String> {
     let Some(def) = definition_of(doc, node) else { return Ok(()) };
-    for (leaf, expr) in doc.bound_slots() {
-        if !leaf.node.is_expanded() && doc.is_ancestor(def, leaf.node) {
-            context_fault(doc, def, leaf.node, expr)?;
+    // The definition's own bindings, not every binding in the document
+    // (`EN-10`).
+    for d in doc.descendants(def).into_iter().filter(|d| !d.is_expanded() && doc.is_live(*d)) {
+        for facet in doc.facets_of(d) {
+            for field in facet.field_names() {
+                if let Some(expr) = facet.get(field).and_then(Slot::expr) {
+                    context_fault(doc, def, d, expr)?;
+                }
+            }
         }
     }
     Ok(())

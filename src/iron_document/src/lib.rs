@@ -1655,6 +1655,14 @@ impl StoreCore {
         self.settle(SettleMode::Live { clusters: true });
     }
 
+    /// `publish`, changing only `set` and withdrawing only `unset`: what a
+    /// producer that knows what changed sends, rather than all it drives
+    /// (`EN-10`).
+    pub fn publish_delta(&mut self, producer: ProducerId, set: std::collections::BTreeMap<Leaf, Value>, unset: &[Leaf]) {
+        self.reactive.publish_delta(Tree::of(&self.docs), producer, set, unset);
+        self.settle(SettleMode::Live { clusters: true });
+    }
+
     /// Release everything a producer published; its leaves read as authored.
     pub fn unpublish(&mut self, producer: ProducerId) {
         self.publish(producer, Default::default());
@@ -3777,6 +3785,20 @@ impl StoreCore {
     }
 
     /// The compositions the observers show directly.
+    /// The compositions shown, `None` while everything counts as shown
+    /// (observing all): what a host pass serving shown pages starts from
+    /// (`EN-10`).
+    pub fn shown_compositions(&self) -> Option<Vec<NodeId>> {
+        (!self.observe_all).then(|| self.observed_compositions())
+    }
+
+    /// Whether `composition` is shown: everything counts as shown while
+    /// observing all, else an observer looks at it (`EN-10`: what host
+    /// passes that serve one view, such as the timeline, wait for).
+    pub fn shows(&self, composition: NodeId) -> bool {
+        self.observe_all || self.observed_compositions().contains(&composition)
+    }
+
     fn observed_compositions(&self) -> Vec<NodeId> {
         let doc = Tree::of(&self.docs);
         let mut out = Vec::new();

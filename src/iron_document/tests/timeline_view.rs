@@ -575,3 +575,23 @@ fn inside_a_transition_the_timeline_shows_and_moves_its_slices() {
     assert!(last.as_ref().unwrap().1.inside.is_none());
     assert!(piece(&store, comp, &format!("slice {tween}")).is_none());
 }
+
+/// `EN-10`: the timeline lists every clip in the document, so it is planned
+/// only while a view shows it. Hidden, an edit to a clip and a theme
+/// switch leave it as it was; shown again, it catches up with both.
+#[test]
+fn a_hidden_timeline_is_planned_when_it_is_shown_again() {
+    let Scene { mut store, rect, clip, keys, .. } = scene();
+    let mut last = None;
+    let comp = build(&mut store, &mut last);
+    let bar = node_named(&store, comp, &format!("bar {clip} {rect}"));
+    assert_eq!(x_of(&store, bar), 260.0);
+    store.set_observe_all(false);
+    store.apply(tx("later", vec![Op::Set { id: keys[0], path: path("key.t"), slot: num(0.5) }])).unwrap();
+    assert!(timeline_view::sync_themed(&mut store, &mut last, true).unwrap().is_none(), "hidden: not planned");
+    assert_eq!(x_of(&store, bar), 260.0, "hidden: as it was");
+    store.observe(Interest::Region { composition: comp, rect: [-1e6, -1e6, 2e6, 2e6], zoom: 1.0 });
+    assert!(timeline_view::sync_themed(&mut store, &mut last, true).unwrap().is_some(), "shown: planned again");
+    assert_eq!(x_of(&store, bar), 310.0, "the bar starts at the key's new time");
+    assert!(last.as_ref().unwrap().1.light, "and in the theme switched to while hidden");
+}

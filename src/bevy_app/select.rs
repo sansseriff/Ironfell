@@ -2115,7 +2115,15 @@ fn control_handles(geo: &Geo, view: &PanelView, r: &Reach, k: f64) -> (Point, Po
 fn reachable_controls(geo: &Geo, view: &PanelView, reaches: &[Reach]) -> Vec<Reach> {
     let Some(comp) = view.composition else { return Vec::new() };
     let here: Vec<_> = reaches.iter().filter(|r| r.panel == view.panel).collect();
-    geo.doc().nodes_of_type(iron_document::TypeId::lookup("empty").expect("registered")).filter_map(|e| {
+    // The empties under the composition's root, by its scoped index, not
+    // every empty in the document (`EN-10`).
+    let mut root = comp;
+    while let Some(p) = geo.doc().live(root).and_then(|n| n.parent) {
+        root = p;
+    }
+    let mut empties = geo.doc().nodes_of_type_in(root, iron_document::TypeId::lookup("empty").expect("registered"));
+    empties.sort_unstable();
+    empties.into_iter().filter_map(|e| {
         if geo.doc().facet(e, iron_document::FacetKind::Anchor).is_some() { return None; }
         let mut chain = vec![e];
         let mut up = e;

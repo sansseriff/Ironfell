@@ -78,7 +78,9 @@ pub struct GasSim {
     pub frames: u64,
     /// The smoothed relative pressure last published.
     pub pressure: f32,
-    found: Option<(Version, Option<Targets>)>,
+    /// What `find` found, for the document version and shown compositions
+    /// it looked at.
+    found: Option<((Version, Option<Vec<NodeId>>), Option<Targets>)>,
     /// The targets last marked as a live source, to unmark when they change.
     last_targets: Option<(Version, Option<Targets>)>,
     particles: Vec<Particle>,
@@ -110,10 +112,17 @@ fn name_of(store: &Store, id: NodeId) -> Option<String> {
 }
 
 /// The piston demo's nodes: a 3D composition named `cylinder` holding
-/// meshes `chamber` and `piston`, and a `port_spec` named `pressure`.
-fn find(store: &Store) -> Option<Targets> {
+/// meshes `chamber` and `piston`, and a `port_spec` named `pressure`. Only
+/// a shown `cylinder` steps, so only the shown compositions are looked
+/// through (`shown`; every one while everything counts as shown), not the
+/// document's every composition on each edit (`EN-10`).
+fn find(store: &Store, shown: Option<&[NodeId]>) -> Option<Targets> {
     let doc = store.tree();
-    let composition = doc.nodes_of_type(TypeId::lookup("composition")?).find(|&c| name_of(store, c).as_deref() == Some("cylinder") && composition::dims(doc, c) == Some(Dims::Three))?;
+    let is_cylinder = |c: NodeId| name_of(store, c).as_deref() == Some("cylinder") && composition::dims(doc, c) == Some(Dims::Three);
+    let composition = match shown {
+        Some(shown) => shown.iter().copied().find(|&c| is_cylinder(c))?,
+        None => doc.nodes_of_type(TypeId::lookup("composition")?).find(|&c| is_cylinder(c))?,
+    };
     let child = |name: &str| doc.children(composition).iter().copied().find(|&k| name_of(store, k).as_deref() == Some(name));
     let gauge = doc.nodes_of_type(TypeId::lookup("port_spec")?).find(|&p| name_of(store, p).as_deref() == Some("pressure"))?;
     Some(Targets { composition, chamber: child("chamber")?, piston: child("piston")?, gauge })
@@ -158,8 +167,10 @@ pub(super) fn step_and_publish(
     mut transforms: Query<&mut Transform, With<GasParticle>>,
 ) {
     let version = store.0.authored().version();
-    if sim.found.as_ref().map(|(v, _)| *v) != Some(version) {
-        sim.found = Some((version, find(&store.0)));
+    let key = (version, store.0.shown_compositions());
+    if sim.found.as_ref().map(|(k, _)| k) != Some(&key) {
+        let targets = find(&store.0, key.1.as_deref());
+        sim.found = Some((key, targets));
     }
     let Some((_, Some(targets))) = sim.found else {
         if let Some((_, Some(t))) = std::mem::take(&mut sim.last_targets) {

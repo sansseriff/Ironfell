@@ -109,23 +109,21 @@ pub fn home(doc: Tree<'_>, id: NodeId) -> Home {
 /// embeds show, through embeds inside those, to any depth.
 pub fn shown_compositions(doc: Tree<'_>, root: Option<NodeId>) -> std::collections::BTreeSet<NodeId> {
     let embed = TypeId::lookup("embed").expect("registered");
-    let edges: Vec<(NodeId, NodeId)> = doc
-        .nodes_of_type(embed)
-        .filter(|&e| doc.is_live(e))
-        .filter_map(|e| Some((composition::composition_of(doc, e)?, composition::embedded(doc, e)?)))
-        .collect();
     let mut shown = std::collections::BTreeSet::new();
     let mut stack: Vec<NodeId> = root.into_iter().collect();
     while let Some(c) = stack.pop() {
         if shown.insert(c) {
-            stack.extend(edges.iter().filter(|(host, _)| *host == c).map(|(_, source)| *source));
+            // The embeds in `c`, by its root's scoped index, not every embed
+            // in the document (`EN-10`).
+            let top = doc.top_root(c).unwrap_or(c);
+            stack.extend(doc.nodes_of_type_in(top, embed).into_iter().filter(|&e| doc.is_live(e) && composition::composition_of(doc, e) == Some(c)).filter_map(|e| composition::embedded(doc, e)));
         }
     }
     shown
 }
 
 /// The embeds at or under `roots`, in painter order. Found from the
-/// document's type index, not by walking the content: this runs every
+/// roots' scoped type indexes, not by walking the content: this runs every
 /// frame, and the walk cost ~8 ms a frame on a 42k-node import
 /// (render-cache.md §2).
 pub fn embeds_under(doc: Tree<'_>, roots: &[NodeId]) -> Vec<NodeId> {
@@ -141,7 +139,10 @@ pub fn embeds_under(doc: Tree<'_>, roots: &[NodeId]) -> Vec<NodeId> {
         None
     };
     // In `roots`' order, then preorder within each.
-    let mut found: Vec<(usize, Vec<&iron_document::OrderKey>, NodeId)> = doc.nodes_of_type(embed).filter_map(|e| Some((under(e)?, doc.order_path(e), e))).collect();
+    // From the scoped index of each of `roots`' top roots, not every embed
+    // in the document (`EN-10`).
+    let tops: std::collections::BTreeSet<NodeId> = roots.iter().map(|&r| doc.top_root(r).unwrap_or(r)).collect();
+    let mut found: Vec<(usize, Vec<&iron_document::OrderKey>, NodeId)> = tops.into_iter().flat_map(|t| doc.nodes_of_type_in(t, embed)).filter_map(|e| Some((under(e)?, doc.order_path(e), e))).collect();
     found.sort();
     found.into_iter().map(|(.., e)| e).collect()
 }

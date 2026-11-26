@@ -1204,7 +1204,23 @@ pub fn sync(store: &mut Store, last: &mut Option<(NodeId, Plan)>) -> Result<Opti
 /// `sync`, drawn in the light theme's colours when `light`.
 pub fn sync_themed(store: &mut Store, last: &mut Option<(NodeId, Plan)>, light: bool) -> Result<Option<Vec<NodeId>>, String> {
     let clock = store.ensure_clock().map_err(|e| e.message)?;
-    let comp = find(store);
+    // The composition as last built, found again only when it is gone, not
+    // by a pass over the roots every frame (`EN-10`).
+    let comp = last.as_ref().map(|(c, _)| *c).filter(|&c| store.tree().is_live(c)).or_else(|| find(store));
+    // Planned only while shown (or before it is built): the plan lists
+    // every clip and machine of the document, which no one needs while no
+    // view shows the timeline (`EN-10`). One left unplanned is marked
+    // stale, so it is planned and redrawn when shown again.
+    if let (Some(c), Some((lc, lp))) = (comp, last.as_mut())
+        && *lc == c
+        && !store.shows(c)
+    {
+        if lp.light != light {
+            lp.light = light;
+            lp.end = -1.0;
+        }
+        return Ok(None);
+    }
     let mut plan = plan(store, clock, comp);
     plan.light = light;
     // Inside a transition the playhead is the preview: the main shows the

@@ -114,13 +114,11 @@ impl Default for DocumentOrigin {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provenance(pub NodeId);
 
-/// `NodeId ↔ Entity`, plus each materialised node's painter index (its
-/// position in the document's preorder), which picking uses as depth.
+/// `NodeId ↔ Entity`.
 #[derive(Resource, Default)]
 pub struct NodeMap {
     to_entity: HashMap<NodeId, Entity>,
     to_node: HashMap<Entity, NodeId>,
-    paint_index: HashMap<NodeId, u32>,
 }
 
 impl NodeMap {
@@ -130,10 +128,6 @@ impl NodeMap {
 
     pub fn node(&self, e: Entity) -> Option<NodeId> {
         self.to_node.get(&e).copied()
-    }
-
-    pub fn paint_index(&self, id: NodeId) -> Option<u32> {
-        self.paint_index.get(&id).copied()
     }
 
     /// How many document nodes have an entity.
@@ -157,13 +151,11 @@ impl NodeMap {
     fn remove(&mut self, id: NodeId) -> Option<Entity> {
         let e = self.to_entity.remove(&id)?;
         self.to_node.remove(&e);
-        self.paint_index.remove(&id);
         Some(e)
     }
 
     fn drain(&mut self) -> Vec<Entity> {
         self.to_node.clear();
-        self.paint_index.clear();
         self.to_entity.drain().map(|(_, e)| e).collect()
     }
 }
@@ -433,7 +425,7 @@ pub(crate) fn sync_document(
     assets: Option<Res<MeshAssets>>,
     time: Res<Time>,
     mut origin: ResMut<DocumentOrigin>,
-    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen, mut inbox, mut spatial): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>, ResMut<ChangeInbox>, ResMut<SpatialScene>),
+    (mut drawables, modes, mut ui, mut timeline, clear, latency, mut library_light, mut session_seen, mut inbox, mut spatial, mut session_pages): (ResMut<Drawables>, Res<Modes>, ResMut<ui::UiChanges>, Local<Option<(NodeId, iron_document::timeline_view::Plan)>>, Res<ClearColor>, Res<LatencyRequested>, Local<Option<bool>>, Local<u64>, ResMut<ChangeInbox>, ResMut<SpatialScene>, Local<BTreeMap<&'static str, NodeId>>),
 ) {
     // The timeline follows the shell's theme, which sets the clear colour
     // (`engine_api::set_dark_mode`).
@@ -443,7 +435,21 @@ pub(crate) fn sync_document(
     if store.0.dark() == light {
         store.0.set_theme(!light);
     }
-    let session_named = |doc: Tree<'_>, name: &str| doc.roots().iter().any(|&r| r.is_session() && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name));
+    // A session page by name, remembered once found, so a frame does not
+    // pass over every root to find it (`EN-10`).
+    let mut session_named = |doc: Tree<'_>, name: &'static str| -> bool {
+        let named = |r: NodeId| r.is_session() && doc.is_live(r) && doc.get::<iron_document::facet::Name>(r).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some(name);
+        if session_pages.get(name).is_some_and(|&r| named(r)) {
+            return true;
+        }
+        match doc.roots().iter().copied().find(|&r| named(r)) {
+            Some(r) => {
+                session_pages.insert(name, r);
+                true
+            }
+            None => false,
+        }
+    };
     let build_latency = latency.0 && !session_named(store.0.tree(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && timeline.as_ref().is_none_or(|(_, p)| p.light == light)
@@ -641,9 +647,6 @@ pub(crate) fn sync_document(
         return;
     };
     materialize::reconcile(&store.0, &affected, &mut map, &mut layers, &mut commands, &assets, &mut drawables, &modes);
-    if structure {
-        map.paint_index = paint_order(&store.0);
-    }
     changes.nodes.extend(affected);
     // A load names no shapes: everything may have changed.
     if reloaded || (structure && shaped.is_empty()) {
@@ -686,19 +689,5 @@ fn report_late_work(
     if !late.is_empty() {
         warn!("queued after this frame's sync, drawn a frame late: {}", late.join(", "));
     }
-}
-
-/// Preorder index of every live node: painter order for 2D content.
-fn paint_order(store: &Store) -> HashMap<NodeId, u32> {
-    let doc = store.tree();
-    let mut out = HashMap::new();
-    let mut stack: Vec<NodeId> = doc.roots().iter().rev().copied().collect();
-    let mut i = 0u32;
-    while let Some(id) = stack.pop() {
-        out.insert(id, i);
-        i += 1;
-        stack.extend(doc.children(id).iter().rev().copied());
-    }
-    out
 }
 

@@ -175,6 +175,13 @@ pub struct Scene {
     pub damage: Vec<Rect>,
     /// Entries rewritten by the last update.
     pub updated: u32,
+    /// The scopes an index write reached since the last update began: the
+    /// ones whose damage is cleared and that are committed, not every scope
+    /// (`EN-10`).
+    touched: BTreeSet<Option<NodeId>>,
+    /// The entries of each indexed root: what `rebuild_root` replaces,
+    /// found without a pass over every entry (`EN-10`).
+    by_root: BTreeMap<Option<NodeId>, BTreeSet<NodeId>>,
 }
 
 /// The scope key a node's children live in.
@@ -380,8 +387,10 @@ impl Scene {
         self.generation = self.generation.wrapping_add(1);
         self.damage.clear();
         self.updated = 0;
-        for s in self.scopes.values_mut() {
-            s.index.begin_changes();
+        for scope in std::mem::take(&mut self.touched) {
+            if let Some(s) = self.scopes.get_mut(&scope) {
+                s.index.begin_changes();
+            }
         }
         for root in roots {
             self.rebuild_root(store, root);
@@ -503,14 +512,18 @@ impl Scene {
                     other => other,
                 };
                 self.entries.insert(g, Entry { scope: parent, root, kind: Kind::Group, affine, bounds: u.mapped(affine), order });
+                self.by_root.entry(root).or_default().insert(g);
                 self.chains.insert(g, lineage(doc, g));
                 self.scopes.entry(parent).or_default().index.upsert(g, Record { bounds: u.mapped(affine), order });
+                self.touched.insert(parent);
                 self.updated += 1;
                 dirty.insert(parent);
             }
         }
-        for s in self.scopes.values_mut() {
-            s.index.commit();
+        for scope in &self.touched {
+            if let Some(s) = self.scopes.get_mut(scope) {
+                s.index.commit();
+            }
         }
         for root in rebuild_roots {
             self.rebuild_root(store, root);
@@ -523,17 +536,22 @@ impl Scene {
         e.affine = affine;
         let order = e.order;
         self.scopes.entry(scope).or_default().index.upsert(id, Record { bounds, order });
+        self.touched.insert(scope);
         self.updated += 1;
     }
 
     fn remove(&mut self, id: NodeId) {
         if let Some(e) = self.entries.remove(&id) {
+            if let Some(ids) = self.by_root.get_mut(&e.root) {
+                ids.remove(&id);
+            }
             self.chains.remove(&id);
             if let Ok(pos) = self.embeds.binary_search(&id) {
                 self.embeds.remove(pos);
             }
             if let Some(s) = self.scopes.get_mut(&e.scope) {
                 s.index.remove(id);
+                self.touched.insert(e.scope);
             }
             self.updated += 1;
         }
@@ -655,7 +673,7 @@ impl Scene {
     /// elsewhere) follows when its union changed.
     fn rebuild_root(&mut self, store: &Store, root: Option<NodeId>) {
         let doc = store.tree();
-        let gone: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
+        let gone: Vec<NodeId> = self.by_root.remove(&root).unwrap_or_default().into_iter().filter(|id| self.entries.get(id).is_some_and(|e| e.root == root)).collect();
         let old_damage: Vec<Rect> = gone.iter().filter_map(|id| self.painted(*id)).collect();
         self.damage.extend(old_damage);
         let mut gone_set: BTreeSet<NodeId> = gone.iter().copied().collect();
@@ -692,7 +710,7 @@ impl Scene {
         for k in kids {
             self.build_node(store, k, root, root, 1, &order);
         }
-        let fresh: Vec<NodeId> = self.entries.iter().filter(|(_, e)| e.root == root).map(|(id, _)| *id).collect();
+        let fresh: Vec<NodeId> = self.by_root.get(&root).into_iter().flatten().copied().collect();
         let mut made: BTreeSet<Option<NodeId>> = fresh
             .iter()
             .filter(|id| matches!(self.entries[id].kind, Kind::Group))
@@ -805,7 +823,13 @@ impl Scene {
 
     #[allow(clippy::too_many_arguments)]
     fn insert(&mut self, id: NodeId, scope: Option<NodeId>, root: Option<NodeId>, kind: Kind, affine: Affine, bounds: Bounds, order: u32, doc: Tree<'_>) {
-        self.entries.insert(id, Entry { scope, root, kind, affine, bounds, order });
+        if let Some(old) = self.entries.insert(id, Entry { scope, root, kind, affine, bounds, order })
+            && old.root != root
+            && let Some(ids) = self.by_root.get_mut(&old.root)
+        {
+            ids.remove(&id);
+        }
+        self.by_root.entry(root).or_default().insert(id);
         self.chains.insert(id, lineage(doc, id));
         if let Kind::Group = kind {
             // Indexed by `settle` from its union; a placeholder box here
@@ -813,5 +837,6 @@ impl Scene {
             return;
         }
         self.scopes.entry(scope).or_default().index.upsert(id, Record { bounds, order });
+        self.touched.insert(scope);
     }
 }

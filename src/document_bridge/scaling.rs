@@ -39,6 +39,9 @@ const SCALING: &[(&str, &str, &str)] = &[
     ("save (canary)", "allocations", "canary: must always grow"),
     ("save (canary)", "bytes", "canary: must always grow"),
     ("save (canary)", "relations", "canary: must always grow"),
+    ("template structure edit", "allocations", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
+    ("template structure edit", "bytes", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
+    ("template structure edit", "roots", "EN-10: a template's structure changing rebuilds the whole spatial scene (Scene::rebuild_root does not build templates)"),
     ("theme", "allocations", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
     ("theme", "bytes", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
     ("walk (canary)", "allocations", "canary: must always grow"),
@@ -91,6 +94,10 @@ struct Ctx {
     card: NodeId,
     card_state: NodeId,
     card_panel: NodeId,
+    /// The host (`EN-10`): the bridge's own systems in a headless world,
+    /// run after every frame, so what the host does per operation is
+    /// measured with the store's.
+    host: (bevy::prelude::World, bevy::ecs::system::SystemId, bevy::ecs::system::SystemId),
 }
 
 /// The shown page's own component: a channel, a machine that poses it, and
@@ -109,7 +116,14 @@ const CARD: &str = r#"<definition name="probe card">
 impl Ctx {
     fn frame(&mut self) -> bool {
         self.now += 1.0 / 60.0;
-        self.store.advance(self.now).changed
+        let changed = self.store.advance(self.now).changed;
+        let (world, sync, spatial) = &mut self.host;
+        world.insert_resource(super::DocumentStore(std::mem::replace(&mut self.store, Store::new())));
+        world.run_system(*sync).expect("sync_document");
+        world.flush();
+        world.run_system(*spatial).expect("prepare_spatial");
+        self.store = world.remove_resource::<super::DocumentStore>().expect("the store").0;
+        changed
     }
 
     /// Step until a frame changes nothing.
@@ -173,7 +187,9 @@ fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
     store.set_observe_all(false);
     store.set_motion(true);
     store.observe(everything(perf["$c"]));
+    let host = super::host_reference::headless(Store::new());
     let mut ctx = Ctx {
+        host,
         store,
         now: 0.0,
         perf: perf["$c"],
@@ -457,6 +473,20 @@ fn operations() -> Vec<Operation> {
                 c.frame();
             }
         }),
+        // A node added to and taken from its template: its instance's
+        // picture is derived again, and the host follows (`EN-10`).
+        op("template structure edit", |c| {
+            let id = c.store.authored().next_id();
+            let template = c.store.tree().live(c.card_panel).and_then(|n| n.parent).expect("the panel's template");
+            let mut size = iron_document::facet::Size::default();
+            size.w = Slot::Const(Value::Number(4.0));
+            size.h = Slot::Const(Value::Number(4.0));
+            use iron_document::LeafStruct;
+            c.apply("add", vec![Op::Create { id, ty: iron_document::TypeId::lookup("rect").unwrap(), parent: Some(template), order: iron_document::OrderKey::first(), facets: vec![iron_document::facet::Transform2d::default().wrap(), size.wrap()] }]);
+            c.frame();
+            c.apply("remove", vec![Op::Delete { id }]);
+            c.frame();
+        }),
         // An edit of its machine: the player visits its instances, not
         // every entity.
         op("machine edit", |c| {
@@ -471,7 +501,7 @@ fn operations() -> Vec<Operation> {
                 c.store.begin_gesture(&[c.r]);
                 c.store.preview(c.r, path("transform2d.x"), Value::Number(x));
                 c.frame();
-                c.store.commit_gesture("drag", Actor::Human, 0).unwrap();
+                assert!(c.store.commit_gesture("drag", Actor::Human, 0).is_some_and(|r| r.is_ok()), "the drag commits");
                 c.frame();
             }
         }),

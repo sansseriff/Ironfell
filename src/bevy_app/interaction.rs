@@ -58,13 +58,15 @@ pub fn publish_interaction_state(mut store: ResMut<crate::document_bridge::Docum
     if let Some(h) = selection.hovered {
         states.entry(h).or_default().push("hovered");
     }
+    let before = store.0.interaction().clone();
     if !store.bypass_change_detection().0.set_interaction(states.clone()) {
         return;
     }
+    // Only the nodes whose states changed, not every node with an
+    // `interaction` facet in the document (`EN-10`).
     let doc = store.0.tree();
-    let nodes: Vec<NodeId> = doc.nodes_with(FacetKind::Interaction).filter(|&n| doc.is_live(n)).collect();
-    let producer = store.0.producer("interaction");
-    if nodes.is_empty() && producer.is_none() {
+    let nodes: Vec<NodeId> = before.keys().chain(states.keys()).copied().collect::<std::collections::BTreeSet<_>>().into_iter().filter(|n| before.get(n) != states.get(n) && doc.is_live(*n) && doc.has(*n, FacetKind::Interaction)).collect();
+    if nodes.is_empty() {
         return;
     }
     let mut values = BTreeMap::new();
@@ -74,6 +76,6 @@ pub fn publish_interaction_state(mut store: ResMut<crate::document_bridge::Docum
             values.insert(Leaf { node: n, path: format!("interaction.{field}").parse().expect("declared leaf") }, Value::Bool(on));
         }
     }
-    let producer = producer.unwrap_or_else(|| store.0.register_producer("interaction"));
-    store.0.publish(producer, values);
+    let producer = store.0.producer("interaction").unwrap_or_else(|| store.0.register_producer("interaction"));
+    store.0.publish_delta(producer, values, &[]);
 }

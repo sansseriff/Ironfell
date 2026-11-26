@@ -181,6 +181,28 @@ pool slot or its `target/`.
 - **T3's worktree cleanup** ("delete merged worktrees", inactive worktrees) must not
   remove the slots: keep those settings off, or check that they leave `pool-N` alone.
 
+### Disk cleanup
+
+Cargo never deletes old hashed artifacts, so `target/` only grows (the main checkout
+reached 448 GB, and each worktree starts as a clone of it that diverges as it builds).
+`scripts/clean-disk.sh` runs `cargo sweep --time 7` on the main checkout and each pool
+slot (files unused for 7 days; `CLEAN_DAYS` changes it, `--dry-run` previews), skips
+while cargo or rustc is running, and lists T3 worktrees that look finished. It only
+removes stale files, never a slot or its `target/`. `scripts/install-clean-schedule.sh`
+runs it weekly (Sunday 03:00) from launchd, logging to
+`~/Library/Logs/iron-clean-disk.log`; `--remove` uninstalls it. `du` overstates
+worktrees because it counts cloned blocks once per copy; trust `df` instead.
+
+The sweep is the backstop. The cause was macOS's default `split-debuginfo =
+"unpacked"`, which keeps every incremental build's `.rcgu.o` files (about 0.16 GB per
+edit of `iron_document`, never freed; 394 GB of the main `target/`). So native builds
+pack their debuginfo (`.cargo/config.toml`, rustflag on `aarch64-apple-darwin`; it
+must not go in `[profile.dev]` because wasm32 rejects `packed`), and `[profile.dev]`
+uses `debug = "line-tables-only"`: a cold `iron_document` test build is 2.5 GB instead
+of 3.7 GB and stays flat across edits. Backtraces keep line numbers; a debugger can't
+show locals until you set `debug = true`. Don't add `debug = 0` for dependencies: it
+saved only 6% more.
+
 ### Cleaning up
 
 Each worktree carries its own `target/` and `node_modules/`, which together have

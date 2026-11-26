@@ -2,6 +2,15 @@
 # Enable the wasm32 target
 target = ["wasm32-unknown-unknown"]
 
+# Disk: on macOS cargo's dev default (`split-debuginfo = "unpacked"`) keeps every
+# incremental build's .rcgu.o files forever, ~0.16 GB per edit of iron_document: the
+# main target/ reached 448 GB. Packing deletes the .o files after linking, so a native
+# target/ stops growing per edit (flat at ~3 GB over 12 edits, 2026-11-26 benchmark).
+# Set here as a rustflag, not in [profile.dev], because wasm32 rejects `packed`
+# ("unstable on this platform"). scripts/clean-disk.sh sweeps what is left.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "split-debuginfo=packed"]
+
 [target.wasm32-unknown-unknown]
 # Ensure the wasm target is properly recognized
 runner = "wasm-server-runner"

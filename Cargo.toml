@@ -159,6 +159,14 @@ js-sys = "0.3.78"
 [dev-dependencies]
 iron_document = { path = "./src/iron_document", features = ["work"] }
 
+# Line numbers for backtraces and profilers, without variable-level debuginfo.
+# Full debuginfo roughly doubled `target/` (measured 2026-11-26: 3.7 GB vs 2.5 GB for
+# one iron_document test build). Also applies to `test`, which inherits `dev`. Native
+# builds additionally pack their debuginfo (.cargo/config.toml, "Disk"). Set
+# `debug = true` here to step through locals in a debugger.
+[profile.dev]
+debug = "line-tables-only"
+
 # Optimise third-party crates (taffy, parley, kurbo, serde_json, …) in dev and
 # test builds so tests aren't bottlenecked on unoptimised dependency code;
 # incremental rebuilds of workspace crates stay fast.

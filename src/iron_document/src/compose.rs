@@ -210,16 +210,19 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
     let (x, y, rot) = (el.num("x")?, el.num("y")?, el.num("rot")?.to_radians());
 
     let mut ops = Vec::new();
-    let mut scratch = store.authored().clone();
+    // The document as the ops so far leave it: the store's own until one is
+    // pushed (a library, a model or a standard definition made first), so
+    // a placement copies the document only then (`EN-9`).
+    let mut scratch: std::borrow::Cow<'_, crate::document::Document> = std::borrow::Cow::Borrowed(store.authored());
     let stamp = scratch.version().next();
-    let mut push = |scratch: &mut crate::document::Document, new: Vec<Op>| -> Result<(), String> {
+    let mut push = |scratch: &mut std::borrow::Cow<'_, crate::document::Document>, new: Vec<Op>| -> Result<(), String> {
         for op in &new {
-            crate::op::apply_op_to(scratch, 0, op, stamp).map_err(|e| e.message)?;
+            crate::op::apply_op_to(scratch.to_mut(), 0, op, stamp).map_err(|e| e.message)?;
         }
         ops.extend(new);
         Ok(())
     };
-    let root = |scratch: &mut crate::document::Document, push: &mut dyn FnMut(&mut crate::document::Document, Vec<Op>) -> Result<(), String>, t: &str| -> Result<NodeId, String> {
+    let root = |scratch: &mut std::borrow::Cow<'_, crate::document::Document>, push: &mut dyn FnMut(&mut std::borrow::Cow<'_, crate::document::Document>, Vec<Op>) -> Result<(), String>, t: &str| -> Result<NodeId, String> {
         if let Some(r) = crate::standard::root_of(Tree::authored_only(scratch), t) {
             return Ok(r);
         }
@@ -331,7 +334,9 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
         return Err(format!("{def}'s template has no size, so its picture cannot be given w or h; give the template a size (size.w, size.h) and bind its parts to it"));
     }
     let picture = picture.ok_or("no picture placed")?;
-    push(&mut scratch, inst)?;
+    // Nothing reads the scratch after this, and the plan's own apply checks
+    // these ops: added, not applied to a copy of the document (`EN-9`).
+    ops.extend(inst);
 
     // Arguments: `args.k` or a bare `k`, each an input of the definition.
     let inputs = definition::inputs_of(Tree::authored_only(&scratch), def)?;
@@ -371,7 +376,7 @@ fn place(store: &crate::StoreCore, el: &El, aliases: &BTreeMap<String, Named>) -
         let slot = arg_slot(kind, v, entity).map_err(|e| format!("{name}: {e}"))?;
         sets.push(Op::Set { id: entity, path: format!("args.{name}").parse().map_err(|e| format!("args.{name}: {e:?}"))?, slot });
     }
-    push(&mut scratch, sets)?;
+    ops.extend(sets);
 
     let line = format!("  <placed entity=\"{entity}\" use=\"{picture}\" in=\"{comp}\" definition=\"{def}\" notation=\"{notation}\"/>");
     Ok((ops, line, Named { definition: def, entity: Some(entity), picture }))

@@ -114,8 +114,15 @@ pub fn definition_ops(key: &str, library: NodeId, order: OrderKey, first: u64) -
     Ok((built.ops, def))
 }
 
+/// The first top-level node of type `ty_` in root order, not in the
+/// session tier: found by type, not by a pass over the roots (`EN-9`).
 pub(crate) fn root_of(doc: Tree<'_>, ty_: &str) -> Option<NodeId> {
-    doc.roots().iter().copied().find(|&r| !r.is_session() && doc.live(r).is_some_and(|n| n.ty.name() == ty_))
+    let tops: Vec<NodeId> = doc.nodes_of_type(ty(ty_)).filter(|&r| !r.is_session() && doc.live(r).is_some_and(|n| n.parent.is_none())).collect();
+    match tops.as_slice() {
+        [] => None,
+        [one] => Some(*one),
+        _ => tops.into_iter().min_by_key(|r| doc.roots().iter().position(|x| x == r)),
+    }
 }
 
 pub(crate) fn after_last(doc: Tree<'_>, parent: Option<NodeId>) -> OrderKey {

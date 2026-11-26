@@ -48,6 +48,10 @@ pub struct Clusters {
     pub by_node: BTreeMap<NodeId, NodeId>,
     /// The copies some cluster holds (`copies`).
     copies: BTreeSet<NodeId>,
+    /// Every node some cluster names: its nodes, and its variables' and
+    /// inputs' nodes. What the owners clusters hold in demand depend on
+    /// (`EN-9`).
+    named: BTreeSet<NodeId>,
     /// The clusters, by key, in a cycle through bindings: formed, never
     /// solved (DS-7: a cycle is a problem, not a refusal).
     pub failed: BTreeSet<NodeId>,
@@ -62,7 +66,13 @@ impl Clusters {
         let at = list.iter().enumerate().map(|(i, c)| (c.key(), i)).collect();
         let by_node = list.iter().flat_map(|c| c.nodes.iter().map(move |&n| (n, c.key()))).collect();
         let copies = list.iter().flat_map(|c| c.nodes.iter().copied()).filter(|n| n.is_expanded()).collect();
-        Clusters { list: list.into(), var_cluster, at, by_node, copies, failed: BTreeSet::new(), problems: Vec::new() }
+        let named = list.iter().flat_map(|c| c.nodes.iter().copied().chain(c.vars.iter().chain(&c.inputs).map(|l| l.node))).collect();
+        Clusters { list: list.into(), var_cluster, at, by_node, copies, named, failed: BTreeSet::new(), problems: Vec::new() }
+    }
+
+    /// Whether some cluster names `node`.
+    pub(crate) fn names(&self, node: NodeId) -> bool {
+        self.named.contains(&node)
     }
 
     /// The cluster with key `key`.

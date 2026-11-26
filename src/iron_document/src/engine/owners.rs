@@ -390,6 +390,12 @@ impl Owners {
         out
     }
 
+    /// The owners whose views derive definition `def`'s body: its entities,
+    /// authored and nested (`EN-9`: what a machine edit revisits).
+    pub(crate) fn owners_of_body(&self, def: NodeId) -> &[NodeId] {
+        self.by_template.get(&CacheKey::Body(def)).map_or(&[], Vec::as_slice)
+    }
+
     pub(crate) fn clear_templates(&mut self) {
         self.templates.clear();
     }

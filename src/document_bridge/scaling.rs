@@ -24,19 +24,23 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Each (operation, count) that still grows with the hidden document, and
 /// the phase expected to stop it.
 const SCALING: &[(&str, &str, &str)] = &[
-    ("edit plan", "graph.unneeded", "EN-9: scratch() clones the store and wakes its clone (the same order as the clone)"),
-    ("edit plan", "allocations", "DS-7"),
-    ("edit plan", "bytes", "DS-7"),
-    ("edit plan", "graph.readers", "DS-4a"),
-    ("fire", "nodes_of_type", "DS-3b"),
-    ("let made", "graph.unneeded", "EN-9: scratch() clones the store and wakes its clone (the same order as the clone)"),
-    ("let made", "allocations", "DS-7"),
-    ("let made", "bytes", "DS-7"),
+    ("edit plan", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("edit plan", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("edit plan", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("edit plan", "graph.readers", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("fire", "nodes_of_type", "EN-9: an on.node may name any node, so listeners are found by type"),
+    ("place instance", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("place instance", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("place instance", "graph.readers", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("place instance", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("let made", "graph.unneeded", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("let made", "allocations", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
+    ("let made", "bytes", "EN-9: an edit plan works on scratch(), a clone of the whole store, woken"),
     ("save (canary)", "allocations", "canary: must always grow"),
     ("save (canary)", "bytes", "canary: must always grow"),
     ("save (canary)", "relations", "canary: must always grow"),
-    ("theme", "allocations", "DS-3a"),
-    ("theme", "bytes", "DS-3a"),
+    ("theme", "allocations", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
+    ("theme", "bytes", "EN-9: a theme switch rechecks every cell reading a colour token, hidden ones too"),
     ("walk (canary)", "allocations", "canary: must always grow"),
     ("walk (canary)", "bytes", "canary: must always grow"),
     ("walk (canary)", "descendants", "canary: must always grow"),
@@ -81,7 +85,26 @@ struct Ctx {
     observer: Option<iron_document::ObserverId>,
     /// What the edit-plan operation sets next.
     toggle: bool,
+    /// A component only the shown page uses, with a state machine, and an
+    /// instance of it there: what a definition edit and a machine edit
+    /// touch (`EN-9`). Its `hidden` state and its template's panel.
+    card: NodeId,
+    card_state: NodeId,
+    card_panel: NodeId,
 }
+
+/// The shown page's own component: a channel, a machine that poses it, and
+/// a panel that reads it.
+const CARD: &str = r#"<definition name="probe card">
+  <port_spec name="vis" kind="value" dir="in" signal="shown"/>
+  <channel id="$fade" name="fade" value="1"/>
+  <machine name="vis">
+    <state id="$hidden" name="hidden" args.fade="0"/>
+    <state name="shown" args.fade="1"/>
+    <transition name="appear" from="hidden" to="shown" ms="300" ease="linear"/>
+  </machine>
+  <template notation="free"><rect id="$panel" name="panel" w="20" h="20" opacity="{= $fade.channel.value}"/></template>
+</definition>"#;
 
 impl Ctx {
     fn frame(&mut self) -> bool {
@@ -140,6 +163,12 @@ fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
             <group id="$b" name="button" transform2d.x="400" transform2d.y="400"><rect name="face" size.w="40" size.h="20"/><on name="bump" write.target="$n" write.to="{= $n.let.value + 1}"/></group>
         </composition>"#,
     );
+    let library = store.tree().nodes_of_type(iron_document::TypeId::lookup("library").unwrap()).find(|&l| store.tree().live(l).is_some_and(|n| n.parent.is_none())).expect("the demo has a library");
+    let last = store.tree().children(library).last().and_then(|&k| store.tree().live(k)).map(|n| iron_document::OrderKey::after(&n.order)).unwrap_or_else(iron_document::OrderKey::first);
+    let card = iron_document::markup::ops(CARD, Some(library), last, store.authored().next_id()).unwrap();
+    store.apply(tx("card", card.ops)).unwrap();
+    let card_def = card.roots[0];
+    edit(&mut store, &format!(r#"<place def="{card_def}" in="{}" x="500" y="100"/>"#, perf["$c"]));
     store.clear_history();
     store.set_observe_all(false);
     store.set_motion(true);
@@ -158,6 +187,9 @@ fn fixture(snapshot: &str, copies: usize, big: usize) -> Ctx {
         acc: running["$acc"],
         observer: None,
         toggle: false,
+        card: card_def,
+        card_state: card.named["hidden"],
+        card_panel: card.named["panel"],
     };
     ctx.settle();
     ctx
@@ -406,6 +438,52 @@ fn operations() -> Vec<Operation> {
             }
             crate::document_bridge::clock::set(&mut c.store, &[("playing", Value::Bool(false)), ("t", Value::Number(0.0))]).unwrap();
             c.frame();
+        }),
+        // Placing an instance of a component on the shown page, and taking
+        // it away (`EN-9`).
+        op("place instance", |c| {
+            let plan = iron_document::edit::plan(&c.store, &format!(r#"<edit><place def="{}" in="{}" x="600" y="100"/></edit>"#, c.card, c.perf), None).unwrap_or_else(|f| panic!("{}", f.message()));
+            let made: Vec<NodeId> = plan.ops.iter().filter_map(|o| match o { Op::Create { id, parent, .. } if parent.is_none_or(|p| !plan.ops.iter().any(|q| matches!(q, Op::Create { id: i, .. } if *i == p))) => Some(*id), _ => None }).collect();
+            c.apply("place", plan.ops);
+            c.frame();
+            c.apply("unplace", made.into_iter().map(|id| Op::Delete { id }).collect());
+            c.frame();
+        }),
+        // An edit of the shown page's own component: its instance there is
+        // derived again, none elsewhere.
+        op("definition edit", |c| {
+            for w in [30.0, 20.0] {
+                c.apply("w", vec![Op::Set { id: c.card_panel, path: path("size.w"), slot: Slot::Const(Value::Number(w)) }]);
+                c.frame();
+            }
+        }),
+        // An edit of its machine: the player visits its instances, not
+        // every entity.
+        op("machine edit", |c| {
+            for f in [0.5, 0.0] {
+                c.apply("pose", vec![Op::Set { id: c.card_state, path: path("args.fade"), slot: Slot::Const(Value::Number(f)) }]);
+                c.frame();
+            }
+        }),
+        // A drag that commits: what a gesture writes.
+        op("gesture commit", |c| {
+            for x in [130.0, 100.0] {
+                c.store.begin_gesture(&[c.r]);
+                c.store.preview(c.r, path("transform2d.x"), Value::Number(x));
+                c.frame();
+                c.store.commit_gesture("drag", Actor::Human, 0).unwrap();
+                c.frame();
+            }
+        }),
+        // The agent's view of the shown page (`Store::view_current`).
+        op("agent view", |c| {
+            let q = iron_document::ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(c.perf), fidelity: iron_document::Fidelity::Full, depth: None };
+            assert!(!c.store.view_current(&q).unwrap().is_empty());
+        }),
+        // The inspector: a node of the shown page asked about.
+        op("inspect", |c| {
+            c.store.pull_nodes(&[c.r]);
+            assert!(c.store.resolved(c.r, path("transform2d.x")).is_some());
         }),
         op("save (canary)", |c| {
             assert!(!c.store.save().is_empty());

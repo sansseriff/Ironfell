@@ -336,10 +336,12 @@ impl Document {
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
+        crate::work::whole_document("Document::nodes");
         self.nodes.values().inspect(|_| crate::work::visit(crate::work::Site::Nodes, 1))
     }
 
     pub fn live_nodes(&self) -> impl Iterator<Item = &Node> {
+        crate::work::whole_document("Document::live_nodes");
         self.nodes.values().inspect(|_| crate::work::visit(crate::work::Site::Nodes, 1)).filter(|n| n.is_live())
     }
 

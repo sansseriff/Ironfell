@@ -142,7 +142,7 @@ pub enum NativeKey {
 }
 
 impl NativeKey {
-    fn node(self) -> NodeId {
+    pub(crate) fn node(self) -> NodeId {
         match self {
             NativeKey::Island(l) => l.node,
             NativeKey::Layout(n) | NativeKey::Pins(n) | NativeKey::Repeat(n) | NativeKey::Component(n) | NativeKey::Cluster(n) => n,

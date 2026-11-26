@@ -10,6 +10,63 @@
 //! parallel do not mix, and counting never allocates, so an allocation
 //! counter beside it reads true.
 
+// A tripwire for whole-document walks inside a transaction or a frame
+// (`EN-9`): in debug builds (every test run), `Document::nodes` and
+// `live_nodes`, which always visit every node, panic while a transaction
+// applies or a frame advances, unless the caller holds `allow_scan`. The
+// scaling test measures what grows; this catches a new full walk in any
+// test that reaches it.
+#[cfg(debug_assertions)]
+thread_local! {
+    static HOT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static ALLOWED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Held while a transaction applies or a frame advances.
+pub(crate) struct Hot;
+
+impl Drop for Hot {
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        HOT.with(|h| h.set(h.get() - 1));
+    }
+}
+
+pub(crate) fn hot() -> Hot {
+    #[cfg(debug_assertions)]
+    HOT.with(|h| h.set(h.get() + 1));
+    Hot
+}
+
+/// Held by a caller that walks the whole document on purpose (export, a
+/// save, a rebuild), naming why.
+pub struct AllowScan;
+
+impl Drop for AllowScan {
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        ALLOWED.with(|a| a.set(a.get() - 1));
+    }
+}
+
+pub fn allow_scan(_why: &'static str) -> AllowScan {
+    #[cfg(debug_assertions)]
+    ALLOWED.with(|a| a.set(a.get() + 1));
+    AllowScan
+}
+
+/// A walk of every node is starting: panics inside a transaction or a frame
+/// without `allow_scan` (debug builds).
+#[inline]
+pub(crate) fn whole_document(what: &'static str) {
+    #[cfg(debug_assertions)]
+    if HOT.with(|h| h.get()) > 0 && ALLOWED.with(|a| a.get()) == 0 {
+        panic!("{what} walks the whole document inside a transaction or a frame (EN-9): scope the walk, or hold work::allow_scan(\"why\")");
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = what;
+}
+
 /// Where work is counted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Site {
@@ -414,5 +471,22 @@ mod tests {
     #[test]
     fn every_map_is_named() {
         assert_eq!(super::MAP_NAMES.len(), super::PRODUCER_PUBLISHED + 1);
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tripwire {
+    #[test]
+    #[should_panic(expected = "walks the whole document")]
+    fn a_whole_document_walk_in_a_transaction_panics() {
+        let _hot = super::hot();
+        let _ = crate::Document::new().live_nodes().count();
+    }
+
+    #[test]
+    fn one_allowed_by_name_does_not() {
+        let _hot = super::hot();
+        let _allow = super::allow_scan("test");
+        let _ = crate::Document::new().live_nodes().count();
     }
 }

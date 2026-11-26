@@ -2093,9 +2093,9 @@ impl StoreCore {
             return None;
         }
         // Clear user-gesture previews before applying so dropped previews
-        // (e.g. bound leaves) never skew `apply_now` or `cluster_problems()`;
+        // (e.g. bound leaves) never skew `apply_now` or `cluster_problems_where`;
         // `live_solve_preview` + `self.fingers` remain briefly for `post_apply`
-        // warm-starting and are cleared before `cluster_problems()` runs.
+        // warm-starting and are cleared before `cluster_problems_where` runs.
         self.reactive.clear_gesture_preview(Tree::of(&self.docs));
         let result = self.apply(TransactionInput {
             label: label.into(),
@@ -2759,10 +2759,17 @@ impl StoreCore {
     /// derived node the authored one it is derived for (an instance, a
     /// repeat), named in the note. At most three notes a node.
     pub fn problem_notes(&self) -> BTreeMap<NodeId, Vec<String>> {
+        self.problem_notes_where(|_| true)
+    }
+
+    /// `problem_notes` of the nodes `keep` keeps (by the node a note shows
+    /// on): only theirs are written (`EN-9`: a scoped view).
+    fn problem_notes_where(&self, keep: impl Fn(NodeId) -> bool) -> BTreeMap<NodeId, Vec<String>> {
+        let shown_on = |n: NodeId| n.expanded_root().unwrap_or(n);
         let mut out: BTreeMap<NodeId, Vec<String>> = BTreeMap::new();
         let mut more: BTreeMap<NodeId, usize> = BTreeMap::new();
-        for p in self.problems() {
-            let shown = p.node.path()[0];
+        for p in self.problems_where(|n| keep(shown_on(n))) {
+            let shown = shown_on(p.node);
             // A repeat's template is evaluated for item 0 only so that it
             // has values; what fails there fails in the items too.
             if p.kind == "binding" && (expand::in_repeat_template(Tree::of(&self.docs), p.node) || !Tree::of(&self.docs).is_live(p.node)) {
@@ -2807,27 +2814,24 @@ impl StoreCore {
     }
 
     pub fn problems(&self) -> Vec<expand::Problem> {
-        let mut out = self.expansion_problems.clone();
-        out.extend(self.embed_topology.virtual_problems().iter().cloned());
-        out.extend(self.truncated.iter().cloned());
-        out.extend(self.feedback.iter().cloned());
-        out.extend(self.reactive.errors.iter().map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
-        out.extend(self.machines_unsettled.iter().cloned());
-        out.extend(self.cluster_problems());
+        self.problems_where(|_| true)
+    }
+
+    /// `problems` of the nodes `keep` keeps: only theirs are written.
+    fn problems_where(&self, keep: impl Fn(NodeId) -> bool) -> Vec<expand::Problem> {
+        let kept = |p: &&expand::Problem| keep(p.node);
+        let mut out: Vec<expand::Problem> = self.expansion_problems.iter().filter(kept).cloned().collect();
+        out.extend(self.embed_topology.virtual_problems().iter().filter(kept).cloned());
+        out.extend(self.truncated.iter().filter(kept).cloned());
+        out.extend(self.feedback.iter().filter(kept).cloned());
+        out.extend(self.reactive.errors.iter().filter(|(leaf, _)| keep(leaf.node)).map(|(leaf, message)| expand::Problem { node: leaf.node, kind: "binding", message: format!("{}: {message}", leaf.path) }));
+        out.extend(self.machines_unsettled.iter().filter(kept).cloned());
+        out.extend(self.cluster_problems_where(&keep));
         out
     }
 
-    /// The constraints' problems (DS-7): what grouping could not use or
-    /// solve (a malformed constraint, a duplicate, a cycle through
-    /// bindings), and each constraint that doesn't hold at its cluster's
-    /// pose, as the cluster's watching native last read it. Read from the
-    /// document and the pose, never remembered from a solve.
-    fn cluster_problems(&self) -> Vec<expand::Problem> {
-        self.cluster_problems_where(|_| true)
-    }
-
-    /// The nodes `cluster_problems` names, without writing its messages: what
-    /// a transaction compares against (`EN-9`).
+    /// The nodes `cluster_problems_where` names, without writing its
+    /// messages: what a transaction compares against (`EN-9`).
     fn cluster_problem_nodes(&self) -> BTreeSet<NodeId> {
         let mut out: BTreeSet<NodeId> = self.clusters.problems.iter().map(|(id, _)| *id).collect();
         for (_, _, v) in self.violated_clusters() {
@@ -2836,7 +2840,12 @@ impl StoreCore {
         out
     }
 
-    /// `cluster_problems` of the nodes `keep` keeps: only theirs are written.
+    /// The constraints' problems (DS-7) of the nodes `keep` keeps, only
+    /// theirs written: what grouping could not use or solve (a malformed
+    /// constraint, a duplicate, a cycle through bindings), and each
+    /// constraint that doesn't hold at its cluster's pose, as the cluster's
+    /// watching native last read it. Read from the document and the pose,
+    /// never remembered from a solve.
     fn cluster_problems_where(&self, keep: impl Fn(NodeId) -> bool) -> Vec<expand::Problem> {
         let mut out: Vec<expand::Problem> = self.clusters.problems.iter().filter(|(id, _)| keep(*id)).map(|(id, message)| expand::Problem { node: *id, kind: "constraint", message: message.clone() }).collect();
         for (_, c, v) in self.violated_clusters() {
@@ -3478,8 +3487,14 @@ impl StoreCore {
         let (mut edge_cells, rebuilt) = self.reactive.take_edge_changes();
         let moved = std::mem::take(&mut self.owner_dirty_cells);
         if !moved.is_empty() {
-            // What moved may be what a cluster solves.
-            self.held_owners = None;
+            // What moved may be what a cluster solves: only then may the
+            // owners clusters hold have changed (`EN-9`).
+            if moved.iter().any(|c| match c {
+                graph::CellId::Leaf(l) => self.clusters.names(l.node),
+                graph::CellId::Native(k) => self.clusters.names(k.node()),
+            }) {
+                self.held_owners = None;
+            }
             self.demand_dirty = true;
         }
         edge_cells.extend(moved);
@@ -3901,8 +3916,7 @@ impl StoreCore {
         let mut touched: BTreeSet<NodeId> = BTreeSet::new();
         for op in ops.iter().chain(inverse) {
             match op {
-                Op::Create { id, ty, .. } => {
-                    self.machines_full |= mdef.contains(ty);
+                Op::Create { id, .. } => {
                     touched.insert(*id);
                 }
                 Op::Delete { id } | Op::Reparent { id, .. } | Op::AddFacet { id, .. } | Op::RemoveFacet { id, .. } | Op::Set { id, .. } => {
@@ -3913,18 +3927,55 @@ impl StoreCore {
         }
         if let Some(vd) = views {
             for &(id, _, _, ty) in vd.created.iter().chain(&vd.removed) {
-                self.machines_full |= mdef.contains(&ty);
+                // A derived machine part gone: its instance (still live, or
+                // gone with it).
+                if mdef.contains(&ty)
+                    && let Some((owner, _)) = id.expanded_parts()
+                {
+                    self.machines_dirty.insert(owner);
+                }
                 touched.insert(id);
             }
             touched.extend(vd.moved.iter().map(|m| m.0).chain(vd.facet_shaped.iter().copied()));
         }
         let doc = Tree::of(&self.docs);
+        let def_ty = TypeId::lookup("definition").expect("registered");
         for id in touched {
             match doc.ty_of(id) {
-                Some(ty) if mdef.contains(&ty) => self.machines_full = true,
+                // A machine part derived for an instance: that instance.
+                // An authored one: the instances of its definition, found by
+                // the views that derive it, not by a pass over every entity
+                // (`EN-9`). One gone, whose definition is no longer known:
+                // every instance.
+                Some(ty) if mdef.contains(&ty) => {
+                    // The differential reference visits every instance, so it
+                    // checks this narrowing rather than sharing it.
+                    #[cfg(feature = "differential")]
+                    if self.full_views {
+                        self.machines_full = true;
+                        continue;
+                    }
+                    if id.is_expanded() {
+                        if let Some((owner, _)) = id.expanded_parts()
+                            && doc.ty_of(owner) == Some(entity_ty)
+                        {
+                            self.machines_dirty.insert(owner);
+                        }
+                        continue;
+                    }
+                    let mut at = doc.live(id).map(|_| id);
+                    while let Some(n) = at.filter(|&n| doc.ty_of(n) != Some(def_ty)) {
+                        at = doc.live(n).and_then(|x| x.parent);
+                    }
+                    match at {
+                        Some(def) => self.machines_dirty.extend(self.owners.owners_of_body(def).iter().copied().filter(|&e| doc.ty_of(e) == Some(entity_ty))),
+                        None => self.machines_full = true,
+                    }
+                }
                 Some(ty) if ty == entity_ty => {
                     self.machines_dirty.insert(id);
                 }
+                None if inverse.iter().chain(ops).any(|op| matches!(op, Op::Create { id: c, ty, .. } if *c == id && mdef.contains(ty))) => self.machines_full = true,
                 _ => {}
             }
             if let Some((owner, _)) = id.expanded_parts()
@@ -4288,6 +4339,7 @@ impl StoreCore {
     /// again and what to redraw until then, the queries that became due,
     /// and whether anything changed.
     pub fn advance(&mut self, now: f64) -> Advanced {
+        let _hot = work::hot();
         self.sync_gate(now);
         self.check_demand();
         let (moving, running, stepping, queries, entering, playing) = self.recorded(|s| (s.advance_motion(now), s.advance_machines(now), s.advance_steps(now), s.advance_queries(now), s.advance_presence(now), s.advance_playhead(now)));
@@ -5490,6 +5542,7 @@ impl StoreCore {
     }
 
     fn apply_now(&mut self, mut input: TransactionInput) -> Result<Applied, Vec<ApplyError>> {
+        let _hot = work::hot();
         // A built-in colour token used for the first time joins the
         // document, in the same transaction (palette.rs).
         // After the transaction's own ops: its ids come after theirs, and
@@ -5530,7 +5583,7 @@ impl StoreCore {
         self.check_owners("a transaction");
         let mut solver = self.settle_tx(SettleMode::Transaction, &mut tx, &mut expanded, &mut full_inverse, edited_copy_leaves, &copy_drivers);
         // Clear a gesture commit's live-solve preview before
-        // `cluster_problems()` inspects the committed pose (EN-12).
+        // `cluster_problems_where` inspects the committed pose (EN-12).
         if self.gesture.is_none() && (!self.drivers.is_empty() || !self.fingers.is_empty()) && !self.reactive.live_solve_preview().is_empty() {
             self.reactive.clear_live_solve(Tree::of(&self.docs));
         }
@@ -5701,7 +5754,7 @@ impl StoreCore {
     /// grouping, and a cluster whose solve fails keeps the values it had
     /// when its solve began, the transaction's own writes included, and is
     /// posed so that only a change to its inputs solves it again. Its
-    /// problem is read from the pose (`cluster_problems`).
+    /// problem is read from the pose (`cluster_problems_where`).
     ///
     /// Solver writes on derived copies go to flat `Document::solved` via
     /// `Op::Solve` (`EN-12`); when a copy leaves every cluster (or goes dead),
@@ -6024,7 +6077,15 @@ impl StoreCore {
     }
 
     pub fn view(&self, q: &ViewQuery) -> Result<String, ViewError> {
-        view::with_problems(self.problem_notes(), || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))
+        // A scoped view writes the problems of what it shows only (`EN-9`).
+        let notes = match q.scope {
+            Some(scope) => {
+                let doc = Tree::of(&self.docs);
+                self.problem_notes_where(|n| n == scope || doc.is_ancestor(scope, n))
+            }
+            None => self.problem_notes(),
+        };
+        view::with_problems(notes, || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))
     }
 
     /// `view` as the agent reads it, to write back (§8.9): current. The

@@ -199,15 +199,22 @@ fn a_change_without_a_transition_snaps() {
     assert_eq!(channel(&store, entity, fade), 0.0);
 }
 
-/// A transition moved to another definition's machine leaves this one's
-/// instances (council review of `EN-9`, Opus): the instance's derived copy
-/// of it goes, which revisits the instance, so the change snaps.
+/// A state moved to another definition's machine leaves this one's idle
+/// instances (council review of `EN-9`, Opus, rounds 1 and 2): nothing about
+/// the instance changes, but it lets go of the state's pose. Three things
+/// revisit it (its derived copy of the state going, a touched part of it,
+/// and the machine's recorded reads of the definition), so this guards the
+/// outcome, not one of them.
 #[test]
-fn a_transition_moved_to_another_definition_leaves_the_old_ones_instances() {
+fn a_state_moved_to_another_definition_leaves_the_old_ones_instances() {
     let Card { mut store, entity, fade, .. } = card();
     store.advance_machines(0.0);
+    set_vis(&mut store, entity, "hidden");
+    store.advance_machines(1.0);
+    store.advance_machines(2.0);
+    assert_eq!(channel(&store, entity, fade), 0.0, "resting in hidden");
     let doc = store.tree();
-    let disappear = doc.nodes_of_type(ty("transition")).find(|&t| doc.get::<Name>(t).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("disappear")).unwrap();
+    let hidden = doc.nodes_of_type(ty("state")).find(|&t| doc.get::<Name>(t).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("hidden")).unwrap();
     let library = doc.nodes_of_type(ty("library")).next().unwrap();
     let [other, machine] = store.authored().next_ids(2)[..] else { unreachable!() };
     store
@@ -216,13 +223,13 @@ fn a_transition_moved_to_another_definition_leaves_the_old_ones_instances() {
             vec![
                 Op::Create { id: other, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&OrderKey::first()), facets: vec![named("other")] },
                 Op::Create { id: machine, ty: ty("machine"), parent: Some(other), order: OrderKey::first(), facets: vec![named("vis")] },
-                Op::Reparent { id: disappear, parent: Some(machine), order: OrderKey::first() },
+                Op::Reparent { id: hidden, parent: Some(machine), order: OrderKey::first() },
             ],
         ))
         .unwrap();
-    set_vis(&mut store, entity, "hidden");
-    assert!(store.advance_machines(1.0).is_empty(), "no transition left: it snaps");
-    assert_eq!(channel(&store, entity, fade), 0.0);
+    store.advance_machines(3.0);
+    store.advance_machines(4.0);
+    assert_eq!(channel(&store, entity, fade), 1.0, "its state gone, the channel rests");
 }
 
 /// An undo snaps only the instances whose state it changes: undoing an

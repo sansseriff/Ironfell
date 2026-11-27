@@ -216,6 +216,14 @@ Not covered by the probe's axes (they grow hidden pages, not the shown one):
 
 ## 6. Council reviews
 
+### 2026-11-26: round 2, round 1's fixes (`33082b2`)
+
+Opus 5.5: 8.5/10, nothing to fix. Sol 6.2: no score (usage limit again).
+
+- The fixes held: the stale timeline plan cannot collide with a real one (`end` ≥ 10), and `MACHINES` names the instance whose machine it is, nested ones included.
+- **Done:** `Store::shows`, now asked on idle frames, allocates nothing and stops at the first observer. The move test is now an idle instance whose resting state moves away (`a_state_moved_to_another_definition_leaves_the_old_ones_instances`); it passes with either revisit path removed, and with both, because the machine's recorded reads of the definition also catch it (E4), so it guards the outcome. `inspect::a_relation_reads_by_its_name` covers `aligns_to`.
+- **Left:** a failing `sync_themed` reopens the gate every frame (as a theme switch always has); a pinned state's channels name themselves as their driver; no test of the name facet's readers.
+
 ### 2026-11-26: review of `EN-9`, `EN-10` and `EN-14` (`21edcf3`..`9770e13`)
 
 Opus 5.5: 7.5/10. Sol 6.2: no score (its ChatGPT usage limit was reached before it began).

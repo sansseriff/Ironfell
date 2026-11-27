@@ -3796,8 +3796,17 @@ impl StoreCore {
     /// Whether `composition` is shown: everything counts as shown while
     /// observing all, else an observer looks at it (`EN-10`: what host
     /// passes that serve one view, such as the timeline, wait for).
+    /// Asked on idle frames, so it allocates nothing and stops at the first
+    /// observer that looks at it.
     pub fn shows(&self, composition: NodeId) -> bool {
-        self.observe_all || self.observed_compositions().contains(&composition)
+        if self.observe_all {
+            return true;
+        }
+        let doc = Tree::of(&self.docs);
+        self.observers.values().any(|i| match i {
+            Interest::Region { composition: c, .. } => *c == composition,
+            Interest::Nodes(nodes) => nodes.iter().any(|&n| composition::composition_of(doc, n) == Some(composition)),
+        })
     }
 
     fn observed_compositions(&self) -> Vec<NodeId> {

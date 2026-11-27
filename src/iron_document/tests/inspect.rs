@@ -70,6 +70,17 @@ fn an_instance_part_says_where_it_comes_from_and_what_overrides_it() {
     assert_eq!(fill.layers.last().and_then(|l| l.from.clone()), Some(id.to_string()), "the override node");
 }
 
+/// Relation kinds read as the view writes them (`aligns_to`, not `alignsto`).
+#[test]
+fn a_relation_reads_by_its_name() {
+    let mut store = Store::new();
+    let a = apply(&mut store, r#"<edit><composition id="$c" name="b" dims="2d"><rect id="$a" w="10" h="10"/><rect id="$b" x="20" w="10" h="10"/></composition></edit>"#);
+    let id = store.authored().next_relation_id();
+    store.apply(tx("align", vec![Op::Link { rel: Relation { id, from: a["$a"], to: a["$b"], rel: RelKind::AlignsTo, data: Default::default() } }])).unwrap();
+    assert!(has(&inspect(&store, a["$a"]).drives, "aligns_to", a["$b"]));
+    assert!(has(&inspect(&store, a["$b"]).driven_by, "aligns_to", a["$a"]));
+}
+
 #[test]
 fn a_laid_out_child_names_its_layout() {
     let mut store = Store::new();

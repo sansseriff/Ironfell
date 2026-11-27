@@ -93,7 +93,7 @@ Every checkpoint records the phase's **measured** net lines (`git diff --shortst
 3. **The Inspector:** a Connections section (`ConnectionsSection.svelte`), collapsed by default, reads the `connections` command (`engine_api::document_connections`) only while it is open, for a single selection.
 4. **Tests:** `tests/inspect.rs` covers a binding (both ends), an instance part with an override, a layout and the agent's rendering through the view; `time::an_animated_node_names_its_clip` covers a clip. The fast smoke passes, and the section was checked in the app on the demo's bound `shadow`. The scaling probe's `inspect` row asks for the connections too.
 
-Not done: `inspect` lists no discrete variation patches or slide/take coordinates yet (`EN-15` adds them), and it does not say which later slides or states shadow an edit (patches.md §5, question 2), because those patches do not exist yet.
+Not done: a machine-driven leaf names the instance, but not the machine or its transition's progress; leaves are walked by the facets the node holds, so a producer writing a leaf of a facet the node lacks would be missed (none is known to); and `inspect` lists no discrete variation patches or slide/take coordinates yet (`EN-15` adds them), and it does not say which later slides or states shadow an edit (patches.md §5, question 2), because those patches do not exist yet.
 
 ### EN-10: part 2, done (2026-11-26)
 
@@ -187,6 +187,15 @@ Not covered by the probe's axes (they grow hidden pages, not the shown one):
 ---
 
 ## 6. Council reviews
+
+### 2026-11-26: review of `EN-9`, `EN-10` and `EN-14` (`21edcf3`..`9770e13`)
+
+Opus 5.5: 7.5/10. Sol 6.2: no score (its ChatGPT usage limit was reached before it began).
+
+- **Fixed: a hidden timeline stayed stale when shown again.** A plan skipped while hidden was marked stale only on a theme change, and the host's idle gate never let a newly shown timeline through, so a key moved while the timeline was closed kept its old bar until the next edit. Every skip now marks the plan stale (`Plan::is_stale`), and `sync_document`'s gate lets a stale, shown timeline through.
+- **Not a bug: a machine part moved to another definition.** Opus read `note_machine_ops` as revisiting only the new definition's instances; but the instance's derived copy of the part goes, and `vd.removed` revisits its owner. `machines::a_transition_moved_to_another_definition_leaves_the_old_ones_instances` passes without a change and now guards it.
+- **Fixed in `inspect`:** the name facet's readers and drivers show (only its `why` line is left out); a machine-driven leaf names its instance; relation kinds use their names (`aligns_to`, not `alignsto`); the manifest lists `live solve`.
+- **Left:** machine and transition progress in `inspect`, leaves without a facet (both under `EN-14`'s "Not done"); `roots_named` noting only the names it found (no recording reader uses it); a panel's remembered first composition across a load; `Scene::show`'s defensive unlisting; the probe's instance-part inspect and selection/SVG rows; `renote_root`'s loop over root types (a handful).
 
 ### 2026-11-24: review of `EN-8c.0` + `EN-8c` (`f4ef731`, `569ce7d`)
 

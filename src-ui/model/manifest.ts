@@ -603,7 +603,7 @@ VIEW
   <connections> with its parent path, what it derives from (<derives>), for each
   leaf not at its default the layers it is read through, weakest first, the last
   winning (<why leaf value>: default, template, override, authored, solved,
-  producer, binding, preview), what drives it (<driven-by kind node leaf>) and what
+  producer, binding, live solve, preview), what drives it (<driven-by kind node leaf>) and what
   it drives (<drives …>). Edit the layer that wins, or the node that drives it.
 
 NODE TYPES  (facet? = optional)

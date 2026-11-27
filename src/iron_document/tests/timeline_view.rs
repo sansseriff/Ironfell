@@ -590,8 +590,11 @@ fn a_hidden_timeline_is_planned_when_it_is_shown_again() {
     store.apply(tx("later", vec![Op::Set { id: keys[0], path: path("key.t"), slot: num(0.5) }])).unwrap();
     assert!(timeline_view::sync_themed(&mut store, &mut last, true).unwrap().is_none(), "hidden: not planned");
     assert_eq!(x_of(&store, bar), 260.0, "hidden: as it was");
+    // What lets the host's idle gate through once it is shown.
+    assert!(last.as_ref().unwrap().1.is_stale(), "a skipped plan is stale");
     store.observe(Interest::Region { composition: comp, rect: [-1e6, -1e6, 2e6, 2e6], zoom: 1.0 });
     assert!(timeline_view::sync_themed(&mut store, &mut last, true).unwrap().is_some(), "shown: planned again");
     assert_eq!(x_of(&store, bar), 310.0, "the bar starts at the key's new time");
     assert!(last.as_ref().unwrap().1.light, "and in the theme switched to while hidden");
+    assert!(!last.as_ref().unwrap().1.is_stale());
 }

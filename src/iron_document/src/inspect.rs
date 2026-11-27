@@ -198,10 +198,9 @@ impl StoreCore {
         let mut drives: BTreeSet<Link> = BTreeSet::new();
         for facet in doc.facets_of(id) {
             let kind = facet.kind();
-            // Its name is in `node`.
-            if kind == FacetKind::Name {
-                continue;
-            }
+            // Its name is in `node`, so it has no `why` line; what reads it
+            // or drives it still shows (council review of `EN-14`, Opus).
+            let is_name = kind == FacetKind::Name;
             for field in facet.field_names() {
                 let Ok(lp) = LeafPath::new(kind, field) else { continue };
                 let leaf = Leaf { node: id, path: lp };
@@ -234,8 +233,11 @@ impl StoreCore {
                 }
                 if let Some(sig) = graph.signal(leaf) {
                     layers.push(Layer { kind: "producer", from: Some(producer_name(sig.producer)), value: sig.value.to_string() });
+                    // Who drives it: a layout's parent; a machine's channel,
+                    // the instance whose machine it is.
                     let by = match sig.producer {
                         ProducerId::LAYOUT => node.parent.unwrap_or(id),
+                        ProducerId::MACHINES => id.expanded_parts().map_or(id, |(owner, _)| owner),
                         _ => id,
                     };
                     driven_by.insert(Link { kind: "producer".into(), node: by.to_string(), leaf: Some(leaf_text.clone()), detail: Some(producer_name(sig.producer)) });
@@ -270,7 +272,7 @@ impl StoreCore {
                 }
                 // Only what comes from more than its default is worth a line.
                 let plain = layers.iter().all(|l| matches!(l.kind, "default" | "template" | "authored")) && layers.iter().filter(|l| l.kind != "default").all(|l| default.as_ref().is_some_and(|d| d.to_string() == l.value));
-                if !plain {
+                if !plain && !is_name {
                     let value = graph.read(doc, leaf).map(|v| v.to_string());
                     why.push(Why { leaf: leaf_text, value, layers });
                 }
@@ -284,10 +286,10 @@ impl StoreCore {
         // The session's own relations (what it selects, hovers) are not the
         // document's.
         for r in doc.relations_to(id).filter(|r| !r.from.is_session()) {
-            driven_by.insert(Link { kind: format!("{:?}", r.rel).to_lowercase(), node: r.from.to_string(), leaf: None, detail: None });
+            driven_by.insert(Link { kind: r.rel.name().to_owned(), node: r.from.to_string(), leaf: None, detail: None });
         }
         for r in doc.relations_from(id).filter(|r| !r.to.is_session()) {
-            drives.insert(Link { kind: format!("{:?}", r.rel).to_lowercase(), node: r.to.to_string(), leaf: None, detail: None });
+            drives.insert(Link { kind: r.rel.name().to_owned(), node: r.to.to_string(), leaf: None, detail: None });
         }
         // What it reads of itself is neither.
         driven_by.retain(|l| !(l.kind == "binding" && l.node == id.to_string()));

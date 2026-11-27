@@ -441,6 +441,8 @@ pub(crate) fn sync_document(
     let build_latency = latency.0 && !session_named(store.0.tree(), iron_document::standard::LATENCY);
     if pending.0.is_empty()
         && timeline.as_ref().is_none_or(|(_, p)| p.light == light)
+        // A timeline skipped while hidden is planned when shown again.
+        && timeline.as_ref().is_none_or(|(c, p)| !p.is_stale() || !store.0.shows(*c))
         && *library_light == Some(light)
         && history.0.is_empty()
         && load.0.is_none()

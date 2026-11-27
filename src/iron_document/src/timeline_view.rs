@@ -65,6 +65,17 @@ pub struct Plan {
     pub inside: Option<Inside>,
 }
 
+/// The `end` of a plan skipped while hidden: no real plan has it, so the
+/// next one differs and is drawn.
+const STALE: f64 = -1.0;
+
+impl Plan {
+    /// Skipped while hidden, since when the document may have changed.
+    pub fn is_stale(&self) -> bool {
+        self.end == STALE
+    }
+}
+
 /// A transition seen from inside (machines.md §6): the same timeline at a
 /// second level. Its rows are the component's parts and their properties,
 /// its bars the properties' slices of the transition, its ruler the
@@ -1210,15 +1221,14 @@ pub fn sync_themed(store: &mut Store, last: &mut Option<(NodeId, Plan)>, light: 
     // Planned only while shown (or before it is built): the plan lists
     // every clip and machine of the document, which no one needs while no
     // view shows the timeline (`EN-10`). One left unplanned is marked
-    // stale, so it is planned and redrawn when shown again.
+    // stale (`Plan::is_stale`), so it is planned and redrawn when shown
+    // again; the host lets a stale, shown timeline through its idle gate.
     if let (Some(c), Some((lc, lp))) = (comp, last.as_mut())
         && *lc == c
         && !store.shows(c)
     {
-        if lp.light != light {
-            lp.light = light;
-            lp.end = -1.0;
-        }
+        lp.light = light;
+        lp.end = STALE;
         return Ok(None);
     }
     let mut plan = plan(store, clock, comp);

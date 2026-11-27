@@ -173,6 +173,19 @@ fn a_state_change_plays_its_transition_and_interruptions_start_where_things_are(
     assert_eq!(saved.tree().get::<Channel>(fade).unwrap().value.constant(), Some(&Value::Number(1.0)), "channel values are presentation state");
 }
 
+/// Ask the node (`EN-14`): a channel a machine is playing names the
+/// instance whose machine drives it.
+#[test]
+fn a_played_channel_names_its_instance() {
+    let Card { mut store, entity, fade, .. } = card();
+    store.advance_machines(0.0);
+    set_vis(&mut store, entity, "hidden");
+    store.advance_machines(1.0);
+    store.advance_machines(1.2);
+    let i = store.inspect(NodeId::expanded(entity, fade).unwrap()).unwrap();
+    assert!(i.driven_by.iter().any(|l| l.kind == "producer" && l.node == entity.to_string() && l.detail.as_deref() == Some("state machine")), "{:?}", i.driven_by);
+}
+
 #[test]
 fn a_change_without_a_transition_snaps() {
     let Card { mut store, entity, fade, .. } = card();
@@ -183,6 +196,32 @@ fn a_change_without_a_transition_snaps() {
     store.apply(tx("drop", vec![Op::Delete { id: disappear }])).unwrap();
     set_vis(&mut store, entity, "hidden");
     assert!(store.advance_machines(1.0).is_empty());
+    assert_eq!(channel(&store, entity, fade), 0.0);
+}
+
+/// A transition moved to another definition's machine leaves this one's
+/// instances (council review of `EN-9`, Opus): the instance's derived copy
+/// of it goes, which revisits the instance, so the change snaps.
+#[test]
+fn a_transition_moved_to_another_definition_leaves_the_old_ones_instances() {
+    let Card { mut store, entity, fade, .. } = card();
+    store.advance_machines(0.0);
+    let doc = store.tree();
+    let disappear = doc.nodes_of_type(ty("transition")).find(|&t| doc.get::<Name>(t).and_then(|n| n.text.constant()).and_then(|v| v.as_str()) == Some("disappear")).unwrap();
+    let library = doc.nodes_of_type(ty("library")).next().unwrap();
+    let [other, machine] = store.authored().next_ids(2)[..] else { unreachable!() };
+    store
+        .apply(tx(
+            "move",
+            vec![
+                Op::Create { id: other, ty: ty("definition"), parent: Some(library), order: OrderKey::after(&OrderKey::first()), facets: vec![named("other")] },
+                Op::Create { id: machine, ty: ty("machine"), parent: Some(other), order: OrderKey::first(), facets: vec![named("vis")] },
+                Op::Reparent { id: disappear, parent: Some(machine), order: OrderKey::first() },
+            ],
+        ))
+        .unwrap();
+    set_vis(&mut store, entity, "hidden");
+    assert!(store.advance_machines(1.0).is_empty(), "no transition left: it snaps");
     assert_eq!(channel(&store, entity, fade), 0.0);
 }
 

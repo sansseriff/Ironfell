@@ -8,7 +8,7 @@
 
 1. This file.
 2. [`notes/postmortem-universal-patch-algebra.md`](notes/postmortem-universal-patch-algebra.md) — why the universal patch algebra was reverted and the guardrails it establishes.
-3. [`specs/engine.md`](specs/engine.md) — target architecture (4 orthogonal layers, recorded-read graph & `settle(mode)`, demand/time/host, settled decisions E1–E11).
+3. [`specs/engine.md`](specs/engine.md) — target architecture (4 orthogonal layers, recorded-read graph & `settle(mode)`, demand/time/host, settled decisions E1–E12; the lookup rule, §4.4).
 4. [`specs/patches.md`](specs/patches.md) — the grounded discrete-variation, semantic-provenance, and node-inspectability plan (`EN-14`–`EN-16`).
 5. [`.claude/skills/run-iron/SKILL.md`](../.claude/skills/run-iron/SKILL.md) — build, test, smoke, and durations.
 
@@ -42,7 +42,7 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 | **EN-8a** | 3 · Scaling | **Epoch version stamps + local topological pass scheduling:** monotonic `epoch` with `leaf_changed_at` / `input_changed_at` / `key_changed_at` + per-cell `verified_at`/`changed_at`/`must_run` + `unneeded_may_be_behind` fast guard + stack-safe O(\|dirty\| + \|E(dirty)\|) `compute_local_ranks` & local `raise_queued` (deleted `Reactive::stale`, `GRAPH_STALE`, `IDLE_SWEEP`/`sweep`, `evaluated_at`/`propagations`, and global `height`/`raise`/`compute_heights`; fixed `run_native` setting `checked` before cycle-deferral `return 0`). Net +387 lines; the stamps sit on top of the cell-level `unneeded` set rather than replacing it (`EN-8c` removes it); `changed_at` is written and never read. | **Done 2026-11-24** |
 | **EN-8b** | 3 · Scaling | **Owner-level `OwnerIndex` + `ActiveOwners` + delta clock gating:** `Owner` (`Composition(c)` / `Entity(e)` / `Free`), O(1) `Tree::root_of`, incremental `OwnerIndex` (compositions, `run = always`, figures, traces/accumulators/queries/entities/clips, and cross-owner reactive read counts), O(\|active\| + \|cross-owner edges\|) `compute_active`, delta `Clocks::pause`/`resume`/`forget`, `BTreeSet` `running_steps`/`running_clips`, O(1) `Steps::forget`/`Queries::forget`/`Player::forget`, and narrowed `sync_touched` clip refresh (deleted `StoreCore::gate`/`paused`, `Clocks::gated`/`GateKey`, `Reactive::reader_nodes`/`wired`, `Docs::reshaped`, `op::reshapes`, `Steps::prune`/`Queries::prune`, and `stamp()`; removed 62 rows from `document_bridge::scaling`). Net +1,119 lines. **Broke §5's "no new op classifiers" rule:** `sync_owners` (480 lines) classifies every forward and inverse op by hand into ~20 cached maps with no check against `OwnerIndex::rebuild`, and the council found four bugs in it (§6). `EN-8c.0` replaces it. | **Done 2026-11-24** |
 
-### Active Work Order (`EN-8c.0` → `EN-8c` → `EN-17` → `EN-9` → `EN-10` → `EN-14` → `EN-15` → `EN-16` → `EN-11`)
+### Active Work Order (`EN-8c.0` → `EN-8c` → `EN-17` → `EN-9` → `EN-10` → `EN-14` → `EN-18` → `EN-19` → `EN-15` → `EN-16` → `EN-11`)
 
 | Key | Stage | Builds | Deletes | Net-LOC target / Exit | State |
 |---|---|---|---|---|---|
@@ -52,9 +52,11 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 | **EN-9** | 3 · Scaling | **Store-side scaling burn-down:** clear the store's rows in `document_bridge::scaling`, extend the probe to every user-facing store operation, and guard whole-document walks (§4) | Whole-document passes on hot store paths | Every store row flat across both axes, or listed with the reason it is accepted and the user told | **Done 2026-11-25** (§4): 27 rows removed; the probe gained 7 operations (placing an instance, definition and machine edits, a gesture commit, the agent's view, the inspector) and found 3 more scans, now fixed; a debug tripwire on `Document::nodes`/`live_nodes` inside a transaction or frame. Accepted, listed: edit plans clone the store (`scratch()`), `fire` finds listeners by type, a theme switch rechecks every token reader. Council: Opus 7/10 on part 1 (fixed) |
 | **EN-10** | 3 · Scaling | **Host-side scaling:** per-composition embed/control/3D indexes, touched spatial scopes only, per-composition paint order, incremental timeline lane planning, `gas::find` & `interaction` indexes | Host whole-document scans | Every row of `document_bridge::scaling` flat across both axes (store + host); `document_scaling_time` +6 ≤ 1.2× +0 | **Done 2026-11-26 (§4).** The scaling probe runs the host: every frame passes through the bridge's panel-view resolution, `sync_document` and `prepare_spatial` in a headless world, and every row is flat but the canaries and three accepted per-event costs. `document_scaling_time` at +6 copies is within 1.13× of +0 on every per-frame operation (structural preview 0.024 → 0.027 ms, structural edit 0.027 → 0.030 ms). Accepted, measured: an edit plan copies the store (3.6 → 26 ms at +6), a click finds listeners by type, a theme switch rechecks every colour-token reader (0.14 → 0.24 ms). |
 | **EN-14** | 4 · Inspect & Vary | **First-class Node Inspectability & Provenance ("Ask the node"):** unified read-only `Store::inspect(node)` returning tree location, semantic derivation (`extends`/instance/slide/take), property provenance stack, incoming drivers (bindings, clips, machines, constraints, layouts), and outgoing consumers; expose in XML `<look id="#…" connections/>` and UI Inspector | Ad-hoc disconnected inspection helpers | Agent and UI can trace any animated/bound/derived component in one query; unit + agent-probe tests pass | **Done 2026-11-26:** `Store::inspect(node)` (`inspect.rs`) from what the store records (graph reads and dependents, producers and waiting claims, overrides, solves, previews, clusters, relations); the agent asks with `<look connections="#id"/>` (the view's `connections` field, no new protocol); the Inspector's Connections section reads it only while open. |
+| **EN-18** | 3 · Scaling | **One lookup rule; clear the accepted whole-document passes** (engine spec §4.4, E12; decided with the user 2026-11-26). Write the rule down and make the code follow it: move the hand-built indexes into `ScopedIndexes`/`Key`, add one reverse-reference index, and remove every accepted per-event and per-frame pass (§4, "EN-18: plan") | The accepted list in `SCALING` (edit-plan store copy, `fire` by type, eager theme recheck, unscoped 3D entities, whole-document timeline plan, unscoped agent view pull, `exact_all()`); private indexes (`Document::root_names`/`root_types`, `Reactive::violated`, `Clusters::names`, the spatial scene's maps) as separate mechanisms | Every probe row flat at +6 copies within 1.2× of +0 with **no accepted rows** but save and the canaries; new rows for a click, selection, SVG export, a theme switch and inspecting an instance part; unscoped `nodes_of_type`/`nodes_with` callers each scoped or on §4.4's named list. The structure-sharing store is a spike: check in before it passes +1,500 net lines | Open |
+| **EN-19** | 4 · Inspect & Vary | **The agent moves through the document** (engine spec §5, user 2026-11-26): the first read is the document's index (roots by name and type, counts, the library, what is shown), not the whole tree; `<look scope="#page" depth="…"/>` opens a page or component, beside `<look expand>` and `<look connections>`; the manifest tells the model how to browse. A look pulls only what it covers | The agent's whole-document first read (`agent.ts`, the full tree plus the model view every request) | The first read's size and cost independent of hidden pages (a probe row); agent probes still pass on the demo; the agent reaches a hidden page's node through looks alone | Open |
 | **EN-15** | 4 · Inspect & Vary | **Small Discrete Variation Layer (~350–500 lines) + Shared-property Machine States:** finite `Ordered`/`Unordered` axes (stable IDs + tombstones), values & `hidden` only, finite-set resolution/arrows/provenance, bubbling ops (`drag`, `widen`, `narrow`, `split`, `reset`); migrate `machine.rs` poses onto unordered local state patches so cyclic/partial-sharing machines work end-to-end | Legacy per-state channel-value storage in `machine.rs`; historical toy crate `src/iron_patch` | Cyclic 3-state triangle machine (`{A, B}` colour + `{B, C}` position) + smooth arrow transitions + bubbling ops + `plot-view.txt` pass; discrete variation core ≤ ~500 lines | Open |
 | **EN-16** | 4 · Inspect & Vary | **Decks, Takes, Ghosts & Narrative Arrows:** ordered document axes (`slide`, `take`, narrative joints), `@slide`/`@take` readable by `when` for structural/topological changes, `<place … at="take=2" clock="…"/>` with isolated simulation state for ghosts/chaos comparisons, Inspector & State Graph bubbling/provenance UI | Narrative extent special-cases | Slide deck (`[B, ∞)` vs `{C}` + `when` schematic branch), pendulum take+ghost race on shared clock, chaos comparison, and bubbling UX checks pass | Open |
-| **EN-11** | 5 · Storage | **Chunked snapshots & point loading:** revise `specs/patch-storage.md` for the grounded engine (cut premature Postgres index tables), implement content-addressed chunks, Merkle manifests, partial loading | Whole-scope snapshot requirement for large scopes | `patch-storage.md` exits met | Open |
+| **EN-11** | 5 · Storage | **Chunked snapshots & point loading:** revise `specs/patch-storage.md` for the grounded engine (cut premature Postgres index tables), implement content-addressed chunks, Merkle manifests, partial loading; the agent's looks (`EN-19`) load only the chunks they cover, and its index read is served from the manifest, so a large document is never wholly in memory (engine spec §5) | Whole-scope snapshot requirement for large scopes | `patch-storage.md` exits met | Open |
 
 ---
 
@@ -67,6 +69,8 @@ Every phase lands committed, pushed, and recorded in §2 here and `roadmap.md`'s
 | End of `EN-7` | **Cohesive Engine milestone:** `regraph`, `Docs::copies`, and all legacy hand refresh rules are gone. |
 | End of `EN-8c` | **Met 2026-11-24** (production −22 lines across `EN-8c.0` + `EN-8c`; +34 with the council round's fixes, of which the test-only demand check is +67). **One demand notion:** `unneeded`, `necessity`, `relax`, `exact()` and `ROOTED` are gone, owner-level demand is the only answer to "is this cell needed", and `EN-8c.0` + `EN-8c` together are net negative. If not, stop and re-plan with the user before `EN-17`/`EN-9`. |
 | End of `EN-10` | **Zero-Slope Scaling milestone:** all store and host scaling probes flat on both axes. |
+| End of `EN-18` | Confirm the probe has no accepted rows but save and the canaries, the lookup rule is the only indexing mechanism, and decide on the structure-sharing store from the spike. |
+| End of `EN-19` | Confirm the agent finds its way through a large document by looks, and that its first read no longer grows with the document. |
 | End of `EN-14` | Confirm `inspect(node)` / `<look connections/>` makes derivations, animations, bindings, and consumers legible in one query. |
 | End of `EN-15` | Confirm discrete variation core stays small (~350–500 lines) and delivers cyclic shared-property machines cleanly before building decks/takes in `EN-16`. |
 
@@ -74,7 +78,31 @@ Every checkpoint records the phase's **measured** net lines (`git diff --shortst
 
 ---
 
-## 4. Immediate Next Steps (`EN-15`; `EN-14` done)
+## 4. Immediate Next Steps (`EN-18`; `EN-14` done)
+
+### EN-18: plan (written 2026-11-26)
+
+Why: `EN-9` and `EN-10` flattened every per-frame row but accepted several per-event passes one at a time, while the user was away, and built some indexes by hand. The user wants one consistent way of avoiding whole-document passes (engine spec §4.4) and the document eventually loaded in part (`EN-11`), where any pass left becomes a full load.
+
+1. **The rule in code.**
+   - Move `Document::root_names`/`root_types` into `ScopedIndexes` as keyed entries (`Key::Roots` stays the dependency), deleting their own rollback and invariant code.
+   - Do the same for `Reactive::violated` and `Clusters::names` where they are structural, or say why they are graph state.
+   - The spatial scene's maps (`by_root`, `shown_in`, `listed`) stay host-side, but keyed by root and updated from `Changes` only.
+   - Audit the ~78 unscoped `nodes_of_type`/`nodes_with` callers: each becomes scoped (§4.4, kinds 1–3) or joins the named list with a reason.
+2. **A reverse-reference index:** for each node, the `Ref` leaves that name it (`Key::RefsTo(n)`), kept at the write choke points. First users: `fire` (an `on.node`'s target finds its listeners) and `inspect` (what names a node through a `Ref` leaf, for its completeness).
+3. **The accepted passes:**
+
+   | Pass | Fix |
+   |---|---|
+   | `fire` finds listeners by type | the reverse-reference index |
+   | A theme switch rechecks every colour-token reader | mark them stale through a theme key; they recompute when read, as a hidden page does |
+   | Every 3D node has an entity; `render_active_shapes` and `sync_embed_cameras` pass over them every frame | entities only for shown compositions, per root, as 2D |
+   | The timeline plan lists every clip and machine | **decision for the user:** the timeline shows the shown pages' clips and machines (per-root lookups), or keeps the whole document while open |
+   | `view_current` with no scope pulls every page | scoped by `EN-19`'s index read; until then accepted |
+   | `current`'s `exact_all()` fallback | delete |
+   | Edit plans copy the store (3.6 → 26 ms at +6) | spike storage that shares structure (persistent maps under `Document`), so a copy costs what the plan changes; fall back to the live-store trial (`EN-10`'s judgment call) if the spike passes +1,500 lines |
+4. **Probe rows:** a click (`fire`), selection, SVG export of a shown page, a theme switch, and `inspect` of an instance part with an override. Save stays a canary until `EN-11`.
+
 
 ### EN-14: done (2026-11-26)
 
@@ -161,7 +189,7 @@ How whole-document walks are kept off hot paths (decided with the user, 2026-11-
    - Each listed row says why it is accepted.
 7. **A tripwire.** In debug builds (every test run), `Document::nodes`/`live_nodes`, which always visit every node, panic inside a transaction or frame unless the caller holds `work::allow_scan("why")`. None does today.
 
-Accepted, listed in `SCALING` (the user to decide if any should become a phase):
+Accepted, listed in `SCALING` (superseded 2026-11-26: the user made clearing them `EN-18`):
 - **Edit plans clone the whole store** (`scratch()`, every agent edit and placement); the clone, not waking it, is the cost. A clone-free planner (the real store with a rollback across the plan's transactions) is an API change across `edit.rs`, `compose.rs` and `parts.rs`.
 - **`fire` finds listeners by type** (an `on.node` may name any node): O(`on` nodes) per click.
 - **A theme switch rechecks every cell that reads a colour token,** hidden ones too.

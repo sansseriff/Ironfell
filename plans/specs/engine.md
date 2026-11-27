@@ -240,7 +240,9 @@ explicitly isolated:
 
 **Rule:** For work in a shown composition *C*, cost depends only on *C*, the cone of what
 changed, and what is shown — never on hidden compositions, hidden entities, or unrelated
-nodes elsewhere. (Excluded: load, save, export, whole-document queries, undo memory.)
+nodes elsewhere. (Excluded: load, save, a whole-document export, undo memory.) What the
+agent, the inspector or the narrative panel asks for counts as shown: a read costs what
+it covers, not the document (`EN-18`, `EN-19`; §4.4).
 
 ### 4.1 Owner-level demand and pull on read (`EN-8a`..`EN-8c`)
 
@@ -347,6 +349,47 @@ compositions or `Changes`, never global scans:
 - Per-composition `paint_order` renumbered locally.
 - Incremental timeline lane planning in `timeline_view`.
 
+### 4.4 The lookup rule (`EN-18`)
+
+*Added 2026-11-26 with the user. `EN-9` and `EN-10` made every per-frame row of the
+scaling probe flat, but left per-event whole-document passes accepted one by one, and
+built several indexes by hand. This section is the one way to avoid a whole-document
+pass, so the next case extends it instead of inventing an index of its own.*
+
+Every lookup the engine or the host makes is one of four kinds:
+
+1. **From what is shown or asked.** Work starts from the demand set: the shown
+   compositions (`observe`, `Store::shows`, `shown_compositions`), and whatever a reader
+   asks for (`pull_nodes`, `current`): a view, the inspector, an agent's look, the
+   narrative. Nothing walks the document to learn what needs work.
+2. **Within one root.** "Every X" is always "every X under root R", R from (1):
+   `Tree::nodes_of_type_in(root, ty)` and its facet and name counterparts, kept in
+   `ScopedIndexes` and recorded as `Key::In` / `Key::With`. The document's roots are
+   themselves indexed by name and type (`Key::Roots`).
+3. **From a node already held.** Parent, children, relations either way
+   (`Key::Relations`), a `Ref` leaf's target and, backwards, what refers to a node; the
+   graph's readers of a leaf; `owners_of_body`. Each is kept by the write choke points.
+4. **From what changed.** Writes note the keys they touch (`Touched`), and only cells that
+   read one are redone (§3.1): `ViewDelta`, `publish_delta`, touched spatial scopes.
+
+Because (2) and (3) are recorded keys, a lookup built from them is invalidated by §3.1's
+one rule with no refresh code of its own. **A new index is a new `ScopedIndexes` entry or
+`Key`, journaled with the document**, never a private map with its own maintenance,
+rollback and invariant check. The host's indexes (the spatial scene's) follow the same
+shape: keyed by root, updated from `Changes`.
+
+**Allowed whole-document passes** are a short named list, each with why: load, save, a
+whole-document export, `check_invariants` and test oracles. Anything else that needs one
+is a missing index. Enforcement stays the scaling probe (`document_bridge::scaling`, a
+row per user-facing operation, +6 hidden copies within 1.2× of +0) and `work.rs`'s
+tripwire on `Document::nodes`/`live_nodes`; the user decided against a name-based lint
+(`EN-9`).
+
+**A copy is not a lookup.** A trial edit (an agent's plan, a placement) needs a store to
+try it on. Copying the whole store is a whole-document pass by another name; the target
+is storage that shares structure, so a copy costs what the trial changes (`EN-18`, a
+spike checked in under E11's +1,500-line breaker).
+
 ---
 
 ## 5. Layer 4: Storage and Partial Loading (`EN-11`)
@@ -358,6 +401,19 @@ server-side SQL index tables):
   owner `Summary`s carrying axis bounds.
 - Views load only the chunks whose bounds contain the active point and prefetch arrows
   along axes; unloaded reads resolve as `Pending`.
+- **The document as a file system the agent moves through** (user, 2026-11-26). Not
+  only screen views load in part: an agent reads the document's index (roots by name and
+  type, counts, the library) from the manifest, then opens a page or component with a
+  look, which loads only the chunks it covers. A large document is never wholly in
+  memory, and the agent learns it step by step, as a person browses folders. `EN-19`
+  builds the agent's side over the in-memory store first; `EN-11` makes the same looks
+  load chunks.
+- **Prerequisites:** §4.4 holding everywhere. Any whole-document pass left on an edit,
+  click or frame would force a full load, so `EN-18` clears them first. The indexes §4.4
+  keeps (roots by name and type, per-root type and facet sets, reverse references) are
+  what the manifest stores, so a lookup answers without loading the chunks it does not
+  name. Edits to a partly loaded store load the nodes they touch and their recorded
+  reads; that is the hard part `scopes.md` §8 names.
 
 ---
 
@@ -399,3 +455,4 @@ the engine:
 | E9 | **Cohesion before scaling, scaling before new variation features.** Finish `EN-12`, `EN-13`, and `EN-7` so `Docs::copies` and `regraph` are gone, land Stage 3 scaling (`EN-8`–`EN-10`), then add node inspectability (`EN-14`) and discrete variations (`EN-15`–`EN-16`). |
 | E10 | **No backwards compatibility.** Delete superseded code, rules, facets, and schema paths in the same change; bump `serial::SCHEMA` freely. |
 | E11 | **Legibility, inspectability, and net-LOC discipline.** Every property and driver on a node must be locally inspectable via `inspect(node)` / `<look connections/>`. Any simplification phase that grows net LOC past +1,500 without deleting its target stops and checks in with the user. |
+| E12 | **One lookup rule** (§4.4, user 2026-11-26). Every lookup starts from what is shown or asked, stays within one root, follows a node already held, or follows what changed; a new index is a `ScopedIndexes` entry or `Key`, never a private map. Whole-document passes are a short named list (load, save, export, invariant checks, oracles); trial edits share structure rather than copy the store. |

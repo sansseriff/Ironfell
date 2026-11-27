@@ -68,7 +68,7 @@ fn build() -> String {
     let at = kids.iter().position(|&k| k == tie).unwrap();
     assert!(kids[at + 1..].iter().any(|&k| k.is_expanded() && doc.live(k).is_some_and(|n| n.order == order)), "the authored child ties a copy and sorts before it: {kids:?}");
     let live: Vec<NodeId> = store.tree().live_nodes().map(|n| n.id).collect();
-    let view = store.view(&ViewQuery { relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: live, omit_defaults: false }).unwrap();
+    let view = store.view(&ViewQuery { connections: Vec::new(), relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: live, omit_defaults: false }).unwrap();
     let derived: Vec<String> = store.tree().nodes().map(|n| n.id).filter(|id| id.is_expanded()).map(|id| id.to_string()).collect();
     format!("{}\n=====\n{view}\n=====\n{}", store.save(), derived.join("\n"))
 }

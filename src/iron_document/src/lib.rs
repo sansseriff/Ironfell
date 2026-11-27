@@ -53,6 +53,7 @@ pub mod author;
 pub mod attachment;
 pub mod appearance;
 pub mod graph;
+pub mod inspect;
 pub mod handle;
 pub mod id;
 pub mod op;
@@ -6107,7 +6108,16 @@ impl StoreCore {
             }
             None => self.problem_notes(),
         };
-        view::with_problems(notes, || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))
+        let mut out = view::with_problems(notes, || view::render_tree(Tree::of(&self.docs), &self.reactive, &self.clusters.var_cluster, q))?;
+        // What `<look connections>` asks of each node (`EN-14`).
+        for &id in &q.connections {
+            out.push('\n');
+            match self.inspect(id) {
+                Some(i) => out += &inspect::render(&i),
+                None => out += &format!("<connections id=\"{id}\" missing=\"no such node\"/>"),
+            }
+        }
+        Ok(out)
     }
 
     /// `view` as the agent reads it, to write back (§8.9): current. The
@@ -6116,10 +6126,11 @@ impl StoreCore {
     /// no leaf for `current` to follow; then it reads through `current`
     /// (`EN-9`, council review: was `exact_all()`).
     pub fn view_current(&mut self, q: &ViewQuery) -> Result<String, ViewError> {
-        let pages = match q.scope {
+        let mut pages = match q.scope {
             Some(scope) => vec![scope],
             None => composition::compositions(Tree::of(&self.docs)),
         };
+        pages.extend(q.connections.iter().copied());
         self.pull_nodes(&pages);
         self.current(|s| s.view(q))
     }

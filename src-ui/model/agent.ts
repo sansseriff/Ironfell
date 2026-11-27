@@ -183,23 +183,26 @@ async function runAsk(api: DocumentApi, transport: ModelTransport, instruction: 
     // Out of pictures: say so rather than end the turn on a reply with no edit.
     // Free the first time (so a prose answer still counts as the first reply);
     // after that it spends an attempt, so it cannot loop.
-    if (picture && !editing && !read.expand.length && !executable.note) {
+    if (picture && !editing && !read.expand.length && !read.connections.length && !executable.note) {
       trace.push({ attempt: attempts, kind: 'picture', source: picture, ok: false });
       messages.push({ role: 'assistant', content: text });
       messages.push({ role: 'user', content: `No more pictures this request (at most ${MAX_PICTURES}). Finish with an <edit> or with prose from what you have seen.` });
       if (!toldNoPictures) { toldNoPictures = true; attempts -= 1; }
       continue;
     }
-    // `<look expand="#u #e"/>` with no edit: show those instances' derived
-    // insides (component-model.md §9) and ask again; not a repair attempt.
+    // `<look expand="#u #e"/>` or `<look connections="#n"/>` with no edit:
+    // show those instances' derived insides (component-model.md §9), or what
+    // drives those nodes and what they drive, and ask again; not a repair
+    // attempt.
     const look = read.expand;
-    if (look.length && !editing && looks < MAX_LOOKS) {
+    const asked = read.connections;
+    if ((look.length || asked.length) && !editing && looks < MAX_LOOKS) {
       looks += 1;
-      trace.push({ attempt: attempts, kind: 'look', ids: look });
+      trace.push({ attempt: attempts, kind: 'look', ids: [...look, ...asked] });
       attempts -= 1;
       messages.push({ role: 'assistant', content: text });
       emit({ kind: 'phase', phase: 'looking', attempt: attempts + 1 });
-      messages.push({ role: 'user', content: await lookView(api, look) });
+      messages.push({ role: 'user', content: await lookView(api, look, asked) });
       continue;
     }
     // `<topic name="tables"/>` with no edit: send that part of the prompt
@@ -391,14 +394,25 @@ const MAX_PICTURES = 6;
 const MAX_TOPIC_ASKS = 2;
 
 /** The view a look asks for: each named instance's subtree with what it
- *  derives shown, marked `derived`. */
-async function lookView(api: DocumentApi, ids: string[]): Promise<string> {
-  const parts = await Promise.all(ids.map(async (id) => {
-    try {
-      return await api.view({ fidelity: 'full', scope: id, expand: [id], omit_defaults: true });
-    } catch (e) {
-      return `<look-failed id="${id}">${String(e).replace(/[<>&]/g, '')}</look-failed>`;
-    }
-  }));
+ *  derives shown, marked `derived`; each node asked about with its
+ *  `<connections>` after it. */
+async function lookView(api: DocumentApi, ids: string[], connections: string[] = []): Promise<string> {
+  const failed = (id: string, e: unknown) => `<look-failed id="${id}">${String(e).replace(/[<>&]/g, '')}</look-failed>`;
+  const parts = await Promise.all([
+    ...ids.map(async (id) => {
+      try {
+        return await api.view({ fidelity: 'full', scope: id, expand: [id], omit_defaults: true });
+      } catch (e) {
+        return failed(id, e);
+      }
+    }),
+    ...connections.map(async (id) => {
+      try {
+        return await api.view({ fidelity: 'full', scope: id, depth: 0, omit_defaults: true, connections: [id] });
+      } catch (e) {
+        return failed(id, e);
+      }
+    }),
+  ]);
   return `LOOK\n${parts.join('\n')}\n\nNow answer the REQUEST: one <edit>, or prose if no change is needed.`;
 }

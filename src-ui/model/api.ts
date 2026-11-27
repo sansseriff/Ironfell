@@ -33,6 +33,8 @@ export interface Reply {
   picture: string | null;
   /** The instances a `<look expand="…"/>` names, as `#id`s. */
   expand: string[];
+  /** The nodes a `<look connections="…"/>` asks about, as `#id`s. */
+  connections: string[];
   /** What `<topic name="…"/>` asks for. */
   topics: string[];
   /** `<continue/>`: more steps follow this edit. */
@@ -67,6 +69,10 @@ export interface DocumentApi {
     expand?: string[];
     /** Leave out constant leaves at their default (what the model reads). */
     omit_defaults?: boolean;
+    /** Nodes whose connections follow the view (`<look connections>`,
+     *  `Store::inspect`): where each is, what it derives from, why each leaf
+     *  has its value, what drives it and what it drives. */
+    connections?: string[];
   }): MaybePromise<string>;
   version(): MaybePromise<number>;
   /** Read one `<edit>` into a plan of one transaction, not applied

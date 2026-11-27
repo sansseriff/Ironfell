@@ -188,7 +188,7 @@ fn a_document_with_a_plot_saves_and_loads() {
 fn the_model_view_omits_defaults() {
     let (mut store, bench) = desk();
     let (_, u) = place(&mut store, r#"title="Intensity""#);
-    let q = |omit: bool| ViewQuery { omit_defaults: omit, relation: Default::default(), scope: Some(bench), fidelity: Fidelity::Full, depth: None, expand: vec![u] };
+    let q = |omit: bool| ViewQuery { connections: Vec::new(), omit_defaults: omit, relation: Default::default(), scope: Some(bench), fidelity: Fidelity::Full, depth: None, expand: vec![u] };
     let (full, brief) = (store.view(&q(false)).unwrap(), store.view(&q(true)).unwrap());
     assert!(full.contains(r#" rot="0""#) && !brief.contains(r#" rot="0""#), "{brief}");
     assert!(brief.contains("Intensity") && brief.contains(".bind="));

@@ -3,7 +3,8 @@
 //! and `<revise>`, which patches the edit the store just rejected ([`revise`]).
 //!
 //! A reply is prose with markup in it: one `<edit>` (or a `<revise>` of the
-//! rejected edit), `<look picture="…"/>` and `<look expand="…"/>`,
+//! rejected edit), `<look picture="…"/>`, `<look expand="…"/>` and
+//! `<look connections="…"/>`,
 //! `<topic name="…"/>` and `<continue/>` (the agent prompt, manifest.ts).
 
 use crate::contexts::attribute_spans;
@@ -21,6 +22,9 @@ pub struct Reply {
     pub picture: Option<String>,
     /// The instances a `<look expand="…"/>` names, each as `#id`.
     pub expand: Vec<String>,
+    /// The nodes a `<look connections="…"/>` asks about, each as `#id`
+    /// (`EN-14`, `Store::inspect`).
+    pub connections: Vec<String>,
     /// The topics `<topic name="…"/>` asks for, each once.
     pub topics: Vec<String>,
     /// `<continue/>`: more steps follow this one's edit.
@@ -94,9 +98,15 @@ pub fn read(text: &str) -> Reply {
                             reply.picture.get_or_insert(source);
                             pictures.push(tag);
                         }
+                        let ids = |s: &str| s.split_whitespace().map(|id| if id.starts_with('#') { id.to_owned() } else { format!("#{id}") }).collect::<Vec<_>>();
                         if reply.expand.is_empty() {
-                            if let Some(ids) = el.attr("expand") {
-                                reply.expand = ids.split_whitespace().map(|id| if id.starts_with('#') { id.to_owned() } else { format!("#{id}") }).collect();
+                            if let Some(s) = el.attr("expand") {
+                                reply.expand = ids(s);
+                            }
+                        }
+                        if reply.connections.is_empty() {
+                            if let Some(s) = el.attr("connections") {
+                                reply.connections = ids(s);
                             }
                         }
                     }

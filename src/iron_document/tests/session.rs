@@ -47,7 +47,7 @@ fn the_selection_lives_in_the_session_and_nowhere_else() {
     assert_eq!(store.authored().version(), version);
     assert_eq!(store.authored().next_id(), next);
     assert_eq!(store.save(), saved);
-    let view = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Tree }).unwrap();
+    let view = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), scope: None, fidelity: Fidelity::Full, depth: None, relation: ViewRelation::Tree }).unwrap();
     assert!(!view.contains("selection"), "{view}");
     assert!(store.session_version() > 0);
 

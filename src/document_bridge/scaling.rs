@@ -507,13 +507,15 @@ fn operations() -> Vec<Operation> {
         }),
         // The agent's view of the shown page (`Store::view_current`).
         op("agent view", |c| {
-            let q = iron_document::ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(c.perf), fidelity: iron_document::Fidelity::Full, depth: None };
+            let q = iron_document::ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(c.perf), fidelity: iron_document::Fidelity::Full, depth: None };
             assert!(!c.store.view_current(&q).unwrap().is_empty());
         }),
-        // The inspector: a node of the shown page asked about.
+        // The inspector: a node of the shown page asked about, with its
+        // connections (`Store::inspect`, `EN-14`).
         op("inspect", |c| {
             c.store.pull_nodes(&[c.r]);
             assert!(c.store.resolved(c.r, path("transform2d.x")).is_some());
+            assert!(c.store.inspect(c.r).is_some());
         }),
         op("save (canary)", |c| {
             assert!(!c.store.save().is_empty());

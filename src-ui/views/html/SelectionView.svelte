@@ -9,6 +9,7 @@
   import { machines } from "../../lib/machines.svelte";
   import CopyPlus from "@lucide/svelte/icons/copy-plus";
   import SliceSection from "./SliceSection.svelte";
+  import ConnectionsSection from "./ConnectionsSection.svelte";
   import StateSection from "./StateSection.svelte";
   import { controllerManager } from "../../controller-manager.svelte";
   import { showIn as showPicture } from "../show_in";
@@ -683,6 +684,7 @@
           {/each}
         {/if}
       {/each}
+      {#if inspections.length === 1}<ConnectionsSection node={inspected.node} />{/if}
       {#if colors.length}
         <Section title="Selection colors" class="property-section" data-section="selection-colors">
           {#each colors as color (`${color.leaf}:${color.nodes!.join()}`)}

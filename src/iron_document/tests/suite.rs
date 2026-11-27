@@ -34,6 +34,7 @@ mod handles;
 mod id_growth;
 mod id_order;
 mod id_registry;
+mod inspect;
 mod latency;
 mod layers;
 mod machine_authoring;

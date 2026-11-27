@@ -2118,7 +2118,7 @@ mod tests {
         let text = super::template_snapshot("demo").unwrap();
         let mut store = iron_document::Store::load(&text).unwrap();
         if std::env::var_os("FOURIER_CLIP").is_some() {
-            let v = store.view(&iron_document::ViewQuery { relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
+            let v = store.view(&iron_document::ViewQuery { connections: Vec::new(), relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
             let find = |hay: &str, pat: &str| -> String {
                 let at = hay.find(pat).unwrap_or_else(|| panic!("no {pat}"));
                 let open = hay[..at].rfind('<').unwrap();
@@ -2133,7 +2133,7 @@ mod tests {
             store.apply(tx).unwrap();
         }
         if std::env::var_os("NO_WAVEPACKET").is_some() {
-            let v = store.view(&iron_document::ViewQuery { relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
+            let v = store.view(&iron_document::ViewQuery { connections: Vec::new(), relation: iron_document::ViewRelation::Tree, scope: None, fidelity: iron_document::Fidelity::Full, depth: None, expand: vec![], omit_defaults: false }).unwrap();
             let at = v.find("name=\"play t\"").expect("the wave packet's clip");
             let open = v[..at].rfind('<').unwrap();
             let id = v[open..at][v[open..at].find("id=\"").unwrap() + 4..].split('"').next().unwrap().to_owned();

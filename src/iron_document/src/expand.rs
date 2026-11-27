@@ -194,7 +194,7 @@ impl IndexedOverrides {
     }
 }
 
-fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
+pub(crate) fn overrides(doc: Tree<'_>, owner: NodeId) -> Vec<OwnOverride> {
     overrides_by_indexed(owner, |n| std::rc::Rc::new(IndexedOverrides::from_vec(own_overrides(doc, n))))
 }
 

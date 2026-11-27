@@ -97,6 +97,7 @@ fn a_reply_names_its_edit_revise_looks_topics_and_continue() {
     assert_eq!((r.edit, r.revise.as_deref(), r.note.as_str()), (None, Some("<revise><drop op=\"1\"/></revise>"), "Fixing it."));
     let r = read("<look expand=\"u e\"/> <topic name=\"tables, circuits\"/><topic name=\"tables\"/>");
     assert_eq!(r.expand, ["#u", "#e"]);
+    assert_eq!(read("<look connections=\"#3F 4\"/>").connections, ["#3F", "#4"]);
     assert_eq!(r.topics, ["tables", "circuits"]);
     assert!(r.picture.is_none() && !r.continues);
     // An edit's own markup is not the reply's: a <look> written in a

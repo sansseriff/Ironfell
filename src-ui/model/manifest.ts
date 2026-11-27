@@ -598,6 +598,13 @@ VIEW
   that failed (whatever reads it fails too, "depends on #x…": mend the one named), a
   repeat cut at its max or with two items of one key, nesting deeper than 16. A failed
   leaf shows its last good value.
+  To ask why a node looks or moves as it does, reply with only
+  <look connections="#id"/> (several ids allowed): each comes back as
+  <connections> with its parent path, what it derives from (<derives>), for each
+  leaf not at its default the layers it is read through, weakest first, the last
+  winning (<why leaf value>: default, template, override, authored, solved,
+  producer, binding, preview), what drives it (<driven-by kind node leaf>) and what
+  it drives (<drives …>). Edit the layer that wins, or the node that drives it.
 
 NODE TYPES  (facet? = optional)
 ${types}

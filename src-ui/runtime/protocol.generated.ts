@@ -67,6 +67,7 @@ export type DocumentCommand =
   | { op: 'selection' }
   | { op: 'version' }
   | { op: 'inspect'; node: string }
+  | { op: 'connections'; node: string }
   | { op: 'component'; node: string; kind: string; add: boolean }
   | { op: 'inspect_patch'; node: string; patch: string }
   | { op: 'inspect_scrub'; node: string; leaf: string; phase: string; token: number; value: number; options: string | null }
@@ -157,6 +158,7 @@ export function documentArguments(command: DocumentCommand): { fn: string; args:
     case 'selection': return { fn: command.op, args: [] };
     case 'version': return { fn: command.op, args: [] };
     case 'inspect': return { fn: command.op, args: [command.node] };
+    case 'connections': return { fn: command.op, args: [command.node] };
     case 'component': return { fn: command.op, args: [command.node, command.kind, command.add] };
     case 'inspect_patch': return { fn: command.op, args: [command.node, command.patch] };
     case 'inspect_scrub': return { fn: command.op, args: [command.node, command.leaf, command.phase, command.token, command.value, command.options] };

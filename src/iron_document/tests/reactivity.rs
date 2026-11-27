@@ -72,7 +72,7 @@ fn a_failed_binding_fails_its_readers_and_recovers() {
     assert!(errors.contains_key(&Leaf { node: b, path: path("let.value") }));
     // What is drawn keeps its last good value, and the view says so.
     assert_eq!(x_of(&store, r), 12.0);
-    let view = store.view(&ViewQuery { omit_defaults: true, relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
+    let view = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: true, relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
     assert!(view.contains("problem=") && view.contains("depends on"), "{view}");
     // Mending it to the same value clears every error.
     store.apply(tx("mend", vec![Op::Set { id: a, path: path("let.value"), slot: bind("3 mW * 2") }])).unwrap();
@@ -288,7 +288,7 @@ fn a_conditional_groups_children_exist_only_while_it_holds() {
     let body = named(&store, g, "body");
     assert_eq!(body.len(), 1);
     assert_eq!(body[0].to_string().split('/').nth(1), Some("~on"));
-    let view = store.view(&ViewQuery { omit_defaults: true, relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
+    let view = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: true, relation: Default::default(), scope: None, fidelity: Fidelity::Full, depth: None, expand: vec![] }).unwrap();
     assert!(view.contains(r#"copies="1""#), "{view}");
     store.undo(0).unwrap().unwrap();
     assert!(named(&store, g, "body").is_empty());
@@ -2063,7 +2063,7 @@ fn the_agent_s_view_of_a_resting_page_is_current() {
     let (mut store, n) = resting_bench();
     set_let(&mut store, n["$n"], 3.0);
     set_let(&mut store, n["$k"], 4.0);
-    let query = ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(n["$b"]), fidelity: Fidelity::Full, depth: None };
+    let query = ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(n["$b"]), fidelity: Fidelity::Full, depth: None };
     let view = store.view_current(&query).unwrap();
     assert!(view.contains(r#"copies="3""#), "the repeat makes three items:\n{view}");
     assert!(view.contains(&format!(r#"id="{}" x="40""#, n["$r2"])), "r2 sits after r1's new width:\n{view}");
@@ -2079,7 +2079,7 @@ fn every_fidelity_of_the_agent_s_view_is_current() {
     let (_, n) = resting_bench();
     let mut bad = Vec::new();
     for (fidelity, scope) in [(Fidelity::Summary, Some(n["$b"])), (Fidelity::Skeleton, None), (Fidelity::Skeleton, Some(n["$b"])), (Fidelity::Full, None)] {
-        let query = ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope, fidelity, depth: None };
+        let query = ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope, fidelity, depth: None };
         let (mut store, _) = resting_bench();
         set_let(&mut store, n["$n"], 3.0);
         let (mut woken, _) = resting_bench();

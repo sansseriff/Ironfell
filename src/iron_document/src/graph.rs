@@ -1441,6 +1441,22 @@ impl Reactive {
         self.nodes.iter().filter(|(_, n)| !n.ctx.is_empty()).map(|(l, n)| (*l, &n.ctx))
     }
 
+    /// What `leaf`'s binding reads, directly (`inspect`, `EN-14`).
+    pub(crate) fn deps_of(&self, leaf: Leaf) -> Vec<Leaf> {
+        self.nodes.get(&leaf).map(|n| n.deps.iter().chain(&n.tracked).copied().collect()).unwrap_or_default()
+    }
+
+    /// The cells that read `leaf`: bindings and engine computations
+    /// (`inspect`, `EN-14`).
+    pub(crate) fn readers_of_leaf(&self, leaf: Leaf) -> Vec<CellId> {
+        self.dependents.get(&leaf).map(|d| d.iter().copied().collect()).unwrap_or_default()
+    }
+
+    /// The producers asking for `leaf` that do not drive it.
+    pub(crate) fn waiting_on(&self, leaf: Leaf) -> Vec<ProducerId> {
+        self.waiting.get(&leaf).map(|w| w.keys().copied().collect()).unwrap_or_default()
+    }
+
     /// Every leaf `leaf` reads, directly or through other bindings.
     pub fn transitive_deps(&self, leaf: Leaf) -> BTreeSet<Leaf> {
         let mut out = BTreeSet::new();

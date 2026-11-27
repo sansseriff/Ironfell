@@ -95,7 +95,7 @@ fn bindings_resolve_on_apply_and_on_change() {
 #[test]
 fn views_show_value_and_binding() {
     let Scene { store, bar, .. } = scene();
-    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains("y=\"565\" y.bind=\"640 - #1.slider.value * 300\""), "{v}");
     assert!(v.contains("h=\"75\" h.bind=\"#1.slider.value * 300\""), "{v}");
 }
@@ -273,10 +273,10 @@ fn undoing_a_binding_makes_the_slot_constant_again() {
     store.undo(1).unwrap().unwrap(); // slider back to 0.25
     store.undo(2).unwrap().unwrap(); // binding restored
     assert_eq!(resolved_num(&store, bar, "size.h"), 75.0);
-    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains("h.bind="), "{v}");
     store.redo(3).unwrap().unwrap();
-    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(bar), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(!v.contains("h.bind="), "{v}");
     assert_eq!(resolved_num(&store, bar, "size.h"), 10.0);
 }

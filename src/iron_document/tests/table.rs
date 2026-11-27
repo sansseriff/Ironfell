@@ -235,7 +235,7 @@ fn deleting_a_cell_disturbs_only_its_row() {
 }
 
 fn view(store: &Store) -> String {
-    store.view(&ViewQuery { omit_defaults: false, relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() }).unwrap()
+    store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, relation: ViewRelation::Tree, scope: None, fidelity: Fidelity::Full, depth: None, expand: Vec::new() }).unwrap()
 }
 
 #[test]

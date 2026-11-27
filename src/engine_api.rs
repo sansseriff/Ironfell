@@ -1376,6 +1376,18 @@ pub fn document_selection(app: &mut WorkerApp) -> String {
     serde_json::Value::Array(list).to_string()
 }
 
+/// Ask the node (`EN-14`, `Store::inspect`): where it is, what it derives
+/// from, why each leaf has its value, what drives it and what it drives.
+/// The inspector reads it only while its Connections section is open.
+pub fn document_connections(app: &mut WorkerApp, node: String) -> String {
+    let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };
+    let Some(mut store) = app.world_mut().get_resource_mut::<crate::document_bridge::DocumentStore>() else {
+        return "null".into();
+    };
+    store.0.pull_nodes(&[id]);
+    serde_json::to_string(&store.0.inspect(id)).unwrap_or_else(|_| "null".into())
+}
+
 pub fn document_inspect(app: &mut WorkerApp, node: String) -> String {
     use iron_document::Handle;
     let Ok(id) = node.parse::<iron_document::NodeId>() else { return "null".into() };

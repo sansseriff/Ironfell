@@ -78,6 +78,7 @@ pub fn call(app:&mut WorkerApp,name:&str,args:&[Value])->Result<String,String>{
         "selection" => { arity(args,0)?; crate::engine_api::document_selection(app) },
         "version" => { arity(args,0)?; crate::engine_api::document_version(app) },
         "inspect" => { arity(args,1)?; crate::engine_api::document_inspect(app,argument::<String>(args,0)?) },
+        "connections" => { arity(args,1)?; crate::engine_api::document_connections(app,argument::<String>(args,0)?) },
         "component" => { arity(args,3)?; crate::engine_api::document_component(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<bool>(args,2)?) },
         "inspect_patch" => { arity(args,2)?; crate::engine_api::document_inspect_patch(app,argument::<String>(args,0)?,argument::<String>(args,1)?) },
         "inspect_scrub" => { arity(args,6)?; crate::engine_api::document_inspect_scrub(app,argument::<String>(args,0)?,argument::<String>(args,1)?,argument::<String>(args,2)?,argument::<u32>(args,3)?,argument::<f64>(args,4)?,argument::<Option<String>>(args,5)?) },

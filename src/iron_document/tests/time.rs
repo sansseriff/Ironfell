@@ -215,12 +215,26 @@ fn bad_clips_are_reported_not_applied() {
     assert_eq!(x_of(&store, rect), 50.0);
 }
 
+/// Ask the node (`EN-14`): a clip's target names the clip and the
+/// producer that drives it, and the clip names its target.
+#[test]
+fn an_animated_node_names_its_clip() {
+    let Scene { mut store, rect, clip, .. } = scene("linear");
+    store.set_time(2.0);
+    let i = store.inspect(rect).unwrap();
+    assert!(i.driven_by.iter().any(|l| l.kind == "animates" && l.node == clip.to_string()), "{:?}", i.driven_by);
+    let x = i.why.iter().find(|w| w.leaf == "transform2d.x").unwrap();
+    assert_eq!(x.layers.last().and_then(|l| l.from.clone()).as_deref(), Some("clips"), "{:?}", x.layers);
+    let c = store.inspect(clip).unwrap();
+    assert!(c.drives.iter().any(|l| l.kind == "animates" && l.node == rect.to_string()), "{:?}", c.drives);
+}
+
 #[test]
 fn views_answer_why_is_this_moving() {
     let Scene { store, rect, clip, .. } = scene("linear");
-    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(rect), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(rect), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<driven-by ref=\"{clip}\" rel=\"animates\" prop=\"transform2d.x\"/>")), "{v}");
-    let v = store.view(&ViewQuery { omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
+    let v = store.view(&ViewQuery { connections: Vec::new(), omit_defaults: false, expand: Vec::new(), relation: Default::default(), scope: Some(clip), fidelity: Fidelity::Full, depth: None }).unwrap();
     assert!(v.contains(&format!("<animates to=\"{rect}\"/>")), "{v}");
     assert!(v.contains("value=\"100\"") && v.contains("value=\"300\""), "the clip's keys: {v}");
     assert_eq!(store.tree().relations_to(rect).count(), 1);
